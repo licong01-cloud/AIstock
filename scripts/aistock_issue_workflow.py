@@ -1699,6 +1699,43 @@ def _relocate_cwd_before_cleanup(*worktrees: str | Path | None, root: Path | Non
     return None
 
 
+def _deferred_cleanup_from_safe_cwd_plan(
+    *,
+    branch: str,
+    bug_id: str,
+    worktree: str | None,
+    pr_url: str | None,
+    sync_root: bool,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    canonical_root = root or _canonical_root()
+    command = (
+        f'cd /d "{canonical_root}" && python scripts/aistock_issue_workflow.py cleanup-after-merge '
+        f'--branch "{branch}" --bug-id {bug_id} '
+    )
+    if worktree:
+        command += f'--worktree "{worktree}" '
+    if pr_url:
+        command += f'--pr-url "{pr_url}" '
+    if sync_root:
+        command += "--sync-root "
+    command += "--apply"
+    return {
+        "schema_version": "aistock_issue_workflow_deferred_cleanup_v1",
+        "workflow_gate": "ready_for_cleanup",
+        "branch": branch,
+        "bug_id": bug_id,
+        "worktree": worktree,
+        "pr_url": pr_url,
+        "sync_root": sync_root,
+        "reason": "source_worktree_contains_invoking_cwd",
+        "next_command": command,
+        "warnings": [
+            "Source worktree cleanup is deferred because the invoking shell may still hold the target cwd on Windows."
+        ],
+    }
+
+
 def _canonical_root() -> Path:
     override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
     if override:
@@ -6637,6 +6674,7 @@ def build_merge_finalizer_plan(
         blocking.append("--cleanup requires --source-branch")
     if cleanup and not source_worktree:
         warnings.append("--source-worktree is missing; cleanup can delete branches but cannot remove the task worktree")
+    source_cleanup_deferred = bool(cleanup and apply and source_worktree and _cwd_is_inside(source_worktree))
     cleanup_cwd_relocation = None
     if cleanup and apply:
         cleanup_cwd_relocation = _relocate_cwd_before_cleanup(source_worktree)
@@ -6658,6 +6696,7 @@ def build_merge_finalizer_plan(
         "warnings": warnings,
         "production_gates": production_gates or _production_gates_payload(),
         "cleanup_cwd_relocation": cleanup_cwd_relocation,
+        "source_cleanup_deferred": source_cleanup_deferred,
     }
     if blocking:
         payload["workflow_gate"] = "blocked"
@@ -6733,14 +6772,23 @@ def build_merge_finalizer_plan(
 
     cleanup_plan = None
     if cleanup and source_branch:
-        cleanup_plan = build_cleanup_after_merge_plan(
-            branch=source_branch,
-            bug_id=canonical_bug_id,
-            worktree=source_worktree,
-            pr_url=source_pr_url,
-            apply=merge_close_sync_pr,
-            sync_root=sync_root,
-        )
+        if source_cleanup_deferred:
+            cleanup_plan = _deferred_cleanup_from_safe_cwd_plan(
+                branch=source_branch,
+                bug_id=canonical_bug_id,
+                worktree=source_worktree,
+                pr_url=source_pr_url,
+                sync_root=sync_root,
+            )
+        else:
+            cleanup_plan = build_cleanup_after_merge_plan(
+                branch=source_branch,
+                bug_id=canonical_bug_id,
+                worktree=source_worktree,
+                pr_url=source_pr_url,
+                apply=merge_close_sync_pr,
+                sync_root=sync_root,
+            )
     close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
@@ -6786,6 +6834,7 @@ def build_merge_finalizer_plan(
             "close_sync_cleanup": close_sync_cleanup_plan,
             "postmortem": postmortem,
             "next_actions": [],
+            "next_commands": [],
         }
     )
     if close_sync_pr_merge.get("workflow_gate") == "ready_for_merge":
@@ -6794,8 +6843,12 @@ def build_merge_finalizer_plan(
         payload["next_actions"].append("run_cleanup_after_merge")
     if cleanup_plan and cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
         payload["next_actions"].append("rerun_cleanup_after_merge_with_apply")
+        if cleanup_plan.get("next_command"):
+            payload["next_commands"].append(cleanup_plan["next_command"])
     if close_sync_cleanup_plan and close_sync_cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
         payload["next_actions"].append("rerun_close_sync_cleanup_after_merge_with_apply")
+        if close_sync_cleanup_plan.get("next_command"):
+            payload["next_commands"].append(close_sync_cleanup_plan["next_command"])
     _write_state(
         canonical_bug_id,
         state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
