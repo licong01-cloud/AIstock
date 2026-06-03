@@ -207,6 +207,8 @@ EXITED           STOP_LOSS / TAKE_PROFIT / ALPHA_RANK_DROP_EXIT / TIME_STOP / WA
 | --- | --- | --- | --- |
 | `app.watchlist_items`（复用，仅加 SCD 字段） | 实体/状态（每 code 1 行） | `status`、`planned_entry`、`actual_entry`、`exited_at`、`exit_reason` —— 一生只变几次 | UPDATE 状态 |
 | **新增 `app.advisory_daily_review`（append-only）** | 时间序列/事实（每 item×trade_date 1 行） | 当日 `current_price`、计算出的 `entry_band(green/yellow/red)`、**当日预计 `stop_price`/`take_price`**、`action`、`reason`、`policy_sha256`、`feature_availability_ts`、`evidence_id`(FK)、`t1_note` | **只 INSERT，永不 UPDATE** |
+| **新增 `app.advisory_replay_run`（append-only，Phase 3）** | 回放运行事实（每次策略包/融合策略回放 1 行） | `run_id`、`strategy_package_id` 或 `package_set`、`fusion_policy_sha256`、`start_signal_date`、`end_signal_date`、`selection_cutoff`、`entry_price_basis`、`exit_price_basis`、`review_policy_sha256`、`created_at` | **只 INSERT，永不 UPDATE** |
+| **新增 `app.advisory_episode_return`（append-only，Phase 3）** | 荐股 episode 收益事实（每 run×episode 1 行；同 code 重新入选生成新 episode） | `episode_id`、`symbol`、`signal_date`、`effective_entry_date`、`entry_price`、`entry_price_basis`、`exit_signal_date`、`effective_exit_date`、`exit_price`、`exit_price_basis`、`exit_reason`、`holding_trading_days`、`return_bps`、`max_runup_bps`、`max_drawdown_bps`、`still_active_mark_price`、`price_quality_status` | **只 INSERT；更换价格口径必须生成新 run** |
 
 要点：
 
@@ -446,6 +448,50 @@ for each trade_date:
 
 该规则参考成熟量化组合实践：多模型/多因子组合通常先做因子标准化、rank/score fusion 或 sleeve portfolio construction，再由组合层统一控制权重、换手、风险与解释；当 raw score 标尺不可比时，rank fusion 比直接分数平均更稳健。MSCI 多因子指数、Black-Litterman views、多 alpha portfolio construction、Reciprocal Rank Fusion、transaction-cost-aware rebalancing 均可作为后续 Phase 3/4 质量报告与 QE 验证的参考。
 
+#### 5.5 荐股生命周期回放（Advisory Replay）与荐股收益记录
+
+**设计决议**：Selection Center 已允许选择历史时间点，Phase 3 需要把它扩展为“荐股生命周期回放”：从任意历史交易日（例如 1 个月前的交易日）开始，逐日按 PIT（point-in-time）口径运行选股、复评、退出与补位，重建当时能够看到的荐股列表演化，并为每个策略包/融合策略记录 episode 级荐股收益。该能力仍是 advisory retrospective，不写 Paper v2 ledger、不模拟账户、不宣称 validated PnL。
+
+**时间线口径**：默认把“2 日荐股选出 3 日股票”解释为：2 日收盘后或盘后任务生成信号，3 日成为可参考/可执行的推荐列表。
+
+```text
+signal_date = T                         # 选股信号生成日，数据 cutoff 不晚于 T 日收盘后已可用时间
+effective_entry_date = next_trading_day(T)
+entry_price_basis_default = next_open_executable
+
+for each signal_date T in replay window:
+  run each StrategyPackage with PIT cutoff(T close)
+  if package_set: build weighted_rank_fusion evidence and fusion_rank
+  apply pending exits whose exit_effective_date == T open
+  review active_pool with T close evidence and ExitGuard decisions
+  schedule EXIT decisions for next_trading_day(T) open unless T+1/suspend/limit blocks execution
+  fill vacancies from today top20/fusion_top20 by hysteresis + replacement_budget
+  schedule new ENTER decisions for next_trading_day(T) open
+  persist daily snapshot + episode evidence + package/fusion diagnostics
+```
+
+**价格基准决议（收益计算）**：默认使用 **3 日开盘价 / `next_open_executable`** 作为入选收益的基准价；2 日收盘价和 3 日收盘价只作为辅助敏感性口径。
+
+| 价格基准 | 是否作为默认收益基准 | 原因 |
+| --- | --- | --- |
+| 2 日收盘价（`signal_close`） | 否，只作信号参考/close-to-close 诊断 | 若策略用到了 2 日收盘价、成交量、因子或盘后数据，2 日收盘价在决策完成后不可成交；用它计算荐股收益会把无法执行的价格当成入场价，容易产生前视/过度乐观偏差。 |
+| 3 日开盘价（`next_open_executable`） | **是，默认** | 这是 2 日信号发布后第一笔清晰、可复现、理论上可执行的日频价格；与“盘后出荐股、次日生效”的用户体验一致，也最容易和后续 QE/Paper 的可执行口径对齐。 |
+| 3 日收盘价（`next_close`） | 否，只作保守/延迟执行敏感性报告 | 它跳过了 3 日整天的涨跌，若荐股在 3 日开盘前已经可见，会漏掉首日收益；仅适合“用户只能在 3 日收盘后才看到或才允许行动”的特殊场景。 |
+| 3 日 VWAP / 前 30 分钟 VWAP（`next_vwap`/`next_open_window_vwap`） | 可选增强口径 | 当分钟线质量足够、需要更贴近可成交均价时使用；必须同时记录成交量上限、停牌/涨跌停不可成交、滑点假设，不替代默认口径。 |
+
+**退出价格口径**：若某 episode 在 `exit_signal_date = X` 的复评中被淘汰，默认收益用 `effective_exit_date = next_trading_day(X)` 的 `next_open_executable` 作为退出价；若 X 当日是入选首日且触发止损/止盈，遵守 A 股 T+1，记 `STOP_LOSS_DEFERRED_T1` 或 `EXIT_DEFERRED_T1`，不得按 X 日价格假装已退出。回放结束仍未退出的 episode 记录 `still_active=true`，用 `end_signal_date` 的收盘价做 mark-to-market 未实现收益，并在报告中与已实现收益分开展示。
+
+**收益记录语义**：
+
+- `episode_return_bps = adjusted_exit_price / adjusted_entry_price - 1`；所有 entry/exit/mark 价格必须按复权因子调整到同一口径，同时保留原始价与 factor，便于复核。
+- 每个 StrategyPackage 独立生成 `advisory_replay_run` 与 `advisory_episode_return`；多策略包融合另生成 fusion run，不得把 fusion episode 的收益重复计入单包收益。
+- 同一股票退出后再入选必须生成新 `episode_id`；同一股票被多个包选中时，以 `run_id + episode_id` 区分，不做隐式去重。
+- `price_quality_status` 必须显式记录 `filled_at_next_open` / `limit_up_unfillable` / `limit_down_unfillable` / `suspended` / `missing_open_price` / `deferred_to_next_tradable`，不得用缺失价、涨跌停不可成交或停牌日价格伪装收益。
+- 报告层同时展示单只 episode 累计涨幅、持有交易日、最大浮盈、最大回撤、退出原因，以及策略包层的胜率、平均/中位收益、Top20 池日收益、换手率、仍持有未实现收益。
+- 所有结果必须标注 `post-decision diagnostics`：它是荐股列表维护质量与价格建议质量的历史诊断，不等同 QE A/B 或 Paper v2 账户收益。
+
+**UI/报告要求**：Paper v2 Advisory 页面应提供“生命周期回放”入口：选择单策略包或策略包组合、起止交易日、价格基准（默认 `next_open_executable`）、是否输出敏感性口径；结果分三层展示：每日荐股池快照、episode 收益表、策略包/融合策略汇总报告。
+
 ---
 
 ## 6. 实施阶段（粗粒度 5 阶段 + 严格验收）
@@ -507,13 +553,17 @@ for each trade_date:
 ### Phase 3 — 区间/止损质量回顾评估（retrospective，"看效果"的量化）
 
 - **目标**：把 Phase 1/2 的展示与建议变成**可检验的事后质量评估**，作为是否值得进 QE 的判断依据。
-- **范围-做**：对历史 advisory 记录计算 §v1-11.4 指标：`entry_zone_hit_rate`、`entry_zone_fillable_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`missed_alpha_if_not_entered`、`soft/hard_stop_trigger_rate`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps`、`reward_risk_realized`；分 score/gap/regime/liquidity/board 桶；桶最小样本阈值 + 不足向父桶收缩（★5）。
+- **范围-做**：对历史 advisory 记录计算 §v1-11.4 指标：`entry_zone_hit_rate`、`entry_zone_fillable_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`missed_alpha_if_not_entered`、`soft/hard_stop_trigger_rate`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps`、`reward_risk_realized`；新增 §5.5 `Advisory Replay`，支持从 1 个月前等历史交易日开始逐日选股复审，生成每日荐股池快照、episode 级荐股收益、策略包/融合策略汇总收益；分 score/gap/regime/liquidity/board/package/fusion_policy/entry_price_basis 桶；桶最小样本阈值 + 不足向父桶收缩（★5）。
 - **范围-不做**：不据此自动启用任何 enforced 规则；不替代 QE A/B。
 - **验收标准（客观）**：
   1. 质量报告产出且分桶；每个结论显式标 **post-decision diagnostics（事后归因，非 validated PnL，含选择偏差与样本量提示）**。
   2. 桶样本不足时有收缩/合并逻辑且报告标注被合并桶。
   3. 报告可复现（固定输入 → 固定输出）。
-- **审核 checklist**：指标定义无未来函数泄漏（成交价用当时可观测价）、样本量护栏、归因口径标注、可复现。
+  4. Advisory Replay 可从指定历史交易日起按交易日逐日运行，严格使用 PIT cutoff；不得读取未来 rank/price/evidence 决定当日荐股。
+  5. episode 收益默认使用 `effective_entry_date` 的 `next_open_executable` 与退出生效日 `next_open_executable`；`signal_close` 与 `next_close` 只能作为敏感性列，报告中不得替代默认收益口径。
+  6. 停牌、涨跌停不可成交、缺开盘价、T+1 延迟退出必须进入 `price_quality_status` / `t1_note`，不得以默认价格伪装成交或收益。
+  7. 单包 run、fusion run、同 code 多 episode 的收益归属可追溯，fusion 收益不得重复计入单包收益。
+- **审核 checklist**：指标定义无未来函数泄漏（成交价用当时可观测价）、`next_open_executable` 默认口径与敏感性口径分离，停牌/涨跌停/T+1/缺价处理可审计，样本量护栏、归因口径标注、可复现。
 - **门槛**：上述 + 我签核。**此处产出的效果读数是是否继续进入 Phase 4 的决策依据。**
 
 ### Phase 4 — QE 注入与 A/B enforced 验证（能力 A，enforced 唯一门）
@@ -565,7 +615,7 @@ for each trade_date:
 1. 成本侵蚀 alpha：Novy-Marx & Velikov (2016) *A Taxonomy of Anomalies and Their Trading Costs*；Frazzini-Israel-Moskowitz (2018) *Trading Costs* (AQR)。
 2. 回测过拟合治理：Bailey & López de Prado *Deflated Sharpe Ratio*；*PBO*。
 3. A 股微观结构：涨跌停"磁吸效应"、T+1 与隔夜跳空实证。
-（经典执行/定价文献 Perold/Almgren-Chriss/Bertsimas-Lo/Obizhaeva-Wang/三因子/Barra/Alphalens/LEAN/Nautilus/Qlib 见 v1 §6，继续有效。）
+（经典执行/定价文献 Perold/Almgren-Chriss/Bertsimas-Lo/Obizhaeva-Wang/三因子/Barra/Alphalens/LEAN/Nautilus/Qlib 见 v1 §6，继续有效。Qlib `Exchange.deal_price` 支持 `$open`/`$close`/`$vwap` 等可执行价格口径并显式处理 limit/volume/suspend；LEAN/QuantConnect 的 MarketOnOpen/MarketOnClose 与 fill model 文档可作为 `next_open_executable`、缺价/过期价格和开盘集合竞价口径的工程参考。）
 
 ---
 
@@ -577,6 +627,8 @@ for each trade_date:
 4. 能力 C 每日复评的退出规则第一版：建议 `alpha_decay_exit(rank_drop) + soft/hard stop`，`take_profit` 默认关闭（多因子优先 alpha 衰减退出）。
 5. advisory 层是否对用户开放手工建仓价/手工止损：若开放，须作为新 policy 重新验证，不得覆盖原 hash。
 6. 多策略包能力 C 第一版是否采纳 `fusion_pool + weighted_rank_fusion` 为默认，`sleeve_mode` 仅保留设计接口、暂不进入 Phase 2 默认实现？建议采纳，避免不同 horizon/风格策略被强行合并。
+7. 荐股生命周期回放是否采纳 `signal_date=T`、`effective_entry_date=T+1`、默认 `entry_price_basis=next_open_executable`？建议采纳；2 日收盘价仅作信号参考，3 日收盘价仅作延迟执行敏感性。
+8. Phase 3 是否新增 `app.advisory_replay_run` 与 `app.advisory_episode_return` 作为 append-only 收益事实？建议采纳；它们只服务 advisory 质量报告，不写 Paper ledger，不作为 validated PnL。
 
 ---
 
