@@ -1,0 +1,82 @@
+{
+  "actual": "Implement the complete advisory program lifecycle per design commit fc77127a: independent Advisory Center UI, advisory_program settings, single-package and multi-package fusion programs, concurrent program review, leaderboard, daily lifecycle review, episode returns, replay, quality report, validation matrix; no simplified/mock-only delivery; stop before code merge to main for user confirmation.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-240-paper-v2-advisory-center-full-program-lifecycle-implementation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/architecture/qe_paper_price_guard_execution_acceptance_design_v2_20260602.md",
+    "backend/db/migrations",
+    "backend/db/init_watchlist_schema.py",
+    "backend/db/init_trading_core_v2_schema.py",
+    "backend/routers/advisory.py",
+    "backend/routers/selection_center.py",
+    "backend/services/advisory_lifecycle.py",
+    "backend/services/advisory_quality.py",
+    "backend/services/selection_center",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/repositories",
+    "backend/tests/watchlist",
+    "backend/tests/selection_center",
+    "frontend/src/app/paper-v2/advisory",
+    "frontend/src/app/paper-v2/selection",
+    "frontend/src/app/paper-v2/layout.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/src/lib/api/selectionCenter.ts"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-240",
+  "closed_at": null,
+  "closure_requirements": [
+    "Implement all complete advisory program lifecycle functionality in design section 6.6 without simplified/mock-only delivery.",
+    "Provide design compliance matrix mapping every major function to implementation and validation evidence.",
+    "Run required verification plans and keep BUG JSON/GitHub Issue synchronized.",
+    "Stop before code merge to main until user confirms."
+  ],
+  "created_at": "2026-06-03T16:57:30.079139Z",
+  "description": "Implement the complete advisory program lifecycle per design commit fc77127a: independent Advisory Center UI, advisory_program settings, single-package and multi-package fusion programs, concurrent program review, leaderboard, daily lifecycle review, episode returns, replay, quality report, validation matrix; no simplified/mock-only delivery; stop before code merge to main for user confirmation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-3fa82ff17cde",
+      "timestamp": "2026-06-03T16:57:30.079136Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-03T16:57:30.079139Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 671,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/671",
+  "last_seen_at": "2026-06-03T16:57:30.079139Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0",
+    "paper_v2_l3",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "Paper v2 Advisory Center full program lifecycle implementation",
+  "trigger_condition": {
+    "fingerprint": "3fa82ff17cdee9c942a9c1e8",
+    "source_event_id": "FE-20260604-3fa82ff17cde"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "fix_ready"
+}
