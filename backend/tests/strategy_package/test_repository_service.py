@@ -909,8 +909,26 @@ def test_validate_manifest_integrity_reports_drift():
     assert report["total_scanned"] == 3
     assert report["clean_count"] == 2
     assert report["drifted_count"] == 1
-    assert report["drifted"][0]["package_id"] == "pkg-0"
-    assert "computed_sha256" in report["drifted"][0]
+    drift = report["drifted"][0]
+    assert drift["package_id"] == "pkg-0"
+    assert "computed_sha256" in drift
+    assert drift["impact"] == {
+        "paper_portfolio_count": 0,
+        "blocks_detail_endpoint": True,
+        "excluded_from_package_list": True,
+    }
+    assert drift["repair_plan"] == {
+        "recommended_action": "repair_manifest_hash",
+        "mutates_manifest_json": False,
+        "requires_operator_confirmation": True,
+        "confirm_stored_sha256": "deadbeef",
+        "confirm_computed_sha256": drift["computed_sha256"],
+        "rollback_restore": {
+            "field": "strategy_pkg.package.manifest_sha256",
+            "restore_value": "deadbeef",
+            "audit_event_reason": "manifest_hash_repaired",
+        },
+    }
 
 
 def test_validate_manifest_integrity_clean_when_all_match():
@@ -936,7 +954,12 @@ def test_repair_manifest_hash_fixes_drift():
     # Before repair: integrity check should report drift
     report_before = repo.validate_manifest_integrity()
     assert report_before["drifted_count"] == 1
-    repaired = repo.repair_manifest_hash("pkg", operator="test_runner")
+    repaired = repo.repair_manifest_hash(
+        "pkg",
+        operator="test_runner",
+        confirm_stored_sha256="00badhash",
+        confirm_computed_sha256=correct_hash,
+    )
     assert repaired.manifest_sha256 == correct_hash
     # After repair: get() should succeed
     after = repo.get("pkg")
@@ -947,4 +970,26 @@ def test_repair_manifest_hash_fixes_drift():
     assert repair_events[0].context["operator"] == "test_runner"
     assert repair_events[0].context["old_manifest_sha256"] == "00badhash"
     assert repair_events[0].context["new_manifest_sha256"] == correct_hash
+    assert repair_events[0].context["rollback_restore"] == {
+        "field": "strategy_pkg.package.manifest_sha256",
+        "restore_value": "00badhash",
+    }
+
+
+def test_repair_manifest_hash_requires_explicit_confirmation():
+    """repair_manifest_hash refuses silent hash overwrites without exact operator confirmation."""
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
+    repo.save_manifest(manifest)
+    correct_hash = manifest.manifest_sha256
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.repair_manifest_hash("pkg", operator="test_runner")
+
+    assert exc_info.value.context["package_id"] == "pkg"
+    assert exc_info.value.context["stored_sha256"] == "00badhash"
+    assert exc_info.value.context["computed_sha256"] == correct_hash
+    assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == "00badhash"
+    assert repo.records["pkg"].manifest_sha256 == "00badhash"
 

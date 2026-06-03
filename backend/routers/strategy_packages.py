@@ -125,6 +125,8 @@ class TransitionPackageStatusRequest(BaseModel):
 
 class RepairManifestHashRequest(BaseModel):
     operator: str = Field(default="paper_v2_gate_decoupling", min_length=1)
+    confirm_stored_sha256: str | None = None
+    confirm_computed_sha256: str | None = None
 
 
 class CreateExecutionPolicyRequest(BaseModel):
@@ -449,6 +451,8 @@ def repair_strategy_package_manifest_hash(package_id: str, req: RepairManifestHa
         record = StrategyPackageService().repair_manifest_hash(
             package_id,
             operator=(req.operator if req else "paper_v2_gate_decoupling"),
+            confirm_stored_sha256=(req.confirm_stored_sha256 if req else None),
+            confirm_computed_sha256=(req.confirm_computed_sha256 if req else None),
         )
         return {"ok": True, "package": _record_payload(record)}
     except TradingCoreError as exc:
