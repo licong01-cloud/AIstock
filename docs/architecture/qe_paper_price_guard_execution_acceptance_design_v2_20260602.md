@@ -205,8 +205,13 @@ EXITED           STOP_LOSS / TAKE_PROFIT / ALPHA_RANK_DROP_EXIT / TIME_STOP / WA
 
 | 表 | 性质（dim/fact） | 内容 | 写入 |
 | --- | --- | --- | --- |
+| **新增 `app.advisory_program`（SCD/版本化配置）** | 荐股任务配置维表（每个可并行运行的荐股任务 1 个 program；配置变更生成新 version） | `program_id`、`program_name`、`status`、`target_count`、`package_mode(single_package/fusion_pool/sleeve_mode_future)`、`package_set_hash`、`fusion_policy_sha256`、`review_policy_sha256`、`entry_price_basis`、`exit_price_basis`、`review_schedule`、`created_by`、`version` | UPDATE 状态；配置变更生成新 version，不改历史 |
+| **新增 `app.advisory_program_package`（append-only）** | program 与 StrategyPackage 绑定事实 | `program_id`、`version`、`package_id`、`package_role(primary/member)`、`weight`、`enabled`、`package_snapshot_hash` | **只 INSERT，永不 UPDATE**；StrategyPackage manifest 不被修改 |
 | `app.watchlist_items`（复用，仅加 SCD 字段） | 实体/状态（每 code 1 行） | `status`、`planned_entry`、`actual_entry`、`exited_at`、`exit_reason` —— 一生只变几次 | UPDATE 状态 |
 | **新增 `app.advisory_daily_review`（append-only）** | 时间序列/事实（每 item×trade_date 1 行） | 当日 `current_price`、计算出的 `entry_band(green/yellow/red)`、**当日预计 `stop_price`/`take_price`**、`action`、`reason`、`policy_sha256`、`feature_availability_ts`、`evidence_id`(FK)、`t1_note` | **只 INSERT，永不 UPDATE** |
+| **新增 `app.advisory_replay_run`（append-only，Phase 3）** | 回放运行事实（每次策略包/融合策略回放 1 行） | `run_id`、`strategy_package_id` 或 `package_set`、`fusion_policy_sha256`、`start_signal_date`、`end_signal_date`、`selection_cutoff`、`entry_price_basis`、`exit_price_basis`、`review_policy_sha256`、`created_at` | **只 INSERT，永不 UPDATE** |
+| **新增 `app.advisory_episode_return`（append-only，Phase 3）** | 荐股 episode 收益事实（每 run×episode 1 行；同 code 重新入选生成新 episode） | `episode_id`、`symbol`、`signal_date`、`effective_entry_date`、`entry_price`、`entry_price_basis`、`exit_signal_date`、`effective_exit_date`、`exit_price`、`exit_price_basis`、`exit_reason`、`holding_trading_days`、`return_bps`、`is_win`、`win_rate_inclusion_status`、`max_runup_bps`、`max_drawdown_bps`、`still_active_mark_price`、`price_quality_status` | **只 INSERT；更换价格口径必须生成新 run** |
+| **新增 `app.advisory_program_metric_snapshot`（可为物化视图或 append-only cache）** | program 排行与统计快照（每 program×as_of_trade_date 1 行，可由 episode_return/daily_review 重算） | `program_id`、`as_of_trade_date`、`enabled_since`、`package_mode`、`package_set_hash`、`active_count`、`entered_episode_count`、`take_profit_count`、`stop_loss_count`、`win_rate`、`avg_return_bps`、`median_return_bps`、`avg_holding_days`、`turnover_rate`、`max_drawdown_bps`、`last_review_status` | 派生统计；若落库则 **只 INSERT 新快照**，不得覆盖历史；排行榜只自动记录 `last_review_status` 这一类数据质量状态 |
 
 要点：
 
@@ -446,6 +451,120 @@ for each trade_date:
 
 该规则参考成熟量化组合实践：多模型/多因子组合通常先做因子标准化、rank/score fusion 或 sleeve portfolio construction，再由组合层统一控制权重、换手、风险与解释；当 raw score 标尺不可比时，rank fusion 比直接分数平均更稳健。MSCI 多因子指数、Black-Litterman views、多 alpha portfolio construction、Reciprocal Rank Fusion、transaction-cost-aware rebalancing 均可作为后续 Phase 3/4 质量报告与 QE 验证的参考。
 
+#### 5.5 荐股生命周期回放（Advisory Replay）与荐股收益记录
+
+**设计决议**：Selection Center 已允许选择历史时间点，Phase 3 需要把它扩展为“荐股生命周期回放”：从任意历史交易日（例如 1 个月前的交易日）开始，逐日按 PIT（point-in-time）口径运行选股、复评、退出与补位，重建当时能够看到的荐股列表演化，并为每个策略包/融合策略记录 episode 级荐股收益。该能力仍是 advisory retrospective，不写 Paper v2 ledger、不模拟账户、不宣称 validated PnL。
+
+**时间线口径**：默认把“2 日荐股选出 3 日股票”解释为：2 日收盘后或盘后任务生成信号，3 日成为可参考/可执行的推荐列表。
+
+```text
+signal_date = T                         # 选股信号生成日，数据 cutoff 不晚于 T 日收盘后已可用时间
+effective_entry_date = next_trading_day(T)
+entry_price_basis_default = next_open_executable
+
+for each signal_date T in replay window:
+  run each StrategyPackage with PIT cutoff(T close)
+  if package_set: build weighted_rank_fusion evidence and fusion_rank
+  apply pending exits whose exit_effective_date == T open
+  review active_pool with T close evidence and ExitGuard decisions
+  schedule EXIT decisions for next_trading_day(T) open unless T+1/suspend/limit blocks execution
+  fill vacancies from today top20/fusion_top20 by hysteresis + replacement_budget
+  schedule new ENTER decisions for next_trading_day(T) open
+  persist daily snapshot + episode evidence + package/fusion diagnostics
+```
+
+**价格基准决议（收益计算）**：默认使用 **3 日开盘价 / `next_open_executable`** 作为入选收益的基准价；2 日收盘价和 3 日收盘价只作为辅助敏感性口径。
+
+| 价格基准 | 是否作为默认收益基准 | 原因 |
+| --- | --- | --- |
+| 2 日收盘价（`signal_close`） | 否，只作信号参考/close-to-close 诊断 | 若策略用到了 2 日收盘价、成交量、因子或盘后数据，2 日收盘价在决策完成后不可成交；用它计算荐股收益会把无法执行的价格当成入场价，容易产生前视/过度乐观偏差。 |
+| 3 日开盘价（`next_open_executable`） | **是，默认** | 这是 2 日信号发布后第一笔清晰、可复现、理论上可执行的日频价格；与“盘后出荐股、次日生效”的用户体验一致，也最容易和后续 QE/Paper 的可执行口径对齐。 |
+| 3 日收盘价（`next_close`） | 否，只作保守/延迟执行敏感性报告 | 它跳过了 3 日整天的涨跌，若荐股在 3 日开盘前已经可见，会漏掉首日收益；仅适合“用户只能在 3 日收盘后才看到或才允许行动”的特殊场景。 |
+| 3 日 VWAP / 前 30 分钟 VWAP（`next_vwap`/`next_open_window_vwap`） | 可选增强口径 | 当分钟线质量足够、需要更贴近可成交均价时使用；必须同时记录成交量上限、停牌/涨跌停不可成交、滑点假设，不替代默认口径。 |
+
+**退出价格口径**：若某 episode 在 `exit_signal_date = X` 的复评中被淘汰，默认收益用 `effective_exit_date = next_trading_day(X)` 的 `next_open_executable` 作为退出价；若 X 当日是入选首日且触发止损/止盈，遵守 A 股 T+1，记 `STOP_LOSS_DEFERRED_T1` 或 `EXIT_DEFERRED_T1`，不得按 X 日价格假装已退出。回放结束仍未退出的 episode 记录 `still_active=true`，用 `end_signal_date` 的收盘价做 mark-to-market 未实现收益，并在报告中与已实现收益分开展示。
+
+**收益记录语义**：
+
+- `episode_return_bps = adjusted_exit_price / adjusted_entry_price - 1`；所有 entry/exit/mark 价格必须按复权因子调整到同一口径，同时保留原始价与 factor，便于复核。
+- **荐股胜率（recommendation win rate）**：`win_rate = win_episode_count / evaluable_episode_count`，其中 `win_episode_count = count(is_win=true)`，`is_win = return_bps > 0`；`evaluable_episode_count` 是报告计算时的内部派生分母，只统计已进入荐股且有有效 entry price，并有有效 exit price 或期末 mark price 的 episode。收益为 0 的 episode 记 `flat_episode_count`，默认不计入 win，但计入分母；停牌、涨跌停不可成交、缺价导致无法确定 entry/exit/mark 的 episode 不进入分母。该分母及排除数量不作为 leaderboard / program snapshot 记录字段。
+- 胜率必须至少输出三种口径：`realized_win_rate`（仅已退出 episode）、`mark_to_market_win_rate`（回放结束仍持有 episode，用期末 mark 价）、`all_episode_win_rate`（已退出 + 仍持有 mark）；未来评估策略包实盘效果时默认看 `all_episode_win_rate`，并同时展示样本数、平均/中位收益、最大回撤，避免单独胜率掩盖赔率不足。
+- 每个 StrategyPackage 独立生成 `advisory_replay_run` 与 `advisory_episode_return`；多策略包融合另生成 fusion run，不得把 fusion episode 的收益重复计入单包收益。
+- 同一股票退出后再入选必须生成新 `episode_id`；同一股票被多个包选中时，以 `run_id + episode_id` 区分，不做隐式去重。
+- `price_quality_status` 必须显式记录 `filled_at_next_open` / `limit_up_unfillable` / `limit_down_unfillable` / `suspended` / `missing_open_price` / `deferred_to_next_tradable`，不得用缺失价、涨跌停不可成交或停牌日价格伪装收益。
+- 报告层同时展示单只 episode 累计涨幅、`is_win`、胜率纳入口径、持有交易日、最大浮盈、最大回撤、退出原因，以及策略包层的胜率、胜/平/负数量、平均/中位收益、Top20 池日收益、换手率、仍持有未实现收益。
+- 所有结果必须标注 `post-decision diagnostics`：它是荐股列表维护质量与价格建议质量的历史诊断，不等同 QE A/B 或 Paper v2 账户收益。
+
+**UI/报告要求**：Paper v2 Advisory 页面应提供“生命周期回放”入口：选择单策略包或策略包组合、起止交易日、价格基准（默认 `next_open_executable`）、是否输出敏感性口径；结果分三层展示：每日荐股池快照、episode 收益表、策略包/融合策略汇总报告。
+
+#### 5.6 UI 与配置边界：独立荐股中心 + 选股页快捷入口
+
+**设计决议**：荐股必须有独立 UI 和独立配置，不应把每日复评、生命周期池、收益统计塞进一次性选股 UI。选股 UI 负责“产生候选与信号解释”，荐股 UI 负责“长期运行、每日复评、退出、收益/胜率与质量报告”。
+
+```text
+/paper-v2/selection        # Selection Center：临时/研究型选股运行、TopK 结果、候选导出
+/paper-v2/advisory         # Advisory Center：荐股任务、独立设置、每日复评、生命周期、收益/胜率
+```
+
+**页面顶部排行榜（Advisory Program Leaderboard）**：
+
+Advisory Center 顶部必须先显示“当前执行中的荐股任务排行榜”，覆盖所有 `status in {ENABLED, REVIEWING, WAITING_DATA}` 的 program。默认排序为 `all_episode_win_rate desc`；用户可切换按 `avg_return_bps desc`、`median_return_bps desc`、`enabled_since asc/desc`、`entered_episode_count desc`、`max_drawdown_bps asc` 排序。
+
+| 列 | 定义 | 默认显示 |
+| --- | --- | --- |
+| 排名 | 当前排序后的 program 排名；小样本应显示样本警示 | 是 |
+| 荐股名称/策略包 | `program_name` + 单包名称或多包组合摘要，展开显示 package ids/weights/fusion hash | 是 |
+| 模式 | `single_package` / `fusion_pool` / `sleeve_mode_future` | 是 |
+| 启用时间 | `enabled_since`，并显示已运行自然日/交易日数 | 是 |
+| 累计荐股数 | `entered_episode_count`；同股票退出后再入选算新 episode，可补充 unique symbol 数 | 是 |
+| 当前持有数 | `active_count`，反映仍在荐股池中的股票数 | 是 |
+| 止盈数 | `take_profit_count`，覆盖 `TAKE_PROFIT_TRAILING` / `TAKE_PROFIT_ALPHA_DECAY` / 其他 take-profit reason | 是 |
+| 止损数 | `stop_loss_count`，覆盖 `STOP_LOSS` / `STOP_LOSS_DEFERRED_T1` / hard/soft stop 退出 | 是 |
+| 胜率 | 默认 `all_episode_win_rate`；tooltip 展示 realized / mark-to-market / eligible count | 是 |
+| 平均涨幅 | `avg_return_bps`，按全部可评价 episode 的 return 计算；支持点击排序 | 是 |
+| 中位涨幅 | `median_return_bps`，降低极端值影响 | 建议显示 |
+| 平均持有天数 | `avg_holding_days`，解释高胜率是否来自过长持有 | 建议显示 |
+| 最大回撤/最大不利波动 | `max_drawdown_bps` 或 episode MAE 聚合，提示风险 | 建议显示 |
+| 换手率/替换率 | `turnover_rate`，衡量每日复评维护成本 | 可选 |
+| 最近复评状态 | `last_review_status`；样本数/排除样本不作为排行榜记录字段 | 建议显示 |
+
+**排序与状态字段**：
+
+- `eligible_episode_count` / `data_excluded_count` 不作为 leaderboard 或 program metric snapshot 的记录字段；如质量报告或回放明细需要，可由 `advisory_episode_return` 临时计算并只在报告上下文展示。
+- `last_review_status`：该 program 最近一次应执行复评的状态，建议枚举为 `OK` / `PARTIAL` / `WAITING_DATA` / `REVIEW_FAILED` / `STALE`。`OK` 表示最近交易日复评完成；`WAITING_DATA` 表示缺行情/证据暂不能判断；`REVIEW_FAILED` 表示任务失败；`STALE` 表示超过预期交易日未复评。
+- 默认胜率排序不自动记录或展示 `LOW_SAMPLE`；如后续需要样本量护栏，应由质量报告临时计算，不落入排行榜持久字段。
+- 胜率相同时，默认 tie-breaker 为 `avg_return_bps desc`、`max_drawdown_bps asc`、`enabled_since asc`。
+- 平均涨幅排序必须同时显示 median return 与 max drawdown，避免少数大涨样本掩盖大多数亏损。
+- 行点击进入 program detail：设置、当前荐股池、每日复评记录、收益 episode、质量报告与回放。
+
+**交互边界**：
+
+- Selection Center 页面保留单次运行能力：选择时间点、一个或多个 StrategyPackage、`single_package` / `weighted_fusion` / `intersection` / `union`，查看当次 TopK 与融合诊断。
+- Selection Center 只提供“创建/更新荐股任务”的快捷入口：把当前 run 的 package 组合、权重、日期与 universe 预填到 Advisory Center；它不拥有每日复评状态，不直接维护荐股池。
+- Advisory Center 提供独立“荐股任务（Advisory Program）”列表和设置页；每个 program 可启用/暂停/克隆/归档，并拥有独立 active_pool、review policy、entry/exit price basis、收益/胜率统计与审计链。
+- 同一 StrategyPackage 可以同时参与多个荐股任务；同一股票也可以同时出现在多个 program 的荐股池中。UI 必须按 `program_id` 隔离展示，不能跨 program 默认去重或合并收益。
+
+**每个荐股任务的策略包模式**：
+
+| 模式 | package 数量 | canonical rank | UI 设置 |
+| --- | ---: | --- | --- |
+| `single_package` | 1 | 单包 rank | 选择 1 个 StrategyPackage；保留 package evidence，`fusion_policy_sha256` 可为空或记录单包 policy hash。 |
+| `fusion_pool` | 2+ | `fusion_rank` | 选择多个 StrategyPackage、权重、candidate_top_k、缺失证据策略、tie-breaker；默认 `weighted_rank_fusion`。 |
+| `sleeve_mode`（未来） | 2+ | 每个 sleeve 独立 rank | 仅保留设计入口；不同 horizon/风格明显不同的包不强行融合，需单独审批和验收。 |
+
+**并行运行语义**：
+
+```text
+for each enabled advisory_program:
+  load program.version + package_set + review_policy
+  run single_package or fusion_pool selection independently
+  write daily_selection_evidence with program_id/package_set_hash/fusion_policy_sha256
+  review only this program's active_pool
+  persist advisory_daily_review / replay / episode_return under this program_id
+```
+
+一个 program 失败只能把该 program 标为 `REVIEW_FAILED` 或 `WAITING_DATA`，不得阻断其他 program 的每日复评；UI 要展示每个 program 的最新运行日、状态、失败原因、样本数、胜率、平均收益和仍持有数量。
+
 ---
 
 ## 6. 实施阶段（粗粒度 5 阶段 + 严格验收）
@@ -486,7 +605,7 @@ for each trade_date:
 
 - **目标**：实现 §5 状态机与每日复评闭环，"观察选股/荐股效果"的主场。
 - **复用**：`app.watchlist_items`（扩列 `status`/`exited_at`/`exit_reason`/`planned_entry`/`actual_entry` 或新增 `app.advisory_lifecycle` + `app.advisory_daily_review` 表，二选一在 Phase 2 设计评审定）；`/to-watchlist` 端点；`selection.daily_selection_evidence`；Phase 0 `exit_guard` evaluator。
-- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；Top20 重跑但不全量覆盖荐股池，采用 `active_pool ∪ topK` 合并复评、入选/退出阈值分离、替换预算；多策略包默认采用 `fusion_pool + weighted_rank_fusion`，保留 per-package rank/score evidence，并以 `fusion_rank` 作为 lifecycle canonical rank；ExitGuard 覆盖 stop loss、trailing/take profit、alpha/rank 衰减、time stop；T+1 标注（★4）；advisory 退出仅改 status，不成交。
+- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；独立 Advisory Center UI 与 `advisory_program` 设置，Selection Center 只作为候选/快捷创建入口；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；Top20 重跑但不全量覆盖荐股池，采用 `active_pool ∪ topK` 合并复评、入选/退出阈值分离、替换预算；多策略包默认采用 `fusion_pool + weighted_rank_fusion`，保留 per-package rank/score evidence，并以 `fusion_rank` 作为 lifecycle canonical rank；每个 program 支持 `single_package` 与 `fusion_pool`，多个 program 可并行运行且状态隔离；ExitGuard 覆盖 stop loss、trailing/take profit、alpha/rank 衰减、time stop；T+1 标注（★4）；advisory 退出仅改 status，不成交。
 - **范围-不做**：**绝不**写 Paper v2 ledger、**绝不**下单；不依赖 QE 验证（advisory 可先用 rule_default policy）。
 - **验收标准（客观）**：
   1. 状态机迁移完备且单测覆盖全部合法/非法迁移。
@@ -501,19 +620,29 @@ for each trade_date:
   10. 退出机制覆盖 STOP_LOSS / STOP_LOSS_DEFERRED_T1 / TAKE_PROFIT_TRAILING / TAKE_PROFIT_ALPHA_DECAY / ALPHA_RANK_DROP_EXIT / TIME_STOP / EXIT_ELIGIBILITY；同 code 重新入选必须生成新 episode。
   11. 多策略包复评中，`latest_rank` 明确等于 `fusion_rank`；`package_raw_scores`、`package_raw_ranks`、`package_rank_scores`、`support_count`、`rank_dispersion`、`fusion_policy_sha256` 均进入 evidence；raw score 不得跨包直接平均作为排序依据。
   12. 策略包集合、权重、融合方法或缺失策略变化时生成新的 `fusion_policy_sha256`；历史 episode 不得无标记跨 policy 比较。
-- **审核 checklist**：状态机正确、每日复评幂等可重跑、T+1 正确、复权/停牌处理正确、零成交/零 ledger、与 Paper v2 边界清晰、reason/evidence 齐全。
+  13. UI 存在独立 Advisory Center 设置页，可创建至少两个并行启用的荐股任务；每个任务可选择单策略包或多策略包融合，状态、active_pool、收益/胜率与失败原因按 `program_id` 隔离。
+  14. Selection Center 的“创建/更新荐股任务”只能预填 Advisory Program，不得把一次性选股 run 直接当作长期荐股生命周期状态。
+  15. Advisory Center 顶部存在当前执行中荐股任务排行榜，默认按胜率排序，支持按平均涨幅/中位涨幅/启用时间/累计荐股数/最大回撤切换排序。
+  16. 排行榜每行展示启用时间、累计荐股数、当前持有数、止盈数、止损数、胜率、平均涨幅，并只自动展示最近复评状态 `last_review_status`；`eligible_episode_count` / `data_excluded_count` 不作为排行榜记录字段。
+- **审核 checklist**：状态机正确、独立 Advisory UI 设置正确、多个 program 并行隔离、顶部排行榜统计正确、每日复评幂等可重跑、T+1 正确、复权/停牌处理正确、零成交/零 ledger、与 Paper v2 边界清晰、reason/evidence 齐全。
 - **门槛**：上述 + 我签核。
 
 ### Phase 3 — 区间/止损质量回顾评估（retrospective，"看效果"的量化）
 
 - **目标**：把 Phase 1/2 的展示与建议变成**可检验的事后质量评估**，作为是否值得进 QE 的判断依据。
-- **范围-做**：对历史 advisory 记录计算 §v1-11.4 指标：`entry_zone_hit_rate`、`entry_zone_fillable_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`missed_alpha_if_not_entered`、`soft/hard_stop_trigger_rate`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps`、`reward_risk_realized`；分 score/gap/regime/liquidity/board 桶；桶最小样本阈值 + 不足向父桶收缩（★5）。
+- **范围-做**：对历史 advisory 记录计算 §v1-11.4 指标：`entry_zone_hit_rate`、`entry_zone_fillable_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`missed_alpha_if_not_entered`、`soft/hard_stop_trigger_rate`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps`、`reward_risk_realized`；新增 §5.5 `Advisory Replay`，支持从 1 个月前等历史交易日开始逐日选股复审，生成每日荐股池快照、episode 级荐股收益、策略包/融合策略汇总收益；分 score/gap/regime/liquidity/board/package/fusion_policy/entry_price_basis 桶；桶最小样本阈值 + 不足向父桶收缩（★5）。
 - **范围-不做**：不据此自动启用任何 enforced 规则；不替代 QE A/B。
 - **验收标准（客观）**：
   1. 质量报告产出且分桶；每个结论显式标 **post-decision diagnostics（事后归因，非 validated PnL，含选择偏差与样本量提示）**。
   2. 桶样本不足时有收缩/合并逻辑且报告标注被合并桶。
   3. 报告可复现（固定输入 → 固定输出）。
-- **审核 checklist**：指标定义无未来函数泄漏（成交价用当时可观测价）、样本量护栏、归因口径标注、可复现。
+  4. Advisory Replay 可从指定历史交易日起按交易日逐日运行，严格使用 PIT cutoff；不得读取未来 rank/price/evidence 决定当日荐股。
+  5. episode 收益默认使用 `effective_entry_date` 的 `next_open_executable` 与退出生效日 `next_open_executable`；`signal_close` 与 `next_close` 只能作为敏感性列，报告中不得替代默认收益口径。
+  6. 停牌、涨跌停不可成交、缺开盘价、T+1 延迟退出必须进入 `price_quality_status` / `t1_note`，不得以默认价格伪装成交或收益。
+  7. 单包 run、fusion run、同 code 多 episode 的收益归属可追溯，fusion 收益不得重复计入单包收益。
+  8. 质量报告必须输出 `realized_win_rate`、`mark_to_market_win_rate`、`all_episode_win_rate`、`win_episode_count`、`flat_episode_count`、`loss_episode_count`；胜率分母按报告内部“可评价 episode 总数”计算，但 `eligible_episode_count` 与被缺价/不可成交排除的 episode 数不作为排行榜记录字段。
+  9. 质量报告必须输出排行榜所需 program-level 聚合指标：胜率、平均/中位涨幅、累计荐股数、止盈/止损数量、当前持有数、最大回撤、平均持有天数；样本数和数据排除数量仅可作为质量报告临时诊断，不进入排行榜持久记录字段。
+- **审核 checklist**：指标定义无未来函数泄漏（成交价用当时可观测价）、`next_open_executable` 默认口径与敏感性口径分离，停牌/涨跌停/T+1/缺价处理可审计、归因口径标注、可复现。
 - **门槛**：上述 + 我签核。**此处产出的效果读数是是否继续进入 Phase 4 的决策依据。**
 
 ### Phase 4 — QE 注入与 A/B enforced 验证（能力 A，enforced 唯一门）
@@ -550,6 +679,52 @@ for each trade_date:
 - **审核 checklist**：parity 一致、★8 实时差异已验证并文档化、override 拒绝、WAITING 语义、审计链完整。
 - **门槛**：上述 + 我签核。
 
+### 6.6 全功能验收矩阵（禁止简化版交付）
+
+本节是代码开发与合入前的强制验收索引。允许分阶段交付，但每个阶段声明完成时，必须满足对应功能的完整定义、功能验证方案和客观验收标准；不得以“先做最小版 / 子集版 / 占位版 / mock-only / 仅后端无 UI / 仅 UI 不接真实 API / 只支持单策略包 / 只支持一个荐股任务 / 暂不处理失败态”等方式宣称完成。
+
+**全局硬性验收（所有功能共同适用）**：
+
+- 所有新增 UI 必须接真实 API；禁止用静态 JSON、mock 数据或只读占位卡片冒充功能完成。
+- 所有新增 API/Job 必须有真实持久化或明确的只读派生口径；禁止用空数组、默认成功、默认价格、默认 rank、默认 policy hash 伪装成功。
+- 所有业务失败必须结构化返回 `WAITING_DATA` / `REVIEW_FAILED` / `*_DATA_ERROR` / `*_CONFIG_ERROR` 等可审计状态；禁止 silent fallback。
+- 所有新增表/字段若进入 DDL，必须有 PostgreSQL comment、幂等 migration、回滚/重跑语义和生产 DDL gate 记录。
+- 所有每日/历史复评必须 PIT：不得读取未来价格、未来 rank、未来 evidence 决定当日荐股或退出。
+- Advisory 层永不写 Paper v2 ledger、永不调用 OMS/broker、永不产生模拟/真实成交；如触碰 ledger/订单路径，本阶段验收失败。
+- 每个功能完成前必须产出“设计条款 -> 实现位置 -> 测试/截图/API/DB 证据 -> 结论”的验收矩阵；缺一项不得合入 main。
+
+| 主功能 | 完整功能定义（不得简化） | 功能验证方案 | 可合入验收标准 |
+| --- | --- | --- | --- |
+| Advisory Center 独立 UI | `/paper-v2/advisory` 是独立荐股中心，包含 program 列表、设置、排行榜、当前荐股池、复评记录、收益/胜率、质量报告和回放入口；Selection Center 只能作为候选/快捷创建入口 | Playwright 或等价 E2E：打开 Advisory 页面，创建/查看 program，进入详情各 tab；截图或 DOM 断言覆盖真实 API 数据 | UI 非 mock，导航存在，至少一个真实 program 可完整展示；Selection 页面快捷入口只预填 Advisory Program，不直接维护 lifecycle 状态 |
+| Advisory Program 设置 | 支持 `program_name`、启用/暂停/归档、target_count、review_schedule、entry/exit price basis、review/exit policy、package_mode、package_set/version；配置变更生成新 version | API 单测 + DB/Repo 测试 + UI 表单测试；验证配置变更不覆盖历史 version | 可创建、编辑、暂停、克隆、归档 program；历史 review/episode 引用旧 version 不漂移；StrategyPackage manifest 不被修改 |
+| 单策略包荐股 | 每个 program 可选择且仅选择 1 个 StrategyPackage，按单包 rank 生成 Top20、active_pool、review evidence 和收益统计 | 后端单测构造单包 run；API smoke 返回单包 evidence；UI 显示 single_package 模式 | 单包 program 可从创建到每日复评闭环；`fusion_policy_sha256` 为空或为单包 policy hash；不依赖多包代码路径伪装 |
+| 多策略包融合荐股 | 每个 program 可选择 2+ StrategyPackage，使用 `weighted_rank_fusion` 生成唯一 `fusion_rank`，保留每包 raw score/rank/rank_score/presence/support/dispersion | 后端融合单测、API 集成测试、UI 权重编辑测试；构造 rank 冲突、缺包 evidence、单包缺失场景 | raw score 不直接平均；Top20/Top40/alpha decay 均使用 `fusion_rank`；per-package evidence 可展开审计 |
+| 多 program 并行运行 | 多个 enabled program 可同日独立复评；program 失败不能阻断其他 program；同一股票可在不同 program 中独立 episode | Job/service 集成测试同时运行 2 个 single + 1 个 fusion program；故意让一个缺数据 | 每个 program 的 active_pool、review、returns、status 均按 `program_id` 隔离；失败 program 标 `WAITING_DATA` 或 `REVIEW_FAILED`，其他 program 正常完成 |
+| 顶部排行榜 | Advisory Center 顶部展示所有执行中 program，默认按胜率，可按平均涨幅/中位涨幅/启用时间/累计荐股数/最大回撤切换；只自动保留 `last_review_status`，不记录 `eligible_episode_count` / `data_excluded_count` | API/selector 测试 + UI 排序测试；构造不同胜率、涨幅、启用时间、失败状态 | 列包含启用时间、累计荐股数、当前持有数、止盈数、止损数、胜率、平均涨幅、last_review_status；排序稳定可复现；无 LOW_SAMPLE 自动记录字段 |
+| Top20 生命周期复评 | 每日重跑 Selection Center，但不得全量覆盖旧荐股；使用 `active_pool ∪ topK`、hysteresis、replacement_budget | 单元测试覆盖 rank=19/21/41、连续确认、replacement_budget、active_pool 不在 top20 | 旧荐股不会因单日跌出 Top20 被无理由替换；rank 缺失 fail-fast 或 WAITING_DATA；每日 review append-only 且幂等 |
+| 状态机 | `CANDIDATE -> ENTERED -> HOLDING -> EXITED` 全迁移；同 code 重新入选生成新 episode | 状态机单测覆盖合法/非法迁移、重复 enter、exit 后重入 | 非法迁移被拒绝并给出 reason；episode_id 可追溯；状态更新不覆盖每日事实 |
+| ExitGuard 退出 | 覆盖 hard/soft stop、trailing take profit、alpha decay take profit/rank drop、time stop、eligibility/ST/delist、T+1 deferred | ExitGuard 纯函数测试 + lifecycle 集成测试 + T+1 场景 | 每种退出 reason 均可触发并落库；当日入选当日止损仅标 deferred；退出不写 ledger/订单 |
+| 买入区间/止损/止盈展示 | 展示 entry band、stop/take/trailing 区间、guidance_status、policy_sha256、reason；未验证不得标 `qe_validated` | API contract 测试 + UI 展示测试 + 缺字段 fail-fast | 缺 price/limit/suspend/pre_close 不显示默认成功；UI 明示 rule_default/bucket/qe_validated；不会修改下单行为 |
+| 每日 evidence 持久化 | `selection.daily_selection_evidence` 覆盖 `topK + active_pool`，包含单包/多包 evidence、fusion hash、feature availability | DB/repo 测试 + 重跑幂等测试 | evidence 不可变或带 version；active item 缺 evidence 不静默 HOLD；policy/hash 可复核 |
+| Replay 回放 | 从任意历史交易日逐日 PIT 运行选股、复评、退出、补位，输出每日快照、episode 收益和 program 汇总 | 固定 fixture 回放 1 个月交易日；断言无未来日期读取；重复运行结果一致 | 可选择 start/end date、单包/多包 program、价格口径；未退出 episode 与已退出分开展示；不写 ledger |
+| 收益记录 | 每个 episode 记录 entry/exit/mark price basis、return_bps、is_win、flat/loss、MFE/MAE、holding days、exit reason；同股票重入独立计算 | 后端收益计算单测：next open、next close sensitivity、停牌/涨跌停、复权 | 默认 entry/exit 使用 `next_open_executable`；复权一致；缺价不伪装收益；胜率分母内部派生不进入排行榜记录字段 |
+| 质量报告 | 输出 post-decision diagnostics：entry zone hit/fillable、stop saved/whipsaw、reward-risk、win rate、avg/median return、max drawdown、bucket 统计 | API 测试拒绝未来 outcome 字段作为 decision input；固定输入固定输出；桶样本不足收缩 | 报告明确标注非 validated PnL；支持 package/fusion_policy/entry_basis 分桶；结论可复现 |
+| Price basis | 信号日 `T`，默认 `effective_entry_date=T+1`、`entry_price_basis=next_open_executable`；`signal_close`/`next_close` 只作敏感性 | 单测覆盖 T/T+1、停牌顺延、缺开盘价、涨跌停不可成交 | 2 日收盘价不得作为默认可执行收益基准；3 日开盘为默认；所有口径在报告中明示 |
+| 公司行动/停牌/ST/涨跌停 | 复权因子调整 entry/stop/take；停牌 WAITING；ST/delist/eligibility 退出；涨跌停不可成交不能伪装 fill | fixture 覆盖除权、停牌、ST、limit up/down、缺 factor | 价格和收益口径不失真；不可成交状态可审计；缺关键数据 fail-fast |
+| API 契约 | program CRUD、package binding、daily review run/preview、leaderboard、active pool、episode returns、quality report、replay run 均有 schema | FastAPI route tests + OpenAPI schema/contract tests | HTTP 状态码、错误 payload、字段名稳定；无 mock-only route；权限/参数校验完整 |
+| DB/持久化 | 新表/字段 append-only 优先，program 配置版本化，daily_review/return/replay 可追溯 | migration dry-run + repo tests + idempotency tests | DDL 有 comment；重跑不重复污染；历史记录不被 UPDATE 覆盖；生产 DDL gate 明确 |
+| 前端错误态 | UI 展示 `WAITING_DATA`、`REVIEW_FAILED`、`STALE`、缺包 evidence、缺价、无 program、无运行记录等状态 | E2E/组件测试覆盖错误态和空态 | 不把空表展示为成功；错误原因可读；可重试/刷新；不会诱导用户以为已完成复评 |
+| 无成交边界 | Advisory 全路径不写 Paper ledger、不创建订单、不触发 broker/QMT | 代码搜索 + 单元测试 monkeypatch ledger/order repo 抛错 + 集成测试 | advisory API/job 即使运行 replay/review 也不触碰订单/ledger；任何触碰视为 P0 |
+| 合入前验证链 | 变更文件 lint、单测、API 测试、UI E2E、module registry、L0、paper_v2_backend、guardrails、CI | 本地命令记录 + PR CI + 设计验收矩阵 | 所有必须项 green；未覆盖项必须明示 blocked 并不得请求代码合入 main |
+
+**开发分阶段但不简化的执行规则**：
+
+1. Phase 2 可优先交付 Advisory Program、单包/多包复评、排行榜、状态机、退出和真实 UI；但这些功能一旦声明完成，必须满足上表对应完整验收，不得只交付子集。
+2. Phase 3 可在 Phase 2 后交付 replay、收益/胜率、质量报告和回放 UI；但不得把“只计算平均收益、没有 episode 明细/价格口径/失败态”的版本视为完成。
+3. Phase 4/5 enforced 不属于 advisory UI 合入门；但 advisory 代码不得预埋会改变 Paper/QE 行为的默认启用路径。
+4. 若实现过程中发现任一矩阵项当前阶段不能完成，必须更新 Issue scope 和 PR 说明为 `blocked/not implemented`，不得隐藏为“后续优化”。
+
+
 ---
 
 ## 7. rule vs ML（一次预留，后期不重写）
@@ -565,7 +740,7 @@ for each trade_date:
 1. 成本侵蚀 alpha：Novy-Marx & Velikov (2016) *A Taxonomy of Anomalies and Their Trading Costs*；Frazzini-Israel-Moskowitz (2018) *Trading Costs* (AQR)。
 2. 回测过拟合治理：Bailey & López de Prado *Deflated Sharpe Ratio*；*PBO*。
 3. A 股微观结构：涨跌停"磁吸效应"、T+1 与隔夜跳空实证。
-（经典执行/定价文献 Perold/Almgren-Chriss/Bertsimas-Lo/Obizhaeva-Wang/三因子/Barra/Alphalens/LEAN/Nautilus/Qlib 见 v1 §6，继续有效。）
+（经典执行/定价文献 Perold/Almgren-Chriss/Bertsimas-Lo/Obizhaeva-Wang/三因子/Barra/Alphalens/LEAN/Nautilus/Qlib 见 v1 §6，继续有效。Qlib `Exchange.deal_price` 支持 `$open`/`$close`/`$vwap` 等可执行价格口径并显式处理 limit/volume/suspend；LEAN/QuantConnect 的 MarketOnOpen/MarketOnClose 与 fill model 文档可作为 `next_open_executable`、缺价/过期价格和开盘集合竞价口径的工程参考。）
 
 ---
 
@@ -577,6 +752,11 @@ for each trade_date:
 4. 能力 C 每日复评的退出规则第一版：建议 `alpha_decay_exit(rank_drop) + soft/hard stop`，`take_profit` 默认关闭（多因子优先 alpha 衰减退出）。
 5. advisory 层是否对用户开放手工建仓价/手工止损：若开放，须作为新 policy 重新验证，不得覆盖原 hash。
 6. 多策略包能力 C 第一版是否采纳 `fusion_pool + weighted_rank_fusion` 为默认，`sleeve_mode` 仅保留设计接口、暂不进入 Phase 2 默认实现？建议采纳，避免不同 horizon/风格策略被强行合并。
+7. 荐股生命周期回放是否采纳 `signal_date=T`、`effective_entry_date=T+1`、默认 `entry_price_basis=next_open_executable`？建议采纳；2 日收盘价仅作信号参考，3 日收盘价仅作延迟执行敏感性。
+8. Phase 3 是否新增 `app.advisory_replay_run` 与 `app.advisory_episode_return` 作为 append-only 收益事实？建议采纳；它们只服务 advisory 质量报告，不写 Paper ledger，不作为 validated PnL。
+9. 荐股胜率是否定义为“上涨 episode 数 / 可评价 episode 总数”？建议采纳，并同时展示已退出胜率、期末持有 mark-to-market 胜率和全样本胜率，避免单独胜率指标掩盖赔率和回撤风险；`eligible_episode_count` / `data_excluded_count` 可内部计算但不进入排行榜记录字段。
+10. 荐股 UI 是否独立于选股 UI？建议采纳独立 Advisory Center：Selection Center 只负责候选/快捷创建，Advisory Center 负责 program 设置、每日复评、生命周期、收益/胜率。每个 program 必须同时支持单策略包与多策略包融合，并允许多个 program 并行运行。
+11. Advisory Center 顶部是否默认展示所有执行中荐股任务的排行榜？建议采纳：默认按 `all_episode_win_rate` 排序，并支持按平均涨幅、累计荐股数、启用时间、最大回撤等切换；排行榜只自动保留 `last_review_status`，不记录 `eligible_episode_count` / `data_excluded_count`。
 
 ---
 
