@@ -1,0 +1,67 @@
+{
+  "actual": "Auto-filed CI/Nightly infrastructure issues can still include a generic promote-ci-issue handoff even when triage-ci-issue classifies the failure as infra_blocker/infra_flaky and needs_bug_json=false. This can send Codex/Claude windows into an unnecessary code BUG promotion/fix loop instead of the infra action path, wasting time and tokens. Expected: infra-only CI/Nightly issues should keep triage as the first command, clearly mark needs_bug_json=false, and either omit promote/fix-after-promotion commands or mark them as not applicable; real regression issues should keep the normal promote -> run flow.",
+  "allowed_write_scope": [
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/20260603_BUG-225-ci-nightly-infra-handoff-still-suggests-code-bug-promotion.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-225",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T18:59:57.717528Z",
+  "description": "Auto-filed CI/Nightly infrastructure issues can still include a generic promote-ci-issue handoff even when triage-ci-issue classifies the failure as infra_blocker/infra_flaky and needs_bug_json=false. This can send Codex/Claude windows into an unnecessary code BUG promotion/fix loop instead of the infra action path, wasting time and tokens. Expected: infra-only CI/Nightly issues should keep triage as the first command, clearly mark needs_bug_json=false, and either omit promote/fix-after-promotion commands or mark them as not applicable; real regression issues should keep the normal promote -> run flow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-02347f633ea7",
+      "timestamp": "2026-06-02T18:59:57.717523Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-02T18:59:57.717528Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 609,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/609",
+  "last_seen_at": "2026-06-02T18:59:57.717528Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 257",
+  "required_verification": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -k \"ci_issue or nightly or infra or handoff or promote\"",
+    "python -m ruff check scripts/ci_failure_issue_summary.py scripts/aistock_issue_workflow.py backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_aistock_issue_workflow.py",
+    "python -m compileall scripts/ci_failure_issue_summary.py scripts/aistock_issue_workflow.py backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_aistock_issue_workflow.py",
+    "python -m nox -s l0 validation_center_backend validation_catalog_integrity validation_module_registry_l0 validation_coverage_backend guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI/Nightly infra handoff still suggests code BUG promotion",
+  "trigger_condition": {
+    "fingerprint": "02347f633ea7b28efa15c95c",
+    "source_event_id": "FE-20260603-02347f633ea7"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "fix_ready"
+}

@@ -658,3 +658,35 @@ def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     assert payload["nightly_fingerprint"] == "runner-preflight-unavailable"
     assert "<!-- aistock-nightly-failure:runner-preflight-unavailable -->" in issue_payload["body"]
     assert "self-hosted Windows runner unavailable" in issue_payload["body"]
+    assert payload["agent_handoff"]["handoff_mode"] == "infra_action_only"
+    assert payload["agent_handoff"]["needs_bug_json"] is False
+    assert payload["agent_handoff"]["next_commands"] == [
+        "python scripts/aistock_issue_workflow.py triage-ci-issue --issue <issue-number>"
+    ]
+    assert payload["agent_handoff"]["workflow_entrypoints"]["promote"] == "not_applicable_infra_action_only"
+    assert "promote-ci-issue" not in issue_payload["body"]
+    assert "needs_bug_json: `False`" in issue_payload["body"]
+    assert "BUG ID: not applicable for infra-only issue" in issue_payload["body"]
+
+
+def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "runner-preflight": "failure",
+            "dr-snapshot": "skipped",
+            "dr-validate": "skipped",
+            "nightly-l3": "skipped",
+            "paper-v2-live": "skipped",
+        },
+        run_id="9002",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
+    )
+
+    context_pack = summary.build_context_pack(payload, github_issue_number=257)
+    markdown = summary.render_context_pack_markdown(context_pack)
+
+    assert context_pack["agent_handoff"]["handoff_mode"] == "infra_action_only"
+    assert context_pack["agent_handoff"]["needs_bug_json"] is False
+    assert "triage-ci-issue --issue 257" in markdown
+    assert "promote-ci-issue" not in markdown
+    assert "needs_bug_json: `False`" in markdown
