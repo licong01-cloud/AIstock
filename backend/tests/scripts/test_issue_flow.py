@@ -705,6 +705,8 @@ def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
     assert tomllib.loads(Path("ruff.toml").read_text(encoding="utf-8"))["lint"]["select"]
     assert json.loads(Path(".github/renovate.json").read_text(encoding="utf-8"))["dependencyDashboard"] is True
+    assert "semgrep" in Path(".github/requirements/semgrep.txt").read_text(encoding="utf-8")
+    assert "semgrep" in Path(".github/requirements/pr-quality.txt").read_text(encoding="utf-8")
     for workflow in [
         ".github/workflows/pr-quality.yml",
         ".github/workflows/semgrep.yml",
@@ -719,6 +721,20 @@ def test_open_source_tooling_configs_are_parseable() -> None:
 def test_pr_quality_semgrep_scans_changed_files_only() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
+    setup_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
+    ]
+    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/pr-quality.txt"
+
+    install_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Install quality tooling"
+    ]
+    assert "python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt" in str(install_steps[0]["run"])
+
     semgrep_steps = [
         step
         for step in steps
@@ -751,6 +767,20 @@ def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
 def test_standalone_semgrep_scans_changed_files_only() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["semgrep"]["steps"]
+    setup_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
+    ]
+    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/semgrep.txt"
+
+    install_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Install Semgrep"
+    ]
+    assert "python -m pip install --prefer-binary -r .github/requirements/semgrep.txt" in str(install_steps[0]["run"])
+
     semgrep_steps = [
         step
         for step in steps
@@ -765,3 +795,8 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
     assert '"paths":{"scanned":[]}' in run
+
+
+def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
+    assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]

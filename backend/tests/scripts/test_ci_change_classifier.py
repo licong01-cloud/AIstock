@@ -65,7 +65,10 @@ def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
+            ".github/workflows/dependency-update-validate.yml",
             ".github/workflows/test.yml",
+            ".github/requirements/pr-quality.txt",
+            ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
