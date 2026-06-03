@@ -617,6 +617,7 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
                 "drValidate": "success",
                 "nightlyL3": "failure",
                 "paperV2Live": "skipped",
+                "codeIntelligence": "success",
             },
             "run_id": "9001",
             "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
@@ -631,13 +632,38 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert payload["nightly_failed_stages"] == ["nightly_l3"]
     assert payload["issue_title"].startswith("P1 Nightly failed:")
     assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
-    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped -->" in issue_payload["body"]
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
     assert "module:validation.runner" in issue_payload["labels"]
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
     assert context_pack["token_budget"]["full_logs_included"] is False
+
+
+def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "success",
+                "paperV2Live": "success",
+                "codeIntelligence": "failure",
+            },
+            "run_id": "9003",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9003",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+
+    assert payload["nightly_failed_stages"] == ["code_intelligence"]
+    assert "code=failure" in payload["issue_title"]
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-success-success-failure -->" in issue_payload["body"]
+    assert "- code_intelligence: `failure`" in issue_payload["body"]
 
 
 def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
