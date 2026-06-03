@@ -208,7 +208,7 @@ EXITED           STOP_LOSS / TAKE_PROFIT / ALPHA_RANK_DROP_EXIT / TIME_STOP / WA
 | `app.watchlist_items`（复用，仅加 SCD 字段） | 实体/状态（每 code 1 行） | `status`、`planned_entry`、`actual_entry`、`exited_at`、`exit_reason` —— 一生只变几次 | UPDATE 状态 |
 | **新增 `app.advisory_daily_review`（append-only）** | 时间序列/事实（每 item×trade_date 1 行） | 当日 `current_price`、计算出的 `entry_band(green/yellow/red)`、**当日预计 `stop_price`/`take_price`**、`action`、`reason`、`policy_sha256`、`feature_availability_ts`、`evidence_id`(FK)、`t1_note` | **只 INSERT，永不 UPDATE** |
 | **新增 `app.advisory_replay_run`（append-only，Phase 3）** | 回放运行事实（每次策略包/融合策略回放 1 行） | `run_id`、`strategy_package_id` 或 `package_set`、`fusion_policy_sha256`、`start_signal_date`、`end_signal_date`、`selection_cutoff`、`entry_price_basis`、`exit_price_basis`、`review_policy_sha256`、`created_at` | **只 INSERT，永不 UPDATE** |
-| **新增 `app.advisory_episode_return`（append-only，Phase 3）** | 荐股 episode 收益事实（每 run×episode 1 行；同 code 重新入选生成新 episode） | `episode_id`、`symbol`、`signal_date`、`effective_entry_date`、`entry_price`、`entry_price_basis`、`exit_signal_date`、`effective_exit_date`、`exit_price`、`exit_price_basis`、`exit_reason`、`holding_trading_days`、`return_bps`、`max_runup_bps`、`max_drawdown_bps`、`still_active_mark_price`、`price_quality_status` | **只 INSERT；更换价格口径必须生成新 run** |
+| **新增 `app.advisory_episode_return`（append-only，Phase 3）** | 荐股 episode 收益事实（每 run×episode 1 行；同 code 重新入选生成新 episode） | `episode_id`、`symbol`、`signal_date`、`effective_entry_date`、`entry_price`、`entry_price_basis`、`exit_signal_date`、`effective_exit_date`、`exit_price`、`exit_price_basis`、`exit_reason`、`holding_trading_days`、`return_bps`、`is_win`、`win_rate_inclusion_status`、`max_runup_bps`、`max_drawdown_bps`、`still_active_mark_price`、`price_quality_status` | **只 INSERT；更换价格口径必须生成新 run** |
 
 要点：
 
@@ -484,10 +484,12 @@ for each signal_date T in replay window:
 **收益记录语义**：
 
 - `episode_return_bps = adjusted_exit_price / adjusted_entry_price - 1`；所有 entry/exit/mark 价格必须按复权因子调整到同一口径，同时保留原始价与 factor，便于复核。
+- **荐股胜率（recommendation win rate）**：`win_rate = win_episode_count / eligible_episode_count`，其中 `win_episode_count = count(is_win=true)`，`is_win = return_bps > 0`；`eligible_episode_count` 只统计已进入荐股且有有效 entry price、有效 exit price 或期末 mark price 的 episode。收益为 0 的 episode 记 `flat_episode_count`，默认不计入 win，但计入分母；停牌、涨跌停不可成交、缺价导致无法确定 entry/exit/mark 的 episode 进入 `win_rate_inclusion_status=excluded_price_unavailable`，不进入分母但必须在报告中披露数量。
+- 胜率必须至少输出三种口径：`realized_win_rate`（仅已退出 episode）、`mark_to_market_win_rate`（回放结束仍持有 episode，用期末 mark 价）、`all_episode_win_rate`（已退出 + 仍持有 mark）；未来评估策略包实盘效果时默认看 `all_episode_win_rate`，并同时展示样本数、平均/中位收益、最大回撤，避免单独胜率掩盖赔率不足。
 - 每个 StrategyPackage 独立生成 `advisory_replay_run` 与 `advisory_episode_return`；多策略包融合另生成 fusion run，不得把 fusion episode 的收益重复计入单包收益。
 - 同一股票退出后再入选必须生成新 `episode_id`；同一股票被多个包选中时，以 `run_id + episode_id` 区分，不做隐式去重。
 - `price_quality_status` 必须显式记录 `filled_at_next_open` / `limit_up_unfillable` / `limit_down_unfillable` / `suspended` / `missing_open_price` / `deferred_to_next_tradable`，不得用缺失价、涨跌停不可成交或停牌日价格伪装收益。
-- 报告层同时展示单只 episode 累计涨幅、持有交易日、最大浮盈、最大回撤、退出原因，以及策略包层的胜率、平均/中位收益、Top20 池日收益、换手率、仍持有未实现收益。
+- 报告层同时展示单只 episode 累计涨幅、`is_win`、胜率纳入口径、持有交易日、最大浮盈、最大回撤、退出原因，以及策略包层的胜率、胜/平/负数量、平均/中位收益、Top20 池日收益、换手率、仍持有未实现收益。
 - 所有结果必须标注 `post-decision diagnostics`：它是荐股列表维护质量与价格建议质量的历史诊断，不等同 QE A/B 或 Paper v2 账户收益。
 
 **UI/报告要求**：Paper v2 Advisory 页面应提供“生命周期回放”入口：选择单策略包或策略包组合、起止交易日、价格基准（默认 `next_open_executable`）、是否输出敏感性口径；结果分三层展示：每日荐股池快照、episode 收益表、策略包/融合策略汇总报告。
@@ -563,6 +565,7 @@ for each signal_date T in replay window:
   5. episode 收益默认使用 `effective_entry_date` 的 `next_open_executable` 与退出生效日 `next_open_executable`；`signal_close` 与 `next_close` 只能作为敏感性列，报告中不得替代默认收益口径。
   6. 停牌、涨跌停不可成交、缺开盘价、T+1 延迟退出必须进入 `price_quality_status` / `t1_note`，不得以默认价格伪装成交或收益。
   7. 单包 run、fusion run、同 code 多 episode 的收益归属可追溯，fusion 收益不得重复计入单包收益。
+  8. 质量报告必须输出 `realized_win_rate`、`mark_to_market_win_rate`、`all_episode_win_rate`、`win_episode_count`、`flat_episode_count`、`loss_episode_count`、`eligible_episode_count` 与被缺价/不可成交排除的 episode 数；胜率定义固定为上涨 episode 数 / 可评价 episode 总数。
 - **审核 checklist**：指标定义无未来函数泄漏（成交价用当时可观测价）、`next_open_executable` 默认口径与敏感性口径分离，停牌/涨跌停/T+1/缺价处理可审计，样本量护栏、归因口径标注、可复现。
 - **门槛**：上述 + 我签核。**此处产出的效果读数是是否继续进入 Phase 4 的决策依据。**
 
@@ -629,6 +632,7 @@ for each signal_date T in replay window:
 6. 多策略包能力 C 第一版是否采纳 `fusion_pool + weighted_rank_fusion` 为默认，`sleeve_mode` 仅保留设计接口、暂不进入 Phase 2 默认实现？建议采纳，避免不同 horizon/风格策略被强行合并。
 7. 荐股生命周期回放是否采纳 `signal_date=T`、`effective_entry_date=T+1`、默认 `entry_price_basis=next_open_executable`？建议采纳；2 日收盘价仅作信号参考，3 日收盘价仅作延迟执行敏感性。
 8. Phase 3 是否新增 `app.advisory_replay_run` 与 `app.advisory_episode_return` 作为 append-only 收益事实？建议采纳；它们只服务 advisory 质量报告，不写 Paper ledger，不作为 validated PnL。
+9. 荐股胜率是否定义为“上涨 episode 数 / 可评价 episode 总数”？建议采纳，并同时披露已退出胜率、期末持有 mark-to-market 胜率和全样本胜率，避免单独胜率指标掩盖赔率、回撤和样本量风险。
 
 ---
 
