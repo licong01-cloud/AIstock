@@ -1,0 +1,65 @@
+{
+  "actual": "simulation_dual_backend_l4 imports code paths that load .env with SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT=true, causing test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default to fail even though production submit=true is intentional. Validation should isolate this unit test from production scheduler env so BUG-241 final gates can run reliably.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-242-simulation-dual-backend-validation-reads-production-default-submit-env.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260604_023654_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-242",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T18:30:51.756432Z",
+  "description": "simulation_dual_backend_l4 imports code paths that load .env with SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT=true, causing test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default to fail even though production submit=true is intentional. Validation should isolate this unit test from production scheduler env so BUG-241 final gates can run reliably.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-cc54f2c6d26c",
+      "timestamp": "2026-06-03T18:30:51.756428Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-03T18:30:51.756432Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 676,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/676",
+  "last_seen_at": "2026-06-03T18:30:51.756432Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT=true python -m nox -s simulation_dual_backend_l4",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0",
+    "simulation_dual_backend_l4",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Simulation dual backend validation reads production default_submit env",
+  "trigger_condition": {
+    "fingerprint": "cc54f2c6d26c5eb0e847d9b3",
+    "source_event_id": "FE-20260604-cc54f2c6d26c"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
