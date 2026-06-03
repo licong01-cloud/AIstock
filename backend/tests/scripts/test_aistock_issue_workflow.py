@@ -2673,6 +2673,92 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     ]
 
 
+def test_merge_finalizer_relocates_before_cleaning_current_source_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    source_worktree = isolated_workflow_root / "task"
+    close_sync_root = isolated_workflow_root / "registry"
+    source_worktree.mkdir()
+    close_sync_root.mkdir()
+    cleanup_cwds: list[Path] = []
+
+    monkeypatch.chdir(source_worktree)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "workflow_gate": "close_synced",
+            "registry_root": str(close_sync_root),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "merge_commit": "merge123",
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+    )
+
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        cleanup_cwds.append(Path.cwd())
+        assert not workflow._cwd_is_inside(kwargs.get("worktree"))
+        return {
+            "workflow_gate": "cleanup_done",
+            "branch": kwargs["branch"],
+            "worktree": kwargs.get("worktree"),
+            "sync_root": kwargs.get("sync_root"),
+        }
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(source_worktree),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "complete"
+    assert payload["cleanup_cwd_relocation"] == {
+        "from": str(source_worktree),
+        "to": str(isolated_workflow_root),
+        "reason": "cleanup_target_contains_current_cwd",
+        "relocated": True,
+    }
+    assert cleanup_cwds == [isolated_workflow_root, isolated_workflow_root]
+    assert Path.cwd() == isolated_workflow_root
+
+
 def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

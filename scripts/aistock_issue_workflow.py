@@ -1666,6 +1666,39 @@ def _is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
+def _cwd_is_inside(path: str | Path | None) -> bool:
+    if not path:
+        return False
+    try:
+        target = Path(path).resolve()
+        cwd = Path.cwd().resolve()
+    except OSError:
+        return False
+    return cwd == target or _is_inside(cwd, target)
+
+
+def _relocate_cwd_before_cleanup(*worktrees: str | Path | None, root: Path | None = None) -> dict[str, Any] | None:
+    current_root = root or _canonical_root()
+    for worktree in worktrees:
+        if _cwd_is_inside(worktree):
+            relocation = {
+                "from": str(worktree),
+                "to": str(current_root),
+                "reason": "cleanup_target_contains_current_cwd",
+                "relocated": False,
+            }
+            if not current_root.exists():
+                relocation["error"] = f"canonical root missing: {current_root}"
+                return relocation
+            try:
+                os.chdir(current_root)
+                relocation["relocated"] = True
+            except OSError as exc:
+                relocation["error"] = str(exc)
+            return relocation
+    return None
+
+
 def _canonical_root() -> Path:
     override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
     if override:
@@ -6604,6 +6637,11 @@ def build_merge_finalizer_plan(
         blocking.append("--cleanup requires --source-branch")
     if cleanup and not source_worktree:
         warnings.append("--source-worktree is missing; cleanup can delete branches but cannot remove the task worktree")
+    cleanup_cwd_relocation = None
+    if cleanup and apply:
+        cleanup_cwd_relocation = _relocate_cwd_before_cleanup(source_worktree)
+        if cleanup_cwd_relocation and not cleanup_cwd_relocation.get("relocated"):
+            blocking.append(cleanup_cwd_relocation.get("error") or "failed to relocate cwd before cleanup")
 
     payload: dict[str, Any] = {
         "schema_version": "aistock_issue_workflow_merge_finalizer_v1",
@@ -6619,6 +6657,7 @@ def build_merge_finalizer_plan(
         "blocking": blocking,
         "warnings": warnings,
         "production_gates": production_gates or _production_gates_payload(),
+        "cleanup_cwd_relocation": cleanup_cwd_relocation,
     }
     if blocking:
         payload["workflow_gate"] = "blocked"
