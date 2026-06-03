@@ -6,8 +6,6 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
