@@ -530,6 +530,9 @@ Advisory Center 顶部必须先显示“当前执行中的荐股任务排行榜�
 
 **排序与样本量护栏**：
 
+- `eligible_episode_count`：可评价样本数，是胜率/平均涨幅/中位涨幅等指标的分母；只统计已经进入该荐股 program 且具备有效 entry price，并且具备有效 exit price 或期末 mark price 的 episode。收益为 0 的 episode 计入 eligible 分母但不计入 win；同一股票退出后再次入选算新的 episode。
+- `data_excluded_count`：已进入或计划进入荐股生命周期、但因价格/数据质量不足无法可靠计算收益的 episode 数，例如缺少次日开盘价、停牌导致无法形成 entry/exit/mark、涨跌停不可成交且未延后补价、复权因子缺失、daily evidence 缺失。它不进入胜率/平均涨幅分母，但必须披露；该值过高表示统计结果可信度下降。
+- `last_review_status`：该 program 最近一次应执行复评的状态，建议枚举为 `OK` / `PARTIAL` / `WAITING_DATA` / `REVIEW_FAILED` / `STALE`。`OK` 表示最近交易日复评完成；`WAITING_DATA` 表示缺行情/证据暂不能判断；`REVIEW_FAILED` 表示任务失败；`STALE` 表示超过预期交易日未复评。
 - 默认胜率排序必须带样本量提示：`eligible_episode_count < min_win_rate_sample`（建议 20）时显示 `LOW_SAMPLE` badge，并在同胜率下排在样本充足任务之后。
 - 胜率相同时，默认 tie-breaker 为 `eligible_episode_count desc`、`avg_return_bps desc`、`max_drawdown_bps asc`、`enabled_since asc`。
 - 平均涨幅排序必须同时显示 median return 与 max drawdown，避免少数大涨样本掩盖大多数亏损。
