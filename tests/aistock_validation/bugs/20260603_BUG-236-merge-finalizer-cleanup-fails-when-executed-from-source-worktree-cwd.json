@@ -32,8 +32,8 @@
   "expected": "When cleanup is requested, merge-finalizer should run cleanup from a safe cwd outside any worktree it may delete, then remove the source worktree/branch only after normal safety checks pass.",
   "first_seen_at": "2026-06-03T15:09:57.219631Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b084cef808a87381b785fa4c2dd92efc2c15ef7",
+  "fixed_at": "2026-06-03T15:46:45.070848Z",
   "github_issue_number": 659,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/659",
   "last_seen_at": "2026-06-03T15:09:57.219631Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/660",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,5 +65,8 @@
     "fingerprint": "0fac8b4105723d7b306d2df5",
     "source_event_id": "FE-20260603-0fac8b410572"
   },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed; targeted pytest merge_finalizer/cleanup_after_merge -> 10 passed; ruff workflow files -> passed; workflow-smoke -> passed; nox l0 guardrail_changed_files validation_center_backend validation_catalog_integrity validation_module_registry_l0 -> passed; PR #660 CI -> all checks passed after docs update; production_ddl_gate=noop."
+  ],
   "verification_run_id": null
 }
