@@ -9,6 +9,7 @@ const TABS = [
   { href: "/paper-v2", label: "总览", exact: true },
   { href: "/paper-v2/packages", label: "策略包", exact: false },
   { href: "/paper-v2/selection", label: "选股中心", exact: false },
+  { href: "/paper-v2/advisory", label: "Advisory", exact: false },
   { href: "/paper-v2/running", label: "运行监控", exact: false },
   { href: "/paper-v2/simulation-runtime", label: "统一运行态", exact: false },
   { href: "/paper-v2/portfolios", label: "模拟盘实例", exact: false },

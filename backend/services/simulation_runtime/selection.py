@@ -7,6 +7,8 @@ rebalance, execution-plan or broker-specific logic runs.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -1053,6 +1055,16 @@ class StrategyPackageSelectionService:
     ) -> list[SelectionCandidate]:
         total_weight = sum(package_weights.values())
         normalized_weights = {package_id: weight / total_weight for package_id, weight in package_weights.items()}
+        package_ids = list(package_results)
+        fusion_policy_sha256 = _canonical_sha256(
+            {
+                "method": "weighted_rank_fusion",
+                "package_weights": package_weights,
+                "normalized_package_weights": normalized_weights,
+                "candidate_top_k": None,
+                "missing_rank_policy": "not_selected_zero_score",
+            }
+        )
         rows_by_symbol: dict[str, list[tuple[str, SelectionCandidate, float]]] = {}
         for package_id, rows in package_results.items():
             candidate_count = len(rows)
@@ -1070,8 +1082,16 @@ class StrategyPackageSelectionService:
             source_package_ids = [package_id for package_id, _, _ in rows]
             package_scores = {package_id: row.score for package_id, row, _ in rows}
             package_ranks = {package_id: row.rank for package_id, row, _ in rows}
-            rank_scores = {package_id: rank_score for package_id, _, rank_score in rows}
-            fusion_score = sum(normalized_weights[package_id] * rank_score for package_id, _, rank_score in rows)
+            rank_scores = {package_id: 0.0 for package_id in package_ids}
+            rank_scores.update({package_id: rank_score for package_id, _, rank_score in rows})
+            package_presence = {
+                package_id: ("selected_topK" if package_id in package_ranks else "not_selected_in_full_evidence")
+                for package_id in package_ids
+            }
+            support_count = len(source_package_ids)
+            rank_values = list(package_ranks.values())
+            rank_dispersion = max(rank_values) - min(rank_values) if len(rank_values) > 1 else 0
+            fusion_score = sum(normalized_weights[package_id] * rank_scores.get(package_id, 0.0) for package_id in package_ids)
             aggregate.append(
                 SelectionCandidate(
                     symbol=symbol,
@@ -1086,12 +1106,28 @@ class StrategyPackageSelectionService:
                         "package_ranks": package_ranks,
                         "package_raw_scores": package_scores,
                         "package_rank_scores": rank_scores,
+                        "package_presence": package_presence,
                         "package_weights": package_weights,
                         "normalized_package_weights": normalized_weights,
+                        "support_count": support_count,
+                        "rank_dispersion": rank_dispersion,
+                        "fusion_policy_sha256": fusion_policy_sha256,
                         "fusion_score": fusion_score,
                     },
                     reason="weighted_fusion_aggregate",
                 )
             )
-        aggregate.sort(key=lambda item: (-item.score, item.rank, item.symbol))
+        aggregate.sort(
+            key=lambda item: (
+                -item.score,
+                -int(item.component_scores.get("support_count") or 0),
+                item.rank,
+                item.symbol,
+            )
+        )
         return [item.model_copy(update={"rank": idx}) for idx, item in enumerate(aggregate, start=1)]
+
+
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

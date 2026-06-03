@@ -1,0 +1,104 @@
+{
+  "actual": "目前组合选股已有 weighted_fusion/union/intersection，但 advisory daily review 的多策略包复评运行、证据持久化、API/UI 验收链路未完整落地。",
+  "allowed_write_scope": [
+    "docs/architecture/qe_paper_price_guard_execution_acceptance_design_v2_20260602.md",
+    "tests/aistock_validation/bugs/20260603_BUG-235-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/advisory_lifecycle.py",
+    "backend/services/advisory_quality.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/models.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/routers/advisory.py",
+    "backend/routers/selection_center.py",
+    "backend/tests/watchlist/test_advisory_lifecycle.py",
+    "backend/tests/watchlist/test_advisory_quality_report.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/selection_center/test_selection_center_api.py",
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/selectionCenter.ts",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/src/app/paper-v2/layout.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-235",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T13:56:52.031349Z",
+  "description": "目前组合选股已有 weighted_fusion/union/intersection，但 advisory daily review 的多策略包复评运行、证据持久化、API/UI 验收链路未完整落地。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-6ee42910bdc0",
+      "timestamp": "2026-06-03T13:56:52.031345Z"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_implementation_runtime_fusion",
+      "actor": "codex",
+      "note": "Expand scope for advisory lifecycle, selection-center and shared simulation-runtime weighted rank fusion, API/UI review surfaces, and targeted tests per accepted design.",
+      "timestamp": "2026-06-03T14:15:51Z"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_advisory_nav",
+      "actor": "codex",
+      "note": "Expand scope for Paper v2 navigation entry to make the advisory diagnostics UI reachable from the existing tab shell.",
+      "timestamp": "2026-06-03T14:24:42Z"
+    },
+    {
+      "action": "validation_passed_pr_ready",
+      "actor": "codex",
+      "note": "Targeted backend/API tests, py_compile, diff-check, l0, paper_v2_backend, and validation_module_registry_l0 passed; implementation branch is ready for PR gate.",
+      "timestamp": "2026-06-03T14:32:27Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/qe_paper_price_guard_execution_acceptance_design_v2_20260602.md"
+  ],
+  "expected": "多策略包荐股每日复评以 fusion_rank 作为 canonical rank，同时保留 package_raw_scores/package_raw_ranks/package_rank_scores/support_count/rank_dispersion/fusion_policy_sha256，缺失 evidence fail-fast 或 WAITING_DATA，并提供 UI/质量报告可消费的证据。",
+  "first_seen_at": "2026-06-03T13:56:52.031349Z",
+  "fix_branch": "bug/BUG-235-issue-20260603",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 653,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/653",
+  "last_seen_at": "2026-06-03T13:56:52.031349Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n weighted_rank_fusion backend/services/selection_center/service.py",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "选股投顾多策略包融合每日复评未完整实现",
+  "trigger_condition": {
+    "fingerprint": "6ee42910bdc01e1f16d75946",
+    "source_event_id": "FE-20260603-6ee42910bdc0"
+  },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/watchlist/test_advisory_lifecycle.py backend/tests/watchlist/test_advisory_quality_report.py backend/tests/selection_center/test_runtime_selection.py::test_selection_center_weighted_fusion_uses_rank_normalized_scores backend/tests/selection_center/test_selection_center_api.py -q -p no:cacheprovider -> 24 passed",
+    "rtk python -m py_compile backend/services/advisory_lifecycle.py backend/services/selection_center/service.py backend/services/simulation_runtime/selection.py backend/routers/selection_center.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> 597 passed, 1 skipped, 2 xfailed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_run_id": "targeted pytest; py_compile; diff-check; nox:l0; nox:paper_v2_backend; nox:validation_module_registry_l0"
+}

@@ -6,6 +6,8 @@ and append-only review facts, never OMS/broker/Paper ledger records.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from math import isfinite
@@ -65,6 +67,17 @@ class DailySelectionEvidenceSnapshot:
     latest_rank_pct: float | None = None
     alpha_decay_confirm_days: int = 0
     feature_availability_ts: datetime | None = None
+    package_raw_scores: dict[str, float] = field(default_factory=dict)
+    package_raw_ranks: dict[str, int] = field(default_factory=dict)
+    package_rank_scores: dict[str, float] = field(default_factory=dict)
+    package_presence: dict[str, str] = field(default_factory=dict)
+    package_weights: dict[str, float] = field(default_factory=dict)
+    normalized_package_weights: dict[str, float] = field(default_factory=dict)
+    support_count: int | None = None
+    rank_dispersion: int | None = None
+    fusion_score: float | None = None
+    fusion_rank: int | None = None
+    fusion_policy_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +111,60 @@ class AdvisoryReviewRecord:
     t1_note: str | None = None
     layer: str = REVIEW_LAYER
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class PackageSelectionEvidence:
+    package_id: str
+    evidence_id: str | None
+    code: str
+    trade_date: date
+    score: float | None = None
+    rank: int | None = None
+    candidate_count: int | None = None
+    presence: str = "selected_topK"
+    feature_availability_ts: datetime | None = None
+
+
+@dataclass(frozen=True)
+class FusionPolicy:
+    method: str = "weighted_rank_fusion"
+    package_weights: dict[str, float] = field(default_factory=dict)
+    candidate_top_k: int | None = None
+    missing_rank_policy: str = "not_selected_zero_score"
+
+    def normalized_weights(self, package_ids: Iterable[str]) -> dict[str, float]:
+        ordered = list(package_ids)
+        raw = self.package_weights or {package_id: 1.0 for package_id in ordered}
+        missing = set(ordered) - set(raw)
+        extra = set(raw) - set(ordered)
+        if missing or extra:
+            raise RuntimeConfigInvalidError(
+                "fusion policy package_weights must match package evidence packages",
+                context={"missing": sorted(missing), "extra": sorted(extra)},
+            )
+        weights: dict[str, float] = {}
+        for package_id in ordered:
+            value = _optional_float(raw.get(package_id))
+            if value is None:
+                raise RuntimeConfigInvalidError(
+                    "fusion policy package weights must be positive finite numbers",
+                    context={"package_id": package_id, "weight": raw.get(package_id)},
+                )
+            weights[package_id] = value
+        total = sum(weights.values())
+        return {package_id: weight / total for package_id, weight in weights.items()}
+
+    def sha256(self, package_ids: Iterable[str]) -> str:
+        ordered = list(package_ids)
+        payload = {
+            "method": self.method,
+            "package_weights": {package_id: self.package_weights.get(package_id, 1.0) for package_id in ordered},
+            "normalized_package_weights": self.normalized_weights(ordered),
+            "candidate_top_k": self.candidate_top_k,
+            "missing_rank_policy": self.missing_rank_policy,
+        }
+        return _canonical_sha256(payload)
 
 
 class AdvisoryReviewRepository(Protocol):
@@ -336,6 +403,41 @@ class AdvisoryLifecycleService:
                     )
         return records
 
+    def run_multi_package_daily_review(
+        self,
+        *,
+        items: Iterable[AdvisoryWatchlistItem],
+        package_evidence_by_code: Mapping[str, Mapping[str, PackageSelectionEvidence]],
+        market_by_code: Mapping[str, AdvisoryMarketSnapshot],
+        trade_date: date,
+        policy: ExitGuardPolicy,
+        fusion_policy: FusionPolicy,
+    ) -> list[AdvisoryReviewRecord]:
+        item_list = list(items)
+        active_codes = {
+            item.code
+            for item in item_list
+            if item.advisory_enabled and item.lifecycle_status in {LIFECYCLE_ENTERED, LIFECYCLE_HOLDING}
+        }
+        missing_codes = sorted(active_codes - set(package_evidence_by_code))
+        if missing_codes:
+            raise DataUnavailableError(
+                "multi-package advisory review requires fusion evidence coverage for every active item",
+                context={"missing_codes": missing_codes, "trade_date": trade_date.isoformat()},
+            )
+        evidence_by_code = build_fusion_evidence_by_code(
+            package_evidence_by_code=package_evidence_by_code,
+            trade_date=trade_date,
+            fusion_policy=fusion_policy,
+        )
+        return self.run_daily_review(
+            items=item_list,
+            evidence_by_code=evidence_by_code,
+            market_by_code=market_by_code,
+            trade_date=trade_date,
+            policy=policy,
+        )
+
 
 def adjust_price_for_factor(price: float, *, base_factor: float | None, current_factor: float | None) -> float:
     if not _positive(base_factor) or not _positive(current_factor):
@@ -353,6 +455,119 @@ def adjusted_stop_take(
     return {
         "stop_price": adjust_price_for_factor(stop_price, base_factor=base_factor, current_factor=current_factor) if stop_price is not None else None,
         "take_price": adjust_price_for_factor(take_price, base_factor=base_factor, current_factor=current_factor) if take_price is not None else None,
+    }
+
+
+def build_fusion_evidence_by_code(
+    *,
+    package_evidence_by_code: Mapping[str, Mapping[str, PackageSelectionEvidence]],
+    trade_date: date,
+    fusion_policy: FusionPolicy,
+) -> dict[str, DailySelectionEvidenceSnapshot]:
+    package_ids = _package_ids_from_evidence(package_evidence_by_code)
+    if not package_ids:
+        raise DataUnavailableError("multi-package advisory review requires package evidence")
+    if fusion_policy.method != "weighted_rank_fusion":
+        raise RuntimeConfigInvalidError(
+            "unsupported advisory fusion policy method",
+            context={"method": fusion_policy.method},
+        )
+    normalized_weights = fusion_policy.normalized_weights(package_ids)
+    fusion_policy_sha256 = fusion_policy.sha256(package_ids)
+    raw_weights = {package_id: fusion_policy.package_weights.get(package_id, 1.0) for package_id in package_ids}
+
+    snapshots: list[DailySelectionEvidenceSnapshot] = []
+    for code, by_package in package_evidence_by_code.items():
+        package_raw_scores: dict[str, float] = {}
+        package_raw_ranks: dict[str, int] = {}
+        package_rank_scores: dict[str, float] = {package_id: 0.0 for package_id in package_ids}
+        package_presence: dict[str, str] = {}
+        feature_ts_values: list[datetime] = []
+
+        for package_id in package_ids:
+            evidence = by_package.get(package_id)
+            if evidence is None:
+                if fusion_policy.missing_rank_policy == "data_missing_fail_fast":
+                    raise DataUnavailableError(
+                        "multi-package advisory review missing package evidence",
+                        context={"code": code, "package_id": package_id, "trade_date": trade_date.isoformat()},
+                    )
+                package_presence[package_id] = "not_selected_in_full_evidence"
+                continue
+            if evidence.trade_date != trade_date:
+                raise RuntimeConfigInvalidError(
+                    "multi-package advisory evidence trade_date mismatch",
+                    context={
+                        "code": code,
+                        "package_id": package_id,
+                        "evidence_trade_date": evidence.trade_date.isoformat(),
+                        "trade_date": trade_date.isoformat(),
+                    },
+                )
+            presence = str(evidence.presence or "selected_topK")
+            package_presence[package_id] = presence
+            if presence == "data_missing":
+                raise DataUnavailableError(
+                    "multi-package advisory review package evidence is data_missing",
+                    context={"code": code, "package_id": package_id, "trade_date": trade_date.isoformat()},
+                )
+            if evidence.feature_availability_ts:
+                feature_ts_values.append(evidence.feature_availability_ts)
+            score = _optional_any_float(evidence.score)
+            rank = _optional_int(evidence.rank)
+            if score is not None:
+                package_raw_scores[package_id] = score
+            if rank is None:
+                if presence == "selected_topK":
+                    raise DataUnavailableError(
+                        "selected package evidence requires rank",
+                        context={"code": code, "package_id": package_id, "trade_date": trade_date.isoformat()},
+                    )
+                continue
+            package_raw_ranks[package_id] = rank
+            denominator = max(int(evidence.candidate_count or 1) - 1, 1)
+            package_rank_scores[package_id] = max(0.0, 1.0 - ((rank - 1) / denominator))
+
+        support_count = sum(1 for value in package_presence.values() if value == "selected_topK")
+        if support_count <= 0:
+            continue
+        ranks = list(package_raw_ranks.values())
+        rank_dispersion = max(ranks) - min(ranks) if len(ranks) > 1 else 0
+        fusion_score = sum(normalized_weights[package_id] * package_rank_scores.get(package_id, 0.0) for package_id in package_ids)
+        snapshots.append(
+            DailySelectionEvidenceSnapshot(
+                # No persisted fusion evidence row exists yet; keep the FK-safe review evidence_id empty.
+                evidence_id=None,
+                code=code,
+                trade_date=trade_date,
+                score=fusion_score,
+                rank=0,
+                package_raw_scores=package_raw_scores,
+                package_raw_ranks=package_raw_ranks,
+                package_rank_scores=package_rank_scores,
+                package_presence=package_presence,
+                package_weights=raw_weights,
+                normalized_package_weights=normalized_weights,
+                support_count=support_count,
+                rank_dispersion=rank_dispersion,
+                fusion_score=fusion_score,
+                fusion_policy_sha256=fusion_policy_sha256,
+                feature_availability_ts=max(feature_ts_values) if feature_ts_values else None,
+            )
+        )
+
+    snapshots.sort(
+        key=lambda item: (
+            -float(item.fusion_score or 0.0),
+            -int(item.support_count or 0),
+            min(item.package_raw_ranks.values()) if item.package_raw_ranks else 999999,
+            item.code,
+        )
+    )
+    universe_count = max(int(fusion_policy.candidate_top_k or 0), len(snapshots), 1)
+    return {
+        item.code: _with_fusion_rank(item, rank, universe_count=universe_count)
+        for rank, item in enumerate(snapshots, start=1)
     }
 
 
@@ -406,9 +621,61 @@ def _optional_float(value: Any) -> float | None:
     return parsed if isfinite(parsed) and parsed > 0 else None
 
 
+def _optional_any_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isfinite(parsed) else None
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _positive(value: Any) -> bool:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return False
     return isfinite(parsed) and parsed > 0
+
+
+def _package_ids_from_evidence(package_evidence_by_code: Mapping[str, Mapping[str, PackageSelectionEvidence]]) -> list[str]:
+    package_ids: set[str] = set()
+    for by_package in package_evidence_by_code.values():
+        package_ids.update(by_package)
+    return sorted(package_ids)
+
+
+def _with_fusion_rank(item: DailySelectionEvidenceSnapshot, rank: int, *, universe_count: int) -> DailySelectionEvidenceSnapshot:
+    return DailySelectionEvidenceSnapshot(
+        evidence_id=item.evidence_id,
+        code=item.code,
+        trade_date=item.trade_date,
+        score=item.score,
+        rank=rank,
+        latest_rank_pct=rank / universe_count,
+        alpha_decay_confirm_days=item.alpha_decay_confirm_days,
+        feature_availability_ts=item.feature_availability_ts,
+        package_raw_scores=item.package_raw_scores,
+        package_raw_ranks=item.package_raw_ranks,
+        package_rank_scores=item.package_rank_scores,
+        package_presence=item.package_presence,
+        package_weights=item.package_weights,
+        normalized_package_weights=item.normalized_package_weights,
+        support_count=item.support_count,
+        rank_dispersion=item.rank_dispersion,
+        fusion_score=item.fusion_score,
+        fusion_rank=rank,
+        fusion_policy_sha256=item.fusion_policy_sha256,
+    )
+
+
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
