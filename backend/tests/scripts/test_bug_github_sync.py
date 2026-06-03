@@ -467,6 +467,7 @@ def test_run_infers_repo_from_git_remote_for_live_sync(tmp_path: Path, monkeypat
     captured: dict[str, object] = {}
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("AISTOCK_GITHUB_SKIP_ENV_FILE", "1")
 
     def fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
         if args[:3] == ["git", "-C", str(tmp_path)] and args[3:] == ["rev-parse", "--show-toplevel"]:
