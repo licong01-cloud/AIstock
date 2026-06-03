@@ -19,6 +19,10 @@ STATUS_OPEN_LIKE = 50
 STATUS_CANCELLED = 54
 STATUS_FILLED = 56
 STATUS_REJECTED = 57
+MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE = "account_group_slots"
+MINIQMT_LEGACY_EXCLUSIVE_ALLOCATION_MODE = "exclusive_account"
+MINIQMT_ACCOUNT_GROUP_METADATA_KEY = "miniqmt_account_group"
+MINIQMT_STRATEGY_SLOT_METADATA_KEY = "miniqmt_strategy_slot"
 
 
 class OrderLifecycle(str, Enum):
@@ -356,6 +360,150 @@ class VirtualAccount:
 
 
 @dataclass(frozen=True)
+class MiniQmtStrategySlot:
+    """A strategy-owned virtual slot inside one MiniQMT broker account group."""
+
+    account_group_id: str
+    strategy_slot_id: str
+    strategy_id: str
+    strategy_name: str
+    display_name: str
+    account_id: str
+    allocated_cash: Decimal
+    order_remark_prefix: str
+    broker_backend: str = "minqmt_sim"
+    broker_mode: str = "SIM"
+    mode: str = "SIM"
+    package_id: str | None = None
+    release_id: str | None = None
+    binding_id: str | None = None
+    legacy_portfolio_id: str | None = None
+    account_group_cash_limit: Decimal | None = None
+    status: VirtualAccountStatus = VirtualAccountStatus.ENABLED
+    risk_config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_virtual_account(cls, account: VirtualAccount) -> "MiniQmtStrategySlot | None":
+        group_meta = account.metadata.get(MINIQMT_ACCOUNT_GROUP_METADATA_KEY)
+        slot_meta = account.metadata.get(MINIQMT_STRATEGY_SLOT_METADATA_KEY)
+        if not isinstance(group_meta, dict) or not isinstance(slot_meta, dict):
+            return None
+        account_group_id = _optional_text(slot_meta.get("account_group_id")) or _optional_text(
+            group_meta.get("account_group_id")
+        )
+        strategy_slot_id = _optional_text(slot_meta.get("strategy_slot_id"))
+        order_remark_prefix = _optional_text(slot_meta.get("order_remark_prefix"))
+        if not account_group_id or not strategy_slot_id or not order_remark_prefix:
+            return None
+        return cls(
+            account_group_id=account_group_id,
+            strategy_slot_id=strategy_slot_id,
+            strategy_id=account.strategy_id,
+            strategy_name=account.strategy_name,
+            display_name=account.display_name,
+            account_id=account.account_id,
+            allocated_cash=_decimal_from_metadata(slot_meta.get("allocated_cash"), account.initial_cash),
+            order_remark_prefix=order_remark_prefix,
+            broker_backend=_optional_text(group_meta.get("broker_backend")) or "minqmt_sim",
+            broker_mode=_optional_text(group_meta.get("broker_mode")) or "SIM",
+            mode=account.mode,
+            package_id=_optional_text(slot_meta.get("package_id")),
+            release_id=_optional_text(slot_meta.get("release_id")),
+            binding_id=_optional_text(slot_meta.get("binding_id")),
+            legacy_portfolio_id=_optional_text(slot_meta.get("legacy_portfolio_id")),
+            account_group_cash_limit=_optional_decimal_from_metadata(group_meta.get("cash_limit")),
+            status=account.status,
+            risk_config=dict(account.risk_config),
+            metadata={k: v for k, v in account.metadata.items() if k not in _SLOT_METADATA_RESERVED_KEYS},
+        )
+
+    def to_virtual_account(self, group: "MiniQmtAccountGroup") -> VirtualAccount:
+        metadata = dict(self.metadata)
+        metadata["allocation_mode"] = MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE
+        metadata[MINIQMT_ACCOUNT_GROUP_METADATA_KEY] = group.to_metadata()
+        metadata[MINIQMT_STRATEGY_SLOT_METADATA_KEY] = self.to_metadata()
+        return VirtualAccount(
+            strategy_id=self.strategy_id,
+            strategy_name=self.strategy_name,
+            display_name=self.display_name,
+            account_id=group.broker_account_id,
+            mode=self.mode,
+            initial_cash=self.allocated_cash,
+            cash=self.allocated_cash,
+            status=self.status,
+            risk_config=dict(self.risk_config),
+            metadata=metadata,
+        )
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "account_group_id": self.account_group_id,
+            "strategy_slot_id": self.strategy_slot_id,
+            "strategy_id": self.strategy_id,
+            "strategy_name": self.strategy_name,
+            "package_id": self.package_id,
+            "release_id": self.release_id,
+            "binding_id": self.binding_id,
+            "allocated_cash": str(self.allocated_cash),
+            "order_remark_prefix": self.order_remark_prefix,
+            "legacy_portfolio_id": self.legacy_portfolio_id,
+            "status": self.status.value,
+        }
+
+
+@dataclass(frozen=True)
+class MiniQmtAccountGroup:
+    """No-DDL account group modeled through virtual_account rows and metadata."""
+
+    account_group_id: str
+    broker_account_id: str
+    broker_backend: str = "minqmt_sim"
+    broker_mode: str = "SIM"
+    allocation_mode: str = MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE
+    cash_limit: Decimal | None = None
+    status: str = "ACTIVE"
+    slots: tuple[MiniQmtStrategySlot, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def allocated_cash_total(self) -> Decimal:
+        total = Decimal("0")
+        for slot in self.slots:
+            if slot.status != VirtualAccountStatus.DISABLED:
+                total += slot.allocated_cash
+        return total
+
+    def with_slots(self, slots: list[MiniQmtStrategySlot] | tuple[MiniQmtStrategySlot, ...]) -> "MiniQmtAccountGroup":
+        return MiniQmtAccountGroup(
+            account_group_id=self.account_group_id,
+            broker_account_id=self.broker_account_id,
+            broker_backend=self.broker_backend,
+            broker_mode=self.broker_mode,
+            allocation_mode=self.allocation_mode,
+            cash_limit=self.cash_limit,
+            status=self.status,
+            slots=tuple(slots),
+            metadata=dict(self.metadata),
+        )
+
+    def to_metadata(self) -> dict[str, Any]:
+        payload = dict(self.metadata)
+        payload.update(
+            {
+                "account_group_id": self.account_group_id,
+                "broker_backend": self.broker_backend,
+                "broker_mode": self.broker_mode,
+                "broker_account_id": self.broker_account_id,
+                "allocation_mode": self.allocation_mode,
+                "cash_limit": str(self.cash_limit) if self.cash_limit is not None else None,
+                "status": self.status,
+            }
+        )
+        return payload
+
+
+@dataclass(frozen=True)
 class StrategyPackageBinding:
     binding_id: str
     strategy_id: str
@@ -598,6 +746,40 @@ class UnattributedTradeRecord:
     order_remark: str = ""
     raw_json: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+_SLOT_METADATA_RESERVED_KEYS = frozenset(
+    {
+        "allocation_mode",
+        MINIQMT_ACCOUNT_GROUP_METADATA_KEY,
+        MINIQMT_STRATEGY_SLOT_METADATA_KEY,
+    }
+)
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _decimal_from_metadata(value: Any, default: Decimal) -> Decimal:
+    if value is None or value == "":
+        return default
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return default
+
+
+def _optional_decimal_from_metadata(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def new_id(prefix: str) -> str:

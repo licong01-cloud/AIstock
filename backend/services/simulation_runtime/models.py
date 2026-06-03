@@ -38,6 +38,8 @@ BROKER_BINDING_RELEASE_FORBIDDEN_KEYS = frozenset(
         "target_broker_backend",
         "broker_account_id",
         "account_id",
+        "account_group_id",
+        "strategy_slot_id",
         "capital_allocation",
         "initial_cash",
         "strategy_name",
@@ -52,6 +54,8 @@ SELECTION_ONLY_FORBIDDEN_KEYS = frozenset(
         "target_broker_backend",
         "broker_account_id",
         "account_id",
+        "account_group_id",
+        "strategy_slot_id",
         "capital_allocation",
         "capital",
         "initial_cash",
@@ -113,6 +117,8 @@ SIMULATION_RELEASE_BINDING_CONFIG_KEYS = frozenset(
         "manifest_sha256",
         "broker_backend",
         "broker_account_id",
+        "account_group_id",
+        "strategy_slot_id",
         "capital_allocation",
         "strategy_name",
         "order_remark_prefix",
@@ -307,6 +313,8 @@ class SimulationReleaseBinding(BaseModel):
     manifest_sha256: str
     broker_backend: SimulationBrokerBackend
     broker_account_id: str | None = None
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
     capital_allocation: float = Field(gt=0)
     strategy_name: str | None = None
     order_remark_prefix: str | None = None
@@ -328,7 +336,15 @@ class SimulationReleaseBinding(BaseModel):
             raise ValueError("field is required")
         return value
 
-    @field_validator("broker_account_id", "strategy_name", "order_remark_prefix", "created_by", "created_reason")
+    @field_validator(
+        "broker_account_id",
+        "account_group_id",
+        "strategy_slot_id",
+        "strategy_name",
+        "order_remark_prefix",
+        "created_by",
+        "created_reason",
+    )
     @classmethod
     def _optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -482,6 +498,8 @@ class ExecutionPlanIntent(BaseModel):
     release_hash: str
     binding_id: str
     binding_hash: str
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
     symbol: str
     side: OrderSide
     target_quantity: int = Field(ge=0)
@@ -532,6 +550,8 @@ class ExecutionPlan(BaseModel):
     release_hash: str
     binding_id: str
     binding_hash: str
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
     selection_evidence_id: str
     selection_evidence_hash: str
     target_trade_date: date

@@ -23,6 +23,8 @@ from .lot_availability import (
 )
 from .models import (
     BUY_ORDER_TYPE,
+    MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE,
+    MINIQMT_ACCOUNT_GROUP_METADATA_KEY,
     SELL_ORDER_TYPE,
     CashEntryType,
     CashLedgerEntry,
@@ -596,6 +598,7 @@ class QmtManagedOrderService:
         errors_by_index: list[list[OrderPreflightError]] = [list(result.errors) for result in base_results]
         seen_remarks: dict[tuple[str, str], int] = {}
         buy_freeze_by_account_strategy: dict[tuple[str, str], Decimal] = {}
+        buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
         sell_quantity_by_account_strategy_symbol: dict[tuple[str, str, str], int] = {}
         broker_sell_quantity_by_account_symbol: dict[tuple[str, str], int] = {}
 
@@ -617,6 +620,13 @@ class QmtManagedOrderService:
             if request.order_type == BUY_ORDER_TYPE and base_results[index].strategy_id:
                 key = (request.account_id, request.strategy_name)
                 buy_freeze_by_account_strategy[key] = buy_freeze_by_account_strategy.get(key, Decimal("0")) + base_results[index].freeze_amount
+                account = self._account_by_strategy_name(request.account_id, request.strategy_name)
+                group_limit = _account_group_cash_limit(account) if account is not None else None
+                if group_limit is not None:
+                    group_key, cash_limit, context = group_limit
+                    buy_freeze_by_account_group[group_key] = (
+                        buy_freeze_by_account_group.get(group_key, Decimal("0")) + base_results[index].freeze_amount
+                    )
             if request.order_type == SELL_ORDER_TYPE:
                 key = (request.account_id, request.strategy_name, request.symbol)
                 sell_quantity_by_account_strategy_symbol[key] = (
@@ -639,6 +649,23 @@ class QmtManagedOrderService:
                             {"available_cash": float(result.available_cash), "batch_required_cash": float(total_freeze)},
                         )
                     )
+                account = self._account_by_strategy_name(request.account_id, request.strategy_name)
+                group_limit = _account_group_cash_limit(account) if account is not None else None
+                if group_limit is not None:
+                    group_key, cash_limit, context = group_limit
+                    group_total_freeze = buy_freeze_by_account_group.get(group_key, Decimal("0"))
+                    if group_total_freeze > cash_limit:
+                        errors_by_index[index].append(
+                            OrderPreflightError(
+                                "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH",
+                                "batch aggregate buy freeze exceeds MiniQMT account-group cash limit",
+                                {
+                                    **context,
+                                    "account_group_cash_limit": float(cash_limit),
+                                    "batch_required_cash": float(group_total_freeze),
+                                },
+                            )
+                        )
             if request.order_type == SELL_ORDER_TYPE and result.strategy_available_sell_quantity is not None:
                 total_sell = sell_quantity_by_account_strategy_symbol[(request.account_id, request.strategy_name, request.symbol)]
                 if total_sell > result.strategy_available_sell_quantity:
@@ -963,6 +990,32 @@ def _optional_decimal(value: Any) -> Decimal | None:
     if value is None or value == "":
         return None
     return _decimal(value)
+
+
+def _account_group_cash_limit(account: VirtualAccount) -> tuple[tuple[str, str], Decimal, dict[str, Any]] | None:
+    metadata = account.metadata or {}
+    if metadata.get("allocation_mode") != MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE:
+        return None
+    group_meta = metadata.get(MINIQMT_ACCOUNT_GROUP_METADATA_KEY)
+    if not isinstance(group_meta, dict):
+        return None
+    raw_cash_limit = group_meta.get("cash_limit")
+    if raw_cash_limit in (None, ""):
+        return None
+    try:
+        cash_limit = Decimal(str(raw_cash_limit))
+    except (InvalidOperation, ValueError):
+        return None
+    account_group_id = str(group_meta.get("account_group_id") or "").strip()
+    if not account_group_id:
+        return None
+    context = {
+        "account_id": account.account_id,
+        "account_group_id": account_group_id,
+        "broker_backend": group_meta.get("broker_backend"),
+        "broker_mode": group_meta.get("broker_mode"),
+    }
+    return (account.account_id, account_group_id), cash_limit, context
 
 
 def _batch_id_for_requests(requests: list[ManagedOrderRequest]) -> str:
