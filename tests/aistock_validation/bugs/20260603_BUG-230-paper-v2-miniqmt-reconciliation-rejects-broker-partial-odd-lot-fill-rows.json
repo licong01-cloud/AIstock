@@ -31,8 +31,8 @@
   "expected": "MiniQMT broker-reported partial fills should be accepted and reconciled as broker authority even when individual trade rows are not 100-share multiples; board-lot checks should apply to submitted order quantities/preflight, not every exchange execution fragment.",
   "first_seen_at": "2026-06-03T07:36:10.053275Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b4bf4e34d0f4e3f788c149acad05ede126a4adf",
+  "fixed_at": "2026-06-03T08:11:38.787847Z",
   "github_issue_number": 638,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/638",
   "last_seen_at": "2026-06-03T07:36:10.053275Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/640",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -61,5 +62,12 @@
     "fingerprint": "53dcf947b661b818fcd5fa8f",
     "source_event_id": "FE-20260603-53dcf947b661"
   },
+  "validation_evidence": [
+    "ruff check backend/services/trading_core/models.py backend/tests/paper_trading_v2/test_day_runner.py -> passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_day_runner.py backend/tests/trading_core/test_oms.py -q -> 33 passed",
+    "python -m nox -s paper_v2_backend -> 590 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed: l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 pytest passed; ownership scan mapped=12 unmapped=0 ambiguous=0"
+  ],
   "verification_run_id": null
 }
