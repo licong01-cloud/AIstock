@@ -38,8 +38,8 @@
   "expected": "DR snapshot should resolve the canonical production DB container safely from DR_PG_CONTAINER or the running container mapped to prod port 5432, then complete without using dev DB 5433.",
   "first_seen_at": "2026-06-03T13:05:38.674237Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a695642b05a229d13e25449f967bfcaf6303dddc",
+  "fixed_at": "2026-06-03T14:50:48.777256Z",
   "github_issue_number": 636,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/636",
   "last_seen_at": "2026-06-03T13:05:38.674237Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/655",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -72,5 +73,8 @@
     "fingerprint": "6acd08c6a0435d79a22ee5c7",
     "source_event_id": "FE-20260603-6acd08c6a043"
   },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed; python -m pytest backend/tests/scripts/test_dr_snapshot_prod_db.py backend/tests/dr/test_dump_schema_diff.py::test_pg_restore_table_line_regex_accepts_catalog_oid_format -q -> 6 passed; python -m ruff check scripts/dr_snapshot_prod_db.py backend/tests/scripts/test_dr_snapshot_prod_db.py backend/tests/dr/test_dump_schema_diff.py -> passed; python -m nox -s dr_validate -> passed (10 passed, 2 xfailed); python -m nox -s l0 guardrail_changed_files validation_center_backend validation_catalog_integrity validation_module_registry_l0 -> passed (validation_center_backend 355 passed); PR #655 CI -> all required checks passed; DR_PG_CONTAINER=timescaledb dry-run -> passed; read-only prod pg_dump snapshot created E:\\DEV backup\\aistock_pg_snapshots\\aistock_pg_20260603.dump size=12673939186."
+  ],
   "verification_run_id": null
 }
