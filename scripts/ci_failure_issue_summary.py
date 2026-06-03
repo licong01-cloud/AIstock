@@ -14,13 +14,21 @@ from typing import Any, Callable
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
 CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
-NIGHTLY_STATUS_KEYS = ("runner_preflight", "dr_snapshot", "dr_validate", "nightly_l3", "paper_v2_live")
+NIGHTLY_STATUS_KEYS = (
+    "runner_preflight",
+    "dr_snapshot",
+    "dr_validate",
+    "nightly_l3",
+    "paper_v2_live",
+    "code_intelligence",
+)
 NIGHTLY_STATUS_ALIASES = {
     "runner_preflight": ("runnerPreflight", "runner-preflight", "runner_preflight"),
     "dr_snapshot": ("drSnapshot", "dr-snapshot", "dr_snapshot"),
     "dr_validate": ("drValidate", "dr-validate", "dr_validate"),
     "nightly_l3": ("nightlyL3", "nightly-l3", "nightly_l3"),
     "paper_v2_live": ("paperV2Live", "paper-v2-live", "paper_v2_live"),
+    "code_intelligence": ("codeIntelligence", "code-intelligence", "code_intelligence", "code-intelligence-weekly"),
 }
 NIGHTLY_FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
 LOGS_NOT_READY_REASON = "actions_run_still_in_progress_logs_unavailable"
@@ -980,6 +988,7 @@ def summarize_nightly_status(
                 f"dr={statuses.get('dr_snapshot')}/{statuses.get('dr_validate')}",
                 f"l3={statuses.get('nightly_l3')}",
                 f"live={statuses.get('paper_v2_live')}",
+                f"code={statuses.get('code_intelligence')}",
             ]
         )
     )

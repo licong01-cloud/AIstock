@@ -14,6 +14,7 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
@@ -70,12 +71,15 @@ jobs:
     env:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - name: Checkout repository (bounded self-hosted fetch)
-        uses: actions/checkout@v4
-        timeout-minutes: 8
-        with:
-          fetch-depth: 1
-          show-progress: false
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: Sanity - docker + target dir reachable
         run: |
@@ -111,13 +115,10 @@ jobs:
             ls -la "${DR_TARGET_DIR}" || true
           } > tmp/dr/snapshot_metadata_${{ github.run_id }}.txt
 
-      - name: Upload DR metadata (NOT the dump bytes)
+      - name: Print DR metadata (NOT the dump bytes)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-metadata-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          find tmp/dr -maxdepth 2 -type f -print -exec cat {} \; 2>/dev/null || true
 
   dr-validate:
     name: DR validation (dump validity + schema diff + retention)
@@ -127,12 +128,15 @@ jobs:
     env:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - name: Checkout repository (bounded self-hosted fetch)
-        uses: actions/checkout@v4
-        timeout-minutes: 8
-        with:
-          fetch-depth: 1
-          show-progress: false
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: nox -s dr_validate
         run: |
@@ -140,13 +144,10 @@ jobs:
           conda activate AIstock
           python -m nox -s dr_validate
 
-      - name: Upload DR validate evidence
+      - name: Print DR validate evidence
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-validate-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          find tmp/dr -maxdepth 2 -type f -print -exec cat {} \; 2>/dev/null || true
 
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
@@ -159,12 +160,15 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     steps:
-      - name: Checkout repository (bounded self-hosted fetch)
-        uses: actions/checkout@v4
-        timeout-minutes: 8
-        with:
-          fetch-depth: 1
-          show-progress: false
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       # Activates the local AIstock conda env. The runner must have conda on PATH
       # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
@@ -201,13 +205,10 @@ jobs:
         env:
           QE_READ_L3_SKIP_UI: '1'
 
-      - name: Upload validation history
+      - name: Print validation history manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-l3-history-${{ github.run_id }}
-          path: tests/aistock_validation/history/
-          if-no-files-found: ignore
+        run: |
+          find tests/aistock_validation/history -maxdepth 2 -type f | head -100 || true
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
@@ -217,12 +218,15 @@ jobs:
     env:
       PAPER_V2_SKIP_REALTIME: '1'
     steps:
-      - name: Checkout repository (bounded self-hosted fetch)
-        uses: actions/checkout@v4
-        timeout-minutes: 8
-        with:
-          fetch-depth: 1
-          show-progress: false
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: nox -s paper_v2_live
         run: |
@@ -230,13 +234,10 @@ jobs:
           conda activate AIstock
           python -m nox -s paper_v2_live
 
-      - name: Upload paper-v2 live evidence
+      - name: Print paper-v2 live evidence manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: paper-v2-live-${{ github.run_id }}
-          path: tmp/paper_v2/
-          if-no-files-found: ignore
+        run: |
+          find tmp/paper_v2 -maxdepth 2 -type f | head -100 || true
 
   code-intelligence-weekly:
     name: Code intelligence weekly graph summary
@@ -245,12 +246,15 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
     steps:
-      - name: Checkout repository (bounded self-hosted fetch)
-        uses: actions/checkout@v4
-        timeout-minutes: 8
-        with:
-          fetch-depth: 1
-          show-progress: false
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: Build CodeGraph freshness artifact
         run: |
@@ -277,17 +281,14 @@ jobs:
             --output-dir "${OUT_DIR}" \
             --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
 
-      - name: Upload code intelligence graph summaries
+      - name: Print code intelligence graph summary manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-intelligence-weekly-${{ github.run_id }}
-          path: tmp/validation/code-intelligence/
-          if-no-files-found: ignore
+        run: |
+          find tmp/validation/code-intelligence -maxdepth 3 -type f | head -100 || true
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
+    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live, code-intelligence-weekly]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -310,6 +311,7 @@ jobs:
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -324,19 +326,21 @@ jobs:
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
+          - code-intelligence-weekly: ${CODE_INTELLIGENCE_RESULT}
 
           Run: ${RUN_URL}
           EOF
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p tmp/validation/nightly_failure_issue
@@ -347,7 +351,8 @@ jobs:
               "drSnapshot": "${DR_RESULT}",
               "drValidate": "${DR_VALIDATE_RESULT}",
               "nightlyL3": "${L3_RESULT}",
-              "paperV2Live": "${LIVE_RESULT}"
+              "paperV2Live": "${LIVE_RESULT}",
+              "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
             },
             "run_id": "${{ github.run_id }}",
             "run_url": "${RUN_URL}"
@@ -371,7 +376,7 @@ jobs:
             --stdout-format compact
 
       - name: Upload Nightly failure issue context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: nightly-failure-issue-context
@@ -380,7 +385,7 @@ jobs:
           retention-days: 14
 
       - name: Auto-register failure as actionable GitHub Issue
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
@@ -446,3 +451,4 @@ jobs:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
+
