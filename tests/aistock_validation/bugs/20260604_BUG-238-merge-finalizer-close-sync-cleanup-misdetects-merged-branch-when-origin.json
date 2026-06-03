@@ -1,0 +1,65 @@
+{
+  "actual": "The finalizer stopped after close-sync PR merge because cleanup verification saw stale origin/main and raised `branch is not merged into origin/main`, requiring manual fetch/sync and manual cleanup from the root checkout.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260604_BUG-238-merge-finalizer-close-sync-cleanup-misdetects-merged-branch-when-origin.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-238",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Add regression coverage for stale origin/main before close-sync cleanup."
+  ],
+  "created_at": "2026-06-03T16:08:20.959528Z",
+  "description": "The finalizer stopped after close-sync PR merge because cleanup verification saw stale origin/main and raised `branch is not merged into origin/main`, requiring manual fetch/sync and manual cleanup from the root checkout.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-06c641525b2c",
+      "timestamp": "2026-06-03T16:08:20.959525Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Before verifying or cleaning a source or close-sync branch after a PR merge, finalizer/cleanup should refresh origin/main (fetch/prune) or otherwise use the verified PR merge state, so stale local origin refs cannot produce a false unmerged-branch blocker.",
+  "first_seen_at": "2026-06-03T16:08:20.959528Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 665,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/665",
+  "last_seen_at": "2026-06-03T16:08:20.959528Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py merge-finalizer --bug-id BUG-236 --source-pr-url https://github.com/licong01-cloud/AIstock/pull/660 --source-branch bug/BUG-236-merge-finalizer-cleanup-fails-when-executed-from-20260603 --source-worktree F:\\Dev\\AIstock_worktrees\\BUG-236-merge-finalizer-cleanup-fails-when-executed-from-20260603 --validation-evidence ... --sync-root --merge-close-sync-pr --cleanup --apply",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "merge-finalizer close-sync cleanup misdetects merged branch when origin/main is stale",
+  "trigger_condition": {
+    "fingerprint": "06c641525b2c9cf76bcae318",
+    "source_event_id": "FE-20260604-06c641525b2c"
+  },
+  "verification_run_id": null
+}

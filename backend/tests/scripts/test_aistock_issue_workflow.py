@@ -52,6 +52,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _fetched_origin_payload() -> dict[str, Any]:
+    return {
+        "status": "fetched",
+        "command": "git fetch origin --prune",
+        "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
+    }
+
+
 def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -3516,6 +3524,53 @@ def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
 
 
+def test_cleanup_after_merge_apply_refreshes_origin_before_merge_check(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "chore/BUG-199-close-sync"
+    calls: list[tuple[str, ...]] = []
+    fetched = False
+
+    def fake_run(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        nonlocal fetched
+        calls.append(tuple(args))
+        if args == ["git", "fetch", "origin", "--prune"]:
+            fetched = True
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        calls.append(("git", *args))
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return ""
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch if fetched else ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(branch=branch, sync_root=False, apply=True)
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["pre_cleanup_fetch"]["status"] == "fetched"
+    assert payload["merged_into_origin_main"] is True
+    assert calls.index(("git", "fetch", "origin", "--prune")) < calls.index(
+        ("git", "branch", "--format=%(refname:short)", "--merged", "origin/main")
+    )
+
+
 def test_cleanup_after_merge_allows_origin_equivalent_root_dirty_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3611,6 +3666,7 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
     monkeypatch.setattr(workflow, "_dirty_files", lambda root: [".codex_tmp/qe_20260601_014515_310f_loop1_execution_truth_tmp.md"])
     monkeypatch.setattr(workflow, "_origin_equivalent_dirty_files", lambda root, files: [])
     monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
 
     payload = workflow.build_cleanup_after_merge_plan(branch=branch, sync_root=True, apply=True)
 
@@ -3775,6 +3831,7 @@ def test_cleanup_after_merge_apply_can_mark_bug_complete(
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
     monkeypatch.setattr(workflow, "_execute_checked", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
 
     assert workflow.main(["cleanup-after-merge", "--branch", branch, "--bug-id", "BUG-199", "--apply"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -3830,6 +3887,7 @@ def test_cleanup_after_merge_removes_empty_unregistered_worktree_dir(
         "_git_squash_head_equivalent_to_ref",
         lambda *args, **kwargs: {"verified": True, "reason": "changed_paths_equivalent", "changed_files": ["scripts/aistock_issue_workflow.py"]},
     )
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
 
     payload = workflow.build_cleanup_after_merge_plan(
         branch=branch,
