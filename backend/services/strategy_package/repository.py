@@ -112,66 +112,124 @@ class StrategyPackageRepository:
                 "manifest_sha256 is required before persistence",
                 context={"package_id": frozen.package_id},
             )
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            return source_existing
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT package_id, manifest_sha256, paper_portfolio_count
+                        FROM strategy_pkg.package
+                        WHERE package_id = %s
+                        """,
+                        (frozen.package_id,),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        if existing["manifest_sha256"] != frozen.manifest_sha256:
+                            raise InvalidStateTransitionError(
+                                "package manifest cannot be silently replaced",
+                                context={
+                                    "package_id": frozen.package_id,
+                                    "existing_manifest_sha256": existing["manifest_sha256"],
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                    "paper_portfolio_count": existing["paper_portfolio_count"],
+                                },
+                            )
+                        return self.get(frozen.package_id)
+
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package (
+                            package_id, package_name, package_version, source_type,
+                            source_id, loop_id, run_id, package_status, manifest_json,
+                            manifest_sha256
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            frozen.package_id,
+                            frozen.package_name,
+                            frozen.package_version,
+                            frozen.source.source_type.value,
+                            frozen.source.source_id,
+                            frozen.source.loop_id,
+                            frozen.source.run_id,
+                            frozen.package_status.value,
+                            psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                            frozen.manifest_sha256,
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            frozen.package_id,
+                            None,
+                            frozen.package_status.value,
+                            "package_created",
+                            psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
+                        ),
+                    )
+        except pg_errors.UniqueViolation as exc:
+            existing_by_source = self.find_by_source_version(
+                source_type=frozen.source.source_type.value,
+                source_id=frozen.source.source_id,
+                loop_id=frozen.source.loop_id,
+                package_version=frozen.package_version,
+            )
+            if existing_by_source:
+                return existing_by_source
+            raise InvalidStateTransitionError(
+                "strategy package unique constraint collision",
+                context={
+                    "package_id": frozen.package_id,
+                    "source_type": frozen.source.source_type.value,
+                    "source_id": frozen.source.source_id,
+                    "loop_id": frozen.source.loop_id,
+                    "package_version": frozen.package_version,
+                },
+            ) from exc
+        return self.get(frozen.package_id)
+
+    def find_by_source_version(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        package_version: str,
+    ) -> StrategyPackageRecord | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT package_id, manifest_sha256, paper_portfolio_count
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
-                    WHERE package_id = %s
+                    WHERE source_type = %s
+                      AND source_id = %s
+                      AND COALESCE(loop_id, '') = COALESCE(%s, '')
+                      AND package_version = %s
+                    ORDER BY created_at DESC, package_id ASC
+                    LIMIT 1
                     """,
-                    (frozen.package_id,),
+                    (source_type, source_id, loop_id, package_version),
                 )
-                existing = cur.fetchone()
-                if existing:
-                    if existing["manifest_sha256"] != frozen.manifest_sha256:
-                        raise InvalidStateTransitionError(
-                            "package manifest cannot be silently replaced",
-                            context={
-                                "package_id": frozen.package_id,
-                                "existing_manifest_sha256": existing["manifest_sha256"],
-                                "new_manifest_sha256": frozen.manifest_sha256,
-                                "paper_portfolio_count": existing["paper_portfolio_count"],
-                            },
-                        )
-                    return self.get(frozen.package_id)
-
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package (
-                        package_id, package_name, package_version, source_type,
-                        source_id, loop_id, run_id, package_status, manifest_json,
-                        manifest_sha256
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        frozen.package_id,
-                        frozen.package_name,
-                        frozen.package_version,
-                        frozen.source.source_type.value,
-                        frozen.source.source_id,
-                        frozen.source.loop_id,
-                        frozen.source.run_id,
-                        frozen.package_status.value,
-                        psycopg2.extras.Json(frozen.model_dump(mode="json")),
-                        frozen.manifest_sha256,
-                    ),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        frozen.package_id,
-                        None,
-                        frozen.package_status.value,
-                        "package_created",
-                        psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
-                    ),
-                )
-        return self.get(frozen.package_id)
+                row = cur.fetchone()
+        if not row:
+            return None
+        return self._record_from_row(dict(row))
 
     def get(self, package_id: str) -> StrategyPackageRecord:
         with self._conn_factory() as conn:
@@ -1664,6 +1722,25 @@ class InMemoryStrategyPackageRepository:
             )
         )
         return record
+
+    def find_by_source_version(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        package_version: str,
+    ) -> StrategyPackageRecord | None:
+        loop_key = loop_id or ""
+        for record in self.records.values():
+            if (
+                record.source_type == source_type
+                and record.source_id == source_id
+                and (record.loop_id or "") == loop_key
+                and record.package_version == package_version
+            ):
+                return record
+        return None
 
     def get(self, package_id: str) -> StrategyPackageRecord:
         record = self.records.get(package_id)

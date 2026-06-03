@@ -51,8 +51,8 @@ TABLES: dict[str, dict[str, Any]] = {
     "memory_items": {
         "table": "research_memory_items",
         "id": "memory_id",
-        "json": {"content_json", "evidence_refs"},
-        "search": {"memory_id", "memory_type", "namespace", "subject_key", "title", "content_text", "approval_status"},
+        "json": {"content_json", "evidence_refs", "provenance_json"},
+        "search": {"memory_id", "memory_type", "namespace", "subject_key", "title", "content_text", "approval_status", "tree_path", "parent_key", "scope"},
     },
     "memory_access_log": {
         "table": "research_memory_access_log",
@@ -153,6 +153,18 @@ TABLES: dict[str, dict[str, Any]] = {
         "id": "external_event_id",
         "json": {"payload_json", "evidence_refs"},
         "search": {"external_event_id", "session_id", "event_type", "risk_level"},
+    },
+    "agent_runs": {
+        "table": "assistant_agent_runs",
+        "id": "agent_run_id",
+        "json": {"input_json", "result_json"},
+        "search": {"agent_run_id", "parent_task_id", "agent_key", "role", "status", "model_profile_id", "trace_id"},
+    },
+    "qe_autonomy_runs": {
+        "table": "qe_autonomous_evolution_runs",
+        "id": "auto_run_id",
+        "json": {"stop_conditions_json", "budget_json", "last_verdict_json"},
+        "search": {"auto_run_id", "qe_task_id", "methodology_ref", "status"},
     },
     "model_profiles": {
         "table": "assistant_model_profiles",

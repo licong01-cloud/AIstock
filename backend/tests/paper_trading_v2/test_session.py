@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+
+import time
 
 import pytest
 
@@ -628,6 +630,268 @@ def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:
     assert result["processed"][0]["session_id"] == session.session_id
     assert result["processed"][0]["status"] == PaperSessionStatus.LIVE_WAITING_FOR_BAR.value
     assert fake_live.calls[0]["session_id"] == session.session_id
+
+
+def test_v2_scheduler_status_reports_in_progress_tick_metadata() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+
+    class InspectingLiveExecutor:
+        def __init__(self) -> None:
+            self.scheduler: PaperTradingV2SessionScheduler | None = None
+
+        def tick(self, session, *, as_of_time=None):
+            status = self.scheduler.status()  # type: ignore[union-attr]
+            assert status["last_run_at"] is not None
+            assert status["last_result"]["in_progress"] is True
+            assert status["last_result"]["session_count"] == 1
+            assert status["last_result"]["processed"] == []
+            updated = paper_repo.update_session_status(
+                session.session_id,
+                status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            )
+            return PaperSessionProgress(session=updated, day_count=0, events=[])
+
+    fake_live = InspectingLiveExecutor()
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=fake_live),
+    )
+    fake_live.scheduler = scheduler
+
+    result = scheduler.run_once(limit=10)
+
+    assert result["processed"][0]["session_id"] == session.session_id
+    assert result["in_progress"] is False
+    assert scheduler.status()["last_result"]["in_progress"] is False
+
+
+class BlockingLiveExecutor:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def tick(self, session, *, as_of_time=None):
+        self.calls.append({"session_id": session.session_id, "as_of_time": as_of_time})
+        while True:
+            time.sleep(0.05)
+
+
+class SlowCompletingLiveExecutor:
+    def __init__(self, repo: InMemoryPaperTradingV2Repository) -> None:
+        self.repo = repo
+        self.calls: list[dict] = []
+
+    def tick(self, session, *, as_of_time=None):
+        self.calls.append({"session_id": session.session_id, "as_of_time": as_of_time})
+        time.sleep(0.15)
+        self.repo.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+        updated = self.repo.update_session_status(
+            session.session_id,
+            status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+        )
+        return PaperSessionProgress(session=updated, day_count=0, events=[])
+
+
+class AliveThreadProbe:
+    def is_alive(self) -> bool:
+        return True
+
+
+def test_v2_scheduler_session_tick_timeout_fails_session_and_releases_scheduler_guard(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    blocking_live = BlockingLiveExecutor()
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=blocking_live),
+    )
+
+    result = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 30, tzinfo=UTC))
+
+    assert result["in_progress"] is False
+    assert result["completed_at"] is not None
+    assert result["processed"] == []
+    assert result["errors"][0]["error_code"] == "PAPER_V2_SESSION_TICK_TIMEOUT"
+    assert result["errors"][0]["context"]["session_id"] == session.session_id
+    assert result["errors"][0]["context"]["policy"] == "mark_session_failed_release_scheduler_guard"
+    assert result["errors"][0]["context"]["scheduler_guard_released"] is True
+    status = scheduler.status()
+    assert status["last_result"]["in_progress"] is False
+    assert status["active_session_ticks"] == []
+    assert status["abandoned_session_ticks"][0]["session_id"] == session.session_id
+    updated = paper_repo.get_session(session.session_id)
+    assert updated.status == PaperSessionStatus.FAILED
+    assert updated.last_error["error_code"] == "PAPER_V2_SESSION_TICK_TIMEOUT"
+    assert paper_repo.get_portfolio(session.portfolio_id).status == PortfolioStatus.FAILED
+    assert any(item["event_type"] == "SESSION_TICK_TIMEOUT_FAILED" for item in paper_repo.session_events)
+
+
+def test_v2_scheduler_does_not_retry_failed_timeout_session_while_worker_is_abandoned(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    blocking_live = BlockingLiveExecutor()
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=blocking_live),
+    )
+
+    scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 30, tzinfo=UTC))
+    result = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 31, tzinfo=UTC))
+
+    assert len(blocking_live.calls) == 1
+    assert result["in_progress"] is False
+    assert result["session_count"] == 0
+    assert result["errors"] == []
+    assert scheduler.status()["active_session_ticks"] == []
+    assert scheduler.status()["abandoned_session_ticks"][0]["session_id"] == session.session_id
+
+
+def test_v2_scheduler_converts_stale_active_tick_to_failed_session(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    scheduler = PaperTradingV2SessionScheduler(repository=paper_repo)
+    scheduler._active_session_ticks[session.session_id] = {
+        "thread": AliveThreadProbe(),
+        "started_at": datetime(2024, 1, 2, 9, 30, tzinfo=UTC),
+        "portfolio_id": session.portfolio_id,
+        "status_before": session.status.value,
+        "phase_before": session.phase.value,
+    }
+
+    result = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 31, tzinfo=UTC))
+
+    assert result["errors"][0]["error_code"] == "PAPER_V2_SESSION_TICK_TIMEOUT"
+    assert result["errors"][0]["context"]["policy"] == "mark_session_failed_release_scheduler_guard"
+    assert paper_repo.get_session(session.session_id).status == PaperSessionStatus.FAILED
+    assert paper_repo.get_portfolio(session.portfolio_id).status == PortfolioStatus.FAILED
+    assert scheduler.status()["active_session_ticks"] == []
+    assert scheduler.status()["abandoned_session_ticks"][0]["session_id"] == session.session_id
+
+
+def test_v2_scheduler_reapplies_failed_state_when_abandoned_worker_completes(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    slow_live = SlowCompletingLiveExecutor(paper_repo)
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=slow_live),
+    )
+
+    scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 30, tzinfo=UTC))
+    time.sleep(0.25)
+
+    updated = paper_repo.get_session(session.session_id)
+    assert updated.status == PaperSessionStatus.FAILED
+    assert paper_repo.get_portfolio(session.portfolio_id).status == PortfolioStatus.FAILED
+    assert any(item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events)
+
+
+def test_v2_scheduler_auto_run_timeout_keeps_portfolio_recoverable_without_duplicate_session(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo).enable_auto_run(
+        portfolio.portfolio_id,
+        broker_account_id="paper-local",
+        create_session=False,
+        updated_by="pytest",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    blocking_live = BlockingLiveExecutor()
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=blocking_live),
+    )
+
+    result = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 30, tzinfo=UTC))
+    retry = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 31, tzinfo=UTC))
+
+    assert result["errors"][0]["error_code"] == "PAPER_V2_SESSION_TICK_TIMEOUT"
+    assert result["errors"][0]["context"]["auto_run_recoverable"] is True
+    assert result["errors"][0]["context"]["portfolio_after_timeout_state"] == PortfolioStatus.READY.value
+    assert paper_repo.get_session(session.session_id).status == PaperSessionStatus.FAILED
+    assert paper_repo.get_portfolio(portfolio.portfolio_id).status == PortfolioStatus.READY
+    assert len(blocking_live.calls) == 1
+    assert retry["auto_run_recovery"]["portfolio_count"] == 1
+    assert retry["auto_run_recovery"]["blocked_portfolio_ids"] == [portfolio.portfolio_id]
+    assert retry["auto_run_recovery"]["skipped"][0]["reason"] == "abandoned_session_tick_active"
+    assert paper_repo.list_active_sessions(portfolio.portfolio_id) == []
+
+
+def test_v2_scheduler_auto_run_recovers_next_session_after_stale_worker_completes(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_TRADING_V2_SCHEDULER_SESSION_TIMEOUT_SECONDS", "0.05")
+    package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo).enable_auto_run(
+        portfolio.portfolio_id,
+        broker_account_id="paper-local",
+        create_session=False,
+        updated_by="pytest",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    slow_live = SlowCompletingLiveExecutor(paper_repo)
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=slow_live),
+    )
+
+    scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 30, tzinfo=UTC))
+    time.sleep(0.25)
+    scheduler.runner = PaperTradingSessionRunner(repository=paper_repo, live_executor=FakeLiveExecutor(paper_repo))
+    recovered = scheduler.run_once(limit=10, as_of_time=datetime(2024, 1, 2, 9, 31, tzinfo=UTC))
+
+    active_sessions = paper_repo.list_active_sessions(portfolio.portfolio_id)
+    assert paper_repo.get_session(session.session_id).status == PaperSessionStatus.FAILED
+    assert paper_repo.get_portfolio(portfolio.portfolio_id).status == PortfolioStatus.READY
+    assert recovered["auto_run_recovery"]["recovered"][0]["portfolio_id"] == portfolio.portfolio_id
+    assert recovered["auto_run_recovery"]["blocked_portfolio_ids"] == []
+    assert active_sessions and active_sessions[0].session_id != session.session_id
+    assert any(item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events)
+
 
 
 def test_portfolio_pagination_and_bulk_lifecycle_use_runtime_state_only() -> None:

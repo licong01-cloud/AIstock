@@ -11,6 +11,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
+from .price_guidance import guidance_fields_from_component_scores
 from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
 
 ConnFactory = Callable[[], Iterator[Any]]
@@ -23,6 +24,7 @@ def _optional_float(value: Any) -> float | None:
 def _selection_candidate_from_aggregate_row(item: dict[str, Any]) -> SelectionCandidate:
     component_scores = item["explanation"] or {}
     display_fields = display_fields_from_component_scores(component_scores)
+    guidance_fields = guidance_fields_from_component_scores(component_scores)
     entry_price = display_fields.get("selection_entry_price")
     reference_price = entry_price if entry_price is not None else item["reference_price"]
     return SelectionCandidate(
@@ -36,11 +38,16 @@ def _selection_candidate_from_aggregate_row(item: dict[str, Any]) -> SelectionCa
         selection_entry_price=_optional_float(entry_price),
         selection_entry_price_source=display_fields.get("selection_entry_price_source"),
         selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+        signal_ref_price=_optional_float(guidance_fields.get("signal_ref_price")),
         previous_close=_optional_float(display_fields.get("previous_close")),
         volume=_optional_float(display_fields.get("volume")),
         current_price=_optional_float(display_fields.get("current_price")),
         current_price_source=display_fields.get("current_price_source"),
         current_price_time=display_fields.get("current_price_time"),
+        suggested_entry_price_band=guidance_fields.get("suggested_entry_price_band"),
+        suggested_stop_loss_zone=guidance_fields.get("suggested_stop_loss_zone"),
+        guidance_status=guidance_fields.get("guidance_status"),
+        price_guard_policy_sha256=guidance_fields.get("price_guard_policy_sha256"),
         component_scores=component_scores,
     )
 
@@ -110,8 +117,9 @@ class SelectionCenterRepository:
                             INSERT INTO selection.package_result (
                                 run_id, package_id, manifest_sha256, symbol, score, rank,
                                 target_weight, target_quantity, reference_price,
-                                component_scores, reason
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                component_scores, reason, suggested_entry_price_band,
+                                suggested_stop_loss_zone, guidance_status, price_guard_policy_sha256
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 completed.run_id,
@@ -125,6 +133,10 @@ class SelectionCenterRepository:
                                 candidate.reference_price,
                                 psycopg2.extras.Json(component_scores_with_display_fields(candidate)),
                                 candidate.reason,
+                                psycopg2.extras.Json(candidate.suggested_entry_price_band) if candidate.suggested_entry_price_band else None,
+                                psycopg2.extras.Json(candidate.suggested_stop_loss_zone) if candidate.suggested_stop_loss_zone else None,
+                                candidate.guidance_status,
+                                candidate.price_guard_policy_sha256,
                             ),
                         )
                 for candidate in completed.aggregate_results:
@@ -247,7 +259,8 @@ class SelectionCenterRepository:
                     """
                     SELECT package_id, manifest_sha256, symbol, score, rank,
                            target_weight, target_quantity, reference_price,
-                           component_scores, reason
+                           component_scores, reason, suggested_entry_price_band,
+                           suggested_stop_loss_zone, guidance_status, price_guard_policy_sha256
                     FROM selection.package_result
                     WHERE run_id = %s
                     ORDER BY package_id, rank
@@ -284,6 +297,7 @@ class SelectionCenterRepository:
             manifest_sha[package_id] = item["manifest_sha256"]
             component_scores = item["component_scores"] or {}
             display_fields = display_fields_from_component_scores(component_scores)
+            guidance_fields = guidance_fields_from_component_scores(component_scores)
             entry_price = display_fields.get("selection_entry_price")
             package_results.setdefault(package_id, []).append(
                 SelectionCandidate(
@@ -297,11 +311,16 @@ class SelectionCenterRepository:
                     selection_entry_price=float(entry_price) if entry_price is not None else None,
                     selection_entry_price_source=display_fields.get("selection_entry_price_source"),
                     selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+                    signal_ref_price=_optional_float(guidance_fields.get("signal_ref_price")),
                     previous_close=float(display_fields["previous_close"]) if display_fields.get("previous_close") is not None else None,
                     volume=float(display_fields["volume"]) if display_fields.get("volume") is not None else None,
                     current_price=float(display_fields["current_price"]) if display_fields.get("current_price") is not None else None,
                     current_price_source=display_fields.get("current_price_source"),
                     current_price_time=display_fields.get("current_price_time"),
+                    suggested_entry_price_band=item["suggested_entry_price_band"] or guidance_fields.get("suggested_entry_price_band"),
+                    suggested_stop_loss_zone=item["suggested_stop_loss_zone"] or guidance_fields.get("suggested_stop_loss_zone"),
+                    guidance_status=item["guidance_status"] or guidance_fields.get("guidance_status"),
+                    price_guard_policy_sha256=item["price_guard_policy_sha256"] or guidance_fields.get("price_guard_policy_sha256"),
                     component_scores=component_scores,
                     reason=item["reason"],
                 )

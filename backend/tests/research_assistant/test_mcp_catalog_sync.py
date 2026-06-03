@@ -45,8 +45,8 @@ def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
 
 def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
     catalog = load_catalog()
-    assert catalog["server_count"] == 12
-    assert catalog["tool_count"] == 191
+    assert catalog["server_count"] == 13
+    assert catalog["tool_count"] == 203
     assert {item["server_key"] for item in default_mcp_servers()} == {
         "research-assistant",
         "aistock-research",
@@ -60,6 +60,7 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
         "aistock-model-registry",
         "aistock-strategy-governance",
         "aistock-execution-policy",
+        "aistock-external-research",
     }
     servers = {item["server_key"]: item for item in default_mcp_servers()}
     assert servers["aistock-model-registry"]["health_json"]["display_name_zh"] == "模型库"
@@ -70,21 +71,37 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
     assert servers["aistock-factor-metrics"]["health_json"]["display_name_zh"] == "因子独立指标"
     assert servers["aistock-factor-correlation"]["health_json"]["display_name_zh"] == "因子相关性"
     assert servers["aistock-execution-policy"]["health_json"]["display_name_zh"] == "执行策略库"
+    assert servers["aistock-external-research"]["health_json"]["display_name_zh"] == "External Research"
 
     local_data_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-local-data"]
     assert len(local_data_tools) == 47
+    qe_archive_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-qe-archive"]
+    assert len(qe_archive_tools) == 28
+    assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_archive_tools)
+    assert any(tool["tool_name"] == "qe_archive_query_promotion_candidates" for tool in qe_archive_tools)
+    external_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-external-research"]
+    assert len(external_tools) == 4
+    assert {tool["tool_name"] for tool in external_tools} == {
+        "external_research_search_web",
+        "external_research_search_papers",
+        "external_research_fetch_extract",
+        "external_research_save_evidence",
+    }
+    assert next(tool for tool in external_tools if tool["tool_name"] == "external_research_save_evidence")["side_effect_level"] == "draft_only"
 
 
 def test_seed_catalogs_registers_all_mcp_tools_and_capability_reply_is_humanized() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
-    assert result["seeded"]["mcp_servers"] == 12
-    assert result["seeded"]["mcp_tools"] == 191
+    assert result["seeded"]["mcp_servers"] == 13
+    assert result["seeded"]["mcp_tools"] == 203
 
     tools = svc.repository.list_records("mcp_tools", limit=300)["items"]
-    assert len(tools) == 191
+    assert len(tools) == 203
     assert any(tool["server_key"] == "aistock-factor-library" and tool["tool_name"] == "factor_library_list" for tool in tools)
+    assert any(tool["server_key"] == "aistock-qe-archive" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-execution-policy" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
+    assert any(tool["server_key"] == "aistock-external-research" and tool["tool_name"] == "external_research_search_web" for tool in tools)
 
     catalog = svc._mcp_tool_catalog_snapshot()
     reply = svc._render_mcp_tool_catalog_reply(catalog)
@@ -97,3 +114,4 @@ def test_seed_catalogs_registers_all_mcp_tools_and_capability_reply_is_humanized
     assert "策略库" in reply
     assert "因子独立指标" in reply
     assert "执行策略库" in reply
+    assert "aistock-external-research" in reply

@@ -10,6 +10,7 @@ import pytest
 
 from backend.mcp.modules import (
     execution_policy,
+    external_research,
     factor_correlation,
     factor_library,
     factor_metrics,
@@ -70,6 +71,7 @@ def _registry_with_capture(module: Any) -> tuple[ModuleRegistry, FakeMCP, list[d
         (model_registry, "model_registry", "/api/v1/model-registry/", 9),
         (strategy_governance, "strategy_governance", "/api/v1/strategy-governance/", 9),
         (execution_policy, "execution_policy", "/api/v1/execution-policy/", 7),
+        (external_research, "external_research", "/api/v1/external-research/", 4),
     ],
 )
 def test_domain_modules_register_exact_tool_catalog(module: Any, module_name: str, prefix: str, count: int) -> None:
@@ -198,7 +200,7 @@ def test_model_strategy_execution_modules_call_facades_and_confirm_before_http()
     assert all(call["path"].startswith("/api/v1/execution-policy/") for call in calls)
 
 
-@pytest.mark.parametrize("module", [factor_library, factor_metrics, factor_correlation, model_registry, strategy_governance, execution_policy])
+@pytest.mark.parametrize("module", [factor_library, factor_metrics, factor_correlation, model_registry, strategy_governance, execution_policy, external_research])
 def test_new_mcp_modules_are_thin_gateway_wrappers(module: Any) -> None:
     source = inspect.getsource(module)
     forbidden = ["backend.routers", "backend.services", "get_conn", "psycopg", "sqlalchemy", "subprocess"]

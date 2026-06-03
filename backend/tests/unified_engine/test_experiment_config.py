@@ -272,7 +272,8 @@ class TestBuildConfigFromExpRecord:
         # 合法 JSON 但类型是 list，不是 dict
         with pytest.raises(ValueError, match="unfilled_handler_params must be a dict"):
             _build_unfilled_handler_params(json.dumps([1, 2, 3]))
-    def test_minimal(self):
+
+    def test_evolution_loop_minimal(self):
         cfg = build_config_from_evolution_loop(
             EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_MINIMAL
         )
@@ -471,6 +472,33 @@ class TestBuildConfigFromCustomEvoLoop:
             "archive_reason": "manual unit",
             "archive_policy": "MANUAL_ONLY",
             "random_seed": 2024,
+        }
+
+    def test_custom_loop_seed_ensemble_sets_anchor_seed_and_runtime_metadata(self):
+        loop = {
+            **CUSTOM_EVO_LOOP_MINIMAL,
+            "strategy_params": {"topk": 12},
+            "runtime_flags": {"archive_reason": "seed ensemble unit"},
+            "ensemble": {
+                "enabled": True,
+                "seeds": [42, 2026, 12345],
+                "level": "score",
+                "agg": "rank_mean",
+            },
+        }
+
+        cfg = build_config_from_custom_evo_loop(loop, CUSTOM_EVO_TASK)
+
+        runtime_flags = cfg.build_runtime_flags()
+        assert cfg.build_custom_params()["topk"] == 12
+        assert "_seed_ensemble_config" not in cfg.build_custom_params()
+        assert runtime_flags["random_seed"] == 42
+        assert runtime_flags["seed_policy"] == "fixed"
+        assert runtime_flags["ensemble"] == {
+            "enabled": True,
+            "seeds": [42, 2026, 12345],
+            "level": "score",
+            "agg": "rank_mean",
         }
 
     def test_hmm_config_resolves_hidden_snapshot_config(self):

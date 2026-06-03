@@ -804,11 +804,79 @@ def _infer_github_issue_refs_from_text(*values: str) -> list[str]:
     return _unique_strings(f"#{item}" for item in found)
 
 
+def _infer_severity_from_text(*values: str) -> list[str]:
+    severities: list[str] = []
+    for value in values:
+        severities.extend(match.upper() for match in re.findall(r"\b(P[0-3])\b", value or "", flags=re.IGNORECASE))
+    return _unique_strings(severities)
+
+
+def _infer_task_tiers_from_text(*values: str) -> list[str]:
+    tiers: list[str] = []
+    for value in values:
+        tiers.extend(match.upper() for match in re.findall(r"\b(T[0-3])\b", value or "", flags=re.IGNORECASE))
+    return _unique_strings(tiers)
+
+
+def _highest_task_tier(values: list[str]) -> str | None:
+    rank = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
+    normalized = [
+        match.group(1).upper()
+        for value in values
+        if (match := re.search(r"\b(T[0-3])\b", str(value), flags=re.IGNORECASE))
+    ]
+    if not normalized:
+        return None
+    return sorted(normalized, key=lambda item: rank.get(item, -1), reverse=True)[0]
+
+
+def _infer_feature_signals_from_text(*values: str) -> list[str]:
+    signals: list[str] = []
+    patterns = {
+        "feature": r"\b(feature|feat|enhancement)\b",
+        "rfc": r"\b(rfc|proposal)\b",
+        "design": r"\b(design|architecture|blueprint)\b",
+    }
+    for value in values:
+        for signal, pattern in patterns.items():
+            if re.search(pattern, value or "", flags=re.IGNORECASE):
+                signals.append(signal)
+    return _unique_strings(signals)
+
+
+def _has_design_acceptance_matrix(*values: str) -> bool:
+    patterns = [
+        r"design acceptance (matrix|index|checklist)",
+        r"design_acceptance_(matrix|index|checklist)",
+        r"acceptance matrix",
+        r"architecture acceptance",
+    ]
+    combined = "\n".join(value or "" for value in values)
+    return any(re.search(pattern, combined, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _normalize_severity(value: Any) -> str | None:
+    if value is None:
+        return None
+    match = re.search(r"\b(P[0-3])\b", str(value), flags=re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def _highest_severity(values: list[str]) -> str | None:
+    rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    normalized = [item for item in (_normalize_severity(value) for value in values) if item]
+    if not normalized:
+        return None
+    return sorted(normalized, key=lambda item: rank.get(item, 99))[0]
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str) -> dict[str, Any]:
     branch = _git_output(["branch", "--show-current"], check=False)
     commit_subjects = _git_output(["log", "--format=%s%n%b", f"{base}...{head}"], check=False)
-    if not commit_subjects:
-        commit_subjects = _git_output(["log", "--format=%s%n%b", "-n", "20"], check=False)
     pr_title = os.environ.get("AISTOCK_PR_TITLE", "")
     pr_body = os.environ.get("AISTOCK_PR_BODY", "")
     bug_json_paths = [
@@ -840,19 +908,150 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
             if item.get("github_issue_number")
         ]
     )
+    bug_id_signals = _unique_strings(
+        _infer_bug_ids_from_text(branch, commit_subjects, pr_title, pr_body, *changed_files)
+        + [
+            str(item.get("bug_id") or "").upper()
+            for item in bug_records
+            if item.get("bug_id")
+        ]
+    )
     inferred_scope: list[str] = []
     for record in bug_records:
         inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
     if bug_json_paths:
         inferred_scope.extend(bug_json_paths)
         inferred_scope.append("tests/aistock_validation/bugs/**")
+    production_gate_keys = [
+        "production_ddl_gate",
+        "production_frontend_dependency_gate",
+        "production_backend_dependency_gate",
+    ]
     return {
         "branch": branch,
         "bug_json_paths": bug_json_paths,
         "bug_records": bug_records,
         "pr_metadata_present": bool(pr_title or pr_body),
         "linked_issues": linked,
+        "bug_id_signals": bug_id_signals,
         "inferred_allowed_scope": _unique_strings(inferred_scope),
+        "severity_signals": _unique_strings(
+            [
+                str(item.get("severity") or item.get("severity_guess") or "")
+                for item in bug_records
+                if item.get("severity") or item.get("severity_guess")
+            ]
+            + _infer_severity_from_text(branch, commit_subjects, pr_title, pr_body)
+        ),
+        "pr_body_validation_evidence": bool(
+            re.search(r"(validation evidence|validation_evidence|nox|pytest|passed|success)", pr_body, flags=re.IGNORECASE)
+        ),
+        "bug_record_validation_evidence": any(bool(_as_list(record.get("validation_evidence"))) for record in bug_records),
+        "pr_body_production_gates": all(key in pr_body for key in production_gate_keys),
+        "bug_record_production_gates": any(all(record.get(key) for key in production_gate_keys) for record in bug_records),
+        "task_tier_signals": _infer_task_tiers_from_text(branch, commit_subjects, pr_title, pr_body),
+        "feature_signals": _infer_feature_signals_from_text(branch, commit_subjects, pr_title, pr_body),
+        "design_acceptance_present": _has_design_acceptance_matrix(pr_body),
+    }
+
+
+def evaluate_design_compliance_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Warn when an explicitly T3 feature PR lacks a Design Acceptance Matrix."""
+    issue_record = summary.get("issue_record") or {}
+    inferred = summary.get("linkage_inference") or {}
+    task_tier = _highest_task_tier(
+        _as_list(issue_record.get("task_tier"))
+        + _as_list(issue_record.get("tier"))
+        + _as_list(inferred.get("task_tier_signals"))
+        + _as_list(summary.get("task_tier"))
+    )
+    issue_type_values = _as_list(issue_record.get("candidate_type")) + _as_list(issue_record.get("issue_type"))
+    feature_signals = _unique_strings(
+        [str(item).lower() for item in issue_type_values if str(item).lower() in {"feature", "enhancement", "rfc"}]
+        + [str(item).lower() for item in _as_list(inferred.get("feature_signals"))]
+    )
+    is_t3_feature = task_tier == "T3" and bool(feature_signals)
+    design_acceptance_present = bool(
+        inferred.get("design_acceptance_present")
+        or issue_record.get("design_acceptance_matrix")
+        or issue_record.get("design_acceptance_index")
+    )
+    checks = {
+        "t3_feature_signal": is_t3_feature,
+        "design_acceptance_matrix": design_acceptance_present,
+    }
+    if not is_t3_feature:
+        gate = "not_applicable"
+        warnings: list[str] = []
+    elif design_acceptance_present:
+        gate = "passed"
+        warnings = []
+    else:
+        gate = "warning"
+        warnings = ["design_acceptance_matrix"]
+    return {
+        "workflow_gate": gate,
+        "task_tier": task_tier,
+        "feature_signals": feature_signals,
+        "checks": checks,
+        "blocking": [],
+        "warnings": warnings,
+    }
+
+
+def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = False) -> dict[str, Any]:
+    """Evaluate the opt-in high-risk PR evidence gate without changing normal PR behavior."""
+    issue_record = summary.get("issue_record") or {}
+    inferred = summary.get("linkage_inference") or {}
+    scope = summary.get("scope_check") or {}
+    severity = _highest_severity(
+        _as_list(issue_record.get("severity"))
+        + _as_list(issue_record.get("severity_guess"))
+        + _as_list(inferred.get("severity_signals"))
+    )
+    explicit_bug_context = bool(
+        _as_list(issue_record.get("bug_id"))
+        or _as_list(inferred.get("bug_json_paths"))
+        or _as_list(inferred.get("bug_id_signals"))
+    )
+    explicit_severity = bool(_as_list(issue_record.get("severity")) or _as_list(issue_record.get("severity_guess")))
+    is_high_risk = severity in {"P0", "P1"} and (explicit_bug_context or explicit_severity)
+    validation_evidence_present = bool(
+        issue_record.get("verification_run_id")
+        or _as_list(issue_record.get("validation_evidence"))
+        or inferred.get("bug_record_validation_evidence")
+        or inferred.get("pr_body_validation_evidence")
+    )
+    production_gate_keys = [
+        "production_ddl_gate",
+        "production_frontend_dependency_gate",
+        "production_backend_dependency_gate",
+    ]
+    record_has_gates = all(issue_record.get(key) for key in production_gate_keys)
+    body_has_gates = bool(inferred.get("pr_body_production_gates"))
+    bug_record_has_gates = bool(inferred.get("bug_record_production_gates"))
+    checks = {
+        "linked_issue": bool(summary.get("linked_issues")),
+        "scope_passed": scope.get("status") == "passed",
+        "validation_evidence": validation_evidence_present,
+        "production_gates": record_has_gates or body_has_gates or bug_record_has_gates,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    if not is_high_risk:
+        gate = "not_applicable"
+    elif missing and enforce_p0_p1:
+        gate = "blocked"
+    elif missing:
+        gate = "warning"
+    else:
+        gate = "passed"
+    return {
+        "workflow_gate": gate,
+        "enforced": enforce_p0_p1,
+        "severity": severity,
+        "checks": checks,
+        "blocking": missing if gate == "blocked" else [],
+        "warnings": missing if gate == "warning" else [],
     }
 
 
@@ -862,6 +1061,7 @@ def build_pr_quality(
     head: str,
     issue_record: dict[str, Any] | None = None,
     changed_files: list[str] | None = None,
+    enforce_p0_p1_evidence: bool = False,
 ) -> dict[str, Any]:
     changed_files = changed_files if changed_files is not None else changed_files_from_git(base, head)
     inferred = _infer_pr_quality_context(changed_files, base=base, head=head)
@@ -892,12 +1092,13 @@ def build_pr_quality(
         + _as_list((issue_record or {}).get("candidate_id"))
         + inferred["linked_issues"]
     )
-    return {
+    summary = {
         "schema_version": "aistock_pr_quality_summary_v1",
         "base": base,
         "head": head,
+        "issue_record": issue_record or {},
         "linked_issues": linked,
-        "task_tier": "T1" if linked else "T0",
+        "task_tier": _highest_task_tier(inferred["task_tier_signals"]) or ("T1" if linked else "T0"),
         "changed_files": changed_files,
         "impacted_modules": validation["impacted_modules"],
         "scope_check": scope_result,
@@ -905,6 +1106,15 @@ def build_pr_quality(
             "branch": inferred["branch"],
             "bug_json_paths": inferred["bug_json_paths"],
             "pr_metadata_present": inferred["pr_metadata_present"],
+            "severity_signals": inferred["severity_signals"],
+            "bug_id_signals": inferred["bug_id_signals"],
+            "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
+            "bug_record_validation_evidence": inferred["bug_record_validation_evidence"],
+            "pr_body_production_gates": inferred["pr_body_production_gates"],
+            "bug_record_production_gates": inferred["bug_record_production_gates"],
+            "task_tier_signals": inferred["task_tier_signals"],
+            "feature_signals": inferred["feature_signals"],
+            "design_acceptance_present": inferred["design_acceptance_present"],
             "status": "inferred" if inferred["linked_issues"] else "missing",
         },
         "selected_validation": validation,
@@ -914,6 +1124,10 @@ def build_pr_quality(
         "production_frontend_dependency_gate": validation["production_gates"]["frontend_dependency"],
         "production_backend_dependency_gate": validation["production_gates"]["backend_dependency"],
     }
+    summary["p0p1_evidence_gate"] = evaluate_pr_quality_gate(summary, enforce_p0_p1=enforce_p0_p1_evidence)
+    summary["design_compliance_gate"] = evaluate_design_compliance_gate(summary)
+    summary.pop("issue_record", None)
+    return summary
 
 
 def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
@@ -931,6 +1145,8 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- scope_check: `{(summary.get('scope_check') or {}).get('status')}`",
         f"- scope_source: `{(summary.get('scope_check') or {}).get('status_source') or 'provided'}`",
         f"- linkage_inference: `{(summary.get('linkage_inference') or {}).get('status')}`",
+        f"- p0p1_evidence_gate: `{(summary.get('p0p1_evidence_gate') or {}).get('workflow_gate')}`",
+        f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
         f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
@@ -940,6 +1156,11 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
     violations = (summary.get("scope_check") or {}).get("violations") or []
     if violations:
         lines.extend(["### Scope Violations", *[f"- `{item}`" for item in violations], ""])
+    gate = summary.get("p0p1_evidence_gate") or {}
+    if gate.get("blocking"):
+        lines.extend(["### P0/P1 Evidence Gate Blocking", *[f"- `{item}`" for item in gate["blocking"]], ""])
+    elif gate.get("warnings"):
+        lines.extend(["### P0/P1 Evidence Gate Warnings", *[f"- `{item}`" for item in gate["warnings"]], ""])
     return "\n".join(lines)
 
 
@@ -1094,14 +1315,24 @@ def cmd_validation_select(args: argparse.Namespace) -> int:
 def cmd_pr_check(args: argparse.Namespace) -> int:
     issue = _load_json(Path(args.issue_json)) if args.issue_json else None
     changed_files = list(args.changed_file or []) or None
-    summary = build_pr_quality(base=args.base, head=args.head, issue_record=issue, changed_files=changed_files)
+    enforce_p0_p1 = bool(args.enforce_p0_p1_evidence or _env_truthy("AISTOCK_PR_QUALITY_ENFORCE_P0P1"))
+    summary = build_pr_quality(
+        base=args.base,
+        head=args.head,
+        issue_record=issue,
+        changed_files=changed_files,
+        enforce_p0_p1_evidence=enforce_p0_p1,
+    )
     if args.output_md:
         path = Path(args.output_md)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render_pr_quality_markdown(summary), encoding="utf-8")
     _write_json(Path(args.output_json) if args.output_json else None, summary)
     status = (summary.get("scope_check") or {}).get("status")
-    return 2 if args.fail_on_scope and status == "failed" else 0
+    evidence_gate = (summary.get("p0p1_evidence_gate") or {}).get("workflow_gate")
+    if args.fail_on_scope and status == "failed":
+        return 2
+    return 2 if evidence_gate == "blocked" else 0
 
 
 def cmd_close_sync(args: argparse.Namespace) -> int:
@@ -1225,6 +1456,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr_check.add_argument("--output-json")
     pr_check.add_argument("--output-md")
     pr_check.add_argument("--fail-on-scope", action="store_true")
+    pr_check.add_argument("--enforce-p0-p1-evidence", action="store_true")
     pr_check.set_defaults(func=cmd_pr_check)
 
     close = sub.add_parser("close-sync", help="Build a close/sync dry-run plan.")

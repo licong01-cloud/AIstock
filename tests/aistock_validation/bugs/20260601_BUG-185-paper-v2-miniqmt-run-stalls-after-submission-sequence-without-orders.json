@@ -1,0 +1,72 @@
+{
+  "actual": "Run stops after MINIQMT_ORDER_SUBMISSION_SEQUENCE; no MINIQMT_ORDER_SUBMITTED or VNPY_STYLE_EXECUTION events; no QMT orders for 2026-06-01; empty RUNNING run blocks retries.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "tests/aistock_validation/bugs/20260601_BUG-185-paper-v2-miniqmt-run-stalls-after-submission-sequence-without-orders.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-185",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T05:30:05.330176Z",
+  "description": "Run stops after MINIQMT_ORDER_SUBMISSION_SEQUENCE; no MINIQMT_ORDER_SUBMITTED or VNPY_STYLE_EXECUTION events; no QMT orders for 2026-06-01; empty RUNNING run blocks retries.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-1d529f48d44a",
+      "timestamp": "2026-06-01T05:30:05.330173Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime read-only check 2026-06-01 13:24 Asia/Shanghai: qmt connected SIM, run RUNNING, order_count=0, last_event=MINIQMT_ORDER_SUBMISSION_SEQUENCE"
+  ],
+  "expected": "MiniQMT auto-run should either submit broker-authoritative orders and persist Paper v2 orders/fills/execution state, or fail/reset safely before final cutoff so the scheduler can retry.",
+  "first_seen_at": "2026-06-01T05:30:05.330176Z",
+  "fix_branch": null,
+  "fix_commit": "da0fe195dc7ab29550bbc834fbbfb4fe094d6ffd",
+  "fixed_at": "2026-06-01T14:01:22.594849Z",
+  "github_issue_number": 459,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/459",
+  "last_seen_at": "2026-06-01T05:30:05.330176Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/479",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/live-dashboard?trade_date=2026-06-01 | ConvertTo-Json -Depth 10",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 MiniQMT run stalls after submission sequence without orders",
+  "trigger_condition": {
+    "fingerprint": "1d529f48d44a50bd53576053",
+    "source_event_id": "FE-20260601-1d529f48d44a"
+  },
+  "validation_evidence": [
+    "CI checks_passed for PR #479 after rebase to include BUG-190",
+    "python -m pytest -q backend/tests/paper_trading_v2/test_live_session.py -p no:cacheprovider -> 22 passed after rebase conflict resolution",
+    "close-sync PR #485 checks green"
+  ],
+  "verification_run_id": null
+}

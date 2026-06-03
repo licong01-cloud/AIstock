@@ -1,0 +1,367 @@
+nox > Running session ra_phase7_full_accept
+nox > git diff --check
+nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m py_compile backend/db/init_research_assistant_schema_20260521.py backend/routers/research_assistant.py backend/services/research_assistant/service.py backend/services/research_assistant/qe_autonomy/adapter.py backend/tests/research_assistant/test_agent_teams_api.py backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py scripts/research_assistant_phase7_crosscheck.py
+nox > python -m pytest backend/tests/research_assistant -q -p no:cacheprovider
+........................................................................ [ 43%]
+........................................................................ [ 87%]
+.....................                                                    [100%]
+165 passed in 30.62s
+nox > cd frontend
+nox > npm run lint
+
+> aistock-next-frontend@0.1.0 lint
+> next lint
+
+
+./src/app/config/rdagent-llm/components/ChangeLogViewer.tsx
+35:6  Warning: React Hook useEffect has a missing dependency: 'loadLogs'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/CurrentConfigDisplay.tsx
+20:6  Warning: React Hook useEffect has a missing dependency: 'loadConfig'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/EditModelDialog.tsx
+106:6  Warning: React Hook useEffect has a missing dependency: 'loadModelConfig'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/StageMappingConfig.tsx
+60:6  Warning: React Hook useEffect has a missing dependency: 'loadMappings'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/page.tsx
+132:6  Warning: React Hook useEffect has a missing dependency: 'loadAllData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/llm/models/page.tsx
+93:6  Warning: React Hook useEffect has a missing dependency: 'fetchModels'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+97:6  Warning: React Hook useEffect has a missing dependency: 'fetchModels'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/local-data/page.tsx
+1495:6  Warning: React Hook useEffect has missing dependencies: 'datasetOptionsTushare' and 'datasetOptionsXtquant'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+3155:6  Warning: React Hook useCallback has a missing dependency: 'annsPdfRetryFailed'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/paper-v2/portfolios/[portfolioId]/performance/page.tsx
+62:9  Warning: The 'dailyReturns' conditional could make the dependencies of useMemo Hook (at line 72) change on every render. To fix this, wrap the initialization of 'dailyReturns' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./src/app/qmt/orders/page.tsx
+73:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+84:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/qmt/positions/page.tsx
+327:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+334:6  Warning: React Hook useEffect has missing dependencies: 'loadData' and 'status?.connected'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+348:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/qmt/strategies/page.tsx
+171:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+184:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/charts/ReturnCurveChart.tsx
+52:9  Warning: The 'chartDates' logical expression could make the dependencies of useMemo Hook (at line 135) change on every render. To fix this, wrap the initialization of 'chartDates' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+52:9  Warning: The 'chartDates' logical expression could make the dependencies of useMemo Hook (at line 190) change on every render. To fix this, wrap the initialization of 'chartDates' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/FactorList.tsx
+1002:6  Warning: React Hook useMemo has unnecessary dependencies: 'categoryFilter' and 'gradeFilter'. Either exclude them or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/SectorBlacklistPanel.tsx
+74:6  Warning: React Hook useEffect has a missing dependency: 'API'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/experiments/page.tsx
+400:46  Warning: React Hook useEffect has a missing dependency: 'loadAllExperiments'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+412:6  Warning: React Hook useEffect has missing dependencies: 'logsExpId' and 'sse'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+419:6  Warning: React Hook useEffect has a missing dependency: 'loadAllExperiments'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/factor-correlation/page.tsx
+203:6  Warning: React Hook useCallback has an unnecessary dependency: 'computeScope'. Either exclude it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/rdagent/tasks-sync/components/TaskTableSection.tsx
+254:6  Warning: React Hook useCallback has a missing dependency: 'scanWorkspaces'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/rdagent/tasks-sync/page.tsx
+133:56  Warning: The ref value 'pollingRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'pollingRef.current' to a variable inside the effect, and use that variable in the cleanup function.  react-hooks/exhaustive-deps
+
+./src/app/scheduler/page.tsx
+1077:6  Warning: React Hook useEffect has a missing dependency: 'loadEnv'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+1113:6  Warning: React Hook useEffect has missing dependencies: 'loadDatasets', 'loadTasks', and 'loadTemplateList'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/strategies/[strategyId]/versions/[versionId]/signals/page.tsx
+40:6  Warning: React Hook useEffect has a missing dependency: 'loadOverview'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
+nox > npm run build
+
+> aistock-next-frontend@0.1.0 build
+> node scripts/next-build-stable.mjs
+
+  ▲ Next.js 14.2.5
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+
+./src/app/config/rdagent-llm/components/ChangeLogViewer.tsx
+35:6  Warning: React Hook useEffect has a missing dependency: 'loadLogs'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/CurrentConfigDisplay.tsx
+20:6  Warning: React Hook useEffect has a missing dependency: 'loadConfig'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/EditModelDialog.tsx
+106:6  Warning: React Hook useEffect has a missing dependency: 'loadModelConfig'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/components/StageMappingConfig.tsx
+60:6  Warning: React Hook useEffect has a missing dependency: 'loadMappings'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/config/rdagent-llm/page.tsx
+132:6  Warning: React Hook useEffect has a missing dependency: 'loadAllData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/llm/models/page.tsx
+93:6  Warning: React Hook useEffect has a missing dependency: 'fetchModels'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+97:6  Warning: React Hook useEffect has a missing dependency: 'fetchModels'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/local-data/page.tsx
+1495:6  Warning: React Hook useEffect has missing dependencies: 'datasetOptionsTushare' and 'datasetOptionsXtquant'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+3155:6  Warning: React Hook useCallback has a missing dependency: 'annsPdfRetryFailed'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/paper-v2/portfolios/[portfolioId]/performance/page.tsx
+62:9  Warning: The 'dailyReturns' conditional could make the dependencies of useMemo Hook (at line 72) change on every render. To fix this, wrap the initialization of 'dailyReturns' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./src/app/qmt/orders/page.tsx
+73:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+84:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/qmt/positions/page.tsx
+327:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+334:6  Warning: React Hook useEffect has missing dependencies: 'loadData' and 'status?.connected'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+348:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/qmt/strategies/page.tsx
+171:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+184:6  Warning: React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/charts/ReturnCurveChart.tsx
+52:9  Warning: The 'chartDates' logical expression could make the dependencies of useMemo Hook (at line 135) change on every render. To fix this, wrap the initialization of 'chartDates' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+52:9  Warning: The 'chartDates' logical expression could make the dependencies of useMemo Hook (at line 190) change on every render. To fix this, wrap the initialization of 'chartDates' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/FactorList.tsx
+1002:6  Warning: React Hook useMemo has unnecessary dependencies: 'categoryFilter' and 'gradeFilter'. Either exclude them or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/components/SectorBlacklistPanel.tsx
+74:6  Warning: React Hook useEffect has a missing dependency: 'API'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/experiments/page.tsx
+400:46  Warning: React Hook useEffect has a missing dependency: 'loadAllExperiments'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+412:6  Warning: React Hook useEffect has missing dependencies: 'logsExpId' and 'sse'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+419:6  Warning: React Hook useEffect has a missing dependency: 'loadAllExperiments'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/quantevolver/factor-correlation/page.tsx
+203:6  Warning: React Hook useCallback has an unnecessary dependency: 'computeScope'. Either exclude it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/rdagent/tasks-sync/components/TaskTableSection.tsx
+254:6  Warning: React Hook useCallback has a missing dependency: 'scanWorkspaces'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/rdagent/tasks-sync/page.tsx
+133:56  Warning: The ref value 'pollingRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'pollingRef.current' to a variable inside the effect, and use that variable in the cleanup function.  react-hooks/exhaustive-deps
+
+./src/app/scheduler/page.tsx
+1077:6  Warning: React Hook useEffect has a missing dependency: 'loadEnv'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+1113:6  Warning: React Hook useEffect has missing dependencies: 'loadDatasets', 'loadTasks', and 'loadTemplateList'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/strategies/[strategyId]/versions/[versionId]/signals/page.tsx
+40:6  Warning: React Hook useEffect has a missing dependency: 'loadOverview'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
+   Collecting page data ...
+   Generating static pages (0/84) ...
+   Generating static pages (21/84) 
+   Generating static pages (42/84) 
+   Generating static pages (63/84) 
+ ✓ Generating static pages (84/84)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                                Size     First Load JS
+┌ ○ /                                                      159 B          88.2 kB
+├ ○ /_not-found                                            879 B          88.9 kB
+├ ○ /analysis                                              9.82 kB        97.9 kB
+├ ○ /analysis-trend                                        8.86 kB        96.9 kB
+├ ○ /cloud-screening                                       4.82 kB        92.9 kB
+├ ○ /config                                                2.66 kB        97.6 kB
+├ ○ /config/rdagent-llm                                    10.1 kB        98.1 kB
+├ ○ /llm/aistock-agents                                    3.1 kB          333 kB
+├ ○ /llm/models                                            8.32 kB         345 kB
+├ ○ /llm/providers                                         5.98 kB         343 kB
+├ ○ /llm/rdagent-config                                    4.48 kB         317 kB
+├ ○ /local-data                                            31.8 kB         120 kB
+├ ○ /market-news                                           2.24 kB        90.3 kB
+├ ○ /market-regime                                         6.4 kB         98.9 kB
+├ ○ /monitor                                               7.42 kB        95.5 kB
+├ ○ /paper-v2                                              5.07 kB         109 kB
+├ ○ /paper-v2/miniqmt-sim                                  10.8 kB         110 kB
+├ ○ /paper-v2/model-hmm                                    7.97 kB         100 kB
+├ ○ /paper-v2/packages                                     5.35 kB         109 kB
+├ ○ /paper-v2/portfolios                                   6.61 kB         110 kB
+├ ƒ /paper-v2/portfolios/[portfolioId]                     3.6 kB          108 kB
+├ ƒ /paper-v2/portfolios/[portfolioId]/ledger              3.18 kB         107 kB
+├ ƒ /paper-v2/portfolios/[portfolioId]/live-dashboard      6.63 kB         111 kB
+├ ƒ /paper-v2/portfolios/[portfolioId]/performance         5.6 kB          105 kB
+├ ƒ /paper-v2/portfolios/[portfolioId]/run-console         13.6 kB         113 kB
+├ ○ /paper-v2/running                                      8.1 kB          107 kB
+├ ○ /paper-v2/selection                                    7.74 kB         111 kB
+├ ○ /paper-v2/settings                                     1.8 kB         96.7 kB
+├ ○ /paper-v2/simulation-runtime                           8.34 kB         101 kB
+├ ○ /portfolio                                             5.98 kB          94 kB
+├ ○ /qe-archive                                            12.1 kB         105 kB
+├ ○ /qlib                                                  10.1 kB        98.1 kB
+├ ○ /qmt/orders                                            1.98 kB        90.1 kB
+├ ○ /qmt/positions                                         7.54 kB        95.6 kB
+├ ○ /qmt/strategies                                        7.89 kB          96 kB
+├ ○ /qmt/virtual-strategies                                10.1 kB         103 kB
+├ ○ /quantevolver                                          2.4 kB         97.3 kB
+├ ○ /quantevolver/compose                                  58.3 kB         167 kB
+├ ○ /quantevolver/evolution                                56.2 kB         161 kB
+├ ƒ /quantevolver/evolution/[taskId]                       10 kB           110 kB
+├ ƒ /quantevolver/evolution/[taskId]/loops/[loopIndex]     6.48 kB         107 kB
+├ ○ /quantevolver/evolution/sota                           3.29 kB        95.8 kB
+├ ○ /quantevolver/execution-algorithms                     5.03 kB        93.1 kB
+├ ○ /quantevolver/experiments                              12.7 kB         109 kB
+├ ƒ /quantevolver/experiments/[id]                         6.92 kB         107 kB
+├ ○ /quantevolver/factor-correlation                       33.4 kB         121 kB
+├ ○ /quantevolver/factor-deletion                          3.22 kB        91.3 kB
+├ ○ /quantevolver/factor-transformation                    11 kB            99 kB
+├ ○ /quantevolver/model-training                           6.31 kB        94.4 kB
+├ ○ /quantevolver/models                                   177 B          94.9 kB
+├ ○ /quantevolver/multi-alpha/diagnostics                  1.29 kB        96.2 kB
+├ ƒ /quantevolver/multi-alpha/diagnostics/[expId]          5.5 kB         93.6 kB
+├ ○ /quantevolver/multi-alpha/evolve-wizard                4.35 kB        98.2 kB
+├ ○ /quantevolver/prompts                                  5.04 kB        93.1 kB
+├ ○ /quantevolver/strategies                               6.15 kB        94.2 kB
+├ ○ /quantevolver/templates                                6.77 kB         106 kB
+├ ƒ /quantevolver/templates/[templateId]                   13.1 kB         112 kB
+├ ○ /rdagent/dispatch                                      9.18 kB        97.3 kB
+├ ○ /rdagent/dispatch/db-monitor                           1.18 kB        89.2 kB
+├ ○ /rdagent/dispatch/log-viewer                           2.91 kB          91 kB
+├ ○ /rdagent/dispatch/system-monitor                       1.35 kB        89.4 kB
+├ ○ /rdagent/models                                        2.55 kB        90.6 kB
+├ ○ /rdagent/sync                                          3.55 kB        91.6 kB
+├ ○ /rdagent/task-selection                                3.39 kB        91.5 kB
+├ ○ /rdagent/tasks                                         4.48 kB        92.5 kB
+├ ○ /rdagent/tasks-sync                                    10.4 kB        98.5 kB
+├ ƒ /rdagent/tasks/[taskId]                                1.63 kB        89.7 kB
+├ ƒ /research-assistant                                    191 B           172 kB
+├ ○ /research-assistant/admin                              1.24 kB        96.2 kB
+├ ○ /research-assistant/approvals                          4.29 kB        97.4 kB
+├ ○ /research-assistant/chat                               191 B           172 kB
+├ ○ /research-assistant/external-agents                    3.98 kB        97.1 kB
+├ ○ /research-assistant/graph                              5.12 kB        98.3 kB
+├ ○ /research-assistant/issue-candidates                   4.04 kB        97.2 kB
+├ ○ /research-assistant/mcp-tools                          3.97 kB        97.1 kB
+├ ○ /research-assistant/memory                             6.67 kB        99.8 kB
+├ ○ /research-assistant/models                             5.15 kB        98.3 kB
+├ ○ /research-assistant/notifications                      4.87 kB          98 kB
+├ ○ /research-assistant/reports                            4.94 kB        98.1 kB
+├ ○ /research-assistant/settings                           5.18 kB        98.3 kB
+├ ○ /research-assistant/skills                             4.12 kB        97.3 kB
+├ ○ /research-assistant/streams                            5.06 kB        98.2 kB
+├ ○ /research-assistant/tasks                              2.88 kB         108 kB
+├ ○ /research-assistant/trace                              1.27 kB         106 kB
+├ ○ /research-assistant/workbench                          8.35 kB         114 kB
+├ ○ /research-pipeline                                     3 kB            108 kB
+├ ƒ /research-pipeline/[experimentId]                      5.99 kB         111 kB
+├ ○ /rl-execution                                          6.13 kB        98.6 kB
+├ ○ /scheduler                                             34 kB           122 kB
+├ ○ /sector-strategy                                       5.41 kB        93.5 kB
+├ ○ /smart-monitor                                         3.48 kB        91.6 kB
+├ ƒ /strategies/[strategyId]/versions/[versionId]/signals  1.82 kB        89.9 kB
+├ ○ /strategy-package-governance                           6.68 kB        99.2 kB
+├ ○ /validation-center                                     29.4 kB         117 kB
+└ ○ /watchlist                                             9.42 kB        97.5 kB
++ First Load JS shared by all                              88.1 kB
+  ├ chunks/7023-66819b68daced4cf.js                        31.7 kB
+  ├ chunks/fd9d1056-a7e86700d9b3a1fe.js                    53.6 kB
+  └ other shared chunks (total)                            2.74 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+nox > npx playwright test tests/research-assistant/phase7-frontend-acceptance.spec.ts --project chromium
+[2m[WebServer] [22m(node:97868) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+[2m[WebServer] [22m(node:9036) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+[2m[WebServer] [22m(node:5276) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 4 tests using 1 worker
+
+(node:73564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:73564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:224:5 › Phase 7 chat shows evidence and blockers while main bubble stays summary-only (3.2s)
+  ✓  2 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:246:5 › Phase 7 memory tree renders project and personal branches with context pack route evidence (1.4s)
+  ✓  3 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:260:5 › Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, and approval blockers (1.7s)
+  ✓  4 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:274:5 › Phase 7 Trace page carries worker process instead of hiding failures (1.5s)
+
+  4 passed (14.9s)
+nox > npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium
+[2m[WebServer] [22m(node:90728) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+[2m[WebServer] [22m(node:48880) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+[2m[WebServer] [22m(node:65796) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 7 tests using 1 worker
+
+(node:67864) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67864) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › tests\research-assistant\research-assistant.spec.ts:88:5 › Research Assistant chat shows readable catalog setup state instead of backend error JSON (2.6s)
+  ✓  2 [chromium] › tests\research-assistant\research-assistant.spec.ts:135:5 › Research Assistant main entry is a Codex-like LLM chat with readable cards (1.2s)
+  ✓  3 [chromium] › tests\research-assistant\research-assistant.spec.ts:192:5 › Research Assistant chat renders tool choice markup as readable MCP route cards (932ms)
+  ✓  4 [chromium] › tests\research-assistant\research-assistant.spec.ts:231:5 › Research Assistant chat renders auto-executed MCP summary result cards (1.2s)
+  ✓  5 [chromium] › tests\research-assistant\research-assistant.spec.ts:319:5 › Research Assistant MCP tools page treats ready servers as ready (1.4s)
+[2m[WebServer] [22m ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+  ✓  6 [chromium] › tests\research-assistant\research-assistant.spec.ts:360:5 › Research Assistant admin page separates audit tools from the chat entry (2.0s)
+  ✓  7 [chromium] › tests\research-assistant\research-assistant.spec.ts:399:5 › Research Assistant workbench surfaces local data MCP tools as readable cards (1.0s)
+
+  7 passed (17.0s)
+nox > cd F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602
+nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/research_assistant_phase7_crosscheck.py --blueprint docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md --expected tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml --fail-on-drift --output-json tmp/validation/research_assistant/phase7/crosscheck.json
+{
+  "dai_rows": 25,
+  "defect_classifications": 13,
+  "phase_anchor_count": 7,
+  "status": "passed",
+  "traceability_rows": 26,
+  "tri_state_statuses": [
+    "approved_exception",
+    "future_phase_pending",
+    "hard_pass"
+  ]
+}
+nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/research_assistant/phase7/catalog_integrity.json --fail-on-warning
+{
+  "schema_version": "aistock_validation_catalog_integrity_v1",
+  "generated_at": "2026-06-02T13:19:08.216147+00:00",
+  "repo_root": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602",
+  "state": "passed",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0,
+    "finding_count": 0,
+    "plans": 45,
+    "runner_enabled_plans": 28,
+    "modules": 74,
+    "ui_targets": 50,
+    "file_ownership_rules": 67,
+    "resource_policies": 9,
+    "nox_sessions": 56,
+    "workflow_nox_sessions": 15,
+    "production_8001_touched": false,
+    "production_db_touched": false
+  },
+  "findings": []
+}
+nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/aistock_module_ownership_scan.py --output-json tmp/validation/research_assistant/phase7/ownership.json --summary-md tmp/validation/research_assistant/phase7/ownership.md --fail-on-unmapped --fail-on-ambiguous backend/routers/research_assistant.py backend/db/init_research_assistant_schema_20260521.py backend/services/research_assistant/service.py backend/services/research_assistant/qe_autonomy/adapter.py backend/tests/research_assistant/test_agent_teams_api.py backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py frontend/src/app/research-assistant/chat/page.tsx frontend/src/app/research-assistant/memory/page.tsx frontend/src/app/research-assistant/research-assistant.css frontend/src/app/research-assistant/tasks/page.tsx frontend/src/app/research-assistant/trace/page.tsx frontend/src/app/research-assistant/workbench/page.tsx frontend/src/components/research-assistant/AgentTeamsRunView.tsx frontend/src/components/research-assistant/BlockerCard.tsx frontend/src/components/research-assistant/EvidenceCard.tsx frontend/src/components/research-assistant/MemoryTreeView.tsx frontend/src/lib/research-assistant/api.ts frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts frontend/tests/research-assistant/phase7-live-smoke.spec.ts scripts/research_assistant_phase7_crosscheck.py tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml tests/aistock_validation/catalog/test_plans.yaml tests/aistock_validation/catalog/module_registry.yaml tests/aistock_validation/catalog/file_ownership.yaml tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_validation.md tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_progress.md tests/aistock_validation/history/research_assistant/20260602_ra_phase7_live_smoke_template.md backend/services/validation/plan_catalog.py noxfile.py
+Module ownership scan completed: files=30, mapped=30, unmapped=0, ambiguous=0
+nox > Session ra_phase7_full_accept was successful in a minute.

@@ -47,8 +47,12 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
         "random_state",
         "torch_seed",
         "numpy_seed",
+        "ensemble",
     }
 )
+
+SEED_ENSEMBLE_LEVELS = frozenset({"score", "portfolio"})
+SEED_ENSEMBLE_AGGS = frozenset({"mean", "rank_mean", "median"})
 
 
 def split_qe_runtime_metadata(params: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -83,6 +87,51 @@ def normalize_qe_random_seed(value: Any, *, field_name: str = "random_seed") -> 
     if seed < 0 or seed > 2**32 - 1:
         raise ValueError(f"{field_name} must be between 0 and 4294967295, got {seed}")
     return seed
+
+
+def normalize_qe_seed_ensemble_config(
+    value: Mapping[str, Any] | None,
+    *,
+    context: str = "ensemble",
+) -> dict[str, Any] | None:
+    """Return a deterministic seed-ensemble config or None when disabled."""
+
+    if value in (None, ""):
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context} must be an object when provided")
+
+    enabled_raw = value.get("enabled", False)
+    if isinstance(enabled_raw, str):
+        enabled = enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        enabled = bool(enabled_raw)
+    if not enabled:
+        return None
+
+    raw_seeds = value.get("seeds")
+    if not isinstance(raw_seeds, list) or not raw_seeds:
+        raise ValueError(f"{context}.seeds must be a non-empty explicit seed list")
+    seeds = [
+        normalize_qe_random_seed(seed, field_name=f"{context}.seeds[{idx}]")
+        for idx, seed in enumerate(raw_seeds)
+    ]
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"{context}.seeds must not contain duplicate seeds")
+
+    level = str(value.get("level") or "score").strip()
+    if level not in SEED_ENSEMBLE_LEVELS:
+        raise ValueError(f"{context}.level must be one of {sorted(SEED_ENSEMBLE_LEVELS)}")
+    agg = str(value.get("agg") or "mean").strip()
+    if agg not in SEED_ENSEMBLE_AGGS:
+        raise ValueError(f"{context}.agg must be one of {sorted(SEED_ENSEMBLE_AGGS)}")
+
+    return {
+        "enabled": True,
+        "seeds": seeds,
+        "level": level,
+        "agg": agg,
+    }
 
 
 def extract_qe_random_seed(*sources: Mapping[str, Any] | None) -> int | None:
@@ -309,6 +358,7 @@ class ExperimentConfig(BaseModel):
     # Runtime-only archive/seed/provenance metadata. Never pass this to Qlib
     # strategy constructors.
     runtime_flags: dict[str, Any] | None = None
+    seed_ensemble: dict[str, Any] | None = None
 
     # ── Model hyperparameters base ─────────────────────────────────────────────
     # For paths that start from model_params (Paths 2 & 3).
@@ -438,6 +488,16 @@ class ExperimentConfig(BaseModel):
             _, metadata = split_qe_runtime_metadata(source)
             for key, value in metadata.items():
                 flags.setdefault(key, value)
+        ensemble = normalize_qe_seed_ensemble_config(
+            self.seed_ensemble if self.seed_ensemble is not None else flags.get("ensemble"),
+            context="runtime_flags.ensemble",
+        )
+        if ensemble:
+            flags["ensemble"] = ensemble
+            flags.setdefault("seed_policy", "fixed")
+            flags.setdefault("random_seed", ensemble["seeds"][0])
+        else:
+            flags.pop("ensemble", None)
         return flags
 
     def build_strategy_params(self) -> dict[str, Any]:

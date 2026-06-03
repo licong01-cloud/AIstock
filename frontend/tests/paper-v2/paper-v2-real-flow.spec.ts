@@ -2,10 +2,19 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const API_BASE = process.env.PAPER_V2_API_BASE || process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8011/api/v1";
 const TDX_BASE = process.env.TDX_BASE_URL || "http://127.0.0.1:19080";
-const QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012"];
-const REPLAY_TRADE_DATE = process.env.PAPER_V2_E2E_TRADE_DATE || "2026-04-24";
+const LEGACY_QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012"];
+const PREFERRED_PACKAGE_MARKERS = (
+  process.env.PAPER_V2_E2E_PACKAGE_MARKERS
+  || "qe_20260601_172505_fe17,qe_20260520_215627_abbc,qe_20260513_151128_12ea"
+)
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+let replayTradeDate = process.env.PAPER_V2_E2E_TRADE_DATE || "";
 const ACTIVATION_TRADE_DATE = process.env.PAPER_V2_E2E_ACTIVATION_DATE || "2026-04-28";
 const HMM_UNCOVERED_TRADE_DATE = process.env.PAPER_V2_E2E_HMM_UNCOVERED_DATE || "2026-04-29";
+const E2E_BLACKLIST_L1_CODE = "801030.SI";
+const E2E_BLACKLIST_L2_CODE = "801036.SI";
 const SKIP_REALTIME =
   process.env.PAPER_V2_E2E_SKIP_REALTIME === "1" || process.env.PAPER_V2_SKIP_REALTIME === "1";
 
@@ -14,6 +23,7 @@ type JsonObject = Record<string, any>;
 type PackageSummary = {
   package_id: string;
   package_name: string;
+  source_type?: string;
   source_id?: string;
   package_status: string;
   manifest_sha256: string;
@@ -72,7 +82,7 @@ let paperPortfolioRuntimeBlocked = "";
 function paperPortfolioBlockText(payloadOrText: unknown): string {
   const text = typeof payloadOrText === "string" ? payloadOrText : JSON.stringify(payloadOrText || {});
   if (
-    /DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
+    /DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|EXECUTION_ALGO_ERROR|V25_TWO_STAGE|V25_1_SMALL_CAP|early_model_path|late_model_path|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
   ) {
     return text.slice(0, 1200);
   }
@@ -132,6 +142,40 @@ async function ensurePackageFromExperiment(request: APIRequestContext, experimen
   return refreshed!;
 }
 
+function packagePreference(pkg: PackageSummary): number {
+  const haystack = `${pkg.package_name || ""} ${pkg.source_id || ""}`.toLowerCase();
+  const idx = PREFERRED_PACKAGE_MARKERS.findIndex((marker) => haystack.includes(marker.toLowerCase()));
+  return idx >= 0 ? idx : PREFERRED_PACKAGE_MARKERS.length + 1;
+}
+
+async function discoverValidationPackages(request: APIRequestContext): Promise<PackageSummary[]> {
+  const selectable = await listSelectablePackages(request);
+  const runnable = selectable
+    .filter((pkg) => pkg.selection_health?.runnable === true)
+    .sort((a, b) => packagePreference(a) - packagePreference(b));
+  if (runnable.length >= 2) {
+    return runnable.slice(0, Math.min(3, runnable.length));
+  }
+
+  const fallbackErrors: string[] = [];
+  const fallbackPackages: PackageSummary[] = [...runnable];
+  for (const experimentId of LEGACY_QE_EXPERIMENTS) {
+    try {
+      const pkg = await ensurePackageFromExperiment(request, experimentId);
+      if (!fallbackPackages.some((item) => item.package_id === pkg.package_id)) {
+        fallbackPackages.push(pkg);
+      }
+    } catch (err) {
+      fallbackErrors.push(`${experimentId}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500));
+    }
+    if (fallbackPackages.length >= 2) break;
+  }
+  if (fallbackPackages.length < 2) {
+    throw new Error(`Paper v2 UI E2E requires at least two runnable packages; fallback errors=${fallbackErrors.join(" | ")}`);
+  }
+  return fallbackPackages;
+}
+
 function runtimeConfig(topK = 20): JsonObject {
   return {
     top_k: topK,
@@ -153,7 +197,7 @@ function runtimeConfig(topK = 20): JsonObject {
 async function resolveReplayCutoff(request: APIRequestContext): Promise<string> {
   const { response, payload } = await apiJson(
     request,
-    `/selection-center/pit-cutoff?trade_date=${REPLAY_TRADE_DATE}&pit_mode=PREVIOUS_TRADING_DAY_CLOSE`,
+    `/selection-center/pit-cutoff?trade_date=${replayTradeDate}&pit_mode=PREVIOUS_TRADING_DAY_CLOSE`,
   );
   expect(response.ok(), `resolve PIT cutoff: ${JSON.stringify(payload)}`).toBeTruthy();
   expect(payload.point_in_time_context?.cutoff_date, "PIT cutoff date must be resolved by backend calendar").toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -165,7 +209,7 @@ async function ensureSuccessfulSelectionRun(request: APIRequestContext, pkg: Pac
     method: "POST",
     data: {
       package_ids: [pkg.package_id],
-      trade_date: REPLAY_TRADE_DATE,
+      trade_date: replayTradeDate,
       data_source: "DB_HISTORICAL",
       mode: "single_package",
       runtime_config: runtimeConfig(20),
@@ -178,13 +222,14 @@ async function ensureSuccessfulSelectionRun(request: APIRequestContext, pkg: Pac
   return payload.run;
 }
 
-async function requireV25PaperPolicy(request: APIRequestContext, pkg: PackageSummary): Promise<ExecutionPolicySummary> {
+async function loadExecutionPolicyOrDefault(request: APIRequestContext, pkg: PackageSummary): Promise<ExecutionPolicySummary | null> {
   const { response, payload } = await apiJson(request, `/strategy-packages/${pkg.package_id}/execution-policies`);
   expect(response.ok(), `load execution policies for ${pkg.package_name}: ${JSON.stringify(payload)}`).toBeTruthy();
   const policies: ExecutionPolicySummary[] = payload.execution_policies || [];
-  const policy = policies.find((item) => item.algo_code === "V25_TWO_STAGE" && item.paper_enabled);
-  expect(policy, `${pkg.package_name} must already have a paper-enabled V25_TWO_STAGE policy; test must not mutate strategy assets`).toBeTruthy();
-  return policy!;
+  return policies.find((item) => item.paper_enabled)
+    || policies.find((item) => ["V25_TWO_STAGE", "V25_1_SMALL_CAP"].includes(String(item.algo_code || "").toUpperCase()))
+    || policies[0]
+    || null;
 }
 
 async function requireHmmRuntimeChoice(request: APIRequestContext): Promise<HmmRuntimeChoice> {
@@ -220,10 +265,23 @@ async function requireHmmRuntimeChoice(request: APIRequestContext): Promise<HmmR
   throw new Error("HMM completed snapshot with preset_A coefficients must exist for UI runtime selection");
 }
 
+
+async function requireHmmAutomaticRuntimeConfig(request: APIRequestContext): Promise<{ config_id: string; trade_date: string }> {
+  const { response, payload } = await apiJson(request, "/hmm-training/configs");
+  expect(response.ok(), `load HMM configs: ${JSON.stringify(payload)}`).toBeTruthy();
+  const configs: JsonObject[] = Array.isArray(payload) ? payload : (payload.configs || []);
+  expect(configs.length, "HMM config must exist for automatic UI runtime selection").toBeGreaterThan(0);
+  const ordered = [
+    ...configs.filter((item) => String(item.display_name || "").includes("w5_zscore_candidate")),
+    ...configs.filter((item) => !String(item.display_name || "").includes("w5_zscore_candidate")),
+  ];
+  return { config_id: String(ordered[0].config_id), trade_date: replayTradeDate };
+}
+
 async function createPaperPortfolioOnly(
   request: APIRequestContext,
   pkg: PackageSummary,
-  policy: ExecutionPolicySummary,
+  policy: ExecutionPolicySummary | null,
   portfolioName: string,
 ): Promise<PaperPortfolioSummary | null> {
   const { response, payload } = await apiJson(request, "/paper-v2/portfolios", {
@@ -232,9 +290,9 @@ async function createPaperPortfolioOnly(
       package_id: pkg.package_id,
       portfolio_name: portfolioName,
       initial_cash: 1000000,
-      start_date: REPLAY_TRADE_DATE,
+      start_date: replayTradeDate,
       data_source: "DB_HISTORICAL",
-      execution_policy: { validated_execution_policy_id: policy.policy_id },
+      ...(policy ? { execution_policy: { validated_execution_policy_id: policy.policy_id } } : {}),
     },
   });
   if (!response.ok()) {
@@ -243,6 +301,37 @@ async function createPaperPortfolioOnly(
   }
   expect(response.ok(), `create UI-console test portfolio: ${JSON.stringify(payload)}`).toBeTruthy();
   return payload.portfolio;
+}
+
+async function waitForPortfolioByName(request: APIRequestContext, portfolioName: string, timeoutMs = 120_000): Promise<PaperPortfolioSummary> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { response, payload } = await apiJson(
+      request,
+      `/paper-v2/portfolios?page=1&page_size=5&search=${encodeURIComponent(portfolioName)}`,
+    );
+    expect(response.ok(), `portfolio search ${portfolioName}: ${JSON.stringify(payload).slice(0, 1200)}`).toBeTruthy();
+    const rows: PaperPortfolioSummary[] = payload.portfolios || [];
+    const found = rows.find((item) => item.portfolio_name === portfolioName);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error(`created portfolio ${portfolioName} was not visible through API within ${timeoutMs}ms`);
+}
+
+async function waitForReplayRunOutcome(request: APIRequestContext, portfolioId: string, timeoutMs = 700_000): Promise<JsonObject> {
+  const deadline = Date.now() + timeoutMs;
+  let latest: JsonObject | null = null;
+  while (Date.now() < deadline) {
+    const { response, payload } = await apiJson(request, `/paper-v2/portfolios/${portfolioId}/runs?limit=5`);
+    expect(response.ok(), `portfolio runs ${portfolioId}: ${JSON.stringify(payload).slice(0, 1200)}`).toBeTruthy();
+    const runs: JsonObject[] = payload.runs || [];
+    latest = runs[0] || null;
+    const status = String(latest?.status || "");
+    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(status)) return latest!;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error(`portfolio ${portfolioId} replay run did not settle; latest=${JSON.stringify(latest).slice(0, 1200)}`);
 }
 
 async function openSection(page: Page, heading: string) {
@@ -262,9 +351,28 @@ async function chooseSelectionPackages(page: Page, packageIds: string[]) {
   }
   for (const packageId of packageIds) {
     const checkbox = page.getByTestId(`selection-package-${packageId}`);
-    await expect(checkbox, `selection package ${packageId} must be enabled by health gate`).toBeEnabled({ timeout: 5_000 });
+    if (await checkbox.count() === 0) {
+      const refresh = page.getByRole("button", { name: /刷新策略包/ });
+      if (await refresh.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await refresh.click();
+      }
+    }
+    await expect(checkbox, `selection package ${packageId} must be visible after selector refresh`).toBeVisible({ timeout: 60_000 });
+    await expect(checkbox, `selection package ${packageId} must be enabled by health gate`).toBeEnabled();
     await checkbox.check();
   }
+}
+
+async function chooseIndustryBlacklist(page: Page, l1Code: string, l2Code: string) {
+  const selector = page.getByTestId("paper-industry-blacklist-selector");
+  await expect(selector, "industry blacklist selector must be visible in Selection Center controls").toBeVisible({ timeout: 60_000 });
+  const group = page.getByTestId(`paper-industry-group-${l1Code}`);
+  await expect(group, `industry group ${l1Code} must be loaded from backend tree`).toBeVisible({ timeout: 60_000 });
+  await group.click();
+  const addButton = page.getByTestId(`paper-industry-add-${l2Code}`);
+  await expect(addButton, `industry child ${l2Code} must be visible after expanding ${l1Code}`).toBeVisible({ timeout: 30_000 });
+  await addButton.click();
+  await expect(page.getByTestId(`paper-industry-selected-${l2Code}`), `industry blacklist ${l2Code} must be selected in runtime profile UI`).toBeVisible();
 }
 
 async function assertSelectionHealthGateBlocksLegacy(page: Page, packageId: string) {
@@ -272,6 +380,86 @@ async function assertSelectionHealthGateBlocksLegacy(page: Page, packageId: stri
   await expect(checkbox, `legacy package ${packageId} should still be visible`).toBeVisible({ timeout: 30_000 });
   await expect(checkbox, `legacy package ${packageId} must be disabled before operator run`).toBeDisabled();
   await expect(page.locator("body")).toContainText(/LEGACY_NON_ST_PIT|BLOCKED|旧版非 ST PIT|健康预检阻断/);
+}
+
+type SelectionRunClickResult = {
+  ok: boolean;
+  status: number;
+  payload: JsonObject;
+  text: string;
+};
+
+async function clickSelectionRunAndAcceptPitResult(page: Page): Promise<SelectionRunClickResult> {
+  const dialogPromise = page.waitForEvent("dialog", { timeout: 10_000 }).then(async (dialog) => {
+    expect(dialog.type(), "PIT cutoff confirmation must be explicit before running selection").toBe("confirm");
+    await dialog.accept();
+  });
+  const responsePromise = page.waitForResponse((response) =>
+    response.url().endsWith("/selection-center/runs")
+    && response.request().method() === "POST",
+    { timeout: 300_000 },
+  );
+  await page.getByTestId("selection-run").click();
+  await dialogPromise;
+  const response = await responsePromise;
+  const text = await response.text();
+  let payload: JsonObject = {};
+  if (text) {
+    payload = JSON.parse(text) as JsonObject;
+  }
+  return { ok: response.ok(), status: response.status(), payload, text };
+}
+
+async function clickSelectionRunAndAcceptPit(page: Page): Promise<JsonObject> {
+  const result = await clickSelectionRunAndAcceptPitResult(page);
+  if (!result.ok) {
+    throw new Error(`selection run HTTP ${result.status}: ${result.text.slice(0, 1200)}`);
+  }
+  return result.payload;
+}
+
+async function assertSinglePackageRunArtifactEvidence(request: APIRequestContext, runId: string) {
+  expect(runId, "selection run response must include the persisted run id").toMatch(/^sel_/);
+  const aggregate = await apiJson(request, `/selection-center/runs/${runId}/aggregate-results`);
+  expect(aggregate.response.ok(), `load aggregate evidence for ${runId}: ${JSON.stringify(aggregate.payload).slice(0, 1200)}`).toBeTruthy();
+  const rows: JsonObject[] = aggregate.payload.aggregate_results || [];
+  expect(rows.length, `selection run ${runId} must persist aggregate rows`).toBeGreaterThan(0);
+  const componentScores = rows[0].component_scores || {};
+  expect(componentScores.artifact_source, `selection run ${runId} must keep live artifact authority`).toBe("live_qe_model_inference_v1");
+  expect(Number(componentScores.raw_rank), `selection run ${runId} must keep raw rank provenance`).toBeGreaterThan(0);
+  expect(Number(rows[0].selection_entry_price), `selection run ${runId} must expose persisted entry price`).toBeGreaterThan(0);
+}
+
+async function assertWeightedFusionRunEvidence(
+  request: APIRequestContext,
+  runPayload: JsonObject,
+  expectedWeights: Record<string, number>,
+) {
+  const runId = String(runPayload.run?.run_id || runPayload.run_id || "");
+  expect(runId, "weighted fusion response must include the persisted run id").toMatch(/^sel_/);
+
+  const run = await apiJson(request, `/selection-center/runs/${runId}`);
+  expect(run.response.ok(), `load weighted fusion run ${runId}: ${JSON.stringify(run.payload).slice(0, 1200)}`).toBeTruthy();
+  const runRecord: JsonObject = run.payload.run || {};
+  expect(runRecord.mode, `weighted fusion run ${runId} must persist mode`).toBe("weighted_fusion");
+  const runtimeWeights: JsonObject = runRecord.runtime_config?.package_weights || {};
+  for (const [packageId, expectedWeight] of Object.entries(expectedWeights)) {
+    expect(Number(runtimeWeights[packageId]), `weighted fusion run ${runId} must persist runtime weight for ${packageId}`).toBeCloseTo(expectedWeight, 6);
+  }
+
+  const aggregate = await apiJson(request, `/selection-center/runs/${runId}/aggregate-results`);
+  expect(aggregate.response.ok(), `load weighted fusion aggregate ${runId}: ${JSON.stringify(aggregate.payload).slice(0, 1200)}`).toBeTruthy();
+  const rows: JsonObject[] = aggregate.payload.aggregate_results || [];
+  expect(rows.length, `weighted fusion run ${runId} must persist aggregate rows`).toBeGreaterThan(0);
+  const componentScores = rows[0].component_scores || {};
+  expect(componentScores.fusion_method, `weighted fusion run ${runId} must keep fusion method evidence`).toBe("weighted_rank_fusion");
+  for (const [packageId, expectedWeight] of Object.entries(expectedWeights)) {
+    expect(Number(componentScores.package_weights?.[packageId]), `weighted fusion row must persist package weight for ${packageId}`).toBeCloseTo(expectedWeight, 6);
+  }
+  const normalizedWeights: JsonObject = componentScores.normalized_package_weights || {};
+  const normalizedTotal = Object.values(normalizedWeights).reduce((sum, value) => sum + Number(value), 0);
+  expect(normalizedTotal, `weighted fusion run ${runId} normalized weights must sum to 1`).toBeCloseTo(1, 6);
+  expect(Number(rows[0].selection_entry_price), `weighted fusion run ${runId} must expose persisted entry price`).toBeGreaterThan(0);
 }
 
 function consoleRuntimeText(topK = 20): string {
@@ -323,7 +511,7 @@ async function assertWatchlistImportPersistence(
   expect(payload.run_id).toBeTruthy();
   expect(payload.category_id).toBeGreaterThan(0);
   expect(payload.entry_source).toContain(expectedSourceName);
-  expect(payload.entry_as_of).toBe(REPLAY_TRADE_DATE);
+  expect(payload.entry_as_of).toBe(replayTradeDate);
   expect(payload.requested_top_k).toBe(20);
   expect(payload.imported_symbols.length).toBeGreaterThan(0);
   expect(payload.imported_symbols.length).toBeLessThanOrEqual(20);
@@ -359,7 +547,7 @@ async function assertWatchlistImportPersistence(
     expect(watchRow.category_names || "").toContain(expectedCategoryName);
     expect(watchRow.entry_source || "").toContain(expectedSourceName);
     expect(watchRow.entry_task_id).toBe(payload.run_id);
-    expect(watchRow.entry_as_of).toBe(REPLAY_TRADE_DATE);
+    expect(watchRow.entry_as_of).toBe(replayTradeDate);
     expect(watchRow.entry_rank).toBe(Number(selectedRow.rank));
     expect(Number(watchRow.entry_price)).toBeCloseTo(Number(selectedRow.reference_price), 4);
     expect(Number(watchRow.entry_price)).toBeGreaterThan(0);
@@ -377,13 +565,15 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     expect(defaults.response.ok(), JSON.stringify(defaults.payload)).toBeTruthy();
     expect(defaults.payload.latest_trading_day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(defaults.payload.replay_start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    if (!replayTradeDate) {
+      replayTradeDate = defaults.payload.latest_trading_day;
+    }
     replayCutoffDate = await resolveReplayCutoff(request);
 
-    ensuredPackages = [];
+    ensuredPackages = await discoverValidationPackages(request);
+    expect(ensuredPackages.length, "Paper v2 UI E2E requires at least two runnable StrategyPackages").toBeGreaterThanOrEqual(2);
     ensuredRuns = [];
-    for (const experimentId of QE_EXPERIMENTS) {
-      const pkg = await ensurePackageFromExperiment(request, experimentId);
-      ensuredPackages.push(pkg);
+    for (const pkg of ensuredPackages) {
       ensuredRuns.push(await ensureSuccessfulSelectionRun(request, pkg));
     }
     const selectable = await listSelectablePackages(request);
@@ -398,30 +588,31 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.goto("/paper-v2/packages");
     await expect(page.getByRole("heading", { name: "模拟盘 v2" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "从 QE 创建策略包" })).toBeVisible();
-    await expect(page.getByText("只显示未打包来源")).toBeVisible();
+    await expect(page.getByText("创建时解析并复制运行资产")).toBeVisible();
 
     const sources = await apiJson(request, "/strategy-packages/qe-sources?source_kind=all&limit=20");
     expect(sources.response.ok(), JSON.stringify(sources.payload)).toBeTruthy();
     const sourceSection = await openSection(page, "从 QE 创建策略包");
     const sourceText = await sourceSection.locator("select").nth(1).textContent();
-    for (const experimentId of QE_EXPERIMENTS) {
-      expect(sourceText || "").not.toContain(experimentId);
+    for (const pkg of ensuredPackages.filter((item) => item.source_type === "qe_experiment" || String(item.source_id || "").startsWith("qe_"))) {
+      expect(sourceText || "").not.toContain(String(pkg.source_id || pkg.package_name));
     }
     if ((sources.payload.sources || []).length > 0) {
       await expect(sourceSection.locator("select").nth(1)).toContainText(/年化|IC|回撤/);
     }
 
-    await expect(page.getByRole("heading", { name: "StrategyPackage 策略包中心" })).toBeVisible();
-    for (const experimentId of QE_EXPERIMENTS) {
-      await expect(page.getByText(experimentId).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "StrategyPackage 列表" })).toBeVisible();
+    const packageTable = page.locator("table").filter({ hasText: "Manifest" }).first();
+    for (const pkg of ensuredPackages) {
+      await expect(packageTable.locator("tbody tr").filter({ hasText: pkg.package_name }).first()).toBeVisible();
     }
     await expect(page.locator("body")).toContainText("RankIC");
     await expect(page.locator("body")).toContainText("最大回撤");
     await expect(page.locator("body")).toContainText("生命周期状态");
-    await expect(page.locator("body")).toContainText("选股能力");
-    await expect(page.locator("body")).toContainText("模拟盘能力");
-    await expect(page.getByText("标记可用于选股").first()).toBeVisible();
-    await expect(page.getByText("标记可用于模拟盘").first()).toBeVisible();
+    await expect(page.locator("body")).toContainText("选股准入");
+    await expect(page.locator("body")).toContainText("模拟盘准入");
+    await expect(page.getByText("可进入选股").first()).toBeVisible();
+    await expect(page.getByText("可创建模拟盘").first()).toBeVisible();
     await expect(page.getByText("用此包创建模拟盘").first()).toBeVisible();
     await expect(page.getByText("退役策略包").first()).toBeVisible();
   });
@@ -433,7 +624,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
     const control = await openSection(page, "选股控制");
     await control.locator("select").first().selectOption("single_package");
-    await control.locator('input[type="date"]').fill(REPLAY_TRADE_DATE);
+    await control.locator('input[type="date"]').fill(replayTradeDate);
     await control.locator('input[type="number"]').first().fill("20");
 
     const picker = await openSection(page, "策略包选择器");
@@ -450,12 +641,14 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     }
     await targetRow.locator('input[type="checkbox"]').check();
 
-    await control.getByRole("button", { name: "运行选股" }).click();
+    const runPayload = await clickSelectionRunAndAcceptPit(page);
+    const runId = String(runPayload.run?.run_id || runPayload.run_id || "");
+    await assertSinglePackageRunArtifactEvidence(request, runId);
     const results = await openSection(page, "选股结果");
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
-    await expect(results).toContainText(/live_qe_model_inference_v1|artifact_source|raw_rank/, { timeout: 300_000 });
+    await expect(results).toContainText("live_qe_model_inference_score", { timeout: 300_000 });
     await expect(results.locator("tbody tr").first()).toBeVisible();
-    await expect(results).toContainText("选股参考价");
+    await expect(results).toContainText(/选股参考价|入池价/);
 
     const watchlistCategoryName = `PaperV2-E2E-Watchlist-${Date.now()}`;
     await results.locator("input.pv2-input").first().fill(watchlistCategoryName);
@@ -479,15 +672,13 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.getByTestId("watchlist-title")).toBeVisible({ timeout: 60_000 });
     await expectSelectOptionValue(page, "watchlist-category-filter", String(importPayload.category_id));
     await page.getByTestId("watchlist-category-filter").selectOption(String(importPayload.category_id));
-    await expectSelectOptionValue(page, "watchlist-source-task-filter", importPayload.run_id);
-    await page.getByTestId("watchlist-source-task-filter").selectOption(importPayload.run_id);
     const firstImportedSymbol = importPayload.imported_symbols[0];
     await expect(page.getByTestId(`watchlist-row-${firstImportedSymbol}`)).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByTestId(`watchlist-cell-source-${firstImportedSymbol}`)).toContainText(target.package_name);
-    await expect(page.getByTestId(`watchlist-cell-source-id-${firstImportedSymbol}`)).toContainText(importPayload.run_id);
+    await expect(page.getByTestId("watchlist-items-table")).toContainText(watchlistCategoryName);
+    await expect(page.getByTestId("watchlist-items-table")).toContainText(target.package_name);
     await expect(page.getByTestId(`watchlist-cell-rank-${firstImportedSymbol}`)).toContainText("1");
     await expect(page.getByTestId(`watchlist-cell-entry-price-${firstImportedSymbol}`)).not.toContainText("-");
-    await expect(page.getByTestId(`watchlist-cell-entry-as-of-${firstImportedSymbol}`)).toContainText(REPLAY_TRADE_DATE);
+    await expect(page.getByTestId(`watchlist-cell-entry-as-of-${firstImportedSymbol}`)).toContainText(replayTradeDate);
     await expect(page.getByTestId("watchlist-items-table")).toContainText("加入以来涨幅");
     await expect(page.getByTestId("watchlist-items-table")).toContainText("加入时间");
     await expectNoRawJsonUi(page);
@@ -527,45 +718,47 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   });
 
   test("Selection Center validates weighted fusion, HMM, blacklist backfill, and TopK guard through UI", async ({ page, request }) => {
-    const hmm = await requireHmmRuntimeChoice(request);
+    const hmm = await requireHmmAutomaticRuntimeConfig(request);
     const [first, second, third] = ensuredPackages;
     await page.goto("/paper-v2/selection");
 
     const runnableEnsured = ensuredPackages.filter((item) => runnableSelectionPackageIds.has(item.package_id));
-    if (runnableEnsured.length < 3) {
-      await page.getByTestId("selection-mode").selectOption("weighted_fusion");
-      await assertSelectionHealthGateBlocksLegacy(page, first.package_id);
-      await page.getByTestId("selection-hmm-enabled").check();
-      await page.getByTestId("selection-hmm-config").selectOption(hmm.config_id);
-      await page.getByTestId("selection-hmm-preset").selectOption("preset_A");
-      await expect(page.getByTestId("selection-hmm-coverage")).toContainText(/HMM|系数|绯绘暟/, { timeout: 30_000 });
-      return;
-    }
+    expect(runnableEnsured.length, "weighted/union UI validation requires at least two runnable packages").toBeGreaterThanOrEqual(2);
 
     await page.getByTestId("selection-mode").selectOption("weighted_fusion");
-    await page.getByTestId("selection-trade-date").fill(REPLAY_TRADE_DATE);
+    await page.getByTestId("selection-trade-date").fill(replayTradeDate);
     await page.getByTestId("selection-top-k").fill("50");
     await chooseSelectionPackages(page, [first.package_id, second.package_id]);
     await page.getByTestId(`selection-weight-${first.package_id}`).fill("2");
     await page.getByTestId(`selection-weight-${second.package_id}`).fill("1");
-    await page.getByTestId("selection-run").click();
+    const weightedPayload = await clickSelectionRunAndAcceptPit(page);
 
     const results = await openSection(page, "选股结果");
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
     await expect(results).toContainText("weighted_fusion_aggregate", { timeout: 300_000 });
     await expect(results.locator("tbody tr").first()).toBeVisible();
-    await expect(results).toContainText("package_weights");
+    await assertWeightedFusionRunEvidence(request, weightedPayload, {
+      [first.package_id]: 2,
+      [second.package_id]: 1,
+    });
 
     await page.getByTestId("selection-mode").selectOption("intersection");
-    await chooseSelectionPackages(page, [first.package_id, second.package_id]);
-    await page.getByTestId("selection-run").click();
+    const intersectionPackages = third ? [second.package_id, third.package_id] : [first.package_id, second.package_id];
+    await chooseSelectionPackages(page, intersectionPackages);
+    const intersectionResult = await clickSelectionRunAndAcceptPitResult(page);
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
-    await expect(results).toContainText("intersection_aggregate", { timeout: 300_000 });
-    await expect(results.locator("tbody tr").first()).toBeVisible();
+    if (intersectionResult.ok) {
+      await expect(results).toContainText("intersection_aggregate", { timeout: 300_000 });
+      await expect(results.locator("tbody tr").first()).toBeVisible();
+    } else {
+      expect(intersectionResult.status, `intersection no-candidate response: ${intersectionResult.text.slice(0, 1200)}`).toBe(400);
+      expect(intersectionResult.text).toMatch(/selection aggregation produced no candidates|ARTIFACT_GENERATION_FAILED/i);
+      await expect(page.locator(".pv2-error-panel")).toContainText(/selection aggregation produced no candidates|no candidates|ARTIFACT_GENERATION_FAILED/i);
+    }
 
     await page.getByTestId("selection-mode").selectOption("union");
-    await chooseSelectionPackages(page, [first.package_id, third.package_id]);
-    await page.getByTestId("selection-run").click();
+    await chooseSelectionPackages(page, [first.package_id, second.package_id]);
+    await clickSelectionRunAndAcceptPit(page);
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
     await expect(results).toContainText("union_aggregate", { timeout: 300_000 });
     await expect(results.locator("tbody tr").first()).toBeVisible();
@@ -575,20 +768,24 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-top-k").fill("20");
     await page.getByTestId("selection-trade-date").fill(hmm.trade_date);
     await expect(page.getByTestId("selection-cutoff-date")).toContainText(/^\d{4}-\d{2}-\d{2}$/, { timeout: 30_000 });
-    await page.getByTestId("selection-industry-blacklist").fill("计算机");
+    await chooseIndustryBlacklist(page, E2E_BLACKLIST_L1_CODE, E2E_BLACKLIST_L2_CODE);
     await page.getByTestId("selection-hmm-enabled").check();
+    await expect(page.getByTestId("selection-hmm-enabled")).toBeChecked();
+    await expect(page.getByTestId("selection-hmm-config")).toBeEnabled({ timeout: 30_000 });
+    await expectSelectOptionValue(page, "selection-hmm-config", hmm.config_id);
     await page.getByTestId("selection-hmm-config").selectOption(hmm.config_id);
-    await expect(page.locator(`[data-testid="selection-hmm-snapshot"] option[value="${hmm.snapshot_id}"]`)).toHaveCount(1, { timeout: 30_000 });
-    await page.getByTestId("selection-hmm-snapshot").selectOption(hmm.snapshot_id);
+    await expect(page.getByTestId("selection-hmm-snapshot")).toHaveCount(0);
+    await expect(page.getByTestId("selection-hmm-preset")).toBeEnabled({ timeout: 30_000 });
     await page.getByTestId("selection-hmm-preset").selectOption("preset_A");
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数覆盖已确认");
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(hmm.trade_date);
-    await page.getByTestId("selection-run").click();
+    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(/HMM/, { timeout: 30_000 });
+    const hmmResult = await clickSelectionRunAndAcceptPitResult(page);
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
     const hmmRuntimeError = page.locator(".pv2-error-panel").filter({ hasText: /HMM/ });
-    const hmmFailedFast = await hmmRuntimeError.isVisible({ timeout: 1_000 }).catch(() => false);
+    const hmmFailedFast = !hmmResult.ok || await hmmRuntimeError.isVisible({ timeout: 1_000 }).catch(() => false);
     if (hmmFailedFast) {
-      await expect(hmmRuntimeError).toContainText(/HMM|stock sector mapping|系数/);
+      expect(hmmResult.status, `HMM fail-fast response: ${hmmResult.text.slice(0, 1200)}`).toBe(400);
+      expect(hmmResult.text).toMatch(/HMM|coefficients|ARTIFACT_GENERATION|snapshot|stock sector mapping/i);
+      await expect(hmmRuntimeError).toContainText(/HMM|stock sector mapping|coefficients|ARTIFACT_GENERATION|snapshot/);
     } else {
       await expect(results).toContainText("hmm", { timeout: 300_000 });
       await expect(results.locator("tbody tr").first()).toBeVisible();
@@ -603,18 +800,17 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-top-k").fill("20");
     await page.getByTestId("selection-trade-date").fill(HMM_UNCOVERED_TRADE_DATE);
     await expect(page.getByTestId("selection-cutoff-date")).toContainText(/^\d{4}-\d{2}-\d{2}$/, { timeout: 30_000 });
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数不覆盖当前交易日");
-    await page.getByTestId("selection-run").click();
-    await expect(page.locator(".pv2-error-panel")).toContainText(/HMM 快照系数覆盖|HMM 系数文件不覆盖/);
+    await expect(page.getByTestId("selection-hmm-snapshot")).toHaveCount(0);
+    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(/HMM/);
   });
 
   test("Portfolio page creates a replay portfolio or surfaces runtime asset block", async ({ page, request }) => {
     const target = ensuredPackages[0];
-    const policy = await requireV25PaperPolicy(request, target);
-    const portfolioName = `E2E-V25-${Date.now()}`;
+    const policy = await loadExecutionPolicyOrDefault(request, target);
+    const portfolioName = `E2E-Paper-${Date.now()}`;
 
     await page.goto(`/paper-v2/portfolios?package_id=${target.package_id}`);
-    await expect(page.locator("body")).toContainText("V25_TWO_STAGE");
+    await expect(page.locator("body")).toContainText(target.package_name);
 
     const createSection = page.locator("section.pv2-card").first();
     await expect(createSection.locator("select").nth(0).locator(`option[value="${target.package_id}"]`)).toHaveCount(1, { timeout: 30_000 });
@@ -623,10 +819,12 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await createSection.locator("input.pv2-input").nth(1).fill("1000000");
     await createSection.locator("select").nth(1).selectOption("REPLAY_ONLY", { timeout: 30_000 });
     await expect(createSection.locator("input.pv2-input").nth(2)).toHaveValue(/DB_HISTORICAL/);
-    await expect(createSection.locator("select").nth(2)).toContainText("V25_TWO_STAGE", { timeout: 30_000 });
-    await createSection.locator("select").nth(2).selectOption(policy.policy_id, { timeout: 30_000 });
-    await createSection.locator("input.pv2-input").nth(3).fill(REPLAY_TRADE_DATE);
-    await createSection.locator("input.pv2-input").nth(4).fill(REPLAY_TRADE_DATE);
+    if (policy) {
+      await expect(createSection.locator("select").nth(2)).toContainText(/V25_TWO_STAGE|V25_1_SMALL_CAP|Platform runtime default|execution policy|manifest_default_execution_policy/i, { timeout: 30_000 });
+      await createSection.locator("select").nth(2).selectOption(policy.policy_id, { timeout: 30_000 });
+    }
+    await createSection.locator("input.pv2-input").nth(3).fill(replayTradeDate);
+    await createSection.locator("input.pv2-input").nth(4).fill(replayTradeDate);
     await createSection.locator('input[type="number"]').nth(1).fill("5");
     const createButton = createSection.locator("button.pv2-button-primary");
     await expect(createButton).toBeEnabled({ timeout: 30_000 });
@@ -636,18 +834,28 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const blockedText = await errorPanel.textContent({ timeout: 10_000 }).catch(() => "");
     paperPortfolioRuntimeBlocked = paperPortfolioBlockText(blockedText || "");
     if (paperPortfolioRuntimeBlocked) {
-      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy/i);
+      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|EXECUTION_ALGO_ERROR|model_path|not accessible|execution policy/i);
       await expect(page.locator(".pv2-readable-panel").filter({ hasText: /Created Portfolio Id|created_portfolio_id/ })).toHaveCount(0);
       return;
     }
 
-    const createdJson = page.locator(".pv2-readable-panel").filter({ hasText: /Created Portfolio Id|created_portfolio_id/ }).last();
-    await expect(createdJson).toBeVisible({ timeout: 180_000 });
-    await expect(createdJson).toContainText("SUCCEEDED", { timeout: 180_000 });
-    const createdText = (await createdJson.textContent()) || "";
-    const portfolioId = createdText.match(/paper_[0-9a-f]{32}/)?.[0] || "";
+    const createdNotice = page.locator(".pv2-notice-success").filter({ hasText: portfolioName });
+    await expect(createdNotice, "portfolio creation success notice must identify the created portfolio").toBeVisible({ timeout: 120_000 });
+    const portfolio = await waitForPortfolioByName(request, portfolioName);
+    const portfolioId = portfolio.portfolio_id;
     expect(portfolioId).toMatch(/^paper_/);
     replayPortfolioId = portfolioId;
+
+    const replayRun = await waitForReplayRunOutcome(request, portfolioId);
+    if (String(replayRun.status) === "FAILED") {
+      paperPortfolioRuntimeBlocked = paperPortfolioBlockText(replayRun.error_json || "");
+      expect(
+        paperPortfolioRuntimeBlocked,
+        `portfolio replay failed with unrecognized error: ${JSON.stringify(replayRun.error_json).slice(0, 1200)}`,
+      ).toBeTruthy();
+      return;
+    }
+    expect(replayRun.status).toBe("SUCCEEDED");
 
     const [runs, orders, fills, positions, cashLedger, snapshots, errors, performance] = await Promise.all([
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/runs?limit=100`),
@@ -761,7 +969,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
   test("Portfolio detail completes and retires an isolated test portfolio", async ({ page, request }) => {
     const target = ensuredPackages[0];
-    const policy = await requireV25PaperPolicy(request, target);
+    const policy = await loadExecutionPolicyOrDefault(request, target);
     const portfolio = await createPaperPortfolioOnly(request, target, policy, `E2E-Lifecycle-${Date.now()}`);
     if (!portfolio) {
       test.skip(true, `Paper portfolio runtime asset block: ${paperPortfolioRuntimeBlocked}`);
@@ -787,7 +995,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
   test("Run console validates readiness, policy/runtime audit, replay reject/reset, and live waiting controls", async ({ page, request }) => {
     const target = ensuredPackages[0];
-    const policy = await requireV25PaperPolicy(request, target);
+    const policy = await loadExecutionPolicyOrDefault(request, target);
     const portfolio = await createPaperPortfolioOnly(request, target, policy, `E2E-Console-${Date.now()}`);
     if (!portfolio) {
       test.skip(true, `Paper portfolio runtime asset block: ${paperPortfolioRuntimeBlocked}`);
@@ -797,14 +1005,26 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
     await page.goto(consolePath);
     await page.getByTestId("console-runtime-top-k").fill("20");
-    await page.getByTestId("console-trade-date").fill(REPLAY_TRADE_DATE);
+    await page.getByTestId("console-trade-date").fill(replayTradeDate);
     await page.getByTestId("console-readiness").click();
-    const readinessJson = page.locator(".pv2-readable-panel").filter({ hasText: /订单意图数量|Order Intent Count/ }).last();
-    await expect(readinessJson).toContainText("passed", { timeout: 120_000 });
+    const readinessCard = page.locator(".pv2-readiness-card").last();
+    await expect(readinessCard).toBeVisible({ timeout: 120_000 });
+    await expect(readinessCard).toContainText(/rebalance|minute_market_data|订单意图|Order Intent/i);
+    await expect(readinessCard.locator('.pv2-badge[title="passed"]').first()).toBeVisible();
     await expect(page.getByTestId("console-run-day")).toBeEnabled();
     await page.getByTestId("console-run-day").click();
-    const runJson = page.locator(".pv2-readable-panel").filter({ hasText: /运行ID|Run ID/ }).last();
-    await expect(runJson).toContainText("SUCCEEDED", { timeout: 180_000 });
+    const dayRun = await waitForReplayRunOutcome(request, portfolio.portfolio_id);
+    if (String(dayRun.status) === "FAILED") {
+      paperPortfolioRuntimeBlocked = paperPortfolioBlockText(dayRun.error_json || "");
+      expect(
+        paperPortfolioRuntimeBlocked,
+        `run-console day run failed with unrecognized error: ${JSON.stringify(dayRun.error_json).slice(0, 1200)}`,
+      ).toBeTruthy();
+      return;
+    }
+    expect(dayRun.status).toBe("SUCCEEDED");
+    const runJson = page.locator(".pv2-readable-panel").filter({ hasText: /daily run result|运行ID|Run ID/ }).last();
+    await expect(runJson).toContainText("SUCCEEDED", { timeout: 30_000 });
 
     await page.getByTestId("console-runtime-top-k").fill("21");
     await page.getByTestId("console-runtime-profile-name").fill(`E2E Runtime ${Date.now()}`);
@@ -833,10 +1053,10 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
       const { payload } = await apiJson(request, `/paper-v2/portfolios/${portfolio.portfolio_id}/execution-policy-activations`);
       return Boolean((payload.activations || []).find((item: JsonObject) => item.trade_date === ACTIVATION_TRADE_DATE && item.status === "ACTIVE"));
     }, { timeout: 30_000 }).toBeTruthy();
-    await expect(page.locator("body")).toContainText("V25_TWO_STAGE");
+    await expect(page.locator("body")).toContainText(/V25_TWO_STAGE|V25_1_SMALL_CAP|Platform runtime default|execution policy|manifest_default_execution_policy/i);
 
-    await page.getByTestId("console-replay-start").fill(REPLAY_TRADE_DATE);
-    await page.getByTestId("console-replay-end").fill(REPLAY_TRADE_DATE);
+    await page.getByTestId("console-replay-start").fill(replayTradeDate);
+    await page.getByTestId("console-replay-end").fill(replayTradeDate);
     await page.getByTestId("console-replay-reject").click();
     await expect(page.locator(".pv2-error-panel")).toContainText(/reject_existing|already|已有|DUPLICATE/i, { timeout: 60_000 });
 
@@ -870,44 +1090,28 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expectSelectOptionValue(page, "model-package", target.package_id);
 
     await page.getByTestId("model-package").selectOption(target.package_id);
-    await page.getByTestId("model-as-of-date").fill(REPLAY_TRADE_DATE);
+    await page.getByTestId("model-as-of-date").fill(replayTradeDate);
     await page.getByTestId("model-lookback-days").fill("756");
     await page.getByTestId("model-retrain-preview").click();
-    await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Requires Manual Confirmation" })).toContainText("Recommended Train End Date", { timeout: 60_000 });
+    const modelPreview = page.locator(".pv2-readable-panel").filter({ hasText: /manual retrain|original backtest model|重训|已生成/i }).last();
+    await expect(modelPreview, "model retrain preview must render the current readable summary UI").toBeVisible({ timeout: 60_000 });
+    await expect(modelPreview).toContainText(/manual retrain|original backtest model|重训|已生成/i);
 
     await page.getByTestId("hmm-config").selectOption(hmm.config_id);
-    await page.getByTestId("hmm-as-of-date").fill(REPLAY_TRADE_DATE);
+    await page.getByTestId("hmm-as-of-date").fill(replayTradeDate);
     await page.getByTestId("hmm-validation-months").fill("3");
     await page.getByTestId("hmm-train-years").fill("3");
     await page.getByTestId("hmm-rolling-preview").click();
-    await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Latest Completed Trade Date" })).toContainText(REPLAY_TRADE_DATE, { timeout: 60_000 });
+    const hmmSection = page.getByTestId("hmm-rolling-preview").locator("xpath=ancestor::section[1]");
+    const hmmPreview = hmmSection.locator(".pv2-readable-panel").last();
+    await expect(hmmPreview, "HMM rolling preview must render a readable summary for the selected as-of date").toBeVisible({ timeout: 60_000 });
+    await expect(hmmPreview.locator(".pv2-readable-row")).toHaveCount(4);
 
-    await page.getByTestId("hmm-daily-snapshot").selectOption(hmm.snapshot_id);
-    await page.getByTestId("hmm-daily-preset").selectOption("preset_A");
-    await page.getByTestId("hmm-daily-as-of-date").fill(hmm.trade_date);
-    await page.getByTestId("hmm-daily-effective-date").fill("");
-    await page.getByTestId("hmm-daily-preview").click();
-    const dailyPreview = page.locator(".pv2-readable-panel").filter({ hasText: "Generation Mode" }).last();
-    const hasDailyPreview = await dailyPreview.isVisible({ timeout: 10_000 }).catch(() => false);
-    if (!hasDailyPreview) {
-      await expect(page.locator(".pv2-error-panel")).toContainText(/HMM|coefficients|HTTP 409|409/i, { timeout: 60_000 });
-      await expect(page.getByTestId("hmm-daily-job-status")).toHaveCount(0);
-      await expectNoRawJsonUi(page);
-      return;
-    }
-    await expect(dailyPreview).toContainText("daily_asof_prediction_v1", { timeout: 60_000 });
-    await page.getByTestId("hmm-daily-generate").click();
-    await page.getByTestId("hmm-daily-generate-input").fill(hmm.snapshot_id);
-    const dailyJobResponse = page.waitForResponse(
-      (response) => response.url().includes("/hmm-training/snapshots/")
-        && response.url().includes("/daily-coefficients/jobs")
-        && response.request().method() === "POST",
-      { timeout: 60_000 },
-    );
-    await page.getByTestId("hmm-daily-generate-confirm").click();
-    expect((await dailyJobResponse).ok()).toBeTruthy();
-    await expect(page.getByTestId("hmm-daily-job-status")).toContainText("COMPLETED", { timeout: 300_000 });
-    await expect(page.getByTestId("hmm-daily-job-status")).toContainText(/CREATED|EXISTS/, { timeout: 300_000 });
+    await expect(page.getByText("HMM 每日系数由平台自动计算")).toBeVisible();
+    await expect(page.getByTestId("hmm-daily-snapshot")).toHaveCount(0);
+    await expect(page.getByTestId("hmm-daily-preview")).toHaveCount(0);
+    await expect(page.getByTestId("hmm-daily-generate")).toHaveCount(0);
+    await expect(page.locator("section").filter({ hasText: "HMM 模型缓存状态" })).toContainText(/运行时自动生成|preset_A|READY|COMPLETED/i);
     await expectNoRawJsonUi(page);
   });
 

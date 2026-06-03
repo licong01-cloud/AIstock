@@ -329,6 +329,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/seed_dataset_refresh_audit.py",
         "scripts/aistock_data_quality_smoke.py",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
         external=True,
     )
@@ -837,6 +838,687 @@ def research_mcp_contract(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase0_baseline(session: nox.Session) -> None:
+    """Run Phase 0 baseline, scaffold, catalog, and ownership gates."""
+    phase0_paths = [
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "docs/process/research_assistant_baseline_verification_20260531.md",
+        "backend/tests/research_assistant/__init__.py",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
+        "backend/db/migrations/ra_upgrade/README.md",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/tests/research_assistant/__init__.py",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase0_baseline_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase0_baseline_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase0_baseline_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase0_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase1_memory_tree(session: nox.Session) -> None:
+    """Run Phase 1 L1 memory tree DDL, retrieval, curator, and anti-drift gates."""
+    phase1_paths = [
+        "backend/db/migrations/ra_upgrade/001_memory_tree.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/models.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/research_assistant/memory_tree.py",
+        "backend/services/research_assistant/memory_curator.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase1_memory_tree_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/memory_tree.py",
+        "backend/services/research_assistant/memory_curator.py",
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase1_memory_tree_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase1_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase2_graph_context(session: nox.Session) -> None:
+    """Run Phase 2 graph-neighbor context injection and anti-drift gates."""
+    phase2_paths = [
+        "backend/services/research_assistant/graph_context.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_graph_context_expansion.py",
+        "backend/tests/research_assistant/test_graph_injected_into_context.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase2_graph_context_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/graph_context.py",
+        "backend/tests/research_assistant/test_graph_context_expansion.py",
+        "backend/tests/research_assistant/test_graph_injected_into_context.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_graph_context_expansion.py",
+        "backend/tests/research_assistant/test_graph_injected_into_context.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase2_graph_context_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase2_graph_context_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase2_graph_context_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase2_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase3_react_grounding(session: nox.Session) -> None:
+    """Run Phase 3 ReAct grounding, evidence guard, and anti-drift gates."""
+    phase3_paths = [
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        "configs/research_assistant/runtime_context.yaml",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase3_react_grounding_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase3_react_grounding_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase3_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase4_external_research(session: nox.Session) -> None:
+    """Run Phase 4 external research MCP, facade, evidence, and ReAct gates."""
+    phase4_paths = [
+        "backend/services/research_assistant/external_research.py",
+        "backend/routers/external_research.py",
+        "backend/mcp/modules/external_research.py",
+        "debug_tools/mcp/list_tools_smoke.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/services/research_assistant/tool_router.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        "backend/tests/mcp/test_domain_modules.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase4_external_research_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+        ".mcp.json",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/external_research.py",
+        "backend/routers/external_research.py",
+        "backend/mcp/modules/external_research.py",
+        "debug_tools/mcp/list_tools_smoke.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "debug_tools/mcp/list_tools_smoke.py",
+        "--server",
+        "aistock-external-research",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        "backend/tests/mcp/test_domain_modules.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase4_external_research_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase4_external_research_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase4_external_research_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase4_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase5_agent_teams(session: nox.Session) -> None:
+    """Run Phase 5 Agent Teams DDL, runtime, reduce, and isolation gates."""
+    phase5_paths = [
+        "backend/db/migrations/ra_upgrade/002_agent_teams.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "configs/research_assistant/agent_teams.yaml",
+        "backend/services/research_assistant/agent_teams/__init__.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/config.py",
+        "backend/services/research_assistant/agent_teams/providers.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase5_agent_teams_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/agent_teams/__init__.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/config.py",
+        "backend/services/research_assistant/agent_teams/providers.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase5_agent_teams_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase5_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase6_qe_autonomy(session: nox.Session) -> None:
+    """Run Phase 6 QE autonomy DDL, runtime, budget, approval, and worker gates."""
+    phase6_paths = [
+        "backend/db/migrations/ra_upgrade/003_qe_autonomy.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/qe_autonomy/__init__.py",
+        "backend/services/research_assistant/qe_autonomy/models.py",
+        "backend/services/research_assistant/qe_autonomy/providers.py",
+        "backend/services/research_assistant/qe_autonomy/guards.py",
+        "backend/services/research_assistant/qe_autonomy/runtime.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "configs/research_assistant/agent_teams.yaml",
+        "configs/research_assistant/runtime_context.yaml",
+        "backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomous_loop.py",
+        "backend/tests/research_assistant/test_qe_autonomy_default_disabled.py",
+        "backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py",
+        "backend/tests/research_assistant/test_qe_autonomy_budget_guard.py",
+        "backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py",
+        "backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py",
+        "backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py",
+        "backend/tests/research_assistant/test_qe_autonomy_determinism.py",
+        "backend/tests/research_assistant/test_qe_autonomy_fakes.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase6_qe_autonomy_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/qe_autonomy/__init__.py",
+        "backend/services/research_assistant/qe_autonomy/models.py",
+        "backend/services/research_assistant/qe_autonomy/providers.py",
+        "backend/services/research_assistant/qe_autonomy/guards.py",
+        "backend/services/research_assistant/qe_autonomy/runtime.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomous_loop.py",
+        "backend/tests/research_assistant/test_qe_autonomy_default_disabled.py",
+        "backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py",
+        "backend/tests/research_assistant/test_qe_autonomy_budget_guard.py",
+        "backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py",
+        "backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py",
+        "backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py",
+        "backend/tests/research_assistant/test_qe_autonomy_determinism.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase6_paths,
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_guardrail_scan.py",
+        "--changed-only",
+        "--baseline-json",
+        _guardrail_baseline_json(session),
+        "--fail-new-only",
+        "--fail-on-severity",
+        "P1",
+        "--output-json",
+        "tmp/validation/guardrails/ra_phase6_qe_autonomy.json",
+        "--summary-md",
+        "tmp/validation/guardrails/ra_phase6_qe_autonomy.md",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase7_full_accept(session: nox.Session) -> None:
+    """Run Phase 7 frontend integration, full RA backend, and cross-check gates."""
+    phase7_paths = [
+        "backend/routers/research_assistant.py",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/tests/research_assistant/test_agent_teams_api.py",
+        "backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "frontend/src/app/research-assistant/chat/page.tsx",
+        "frontend/src/app/research-assistant/memory/page.tsx",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/app/research-assistant/tasks/page.tsx",
+        "frontend/src/app/research-assistant/trace/page.tsx",
+        "frontend/src/app/research-assistant/workbench/page.tsx",
+        "frontend/src/components/research-assistant/AgentTeamsRunView.tsx",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx",
+        "frontend/src/components/research-assistant/MemoryTreeView.tsx",
+        "frontend/src/lib/research-assistant/api.ts",
+        "frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts",
+        "frontend/tests/research-assistant/phase7-live-smoke.spec.ts",
+        "scripts/research_assistant_phase7_crosscheck.py",
+        "tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_validation.md",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_progress.md",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_live_smoke_template.md",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    frontend_env = _env(
+        {
+            "FRONTEND_PORT": "3011",
+            "BACKEND_PORT": "8012",
+            "API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_TDX_BACKEND_BASE": "http://127.0.0.1:8012",
+            "PAPER_V2_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "PAPER_V2_API_PROXY_TARGET": "http://127.0.0.1:8012/api/v1",
+        }
+    )
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/routers/research_assistant.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/tests/research_assistant/test_agent_teams_api.py",
+        "backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "scripts/research_assistant_phase7_crosscheck.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.chdir("frontend")
+    session.run("npm", "run", "lint", env=frontend_env, external=True)
+    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/phase7-frontend-acceptance.spec.ts",
+        "--project",
+        "chromium",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/research-assistant.spec.ts",
+        "--project",
+        "chromium",
+        env=frontend_env,
+        external=True,
+    )
+    session.chdir(str(ROOT))
+    session.run(
+        sys.executable,
+        "scripts/research_assistant_phase7_crosscheck.py",
+        "--blueprint",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "--expected",
+        "tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml",
+        "--fail-on-drift",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/crosscheck.json",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/catalog_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/ownership.json",
+        "--summary-md",
+        "tmp/validation/research_assistant/phase7/ownership.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase7_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(
@@ -1023,6 +1705,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
     coverage_xml = coverage_dir / "validation_coverage_backend.xml"
     coverage_json = coverage_dir / "validation_coverage_backend.json"
     coverage_snapshot = coverage_dir / "validation_coverage_backend_snapshot.json"
+    coverage_data = coverage_dir / ".coverage.validation_coverage_backend"
     session.run(
         sys.executable,
         "-m",
@@ -1043,7 +1726,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env(),
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
         external=True,
     )
     session.run(
@@ -1149,6 +1832,7 @@ def validation_center_backend(session: nox.Session) -> None:
     coverage_xml = coverage_dir / "validation_center_backend.xml"
     coverage_json = coverage_dir / "validation_center_backend.json"
     coverage_snapshot = coverage_dir / "validation_center_backend_snapshot.json"
+    coverage_data = coverage_dir / ".coverage.validation_center_backend"
     session.run(
         sys.executable,
         "-m",
@@ -1201,7 +1885,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env(),
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
         external=True,
     )
     session.run(

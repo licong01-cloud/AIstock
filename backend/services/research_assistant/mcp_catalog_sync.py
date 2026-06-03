@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.mcp.modules import local_data, research, research_assistant
+from backend.mcp.modules import external_research, local_data, research, research_assistant
 
 try:  # New gateway modules are imported after their files are generated in this branch.
     from backend.mcp.modules import execution_policy, factor_correlation, factor_library, factor_metrics, model_registry, strategy_governance
@@ -30,6 +30,7 @@ SERVER_DEFS: tuple[dict[str, Any], ...] = (
     {"server_key": "aistock-factor-correlation", "title": "Factor Correlation MCP", "display_name_zh": "因子相关性", "business_aliases_zh": ["相关矩阵", "高相关因子", "冗余因子"], "domain": "factor_correlation", "module": "factor_correlation", "summary_zh": "Factor correlation top pairs, clusters, replacement suggestions and matrix refs"},
     {"server_key": "aistock-model-registry", "title": "Model Registry MCP", "display_name_zh": "模型库", "business_aliases_zh": ["模型注册", "模型版本", "模型试验", "模型产物"], "domain": "model_registry", "module": "model_registry", "summary_zh": "Model registry trials, seed stability, hyperparameter history, artifact refs and lifecycle"},
     {"server_key": "aistock-strategy-governance", "title": "Strategy Governance MCP", "display_name_zh": "策略库", "business_aliases_zh": ["策略包", "策略治理", "选股就绪", "模拟盘就绪"], "domain": "strategy_governance", "module": "strategy_governance", "summary_zh": "StrategyPackage health, Selection/Paper readiness, promotion and retirement"},
+    {"server_key": "aistock-external-research", "title": "External Research MCP", "display_name_zh": "External Research", "business_aliases_zh": ["external search", "web search", "paper search", "academic search"], "domain": "external_research", "module": "external_research", "summary_zh": "External web search, academic paper search, fetch/extract, and draft evidence candidates"},
     {"server_key": "aistock-execution-policy", "title": "Execution Policy MCP", "display_name_zh": "执行策略库", "business_aliases_zh": ["执行策略", "分钟算法", "TWAP", "VWAP", "POV"], "domain": "execution_policy", "module": "execution_policy", "summary_zh": "Execution policy library, minute algos, market-state constraints and binding validation"},
 )
 
@@ -86,6 +87,14 @@ TOOL_NAMES_BY_SERVER: dict[str, tuple[str, ...]] = {
         "qe_archive_query_model_trials",
         "qe_archive_query_seed_trials",
         "qe_archive_query_hyperparam_history",
+        "qe_archive_query_analytics_view_status",
+        "qe_archive_query_run_leaderboard",
+        "qe_archive_query_seed_robustness",
+        "qe_archive_query_factor_performance",
+        "qe_archive_query_model_hyperparam_seed_perf",
+        "qe_archive_query_overfit_flags",
+        "qe_archive_query_promotion_candidates",
+        "qe_archive_query_evolution_lineage",
     ),
     "aistock-validation": (
         "health",
@@ -120,6 +129,7 @@ TOOL_NAMES_BY_SERVER: dict[str, tuple[str, ...]] = {
         "strategy_governance_list_packages", "strategy_governance_get_package", "strategy_governance_get_health", "strategy_governance_get_selection_readiness", "strategy_governance_get_paper_readiness", "strategy_governance_plan_promotion", "strategy_governance_plan_retirement", "strategy_governance_promote_confirmed", "strategy_governance_retire_confirmed"))),
     "aistock-execution-policy": tuple(getattr(execution_policy, "TOOL_NAMES", (
         "execution_policy_list_algos", "execution_policy_get_algo", "execution_policy_validate_for_strategy", "execution_policy_get_market_state_constraints", "execution_policy_plan_binding", "execution_policy_bind_confirmed", "execution_policy_retire_confirmed"))),
+    "aistock-external-research": tuple(external_research.TOOL_NAMES),
 }
 
 REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
@@ -142,6 +152,8 @@ PREFLIGHT_CHECKS_BY_TOOL: dict[str, list[str]] = {
     "qe_template_run_confirmed": ["materialized_template", "cost_guard", "node_health", "approval"],
     "local_data_apply_repair_confirmed": ["confirmation_text", "plan_id", "facade", "approval"],
 }
+
+DRAFT_ONLY_TOOLS = {"external_research_save_evidence"}
 
 CONFIRMATIONS_BY_TOOL = {
     "local_data_apply_repair_confirmed": ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
@@ -209,6 +221,9 @@ def _tool_metadata(server_key: str, tool_name: str) -> dict[str, Any]:
     if tool_name in {"factor_metrics_submit_confirmed", "factor_corr_submit_confirmed"}:
         side_effect = "high_cost_compute"
         risk = "high"
+    if tool_name in DRAFT_ONLY_TOOLS:
+        risk = "medium"
+        side_effect = "draft_only"
     required_inputs = list(REQUIRED_INPUTS_BY_TOOL.get(tool_name, []))
     schema: dict[str, Any] = {"type": "object"}
     if required_inputs:

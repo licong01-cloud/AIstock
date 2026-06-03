@@ -26,6 +26,7 @@
 - **不得"建了不用"**：凡新增存储 / 表 / API，必须有"被推理链路真实消费"的断言测试（见第 11 章防漂移门禁）。
 - **不得设计丢失 / 业务断层**：第 1.3、第 2.2 节锁定全部前序设计来源（含已丢失的外部搜索设计），逐条说明承接方式。
 - **分阶段但不得降级**：第 10 章每个 Phase 都有独立验收标准；任一 DAI 未过，不得宣称"完整实现完成"。
+- **可移植/剥离是贯穿约束，不是尾部章节**：助手未来要能独立成产品、对接任意 MCP 应用，因此"核心-适配器解耦、最小化对 AIstock 的依赖"**必须在下面每一章、每个设计里就地考虑**（每章设「🔗 剥离考虑」小节标注 core/adapter 归属与解耦方式）。§17 仅是这些就地考虑的**汇总与横切规范**，不替代各章自身的剥离设计。**核心引擎不得直接依赖 AIstock 的 façade/DB/领域符号**（见 §2.1 原则 7、§11 ANTI-DRIFT-11）。
 
 ---
 
@@ -55,9 +56,9 @@
 | DEF-03 | 无树形记忆召回 / 无打分 / 无反思 | 全仓 grep `importance/recency/relevance/reflection/embedding` 在记忆检索层 = 0 命中 | 记忆不可靠 |
 | DEF-04 | 知识图谱建了不用 | `service.py:3137` `"graph_relation_refs": []` 硬编码空 | 跨模块理解缺失 |
 | DEF-05 | 无 Agent Teams | 单体 `ResearchAssistantService`；无 orchestrator/worker | 无法并行多任务 |
-| DEF-06 | QE 无跨 loop 自主闭环 | `qe_evolution_service.py:133-312` `AutoEvolutionScheduler` 有单 loop 决策，rerun/retry 均被动触发 | 不能自主演进 |
+| DEF-06 | QE 无跨 loop 自主闭环 | `qe_evolution_service.py:133` `AutoEvolutionScheduler` + `:1600-1634` `submit_next_loop` 仍是单 loop 流转；`:5243`/`:5409`/`:5506` rerun/custom loop 均被动触发 | 不能自主演进 |
 | DEF-07 | 外部搜索/学术检索零实现 | 后端 grep `arxiv/scholar/tavily/web_search/paper_search` = 0 文件 | 无文献接地 |
-| DEF-08 | 记忆表无真树列 | `research_memory_items` 仅 `namespace + memory_type + 点分键`，无 `parent_key/tree_path`（仅 `assistant_prompt_nodes` 有） | 树存储是弱约定 |
+| DEF-08 | 记忆表无真树列 | `init_research_assistant_schema_20260521.py:143-171` `research_memory_items` 仅 `namespace + memory_type + 点分键`，无 `parent_key/tree_path`（仅 `assistant_prompt_nodes` `:548-565` 有） | 树存储是弱约定 |
 | DEF-09 | 记忆类型不含个人维度 | `models.py:61-71` `MEMORY_TYPES` 无 `user_preference/directive/analysis_note` | 无法装个人习惯/指令 |
 
 ### 1.3 前序设计来源与承接（防止设计丢失）
@@ -87,6 +88,7 @@
 4. **国产模型为主**：主推理 deepseek（`primary_reasoner`）；worker/反思/curator/压缩 用 glm/qwen（`cheap_worker`）；长上下文 qwen-long。与现有 `route_model` 三档对齐。
 5. **不引入替换性框架**：吸收 Claude Code / OpenClaw / LangGraph / AutoGen / Mem0 / MemTree 等的**理念**，在现有 FastAPI/PostgreSQL/litellm 上自建，不引入 LangGraph/CrewAI/Temporal 作为运行时依赖。
 6. **fail-fast**：无静默降级、无空 `except: pass`、无默认值掩盖错误（遵循 AIstock 开发标准 v1.5 §6.3-6.4）。
+7. **可移植性与核心解耦（贯穿每一层）**：每一层都区分 `assistant_product_core`（领域无关引擎）与 `aistock_domain_adapter`/`aistock_knowledge_pack`（AIstock 领域内容）。core 一律通过 **provider 接口**（MCP/Memory/Storage/Model/Skill/Channel/KnowledgePack）访问外部，**不得 import AIstock 的 façade/DB/业务 service/领域符号**；AIstock 只是"第一个 adapter"。目标姿态为**可移植接缝**（现在不物理拆包，但耦合点全部收敛到接口背后，未来剥离成本低）。每章的「🔗 剥离考虑」小节给出该层的 core/adapter 划分与解耦做法；汇总见 §17。
 
 ### 2.2 红线（禁止形态）
 
@@ -96,6 +98,7 @@
 - 禁止 Agent Teams 让模型自行决定高风险执行（高风险动作仍走 preflight + approval）。
 - 禁止 QE 自主演进绕过预算 / 停止条件 / 审批。
 - 禁止任何阶段触碰 `8001` / `3000`。
+- **禁止核心引擎直接耦合 AIstock**：`assistant_product_core` 模块不得 import/调用 AIstock 的 `8001` façade、AIstock DB schema、AIstock 业务 service 或领域符号；一切经 provider 接口。任何新增层/表/服务若把 AIstock 领域内容写死进 core，视为违规（见 §11 ANTI-DRIFT-11）。
 
 ---
 
@@ -113,7 +116,7 @@
 │    ReAct 回灌循环 + 真实能力闸门 + 全局证据契约 + Reflexion 复盘
 │
 ├─ L2.5 外部研究/检索（受控、证据优先、无幻觉）
-│    中文 provider + 学术 MCP（arXiv/Semantic Scholar/Paper Search）；结果入 external.*/topic.*
+│    中文 provider + 学术 MCP（arXiv/Semantic Scholar/Paper Search）；结果入 external.*/personal.topic.*
 │
 ├─ L3 Agent Teams（主范本 = Claude Code subagent；配置范本 = OpenClaw 声明式）
 │    orchestrator（分解/派发/记忆/汇聚/仲裁） + workers（QE/HMM/因子/数据诊断）
@@ -124,6 +127,8 @@
 │
 └─ L5 范式兑现 + 验收门禁：对照兑现表 + 可追溯性矩阵 + 防漂移门禁
 ```
+
+> **每层都是 core + adapter 两半**：上图每一层的"机制/引擎"属 `assistant_product_core`（领域无关，经 provider 接口工作），其"AIstock 领域内容"（12 个 MCP、业务本体/图谱 seed、QE 方法论、股票证据规则、worker 定义）属 `aistock_domain_adapter` / `aistock_knowledge_pack`。各层正文末尾的「🔗 剥离考虑」小节给出具体划分；横切规范与 provider 接口清单见 §17。
 
 模型分级映射（沿用 `assistant_model_profiles` / `assistant_routing_policies`）：
 
@@ -225,6 +230,13 @@ def select_memory_branches(user_message: str, intent, *, repo, runtime_config) -
 
 **定位分工**：树负责"逐级分类召回"，图负责"关系/依赖遍历"，互补（GraphRAG / Zep-Graphiti 思路），均无 embedding。
 
+### 4.6 🔗 剥离考虑（core/adapter）
+
+- **core（`assistant_product_core`）**：树引擎（`parent_key`/`tree_path`/分类召回/collapsed 选择/`importance×recency` 打分/curator 自扩展/反思巩固）、`MEMORY_TYPES` 的通用维度（`core/episodic/user_preference/directive/habit/analysis_note/task_state`）、`Memory Provider` 与 `Storage Provider` 接口。记忆引擎**不认识** AIstock。
+- **adapter/pack（`aistock_knowledge_pack`）**：`project.*` 项目知识树的具体内容（AIstock 模块/MCP/红线本体）、知识图谱 seed（`module/consumes/owned_by`）、QE/Paper 来源绑定。
+- **解耦做法**：① 记忆读写一律经 `Memory/Storage Provider`，**不直连 AIstock DB**（当前默认实现指向 AIstock PostgreSQL，但通过接口）；② `project.*` 树与图谱 seed 作为**可加载知识包**，core 默认空树空图，加载 AIstock pack 后才有领域内容；③ `personal.*` 个人树与 AIstock 无关，天然可移植。
+- **最小依赖断言**：`memory_tree.py`/`graph_context.py` 不得 import AIstock 业务 service（§11 ANTI-DRIFT-11）。
+
 ---
 
 ## 5. L2：工具接地推理内核（消除幻觉）
@@ -265,6 +277,13 @@ final_answer = compose_with_evidence_guard(llm_out, collected_results)  # 证据
 
 工具失败 / 证据不足 / preflight 阻塞时，模型生成简短复盘（写 trace），并在剩余 iteration 内自我修正重试（如换工具、补参数、缩小范围）；超过 `max_tool_iterations` 则 fail-fast 给出"已尝试 X，仍缺 Y"。
 
+### 5.5 🔗 剥离考虑（core/adapter）
+
+- **core**：ReAct 回灌循环、`assert_tool_in_catalog` 能力闸门、证据契约**机制**（"无源不下数值结论"这一通用规则）、Reflexion 复盘。这些都与领域无关。
+- **adapter/pack**：证据契约里的**领域专用规则**（股票 PE/资金流/支撑位、QE 指标口径）、catalog 里的 AIstock MCP 工具集。
+- **解耦做法**：① 工具调用经 `MCP Provider`（通用 `list_tools` 发现，见 §17.5），**不写死 AIstock 12 个 server**；② 闸门只校验"工具是否在当前已审核 catalog 内"，与具体是不是 AIstock 工具无关；③ 领域证据规则放进 `aistock_knowledge_pack` 的 evidence-rule 配置，core 只保留通用"占位符禁令 + 无源降级"。
+- **最小依赖断言**：ReAct 内核不 import 任何 AIstock 领域模块；领域规则经 KnowledgePack Provider 注入。
+
 ---
 
 ## 6. L2.5：外部研究 / 检索（受控、证据优先）
@@ -296,6 +315,13 @@ final_answer = compose_with_evidence_guard(llm_out, collected_results)  # 证据
 - 喂给 L4：论文/资料 → 候选假设 → 低成本验证，**不直接排高成本实验**。
 - summary-first + provenance + as_of；长正文走 detail/ref，遵守 token 契约。
 - 仍然**不自建向量库**：语义匹配由 provider 完成。
+
+### 6.4 🔗 剥离考虑（core/adapter）
+
+- **core**：外部检索**连接框架** + `Search Provider` 接口 + 证据入库机制（结果→`external.*` 候选、provenance、证据优先红线）。
+- **adapter/pack**：具体 provider 选型（博查/秘塔/arXiv/Semantic Scholar）与 AIstock 的领域查询偏好（因子/HMM/事件研究）。
+- **解耦做法**：检索 provider 全部经 `Search Provider` 接口可替换；core 不绑定任何搜索厂商；"外部资料只作证据不作结论"是通用红线，随 core 走。
+- **最小依赖断言**：`external_research` 模块经 provider 接口工作，不依赖 AIstock 领域 service。
 
 ---
 
@@ -364,11 +390,18 @@ orchestrator.run(user_goal):
 - 所有写入/高成本/生产敏感动作经统一审批门禁，**Agent Teams 不绕过**。
 - 主气泡只显示 orchestrator 的自然语言汇总；worker 过程进 Workbench/Trace。
 
+### 7.7 🔗 剥离考虑（core/adapter）
+
+- **core**：orchestrator/worker **运行时**（分解/并行派发/隔离上下文/结构化返回/reduce/仲裁）、`assistant_agent_runs` 表、声明式 worker 加载机制。
+- **adapter/pack**：具体 worker 定义（`qe_experiment_designer`/`hmm_evolution`/`factor_developer`/`local_data_doctor` 均为 AIstock 领域）及其 `allowed_tools`（AIstock MCP）。
+- **解耦做法**：① worker 全部经 `agent_teams.yaml` **声明式定义**（role/goal/tools/model），运行时不硬编码任何具体 worker；② worker 的工具子集经 `MCP Provider`；③ orchestrator 与"有哪些 worker"解耦——换领域只换 worker 配置 + 知识包，运行时不动。
+- **最小依赖断言**：orchestrator/worker runtime 不 import 具体领域 worker 的业务逻辑（业务在 adapter 侧实现，经接口注册）。
+
 ---
 
 ## 8. L4：QE 自主演进闭环
 
-> 解决 DEF-06。承接现有 `AutoEvolutionScheduler`（`qe_evolution_service.py:133-312`）+ Analyst 两步 + Evaluator 三层。范式：Voyager（技能库+自主课程）、AI-Scientist（研究循环）。作为 L3 的 `qe_experiment_designer` worker 落地。
+> 解决 DEF-06。承接现有 `AutoEvolutionScheduler`（`qe_evolution_service.py:133` + `submit_next_loop` `:1600-1634`）+ Analyst 两步 + Evaluator 三层。范式：Voyager（技能库+自主课程）、AI-Scientist（研究循环）。作为 L3 的 `qe_experiment_designer` worker 落地。
 
 ### 8.1 自主主循环
 
@@ -414,6 +447,15 @@ CREATE TABLE IF NOT EXISTS qe_autonomous_evolution_runs (
 COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行记录，含停止条件与预算守护';
 ```
 
+### 8.4 🔗 剥离考虑（core/adapter）
+
+> L4 是**领域性最强**的一层（QE 是 AIstock 特有），但"自主演进"这套状态机可抽象复用。
+
+- **core**：自主主循环**框架**（`loop→evaluate→decide→generate→budget/stop guard→submit` 状态机）、停止条件/预算守护机制——以"评估器 / 方向决策器 / loop 执行器"为**可插拔回调**。
+- **adapter/pack**：QE 特有的 Evaluator 三层、Analyst 两步、loop 执行、`qe_autonomous_evolution_runs`、QE 方法论/演进路线。
+- **解耦做法**：自主循环框架经回调接口调 QE，不被 QE 反向绑死；未来其他领域（因子/HMM 演进）可复用同一框架，只换回调实现。AIstock QE 是该框架的第一个实例。
+- **最小依赖断言**：自主循环框架模块不 import QE 业务 service，经注册的回调接口交互。
+
 ---
 
 ## 9. L5：外部范式兑现对照表（防止"纸面引用"）
@@ -434,16 +476,19 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | Anthropic orchestrator-workers | 主分解/worker执行/主综合 | L3 §7.5 | `pytest test_orchestrator_reduce.py` | 不全自动放权高风险 |
 | Voyager / AI-Scientist | 自主课程 + 研究循环 | L4 自主主循环 | `pytest test_qe_autonomous_loop.py` | 不绕过预算/审批 |
 | 外部搜索（console 设计 §12） | 多 provider + 学术 MCP + 证据优先 | L2.5 `external_research` | `python debug_tools/mcp/list_tools_smoke.py --server aistock-external-research` | Firecrawl 非默认入口 |
+| 插件/适配器 + MCP 通用接口 + OpenClaw provider 形态 | core 稳定、领域可插拔、对接任意 MCP 应用 | 各层 §x.x「🔗 剥离考虑」+ §17 横切规范 | `pytest test_core_no_adapter_import.py`（依赖方向） | 现在不物理拆包，仅逻辑接缝 |
 
 ---
 
 ## 10. 实施阶段与验收标准
 
 > 允许分 PR 推进，但**每个 Phase 必须明确"尚未完整"，所有 DAI/防漂移门禁全过才可称完整实现完成**。每个 Phase 验收均**不启动 8001/3000**；运行时验证由用户启动后另做只读 smoke。
+>
+> **跨阶段剥离门禁（适用于每一个 Phase）**：任一 Phase 新增的 core 机制/表/服务，验收时必须同时满足该层「🔗 剥离考虑」的 core/adapter 划分——即 core 代码经 provider 接口工作、不 import AIstock 领域符号（`pytest test_core_no_adapter_import.py` 依赖方向检查通过）。**剥离不是 §17 单独阶段才做，而是每个 Phase 的交付门禁**（§17 的 P13–P15 是对这一约束的集中收敛与验证，不替代各 Phase 的就地遵守）。
 
 ### Phase 0：基线锁定与脚手架
 - **交付**：本蓝图合入；新增 `backend/tests/research_assistant/` 占位测试目录；DDL 迁移脚本骨架（不执行生产 DDL）。
-- **验收**：`git diff --check` 通过；本文档 §1.2 缺陷清单与 §12 矩阵 cross-check 无遗漏；`rg "DEF-0" 本文件` 命中 9 项。
+- **验收**：`git diff --check` 通过；本文档 §1.2/§16.1 缺陷清单与 §12/§16.9/§17.10 矩阵 cross-check 无遗漏；`rg -n "DEF-0|DEF-1" 本文件` 覆盖 DEF-01~13。
 
 ### Phase 1：L1 记忆树（DDL + 召回 + curator）
 - **交付**：§4.2 DDL 迁移 + `memory_tree.py` + `memory_curator.py` + `build_context_pack` 改造（树形召回替换平铺）+ 常驻注入。
@@ -465,7 +510,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 ### Phase 4：L2.5 外部研究检索
 - **交付**：`external_research` MCP module + profile + façade + 证据入库 + `.mcp.json` 登记。
-- **验收**：`list_tools_smoke.py --server aistock-external-research` 显示工具 schema；`pytest test_external_research_evidence_first.py`：搜索结果只入 `external.*`/`topic.*`，不直接成结论；token 契约测试通过。
+- **验收**：`list_tools_smoke.py --server aistock-external-research` 显示工具 schema；`pytest test_external_research_evidence_first.py`：搜索结果只入 `external.*`/`personal.topic.*`，不直接成结论；token 契约测试通过。
 
 ### Phase 5：L3 Agent Teams
 - **交付**：`assistant_agent_runs` DDL + `agent_teams.yaml` + orchestrator/worker 实现 + 并行派发 + reduce + 隔离上下文 + 工具子集闸门。
@@ -495,6 +540,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | ANTI-DRIFT-04 | 禁止业务断层 | 每个 Phase 有端到端断言（非仅单元 mock） |
 | ANTI-DRIFT-05 | 禁止占位/简化交付 | 快照测试禁 `XX`/`X%`/`约X`；read-only-only 不得声称完整 |
 | ANTI-DRIFT-06 | 范式兑现 | §9 每行范式必须有验收命令且通过 |
+| ANTI-DRIFT-11 | **核心解耦贯穿每层**：`assistant_product_core` 不得 import/依赖 AIstock façade/DB/领域符号；每层「🔗 剥离考虑」的 core/adapter 划分必须落实 | 依赖方向检查 `test_core_no_adapter_import.py`；core 模块一律经 provider 接口工作（详见 §17.9 ANTI-DRIFT-11~13） |
 
 ---
 
@@ -508,15 +554,28 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | 自动扩展 curator | — | `memory_curator.py` | `test_memory_autogrow.py` |
 | 反思巩固 + 治理 | — | `memory_curator.py`（定时） | `test_memory_reflection.py` |
 | 知识图谱注入 | DEF-04 | `graph_context.py`、`build_context_pack` | `test_graph_injected_into_context.py` |
-| ReAct 回灌 | DEF-01 | `service.py:chat_turn` | `test_react_tool_loop.py` |
-| 能力闸门 | — | `service.py:assert_tool_in_catalog` | `test_tool_catalog_gate.py` |
-| 证据契约 | — | `compose_with_evidence_guard` | `test_evidence_guard.py` |
-| 外部研究 MCP | DEF-07 | `backend/mcp/modules/external_research.py`、façade | `test_external_research_evidence_first.py` |
-| Agent Teams | DEF-05 | `assistant_agent_runs`、`agent_teams.yaml`、orchestrator/worker | `test_agent_teams_parallel.py` 等 |
-| QE 自主闭环 | DEF-06 | `qe_evolution_service.py`、`qe_autonomous_evolution_runs` | `test_qe_autonomous_loop.py` |
+| ReAct 回灌 | DEF-01 | `react_grounding.py:run_react_grounding_loop`（机制） + `service.py:chat_turn` / `_complete_chat_with_react_grounding`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_react_tool_loop.py`、`test_service.py`、`20260601_ra_phase3_react_grounding_validation.md` |
+| 能力闸门 | — | `react_grounding.py:assert_tool_in_catalog`（机制） + `service.py:chat_turn` / `_ServiceReactMcpProvider`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_tool_catalog_gate.py`、`test_core_no_adapter_import.py`、`20260601_ra_phase3_react_grounding_validation.md` |
+| 证据契约 | — | `react_grounding.py:compose_with_evidence_guard`（机制） + `service.py:chat_turn` / `_compose_assistant_reply`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_evidence_guard.py`、`test_react_tool_loop.py`、`20260601_ra_phase3_react_grounding_validation.md` |
+| 外部研究 MCP | DEF-07 | `backend/services/research_assistant/external_research.py` (provider-only core + evidence contract), `backend/routers/external_research.py` (facade), `backend/mcp/modules/external_research.py` (gateway four tools), `service.py:chat_turn` / ReAct consumption, `.mcp.json`; commit `bf560be3`; G1-central `research-assistant-external-research_20260601_143547_l2-5_ra-phase4-external-research_e06c2074_runner-validation__8a33f0e7ac` | `test_external_research_provider_contract.py`, `test_external_research_evidence_first.py`, `test_external_research_token_budget.py`, `test_external_research_react_consumption.py`, `test_external_research_l4_redline.py`, `test_external_research_module.py`, `test_core_no_adapter_import.py` |
+| Agent Teams | DEF-05 | `backend/db/migrations/ra_upgrade/002_agent_teams.sql` + `assistant_agent_runs`; `configs/research_assistant/agent_teams.yaml`; `backend/services/research_assistant/agent_teams/` runtime; `service.py:run_agent_team`; runtime implementation commit `4a4eb15c` + G3 doc-only fixup commit `cca829ee` (code bytes unchanged from validated HEAD `e57a8704`); Claude Tier2 G1-central `research-assistant-agent-teams_20260601_171920_l3_ra-phase5-agent-teams_58979854_runner-validation__9d5a66f1cc`; production_ddl_gate `required_pending_user_approval` | `test_agent_teams_ddl_contract.py`, `test_agent_teams_config.py`, `test_agent_teams_parallel.py`, `test_orchestrator_reduce.py`, `test_worker_tool_isolation.py`, `test_core_no_adapter_import.py`, `20260602_ra_phase5_agent_teams_validation.md` |
+| QE 自主闭环 | DEF-06 | `backend/services/research_assistant/qe_autonomy/` core/adapter/runtime + `backend/db/migrations/ra_upgrade/003_qe_autonomy.sql` / `qe_autonomous_evolution_runs`; final implementation commit `5049e2a6a6e1b9f679ac2c737304051ef568fa76` (BUG-206 lint-only fix included); HEAD-level G1-central `research-assistant-qe-autonomy_20260602_072520_l4_ra-phase6-qe-autonomy_53872040_runner-validation__31cd146f58` on `5049e2a6`; production_ddl_gate `required_pending_user_approval` | `test_qe_autonomous_loop.py`, `test_qe_autonomy_ddl_contract.py`, `test_qe_autonomy_budget_guard.py`, `test_qe_autonomy_adapter_contract.py`, `test_qe_autonomy_agent_team_integration.py`, `test_qe_autonomy_external_hypotheses.py`, `test_qe_autonomy_determinism.py`, `test_core_no_adapter_import.py`, `20260602_ra_phase6_qe_autonomy_validation.md` |
+| Phase 7 memory tree UI | Phase7 / DAI-MEM-001..005 | `frontend/src/components/research-assistant/MemoryTreeView.tsx`, `frontend/src/app/research-assistant/memory/page.tsx`; validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` | `frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts`, `python -m nox -s ra_phase7_full_accept`, `20260602_ra_phase7_full_accept_validation.md` |
+| Phase 7 Agent Teams run view | Phase7 / DEF-05 / DAI-TEAM-001..002 | `backend/routers/research_assistant.py` `/agent-runs` facade, `frontend/src/components/research-assistant/AgentTeamsRunView.tsx`, tasks/trace/workbench pages; validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` | `backend/tests/research_assistant/test_agent_teams_api.py`, `frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts`, `python -m nox -s ra_phase7_full_accept` |
+| Phase 7 evidence/blocker cards + summary-only bubble | Phase7 / DAI-GND-003 / ANTI-DRIFT-05 | `frontend/src/components/research-assistant/EvidenceCard.tsx`, `BlockerCard.tsx`, `frontend/src/app/research-assistant/chat/page.tsx`, `frontend/src/lib/research-assistant/api.ts`; validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` | `frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts`, `frontend/tests/research-assistant/research-assistant.spec.ts`, `20260602_ra_phase7_live_smoke_template.md` |
+| Phase 7 QE as_of silent-default cleanup | DEF-06 / DAI-QE-001 | `backend/services/research_assistant/qe_autonomy/adapter.py` removes `datetime.now()` fabricated `as_of`; validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` | `backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py::test_qe_adapter_does_not_fabricate_as_of_when_scheduler_omits_it` |
+| Phase 7 full acceptance cross-check | DAI-DRIFT-001/002 / DEF-01..13 | `scripts/research_assistant_phase7_crosscheck.py`, `tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml`, `tests/aistock_validation/catalog/test_plans.yaml`, `noxfile.py`; validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` | `backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py`, `tmp/validation/research_assistant/phase7/crosscheck.json`, repo runner archive `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_*` plus Claude Tier2 tracked archive `tests/aistock_validation/history/research-assistant/20260602_134456_l4_ra-phase7-full-accept_93eea82d_*` |
+| 核心/适配器解耦（贯穿每层） | DEF-13 | 各层「🔗 剥离考虑」、7 类 provider 接口、依赖检查脚本、§17 | `test_core_no_adapter_import.py` |
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
+> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`；G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`，validated_commit `fba1c3de`，`return_code=0`。本锚点只声明基线和登记，不把未来行标记为已实现。
+
+> Phase 1 G3 回填锚点：`backend/db/migrations/ra_upgrade/001_memory_tree.sql`、`backend/db/init_research_assistant_schema_20260521.py`、`backend/services/research_assistant/models.py`、`backend/services/research_assistant/memory_tree.py`、`backend/services/research_assistant/memory_curator.py`、`backend/services/research_assistant/service.py`、`configs/research_assistant/runtime_context.yaml`、`backend/tests/research_assistant/test_memory_tree_ddl_contract.py`、`backend/tests/research_assistant/test_memory_tree_retrieval.py`、`backend/tests/research_assistant/test_memory_scoring.py`、`backend/tests/research_assistant/test_memory_autogrow.py`、`backend/tests/research_assistant/test_memory_dedup_scope.py`、`backend/tests/research_assistant/test_core_no_adapter_import.py`、`tests/aistock_validation/catalog/test_plans.yaml`、`backend/services/validation/plan_catalog.py`、`noxfile.py` 将树形召回、记忆真树 DDL、个人维度类型、自动扩展 curator 接入 `ra_phase1_memory_tree` 闸门。Phase 1 原始实现 commit `d12f9aaca07960a577e055d46df47cc46d09aeca`，原始确定性修复 commit `b4c021345dd187f964bedfcfdf77ddeba1481d02`，rebase 后实现 commit `1d2bafbd`，rebase 后确定性修复 commit `47affe04`；G1-central run_id `research-assistant-memory-tree_20260601_013143_l1_ra-phase1-memory-tree_df500446_runner-validation__9756376ad7`，validated_commit `df500446`，`return_code=0`。`production_ddl_gate=pending_before_merge`，生产 `8001`/`3000` 与生产库未触碰。
+
+> Phase 2 G3 traceability anchor: `backend/services/research_assistant/graph_context.py`, `backend/services/research_assistant/service.py`, `backend/tests/research_assistant/test_graph_context_expansion.py`, `backend/tests/research_assistant/test_graph_injected_into_context.py`, `backend/tests/research_assistant/test_core_no_adapter_import.py`, `tests/aistock_validation/catalog/test_plans.yaml`, `backend/services/validation/plan_catalog.py`, and `noxfile.py` connect the L1 knowledge graph relation layer to `build_context_pack`; cross-module context packs now write real `graph_relation_refs` and directly fix DEF-04. Phase 2 implementation commit `7b434073fd38f229a61153c7d4a147341780e53d`; G1-central run_id `research-assistant-graph-context_20260601_032224_l1_ra-phase2-graph-context_3b4f3ef9_runner-validation__38f2586497`, validated_commit `7b434073`, `return_code=0`. `production_ddl_gate=noop`; production `8001`/`3000` and the production database were not touched. Terminal-review pre-merge final HEAD `bdaa979fc13f3c540084b0050d195dd3fe4c36b9` passed G1-central run_id `research-assistant-graph-context_20260601_034550_l1_ra-phase2-graph-context_1c12af30_runner-validation__a76fcb4bd8` with `return_code=0`.
+
+> Phase 7 G3 traceability anchor: `backend/routers/research_assistant.py` adds the `/agent-runs` facade; `frontend/src/components/research-assistant/MemoryTreeView.tsx`, `AgentTeamsRunView.tsx`, `EvidenceCard.tsx`, `BlockerCard.tsx`, and chat/memory/tasks/trace/workbench pages complete the frontend delivery; `backend/services/research_assistant/qe_autonomy/adapter.py` removes fabricated `as_of`; `scripts/research_assistant_phase7_crosscheck.py` plus `tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml` lock the Section 12/13/16/17 cross-check and hard_pass / future_phase_pending / approved_exception classification. Phase 7 validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5`; G1-central run_id `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4`, job_id `valjob_20260602_132233_3f86ef03`, `return_code=0`, `production_8001_touched=false`. Claude Tier2 independent audit also passed on the same HEAD with job_id `valjob_20260602_134327_93eea82d`, archive stem `research-assistant_20260602_134456_l4_ra-phase7-full-accept_93eea82d_runner-validation`, `return_code=0`, and `production_8001_touched=false`. Automatic gate does not start/stop/call `8001`/`3000`/`19080`; the `600584 buy-worthiness` live smoke remains user-started read-only evidence and is excluded from automatic G1. A1 evidence alignment is doc-only; it does not change Phase 7 code bytes.
 ---
 
 ## 13. Design Acceptance Index（DAI）
@@ -541,6 +600,9 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 ---
 
+
+> Phase 7 acceptance note: automatic G1-central `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4` on validated HEAD `8dfe4dd994fb0ce0f32940961e9bd042a2fc3bd5` covers backend pytest, frontend lint/build, route-mock Playwright, Section 12/13/16/17 cross-check, catalog integrity, and ownership scan. It proves UI/API contracts, not live stock-business correctness; the `600584 buy-worthiness` smoke is manual read-only evidence. Claude Tier2 evidence `valjob_20260602_134327_93eea82d` is recorded as an independent final-HEAD audit.
+
 ## 14. 运行与生产边界
 
 - 本文档阶段不触碰 `8001` / `3000`；后续实现也不得把"代码可见"误解为"重启生效"。
@@ -556,3 +618,362 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 3. 明确 L0–L5 + L1 双树/图谱 + L2.5 外部研究的边界与承接。
 4. 明确分阶段实施（§10）与每阶段验收标准、防漂移门禁（§11）、可追溯性矩阵（§12）、DAI（§13）。
 5. 本 PR 为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`（DDL 在后续实现 PR 中按 §14 处理）。
+
+---
+
+## 16. 蓝图增补（2026-05-31）：代码智能 / 主动汇报 / 自我学习
+
+> 增补背景：复查发现三项"原始设计存在、但未实现且未被本蓝图覆盖"的能力（典型"设计丢失"）。它们出自 issue-workflow / 研究 Agent 控制台 设计线，不在 §1.3 原 RA 命名文档清单内，故初版蓝图遗漏。本章按与正文一致的标准补齐：缺陷证据、来源承接、目标架构、DDL、分阶段实施、每阶段审计/验收、防漂移、可追溯性、DAI、外部范式兑现。本章同样不触碰 `8001`/`3000`，DDL 延后到实现 PR 按 §14 处理。
+
+### 16.1 新增缺陷（附证据）
+
+| 编号 | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| DEF-10 | 代码智能适配器存在但未接入助手推理 | `scripts/code_intelligence_adapter.py`（+ `backend/tests/scripts/test_code_intelligence_adapter.py`、`tests/aistock_validation/catalog/code_intelligence.yaml`）已存在；但 `backend/services/research_assistant/` 无 codegraph/impact 引用，未注入 Context Pack | 跨模块/"这个模块怎么工作/改这里影响谁"靠猜，token 浪费 |
+| DEF-11 | 主动晨报 / 实验日报仅占位、未生成 | `service.py:3598-3599` 仅有"研究助理晨报模板"，body 注明"夜间自动任务将在后续阶段写入具体晨报" | 无主动汇报（Jarvis 式主动性缺失） |
+| DEF-12 | 无自我学习 / 提示词自评估闭环 | backend 无 `prompt_lab/reflection_card/research_curriculum` 实现；记忆有反思巩固但无"提示词/策略自改进" | 助手不能"越用越准"，提示词靠人工维护 |
+
+> 澄清（防误判）：复查中曾被怀疑"未实现"的上下文压缩 + key facts（`assistant_context_segments`/`assistant_context_key_facts`，写入见 `service.py:2381-2417`，回灌见 `:2316-2323`）、external_agent_session（`service.py:3402` + schema:490）、LLM 真实调用（`service.py:569` litellm）、mode router / `_select_prompt_nodes`（`:1295`）/ `tool_router.py` / `domain_ontology.py` 均**已实现并接入**，不属于缺口；用户画像由 L1 `personal.preference/habit` 覆盖；experiment lineage 由 `research_evolution_paths` + L4 覆盖。
+
+### 16.2 设计来源承接（补 §1.3）
+
+| 前序设计 | 提供内容 | 本章承接 |
+|---|---|---|
+| `aistock_code_intelligence_integration_design_20260526.md` | CodeGraph（tree-sitter 代码结构/调用链/影响半径/受影响测试，MCP/CLI）+ Understand Anything（代码知识图谱）作为 Context Pack/Research Assistant 证据层；只存轻量 manifest/impact summary/context refs，带 provenance + approval；不替代 nox/CI/生产门禁 | L1.6 直接承接 |
+| `aistock_research_agent_console_design_20260520.md` | 晨报/实验报告；Prompt Lab、Reflection Card、Research Curriculum、prompt feedback 自我学习闭环 | L6 / L7 承接 |
+| `aistock_research_agent_console_validation_matrix_20260521.md` | 上述能力的 PoC/验收项 | L6/L7 验收承接 |
+
+### 16.3 外部范式兑现（补 §9，前沿论文/工具，均可配国产模型、可门禁化）
+
+| 范式 / 来源 | 借鉴点 | AIstock 落地 | 验收命令 | 不采用项 |
+|---|---|---|---|---|
+| Codebase-Memory（arXiv 2603.27277，tree-sitter KG via MCP，10x 省 token） | 确定性代码图 + 结构化查询工具 | L1.6 复用 `code_intelligence_adapter.py` 的 CodeGraph 输出 | `pytest test_code_intel_context_injection.py` | 不在 MCP 内做全仓 LLM 扫描 |
+| Reliable Graph-RAG for Codebases（arXiv 2601.08773，AST确定性 > LLM抽取） | 用 AST 确定性图，避免随机性 | L1.6 仅用 tree-sitter/AST 派生图，**无 embedding** | 同上 | 不用 LLM 抽取代码图 |
+| RepoGraph（agent +32.8%） / CodeRAG 双图（arXiv 2504.10046） | repo 级代码图提升 agent | L1.6 注入 L3 任务分解 | `pytest test_code_intel_decomposition.py` | 不引入外部 agent 运行时 |
+| GEPA（arXiv 2507.19457，反思式提示词进化，比 RL 省 35x rollout，已入 DSPy） | 反思式提示词优化（ASI 反馈 + Pareto 池） | L7 Prompt Lab 优化器 | `pytest test_prompt_lab_gepa_offline.py` | 不引入 RL/权重训练 |
+| DSPy（声明式自改进，MIPROv2/BootstrapFewShot） | 提示词作可优化参数 + 评估驱动 | L7 优化与评估编排（可选直接用 dspy 库） | 同上 | 不强绑 DSPy 运行时（可纯自实现） |
+| Reflexion（arXiv 2303.11366，言语强化 + 情景反思缓冲） | 失败言语反思入情景记忆 | L7 Reflection Card → `personal.episodic.*` | `pytest test_reflection_card_loop.py` | 不外显推理链 |
+| Voyager（arXiv 2305.16291）/ SAGE（arXiv 2512.17102，技能库 + 经验回放） | 可复用技能库 + 自主课程 | L7 技能库（沉淀成功 workflow/prompt 为可复用技能）+ L4 课程 | `pytest test_skill_library.py` | 不做权重级 RL |
+| LLM-as-Judge / Agent-as-a-Judge（arXiv 2508.02994） | 评估信号闭环；**自改进须作为受门禁的提议** | L7 评估用 judge，改进一律走 approval | `pytest test_prompt_lab_judge_gated.py` | judge 不自动上线，须人工 approve |
+
+> 安全基线（采纳论文共识）：**所有自我学习只产出"提议"，经评估 + 人工 approval 才生效**，绝不自动改写线上提示词/策略（呼应 §2.2 红线与既有 approval 闭环）。
+
+### 16.4 L1.6 代码智能层（解决 DEF-10）
+
+定位：把**代码级**结构图（函数/类/调用链/导入/影响半径/受影响测试）作为助手证据层，与 L1 的**业务级**知识图谱互补——业务图答"模块依赖谁消费谁"，代码图答"具体哪个函数/调用链/测试受影响"。**纯 AST 确定性，无 embedding**（采纳 arXiv 2601.08773 结论）。
+
+- **复用现有资产**：`scripts/code_intelligence_adapter.py`（CodeGraph/Understand-Anything 适配，已存在）。L1.6 不重写适配器，只做"接入 Research Assistant"。
+- **后端 façade**：新增 `/api/v1/research-assistant/code-intelligence/*`（或在 RA 服务内封装），调用 adapter，返回 summary-first 的轻量结果（manifest/impact summary/context refs），带 `provenance` + `as_of`，遵守 token 契约。
+- **注入推理**：`build_context_pack` 对涉及具体代码/模块的 query，追加 `code_context_refs`（调用链/影响半径/受影响测试摘要）；喂 L3 orchestrator 任务分解（"改这里→受影响 worker/测试"）。
+- **证据契约**：代码结论须可追溯到 adapter 输出（文件/符号/边），无则降级；不替代 nox/pytest/CI（沿用原设计红线）。
+
+DDL（轻量缓存，触发 production_ddl_gate）：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_code_context_refs (
+    code_ref_id   TEXT PRIMARY KEY,
+    task_id       TEXT,
+    query_scope   TEXT NOT NULL,           -- symbol/module/path
+    manifest_json JSONB NOT NULL,          -- adapter 输出的轻量 manifest/impact summary
+    source        TEXT NOT NULL,           -- codegraph | understand_anything
+    provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {commit, file, symbol, generated_at}
+    as_of         TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE assistant_code_context_refs IS '代码智能(CodeGraph/Understand)注入 Context Pack 的轻量引用，AST确定性，无embedding';
+```
+
+**🔗 剥离考虑（core/adapter）**：core = 代码智能**注入框架** + `Code-Intelligence Provider` 接口（输入 query → 返回结构化 manifest/impact，与具体工具无关）；adapter = `code_intelligence_adapter.py` 对 AIstock 仓库的绑定。解耦：core 只依赖 provider 接口，底层换成任意 CodeGraph/Understand/其它实现都行；对接别的产品时只换 provider 指向其代码库，注入框架不动。
+
+### 16.5 L6 主动汇报（解决 DEF-11）
+
+定位：把占位的"晨报模板"落地为**真实生成**的主动汇报，作为 L3 的**定时 orchestrator 任务**（不是用户每次提问才触发）。
+
+- **聚合源**（全部只读、证据优先）：任务/任务事件、QE/实验状态、Validation/BUG/Issue、本地数据健康、Agent Teams 运行、`personal.task.*` 进展。
+- **生成**：orchestrator 用 `cheap_worker` 汇总为自然语言晨报 + 关键证据 + 待办；每条事实带来源（沿用 L2 证据契约，禁占位符）。
+- **触发**：定时（如交易日早间）；产物写报告表，前端/推送展示。
+- **边界**：只读聚合 + 汇报，不触发任何写入/高风险动作。
+
+DDL：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_proactive_reports (
+    report_id     TEXT PRIMARY KEY,
+    report_type   TEXT NOT NULL,           -- morning_brief | experiment_daily
+    report_date   DATE NOT NULL,
+    summary_md    TEXT NOT NULL,
+    sections_json JSONB NOT NULL,          -- 各板块摘要 + source_refs
+    source_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status        TEXT NOT NULL DEFAULT 'generated',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_apr UNIQUE (report_type, report_date)
+);
+COMMENT ON TABLE assistant_proactive_reports IS '主动晨报/实验日报，只读聚合 + 证据优先，不触发写入';
+```
+
+**🔗 剥离考虑（core/adapter）**：core = 汇报**生成框架**（聚合源注册表 → 证据优先汇总 → 报告表）；adapter = 具体聚合源（QE/Validation/本地数据 均为 AIstock 数据源）。解耦：聚合源经 registry/provider 注册，core 不写死 AIstock 数据源；换领域时换一组聚合源清单即可复用同一汇报框架。
+
+### 16.6 L7 自我学习（解决 DEF-12，全程"提议→评估→approval"门禁）
+
+定位：让助手基于成败**自改进提示词与策略**，并沉淀**可复用技能**——但绝不自动上线。
+
+三个子机制（均可配国产模型，经 litellm）：
+1. **Reflection Card（Reflexion）**：任务失败/纠偏后生成结构化反思（错因/教训/下次策略），写入 `personal.episodic.*` 并可被 L1 召回；不外显推理链。
+2. **Prompt Lab（DSPy/GEPA）**：以历史 trace 为评估集，用 **GEPA 反思式优化** 生成候选提示词；用 **LLM-as-judge** 离线评估；**仅产出 candidate**，经人工 approval 才切换 prompt activation（复用现有 Prompt Pack 版本/激活机制）。
+3. **技能库（Voyager/SAGE）**：把验证成功的 workflow/prompt 组合沉淀为可复用"技能"，相似任务经验回放；纳入 L4 自主课程。
+
+DDL：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_reflection_cards (
+    card_id       TEXT PRIMARY KEY,
+    task_id       TEXT,
+    trigger       TEXT NOT NULL,           -- failure | correction | low_confidence
+    lesson_md     TEXT NOT NULL,
+    structured_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    memory_ref    TEXT,                    -- 写入的 personal.episodic.* memory_id
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS assistant_prompt_lab_runs (
+    lab_run_id    TEXT PRIMARY KEY,
+    target_prompt_key TEXT NOT NULL,
+    optimizer     TEXT NOT NULL,           -- gepa | dspy_mipro | manual
+    eval_set_ref  TEXT NOT NULL,           -- 历史 trace 评估集引用
+    candidate_text TEXT NOT NULL,
+    judge_score_json JSONB NOT NULL,       -- LLM-as-judge 评估结果
+    status        TEXT NOT NULL DEFAULT 'candidate',  -- candidate | approved | rejected
+    approval_request_id TEXT,              -- 复用 assistant_approval_requests
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS assistant_skill_library (
+    skill_id      TEXT PRIMARY KEY,
+    skill_key     TEXT NOT NULL UNIQUE,
+    description   TEXT NOT NULL,
+    recipe_json   JSONB NOT NULL,          -- 可复用 workflow/prompt/tool 组合
+    success_count INTEGER NOT NULL DEFAULT 0,
+    provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status        TEXT NOT NULL DEFAULT 'draft',  -- draft | approved | deprecated
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSPy)+LLM-judge评估；仅候选，approval后才激活';
+```
+
+**🔗 剥离考虑（core/adapter）**：三机制（Reflection/Prompt Lab/技能库）**全部属 core、天然可移植**——它们作用于"本系统自己的 trace/prompt/skill"，与领域无关。adapter 侧仅是"评估集取自哪个领域的 trace、技能库沉淀哪个领域的 recipe"。解耦：自我学习引擎对任意领域的 trace/prompt 都适用，AIstock 只是数据来源；自改进产物经 approval 门禁，与剥离姿态一致。
+
+### 16.7 分阶段实施与验收（接 §10，Phase 8–12；不启动 8001/3000）
+
+#### Phase 8：L1.6 代码智能接入（DEF-10）
+- 交付：façade `/code-intelligence/*` 包裹现有 adapter；`assistant_code_context_refs` DDL；`build_context_pack` 注入 `code_context_refs`。
+- 验收：
+  - `pytest test_code_intel_context_injection.py test_code_intel_decomposition.py` 全绿。
+  - **防漂移消费断言**：涉及具体符号/模块的 query，context pack `code_context_refs` 非空且每条带 provenance（直接消灭 DEF-10"建了不用"）。
+  - 纯 AST，无 embedding 依赖；token 契约（summary-first）测试通过。
+
+#### Phase 9：L6 主动晨报生成（DEF-11）
+- 交付：`assistant_proactive_reports` DDL；orchestrator 定时任务聚合生成；替换占位模板。
+- 验收：
+  - `pytest test_proactive_report_generation.py`：晨报含任务/实验/Issue/数据健康板块，每条带 source_refs，快照无 `XX`/`X%`/`约X`。
+  - 只读断言：生成过程不产生任何写入/高风险 action proposal。
+
+#### Phase 10：L7 Reflection Card（DEF-12 之一）
+- 交付：`assistant_reflection_cards` DDL；失败/纠偏触发生成并写 `personal.episodic.*`。
+- 验收：`pytest test_reflection_card_loop.py`：失败任务生成反思卡 + 入记忆树 + 可被 L1 召回；不外显推理链。
+
+#### Phase 11：L7 Prompt Lab（DEF-12 之二，门禁化）
+- 交付：`assistant_prompt_lab_runs` DDL；GEPA/DSPy 离线优化 + LLM-judge 评估；candidate → approval → 激活（复用 Prompt Pack 激活）。
+- 验收：
+  - `pytest test_prompt_lab_gepa_offline.py test_prompt_lab_judge_gated.py`：产出 candidate + judge 分数；**未经 approval 不得改 activation**（断言）。
+  - 离线：不调用生产、不改线上 prompt。
+
+#### Phase 12：L7 技能库 + 课程（DEF-12 之三）
+- 交付：`assistant_skill_library` DDL；成功 workflow 沉淀为技能；接入 L4 自主课程经验回放。
+- 验收：`pytest test_skill_library.py`：成功任务沉淀技能（draft）+ approval 后可复用；技能复用经审批，不绕过风险门禁。
+
+### 16.8 防设计漂移门禁（补 §11）
+
+| 门禁 | 规则 | 检查 |
+|---|---|---|
+| ANTI-DRIFT-07 | 代码智能必须被消费 | context pack `code_context_refs` 注入断言（DEF-10） |
+| ANTI-DRIFT-08 | 晨报必须真实生成且证据优先 | 生成断言 + 无占位符快照（DEF-11） |
+| ANTI-DRIFT-09 | 自我学习仅提议、须 approval | Prompt Lab 未审批不得改 activation 的断言（DEF-12） |
+| ANTI-DRIFT-10 | 自我学习只读训练、离线评估 | 不调用生产、不改线上 prompt 的断言 |
+
+### 16.9 可追溯性矩阵（补 §12）
+
+| 设计项 | 缺陷 | 实现文件 | 测试 |
+|---|---|---|---|
+| 代码智能接入 | DEF-10 | `code_intelligence_adapter.py`(复用)、façade、`build_context_pack`、`assistant_code_context_refs` | `test_code_intel_context_injection.py` |
+| 主动晨报 | DEF-11 | orchestrator 定时任务、`assistant_proactive_reports` | `test_proactive_report_generation.py` |
+| Reflection Card | DEF-12 | `assistant_reflection_cards`、curator | `test_reflection_card_loop.py` |
+| Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
+| 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
+
+> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`，G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`。
+
+### 16.10 Design Acceptance Index（补 §13）
+
+| 编号 | 用户要求 | 设计位置 | 验收标准 |
+|---|---|---|---|
+| DAI-CODE-001 | 代码智能助 LLM 理解任务/跨模块 | L1.6 §16.4 | 代码 query 的 pack `code_context_refs` 非空且带 provenance |
+| DAI-CODE-002 | 代码图无 embedding、AST 确定性 | L1.6 §16.4 | 无 embedding 依赖；纯 adapter/AST 输出 |
+| DAI-REPORT-001 | 主动晨报/汇报 | L6 §16.5 | 真实生成、证据优先、只读 |
+| DAI-LEARN-001 | 自我学习/提示词自改进 | L7 §16.6 | Reflection + Prompt Lab + 技能库 |
+| DAI-LEARN-002 | 自改进受门禁 | L7 §16.6 | 仅候选，approval 后激活；不自动上线 |
+| DAI-DRIFT-002 | 增补项无漂移 | §16.8/§16.9 | 矩阵无空行；消费/门禁断言存在 |
+
+> Phase 7 cross-check note: Section 16.10 DAI-CODE/REPORT/LEARN items are explicitly classified in `research_assistant_phase7_expected.yaml`; Phase 8-12 items are `future_phase_pending`, while `DAI-DRIFT-002` is hard_pass via `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4`; Claude Tier2 `valjob_20260602_134327_93eea82d` independently rechecked the same final HEAD.
+
+### 16.11 边界
+
+- 本章 DDL（§16.4/16.5/16.6）均触发 `production_ddl_gate`，实现 PR 逐项报告 COMMENT 与幂等性，生产库由用户决定执行时机。
+- 代码智能不替代 nox/pytest/CI/生产门禁；自我学习不自动改线上提示词/策略；主动汇报只读。
+- 本 PR 仍为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`。
+
+---
+
+## 17. 横切设计（2026-05-31）：可移植性与独立产品化
+
+> 背景：助手当前是 AIstock 的一个模块，未来可能**独立成一个智能工具软件产品，对接任意提供 MCP 接口的应用**。原始设计 `aistock_research_agent_console_design_20260520.md` 行 2142「Phase 4：独立产品化」**仅有 5 条意图占位**（抽离 `assistant_product_core`、AIstock 作首个 adapter、可替换 Memory/Skill/MCP/Channel Provider、私有数据不外泄），无具体架构；初版蓝图（L0–L7 + §16）**未考虑此点，深度耦合 AIstock**（loopback `8001` façade、AIstock DB 表、写死 12 个 AIstock MCP、AIstock 业务本体）。本章把它升级为**横切架构约束**——因为它影响每一层的构建方式，若不在建设期留好接缝，未来独立产品化将整体返工。
+
+> **重要（2026-05-31 修订）**：可移植/剥离不再只放本章。已下沉为**贯穿全文的一等约束**——§2.1 原则 7、§2.2 红线、§3 总览、以及 §4.6/§5.5/§6.4/§7.7/§8.4/§16.4/§16.5/§16.6 每层的「🔗 剥离考虑」小节，都就地给出该层的 core/adapter 划分与解耦做法；§10 把"core/adapter 边界"列为**每个 Phase 的交付门禁**，§11 ANTI-DRIFT-11 强制依赖方向检查。**本章 §17 退为这些就地考虑的汇总与横切规范（provider 接口清单、通用 MCP 客户端、知识包隔离、P13–P15 集中验证）**，不替代各章自身的剥离设计。本章不触碰 `8001`/`3000`，DDL 延后到实现 PR。
+
+### 17.1 新增缺陷
+
+| 编号 | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| DEF-13 | 助手核心与 AIstock 领域强耦合，无 core/adapter 边界、无通用 MCP 客户端、无 provider 抽象 | 蓝图各层依赖 `8001` façade、AIstock DB schema、写死 12 个 MCP server；原设计仅有 Phase 4 意图占位（console 设计 :2142-2150） | 未来独立产品化/对接外部 MCP 应用需整体返工 |
+
+### 17.2 设计姿态（用户决策）：可移植接缝（非现在物理拆分）
+
+- **现在仍以 AIstock 为主交付**，不要求 Phase 0–12/§16 立即物理拆包重构。
+- 但**所有耦合点收敛到 provider 接口背后**，并**定义清晰的 core/adapter 逻辑边界**；新代码一律按接口写，旧耦合点逐步收敛。
+- 用**静态依赖方向检查**保证"核心不反向依赖 AIstock 领域"，使未来物理抽离成本低、当前每层成本仅小幅增加。
+
+### 17.3 Core / Adapter 边界（回贴 L0–L7 + §16）
+
+| 层 | 归属 | 说明 |
+|---|---|---|
+| L0 模型路由 / Prompt Tree 引擎 / 审批风险引擎 / 模式状态机 | **core** | 领域无关运行时 |
+| L1 记忆树**引擎**（分类召回/打分/curator/反思机制） | **core** | 机制领域无关 |
+| L1 业务知识图谱 seed + AIstock 本体 | adapter/pack | AIstock 领域内容 |
+| L1.6 代码智能**注入框架** | **core** | 通用 |
+| L1.6 `code_intelligence_adapter.py` 绑定与仓库 | adapter | AIstock 仓库特定 |
+| L2 ReAct 接地循环 + 能力闸门 + 证据契约**机制** | **core** | 通用 |
+| L2 证据契约里的**股票/QE 专用规则** | adapter/pack | AIstock 领域规则 |
+| L2.5 外部研究**连接框架** | **core** | provider 化 |
+| L3 Agent Teams orchestrator/worker **运行时** | **core** | 通用编排 |
+| L3 worker 定义（QE/HMM/因子/数据诊断） | adapter/pack | AIstock 领域 worker |
+| L4 QE 自主演进循环**框架** | **core** | 通用循环 |
+| L4 QE 方法论/演进路线**内容** | adapter/pack | AIstock 领域 |
+| L6 主动汇报**框架** | **core** | 通用 |
+| L6 聚合源（QE/Validation/本地数据…） | adapter | AIstock 数据源 |
+| L7 自我学习引擎（Reflection/Prompt Lab/技能库） | **core** | 通用 |
+| 12 个 AIstock MCP + façade + 领域 prompt pack | adapter/pack | AIstock 领域 |
+
+`assistant_product_core` = 领域无关引擎；`aistock_domain_adapter` + `aistock_knowledge_pack` = AIstock 全部领域内容。**AIstock 是第一个 adapter，不是唯一。**
+
+### 17.4 Provider 接口（可替换，逻辑接缝）
+
+| Provider | 抽象内容 | AIstock 默认实现 | 未来可替换为 |
+|---|---|---|---|
+| **MCP Gateway/Client Provider** | 连接任意 MCP server、能力发现、调用 | AIstock 统一 gateway + 12 server | 任意 MCP 应用（见 17.5） |
+| **Memory Provider** | 树形记忆存储/召回 | AIstock PostgreSQL | 其他 DB / 嵌入式存储 |
+| **Storage Provider** | 任务/审批/trace 持久化 | AIstock PostgreSQL | 可替换后端 |
+| **Model Provider** | LLM 调用（已天然可移植） | litellm + deepseek/glm/qwen | 任意 BYOK provider |
+| **Skill Provider** | 本地技能目录 | AIstock skill catalog | 其他技能源（人工审核导入） |
+| **Channel Provider** | 对话/通知渠道 | AIstock 前端 10 页 | 其他渠道（如 IM/CLI，参考 OpenClaw） |
+| **Knowledge Pack Provider** | 领域本体+图谱seed+证据规则+领域prompt | AIstock domain pack | 其他领域包；core 默认空载 |
+
+### 17.5 通用 MCP 客户端 + 能力发现（用户决策：自动发现 + 人工审核分级）
+
+- 对**任意 MCP server** 用 `list_tools` **自动发现**能力，动态生成能力目录（不再写死 AIstock 12 个）——这正是 MCP 协议的通用客户端用途。
+- 新发现的 server/工具进入 **`quarantine`（隔离待审）** 状态：必须经**人工审核分级**（risk_level + auto_call_policy + summary-first 契约校验）后才 `approved` 可用。
+- 与 §5.2 能力闸门联动：**未审核(quarantine)工具不得被 ReAct 循环调用**——既保通用接入，又防幻觉/越权。
+
+DDL（触发 production_ddl_gate）：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_mcp_connections (
+    connection_id TEXT PRIMARY KEY,
+    server_key    TEXT NOT NULL UNIQUE,    -- 任意 MCP 应用的 server key
+    transport     TEXT NOT NULL,           -- stdio | http | sse
+    endpoint      TEXT NOT NULL,
+    domain_pack   TEXT,                    -- 关联的知识包(可空=通用)
+    status        TEXT NOT NULL DEFAULT 'discovered',  -- discovered | quarantine | approved | disabled
+    discovered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_by   TEXT,
+    review_status TEXT NOT NULL DEFAULT 'pending'       -- pending | approved | rejected
+);
+COMMENT ON TABLE assistant_mcp_connections IS '通用 MCP 客户端连接登记；list_tools 自动发现，新工具经人工审核分级后方可调用';
+```
+
+发现的工具进入既有 `assistant_capabilities`，新增 `review_status` 列（`pending|approved|rejected`）；闸门检查 `review_status='approved'` 才放行。
+
+### 17.6 数据隔离与不外泄（承接原设计第 5 条）
+
+- AIstock 私有策略、生产边界、研究记忆只存在于 `aistock_domain_adapter` + `aistock_knowledge_pack` + AIstock 存储，**不进 core 默认逻辑**。
+- core 设计为**多租户/多领域就绪**：知识包隔离、记忆 namespace 隔离；切换/卸载 AIstock pack 不应泄露其私有数据。
+
+### 17.7 外部范式兑现（补 §9）
+
+| 范式 | 借鉴点 | 落地 | 不采用 |
+|---|---|---|---|
+| MCP 协议（通用工具接口） | 任意应用经 MCP 接入同一客户端 | 17.5 通用客户端 + list_tools 发现 | 不写死特定应用 |
+| OpenClaw（自托管助手：网关+模型路由BYOK+渠道+skills） | core/provider/channel 可插拔形态 | 17.4 provider 接口 | 不做 IM 网关产品形态（仅留 Channel Provider 接口） |
+| 插件/适配器架构（core + domain adapter） | 核心稳定、领域可插拔 | 17.3 core/adapter 边界 | 现在不物理拆包 |
+
+### 17.8 分阶段实施与验收（接 §10/§16，Phase 13–15；不启动 8001/3000）
+
+#### Phase 13：定义 core/adapter 边界 + provider 接口收敛（DEF-13 之一）
+- 交付：按 17.3 标注各模块归属；定义 17.4 provider 接口；把现有耦合点（MCP/记忆/存储/模型/渠道）改为经 provider 接口访问（**逻辑接缝，不物理拆包**）。
+- 验收：
+  - **静态依赖方向检查**：`assistant_product_core` 模块不得 import AIstock 领域符号（CI 依赖检查脚本，**断言无反向依赖**）。
+  - provider 接口契约测试通过；现有功能行为不变（回归全绿）。
+
+#### Phase 14：通用 MCP 客户端 + 自动发现 + 人工审核（DEF-13 之二）
+- 交付：`assistant_mcp_connections` DDL + `capabilities.review_status`；list_tools 自动发现；quarantine→review→approved 流程；闸门联动。
+- 验收：
+  - `pytest test_generic_mcp_discovery.py`：接入一个**非 AIstock 的样例 MCP server**，工具被自动发现并进入 `quarantine`。
+  - `pytest test_quarantine_tool_blocked.py`：**未审核工具不得被 ReAct 调用**（断言，接 §5.2 闸门）；审核 approved 后可用。
+
+#### Phase 15：AIstock 知识包抽离 + 数据隔离（DEF-13 之三）
+- 交付：把 AIstock 本体/图谱seed/证据规则/领域prompt 抽为可加载 `aistock_knowledge_pack`；core 默认空载。
+- 验收：
+  - `pytest test_core_empty_boot.py`：core **空载启动**不报错、能力为空。
+  - `pytest test_pack_load_isolation.py`：加载 AIstock pack 后能力恢复；卸载后**私有记忆/策略不外泄**（隔离断言）。
+
+### 17.9 防设计漂移门禁（补 §11）
+
+| 门禁 | 规则 | 检查 |
+|---|---|---|
+| ANTI-DRIFT-11 | core 不反向依赖 adapter | 静态依赖方向检查（DEF-13） |
+| ANTI-DRIFT-12 | 未审核 MCP 工具不得被调用 | quarantine 工具被闸门拒绝的断言 |
+| ANTI-DRIFT-13 | 知识包隔离、私有数据不外泄 | core 空载 + pack 卸载隔离断言 |
+
+### 17.10 可追溯性矩阵（补 §12）
+
+| 设计项 | 缺陷 | 实现位置 | 测试 |
+|---|---|---|---|
+| core/adapter 边界 + provider 接口 | DEF-13 | core 包结构、provider 接口、依赖检查脚本 | `test_core_no_adapter_import.py` |
+| 通用 MCP 客户端 + 发现/审核 | DEF-13 | `assistant_mcp_connections`、`capabilities.review_status`、闸门 | `test_generic_mcp_discovery.py` / `test_quarantine_tool_blocked.py` |
+| 知识包抽离 + 数据隔离 | DEF-13 | `aistock_knowledge_pack`、Knowledge Pack Provider | `test_core_empty_boot.py` / `test_pack_load_isolation.py` |
+
+> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`，G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`。
+
+### 17.11 Design Acceptance Index（补 §13）
+
+| 编号 | 用户要求 | 设计位置 | 验收标准 |
+|---|---|---|---|
+| DAI-PORT-001 | 可独立成产品、对接任意 MCP 应用 | §17 | core/adapter 边界 + 通用 MCP 客户端落地 |
+| DAI-PORT-002 | 可移植接缝（现在不物理拆分） | §17.2/17.3 | provider 接口收敛 + 依赖方向检查通过 |
+| DAI-PORT-003 | 任意 MCP 应用自动发现 + 人工审核 | §17.5 | 非 AIstock server 可发现；未审核工具被闸门拒绝 |
+| DAI-PORT-004 | AIstock 私有数据不外泄 | §17.6 | 知识包隔离断言通过 |
+
+> Phase 7 cross-check note: Section 17.11 DAI-PORT-001..004 are explicitly classified in `research_assistant_phase7_expected.yaml`; Phase 13-15 items are `future_phase_pending`, and Phase 7 keeps `test_core_no_adapter_import.py` green without adding frontend bypass paths.
+
+### 17.12 边界
+
+- 本章为**逻辑接缝**，不要求 Phase 0–12/§16 立即物理拆包重构；新代码按 provider 接口写，旧耦合点逐步收敛。
+- DDL（§17.5）触发 `production_ddl_gate`，实现 PR 逐项报告。
+- 不引入替换性外部 agent 框架；Channel/IM 产品形态仅保留接口、不在本期实现。
+- 本 PR 仍为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`。

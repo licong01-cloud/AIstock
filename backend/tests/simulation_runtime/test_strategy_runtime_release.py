@@ -8,7 +8,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import StrategyRuntimeRelease
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 
 def _service() -> StrategyRuntimeReleaseService:
@@ -50,12 +50,12 @@ def test_strategy_runtime_release_hash_is_canonical_and_idempotent() -> None:
 def test_strategy_runtime_release_requires_all_policy_versions() -> None:
     service = _service()
 
-    with pytest.raises(StrategyPackageValidationError, match="requires all runtime"):
+    with pytest.raises(RuntimeConfigInvalidError, match="requires all runtime"):
         service.create_release(**_release_kwargs(execution_policy_version_id=""))
 
 
 def test_strategy_runtime_release_rejects_alpha_core_or_broker_fields() -> None:
-    with pytest.raises(StrategyPackageValidationError, match="cannot contain alpha-core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot contain alpha-core"):
         StrategyRuntimeRelease(
             release_id="srr_bad_alpha",
             package_id="pkg_unit",
@@ -75,7 +75,7 @@ def test_strategy_runtime_release_rejects_alpha_core_or_broker_fields() -> None:
             },
         )
 
-    with pytest.raises(StrategyPackageValidationError, match="cannot contain alpha-core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot contain alpha-core"):
         StrategyRuntimeRelease(
             release_id="srr_bad_broker",
             package_id="pkg_unit",

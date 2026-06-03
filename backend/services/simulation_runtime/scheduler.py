@@ -1194,6 +1194,12 @@ class SimulationLifecycleScheduler:
             limit=limit,
         )
         results: list[SimulationSchedulerBindingResult] = []
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] = {}
+        shared_selection_keys = self._shared_selection_cache_keys(
+            bindings=bindings,
+            trade_date=trade_date,
+            data_source=data_source,
+        )
         for binding in bindings:
             try:
                 results.append(
@@ -1204,6 +1210,8 @@ class SimulationLifecycleScheduler:
                         submit=submit,
                         mode=mode,
                         created_by=created_by,
+                        selection_cache=selection_cache,
+                        shared_selection_keys=shared_selection_keys,
                     )
                 )
             except Exception as exc:
@@ -1241,6 +1249,8 @@ class SimulationLifecycleScheduler:
         submit: bool,
         mode: str,
         created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None = None,
+        shared_selection_keys: set[tuple[Any, ...]] | None = None,
     ) -> SimulationSchedulerBindingResult:
         runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
         existing = self.repository.get_simulation_daily_run_by_key(
@@ -1262,14 +1272,14 @@ class SimulationLifecycleScheduler:
             binding=binding,
             trade_date=trade_date,
         )
-        selection = self.selection_service.run_selection(
-            package_ids=[binding.package_id],
-            mode=SelectionMode.SINGLE_PACKAGE,
+        selection = self._run_selection_once_per_release(
+            binding=binding,
+            runtime_release=runtime_release,
             trade_date=trade_date,
             data_source=data_source,
-            runtime_config={},
-            runtime_release=runtime_release,
             created_by=created_by,
+            selection_cache=selection_cache,
+            shared_selection_keys=shared_selection_keys,
         )
         self._validate_fresh_selection_evidence(
             binding=binding,
@@ -1376,6 +1386,87 @@ class SimulationLifecycleScheduler:
             run=run,
             execution_plan=plan,
         )
+
+    def _run_selection_once_per_release(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
+        shared_selection_keys: set[tuple[Any, ...]] | None,
+    ) -> StrategyPackageSelectionResult:
+        cache_key = self._selection_cache_key(
+            binding=binding,
+            trade_date=trade_date,
+            data_source=data_source,
+        )
+        if shared_selection_keys is not None and cache_key not in shared_selection_keys:
+            selection_cache = None
+        if selection_cache is not None and cache_key in selection_cache:
+            cached = selection_cache[cache_key]
+            if isinstance(cached, BaseException):
+                raise cached
+            return cached
+        try:
+            selection = self.selection_service.run_selection(
+                package_ids=[binding.package_id],
+                mode=SelectionMode.SINGLE_PACKAGE,
+                trade_date=trade_date,
+                data_source=data_source,
+                runtime_config={},
+                runtime_release=runtime_release,
+                created_by=created_by,
+            )
+        except Exception as exc:
+            if selection_cache is not None:
+                selection_cache[cache_key] = exc
+            raise
+        if selection_cache is not None:
+            selection_cache[cache_key] = selection
+        return selection
+
+    def _selection_cache_key(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+    ) -> tuple[Any, ...]:
+        return (
+            binding.package_id,
+            binding.manifest_sha256,
+            binding.release_id,
+            binding.release_hash,
+            trade_date.isoformat(),
+            data_source,
+        )
+
+    def _shared_selection_cache_keys(
+        self,
+        *,
+        bindings: list[SimulationReleaseBinding],
+        trade_date: date,
+        data_source: str,
+    ) -> set[tuple[Any, ...]]:
+        """Share selection only when the same release fans out to multiple backends.
+
+        Multiple strategies on the same backend keep the historical independent
+        selection call contract until account-group slot semantics own that fanout.
+        """
+
+        backends_by_key: dict[tuple[Any, ...], set[str]] = {}
+        for binding in bindings:
+            key = self._selection_cache_key(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+            )
+            backend = binding.broker_backend.value if isinstance(binding.broker_backend, SimulationBrokerBackend) else str(binding.broker_backend)
+            backends_by_key.setdefault(key, set()).add(backend)
+        return {key for key, backends in backends_by_key.items() if len(backends) > 1}
 
     def _persist_strategy_performance(
         self,

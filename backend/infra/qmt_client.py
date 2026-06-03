@@ -9,16 +9,209 @@ Design goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Tuple
 import os
 from pathlib import Path
+import re
 import sys
 import threading
 import time
 import logging
+from zoneinfo import ZoneInfo
 
 
 _GLOBAL_QMT_CLIENT: Optional["BaseQMTClient"] = None
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
+logger = logging.getLogger(__name__)
+_XTQUANT_DLL_HANDLES: list[Any] = []
+
+
+def _looks_like_mojibake(value: str) -> bool:
+    return any(0x80 <= ord(ch) <= 0x9F for ch in value) or "\ufffd" in value
+
+
+def _looks_truncated_status_msg(value: str) -> bool:
+    if not value:
+        return False
+    stripped = value.strip()
+    if stripped.endswith("["):
+        return True
+    if stripped.startswith("[COUNTER]") and stripped.count("[") > stripped.count("]"):
+        return True
+    return stripped.endswith(("\ufffd", ":", ";"))
+
+
+def _extract_counter_error_code(value: str) -> str | None:
+    match = re.search(r"\[COUNTER\]\[(?P<code>[A-Za-z0-9_-]+)\]", value or "")
+    return str(match.group("code")) if match else None
+
+
+def _coerce_int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _diagnostic_completeness(status_msg: str) -> tuple[str, bool, str | None]:
+    if not status_msg:
+        return "broker_status_msg_unavailable", True, "broker_status_msg_missing"
+    if _looks_truncated_status_msg(status_msg) or _looks_like_mojibake(status_msg):
+        return (
+            "broker_status_msg_truncated_or_encoding_uncertain",
+            True,
+            "broker_status_msg_truncated_or_encoding_uncertain",
+        )
+    if re.fullmatch(r"(?:\[[^\]]+\])+", status_msg):
+        return "broker_status_msg_code_only", True, "broker_status_msg_code_only"
+    return "best_available", False, None
+
+
+def _parse_order_time(order_time: str) -> tuple[str | None, bool]:
+    raw = str(order_time or "").strip()
+    if not raw:
+        return None, False
+    try:
+        # xtquant reports seconds since epoch for stock order time.
+        ts = int(raw)
+    except ValueError:
+        return None, False
+    dt = datetime.fromtimestamp(ts, tz=UTC).astimezone(CHINA_TZ)
+    return dt.isoformat(), dt.date() < datetime.now(CHINA_TZ).date()
+
+
+def build_qmt_order_diagnostic(order: Dict[str, Any], *, cancelable_only: bool = False) -> Dict[str, Any]:
+    """Build structured diagnostics without mutating broker state."""
+
+    status_msg = str(order.get("status_msg") or "")
+    order_time_iso, older_than_today = _parse_order_time(str(order.get("order_time") or ""))
+    stale_cancelable = bool(cancelable_only and older_than_today)
+    completeness, gap, gap_reason = _diagnostic_completeness(status_msg)
+    broker_error_code = _extract_counter_error_code(status_msg)
+    return {
+        "schema_version": "qmt_order_diagnostic_v1",
+        "broker": "xtquant",
+        "order_status": int(order.get("order_status", 0) or 0),
+        "status_msg_best_available": status_msg or None,
+        "status_msg_length": len(status_msg),
+        "status_msg_maybe_truncated": _looks_truncated_status_msg(status_msg),
+        "status_msg_encoding_warning": _looks_like_mojibake(status_msg),
+        "broker_error_code": broker_error_code,
+        "broker_rejection_classification": f"counter_{broker_error_code}" if broker_error_code else None,
+        "diagnostic_completeness": completeness,
+        "diagnostic_gap": gap,
+        "diagnostic_gap_reason": gap_reason,
+        "cancelable_query": bool(cancelable_only),
+        "cancelable_stale_warning": stale_cancelable,
+        "cancelable_stale_reason": "historical_cancelable_order_reported_by_broker" if stale_cancelable else None,
+        "order_time_iso": order_time_iso,
+    }
+
+
+def build_qmt_order_submit_diagnostic(
+    *,
+    accepted: bool,
+    raw_return_code: int | None,
+    operation: str = "order_stock",
+    stock_code: str | None = None,
+    order_type: int | None = None,
+    order_volume: int | None = None,
+    price_type: int | None = None,
+    price: float | None = None,
+    strategy_name: str | None = None,
+    order_remark: str | None = None,
+    exception: BaseException | None = None,
+    timeout_seconds: float | None = None,
+    timeout_env_key: str | None = None,
+) -> Dict[str, Any]:
+    if isinstance(exception, TimeoutError):
+        classification = "adapter_timeout"
+        operator_hint = (
+            "MiniQMT/xtquant order submit did not return before the configured timeout. "
+            "Treat this as broker connectivity risk and verify native MiniQMT order state before retrying."
+        )
+    elif exception is not None:
+        classification = "adapter_exception"
+        operator_hint = "MiniQMT adapter raised before a broker acknowledgement was available."
+    elif accepted:
+        classification = "accepted"
+        operator_hint = "MiniQMT accepted the order request."
+    else:
+        classification = "xtquant_nonpositive_return"
+        operator_hint = (
+            "MiniQMT/xtquant did not accept the order request. Check available cash, lot size, price limits, "
+            "counter restrictions, and exchange session state."
+        )
+    return {
+        "schema_version": "qmt_order_submit_diagnostic_v1",
+        "broker": "xtquant",
+        "operation": operation,
+        "accepted": bool(accepted),
+        "raw_return_code": raw_return_code,
+        "stock_code": stock_code,
+        "order_type": order_type,
+        "order_volume": order_volume,
+        "price_type": price_type,
+        "price": price,
+        "strategy_name": strategy_name,
+        "order_remark": order_remark,
+        "classification": classification,
+        "operator_hint": operator_hint,
+        "exception_type": type(exception).__name__ if exception is not None else None,
+        "exception_message": str(exception) if exception is not None else None,
+        "timeout_seconds": timeout_seconds,
+        "timeout_env_key": timeout_env_key,
+        "timeout_policy": "bounded_order_submit_ack_wait" if timeout_seconds is not None else None,
+    }
+
+
+def build_qmt_cancel_diagnostic(
+    *,
+    operation: str,
+    cancel_method: str,
+    accepted: bool,
+    raw_return_code: int | None = None,
+    order_id: str | None = None,
+    market: int | None = None,
+    order_sysid: str | None = None,
+    exception: BaseException | None = None,
+) -> Dict[str, Any]:
+    """Return an operator-readable MiniQMT cancel diagnostic payload."""
+
+    if isinstance(exception, TimeoutError):
+        classification = "adapter_timeout"
+        operator_hint = (
+            "MiniQMT/xtquant cancel did not return before the configured timeout. "
+            "Verify native MiniQMT order state before retrying or assuming the cancel failed."
+        )
+    elif exception is not None:
+        classification = "adapter_exception"
+        operator_hint = "MiniQMT adapter raised before a broker acknowledgement was available."
+    elif accepted:
+        classification = "accepted"
+        operator_hint = "MiniQMT accepted the cancel request."
+    else:
+        classification = "xtquant_nonzero_return"
+        operator_hint = (
+            "MiniQMT/xtquant did not accept the cancel request. Check exchange session, counter state, "
+            "order ownership, and whether the order is a stale historical cancelable record."
+        )
+    return {
+        "schema_version": "qmt_cancel_diagnostic_v1",
+        "broker": "xtquant",
+        "operation": operation,
+        "cancel_method": cancel_method,
+        "accepted": bool(accepted),
+        "raw_return_code": raw_return_code,
+        "order_id": order_id,
+        "market": market,
+        "order_sysid": order_sysid,
+        "classification": classification,
+        "operator_hint": operator_hint,
+        "exception_type": type(exception).__name__ if exception is not None else None,
+        "exception_message": str(exception) if exception is not None else None,
+    }
 
 
 @dataclass
@@ -61,6 +254,32 @@ def _call_with_timeout(fn, timeout_s: float):
     if "error" in error_holder:
         raise error_holder["error"]
     return result_holder.get("value")
+
+
+def _stop_trader_best_effort(trader: Any, timeout_s: float) -> None:
+    if trader is None:
+        return
+    try:
+        _call_with_timeout(trader.stop, timeout_s)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("miniQMT trader stop cleanup failed: %r", exc, exc_info=True)
+
+
+def _subscribe_best_effort(trader: Any, account: Any) -> None:
+    try:
+        trader.subscribe(account)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("miniQMT subscribe failed; continuing with query APIs: %r", exc, exc_info=True)
+
+
+def _register_xtquant_dll_dir(path: Path) -> None:
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if not callable(add_dll_directory):
+        return
+    handle = add_dll_directory(str(path))
+    _XTQUANT_DLL_HANDLES.append(handle)
+
+
 class QMTNotAvailableError(RuntimeError):
     """Raised when xtquant is missing or QMT connection is unavailable."""
 class BaseQMTClient:
@@ -249,8 +468,21 @@ Notes:
         self._last_probe_ts: float = 0.0
         self._last_status_connected: Optional[bool] = None
         self._last_autoconnect_ts: float = 0.0
+        self._last_order_diagnostic: Dict[str, Any] | None = None
+        self._last_cancel_diagnostic: Dict[str, Any] | None = None
         self._active_tasks: Dict[str, Dict[str, Any]] = {}
         self._task_lock = threading.Lock()
+
+    def get_last_order_diagnostic(self) -> Dict[str, Any] | None:
+        return dict(self._last_order_diagnostic) if self._last_order_diagnostic else None
+
+    def get_last_cancel_diagnostic(self) -> Dict[str, Any] | None:
+        return dict(self._last_cancel_diagnostic) if self._last_cancel_diagnostic else None
+
+    def _mark_operation_timeout(self, operation: str, timeout_s: float, exc: TimeoutError) -> QMTNotAvailableError:
+        self._connected = False
+        self._last_error = f"miniQMT {operation} timed out after {timeout_s}s: {exc!r}"
+        return QMTNotAvailableError(self._last_error)
 
     def _resolve_xtquant_dir(self) -> Optional[Path]:
         """Resolve xtquant directory.
@@ -272,7 +504,7 @@ Notes:
 
         try:
             repo_root = Path(__file__).resolve().parents[2]
-        except Exception:
+        except IndexError:
             return None
         candidate = repo_root / "xtquant"
         if (candidate / "xttrader.py").exists() and (candidate / "__init__.py").exists():
@@ -289,10 +521,7 @@ Notes:
                 if repo_root not in sys.path:
                     sys.path.insert(0, repo_root)
                 if hasattr(os, "add_dll_directory"):
-                    try:
-                        os.add_dll_directory(str(xt_dir))
-                    except Exception:
-                        pass
+                    _register_xtquant_dll_dir(xt_dir)
 
             from xtquant import xttrader as xttrader_mod  # type: ignore
             from xtquant import xttype as xttype_mod  # type: ignore
@@ -368,10 +597,7 @@ Notes:
                 rc = _call_with_timeout(self._trader.connect, connect_timeout_s)
                 if rc == 0:
                     # Subscribe for pushes (optional for query, but recommended by doc).
-                    try:
-                        self._trader.subscribe(self._account)
-                    except Exception:
-                        pass
+                    _subscribe_best_effort(self._trader, self._account)
                     self._connected = True
                     self._last_error = None
                     if not prev_connected:
@@ -392,20 +618,14 @@ Notes:
                         retry_session_id,
                     )
                     try:
-                        try:
-                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
-                            _call_with_timeout(self._trader.stop, stop_timeout_s)
-                        except Exception:
-                            pass
+                        stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                        _stop_trader_best_effort(self._trader, stop_timeout_s)
 
                         self._trader = self._xttrader_mod.XtQuantTrader(self._userdata_path, retry_session_id)
                         self._trader.start()
                         rc2 = _call_with_timeout(self._trader.connect, connect_timeout_s)
                         if rc2 == 0:
-                            try:
-                                self._trader.subscribe(self._account)
-                            except Exception:
-                                pass
+                            _subscribe_best_effort(self._trader, self._account)
                             self._connected = True
                             self._last_error = None
                             self._session_id = retry_session_id
@@ -426,11 +646,8 @@ Notes:
                 # IMPORTANT: when connect fails, xtquant may have started background threads.
                 # Stop and release the trader instance to avoid thread leaks and lock contention.
                 try:
-                    try:
-                        stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
-                        _call_with_timeout(self._trader.stop, stop_timeout_s)
-                    except Exception:
-                        pass
+                    stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                    _stop_trader_best_effort(self._trader, stop_timeout_s)
                 finally:
                     self._trader = None
                     self._account = None
@@ -441,11 +658,8 @@ Notes:
                 self._last_error = f"miniQMT connect 超时: {e!r}"
                 try:
                     if self._trader is not None:
-                        try:
-                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
-                            _call_with_timeout(self._trader.stop, stop_timeout_s)
-                        except Exception:
-                            pass
+                        stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                        _stop_trader_best_effort(self._trader, stop_timeout_s)
                 finally:
                     self._trader = None
                     self._account = None
@@ -475,13 +689,8 @@ Notes:
                 # 清理可能部分初始化的对象
                 if self._trader is not None:
                     try:
-                        try:
-                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
-                            _call_with_timeout(self._trader.stop, stop_timeout_s)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                        stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                        _stop_trader_best_effort(self._trader, stop_timeout_s)
                     finally:
                         self._trader = None
                 self._account = None
@@ -543,7 +752,22 @@ Notes:
         import logging
 
         logger = logging.getLogger(self.__class__.__name__)
-        with self._lock:
+        lock_timeout_s = _env_float("MINIQMT_CLIENT_LOCK_TIMEOUT_SECONDS", default=2.0)
+        acquired = self._lock.acquire(timeout=max(0.0, lock_timeout_s))
+        if not acquired:
+            self._last_error = f"miniQMT client lock busy during status probe after {lock_timeout_s}s"
+            logger.warning(self._last_error)
+            return QMTStatus(
+                enabled=self._enabled,
+                connected=False,
+                mode=self._mode,
+                account_id=self._account_id,
+                provider="xtquant",
+                userdata_path=self._userdata_path,
+                session_id=self._session_id,
+                last_error=self._last_error,
+            )
+        try:
             connected_now = self._probe_connection_locked()
             if self._last_status_connected is None:
                 self._last_status_connected = connected_now
@@ -564,6 +788,8 @@ Notes:
                 session_id=self._session_id,
                 last_error=self._last_error,
             )
+        finally:
+            self._lock.release()
 
     def _require_connected(self) -> None:
         if not self._enabled:
@@ -671,6 +897,19 @@ Notes:
                             "secu_account": str(getattr(order, "secu_account", "") or ""),
                         }
                     )
+                for item in result:
+                    diagnostic = build_qmt_order_diagnostic(item, cancelable_only=cancelable_only)
+                    item["diagnostic"] = diagnostic
+                    item["status_msg_maybe_truncated"] = diagnostic["status_msg_maybe_truncated"]
+                    item["status_msg_encoding_warning"] = diagnostic["status_msg_encoding_warning"]
+                    item["diagnostic_completeness"] = diagnostic["diagnostic_completeness"]
+                    item["diagnostic_gap"] = diagnostic["diagnostic_gap"]
+                    item["diagnostic_gap_reason"] = diagnostic["diagnostic_gap_reason"]
+                    item["broker_error_code"] = diagnostic["broker_error_code"]
+                    item["broker_rejection_classification"] = diagnostic["broker_rejection_classification"]
+                    item["cancelable_stale_warning"] = diagnostic["cancelable_stale_warning"]
+                    item["cancelable_stale_reason"] = diagnostic["cancelable_stale_reason"]
+                    item["order_time_iso"] = diagnostic["order_time_iso"]
                 return result
             except Exception as e:  # noqa: BLE001
                 raise QMTNotAvailableError(f"读取委托失败: {e!r}") from e
@@ -944,53 +1183,43 @@ Notes:
 
     def get_latest_trading_day(self) -> str:
         """获取最新交易日，带有超时保护."""
-        import datetime
         with self._lock:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
-                
-                # 尝试获取交易日历 (3秒超时)
-                try:
-                    calendar = _call_with_timeout(lambda: xtdata.get_trading_calendar("SH"), timeout_s=3.0)
-                    if calendar:
-                        return str(calendar[-1])
-                except Exception:
-                    pass
-                
-                # 尝试获取最新行情的时间 (3秒超时)
-                try:
-                    snapshot = _call_with_timeout(lambda: xtdata.get_full_tick(["000001.SH"]), timeout_s=3.0)
-                    if snapshot and "000001.SH" in snapshot:
-                        last_time = snapshot["000001.SH"].get("timetag", "")
-                        if last_time:
-                            return str(last_time[:8])
-                except Exception:
-                    pass
-                
-                return datetime.date.today().strftime("%Y%m%d")
+
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                calendar = _call_with_timeout(lambda: xtdata.get_trading_calendar("SH"), query_timeout_s)
+                if calendar:
+                    return str(calendar[-1])
+                snapshot = _call_with_timeout(lambda: xtdata.get_full_tick(["000001.SH"]), query_timeout_s)
+                if snapshot and "000001.SH" in snapshot:
+                    last_time = snapshot["000001.SH"].get("timetag", "")
+                    if last_time:
+                        return str(last_time[:8])
+                raise QMTNotAvailableError("miniQMT latest trading day unavailable: empty calendar and snapshot")
             except Exception as e:
-                logger = logging.getLogger(self.__class__.__name__)
-                logger.error(f"获取最新交易日失败: {e}")
-                return datetime.date.today().strftime("%Y%m%d")
+                raise QMTNotAvailableError(f"获取最新交易日失败: {e!r}") from e
 
     def get_stock_list_in_sector(self, sector_name: str) -> List[str]:
         with self._lock:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
-                return xtdata.get_stock_list_in_sector(sector_name) or []
-            except Exception:
-                return []
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                return _call_with_timeout(lambda: xtdata.get_stock_list_in_sector(sector_name), query_timeout_s) or []
+            except Exception as e:  # noqa: BLE001
+                raise QMTNotAvailableError(f"查询板块股票列表失败: {e!r}") from e
 
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         with self._lock:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
-                return xtdata.get_trading_calendar(market) or []
-            except Exception:
-                return []
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                return _call_with_timeout(lambda: xtdata.get_trading_calendar(market), query_timeout_s) or []
+            except Exception as e:  # noqa: BLE001
+                raise QMTNotAvailableError(f"查询交易日历失败: {e!r}") from e
 
     def place_order(
         self,
@@ -1004,48 +1233,191 @@ Notes:
     ) -> Tuple[int, str]:
         with self._lock:
             self._require_connected()
+            self._last_order_diagnostic = None
+            order_timeout_s = _env_float(
+                "MINIQMT_ORDER_TIMEOUT_SECONDS",
+                default=15.0,
+            )
             try:
                 self._ensure_xtquant()
-                order_id = self._trader.order_stock(
-                    self._account,
-                    stock_code,
-                    order_type,
-                    order_volume,
-                    price_type,
-                    price,
-                    strategy_name,
-                    order_remark,
+                order_id = _call_with_timeout(
+                    lambda: self._trader.order_stock(
+                        self._account,
+                        stock_code,
+                        order_type,
+                        order_volume,
+                        price_type,
+                        price,
+                        strategy_name,
+                        order_remark,
+                    ),
+                    order_timeout_s,
                 )
-                if order_id > 0:
-                    return order_id, f"下单成功，订单编号：{order_id}"
-                else:
-                    return -1, "下单失败"
+                raw_return_code = _coerce_int_or_none(order_id)
+                accepted = raw_return_code is not None and raw_return_code > 0
+                self._last_order_diagnostic = build_qmt_order_submit_diagnostic(
+                    accepted=accepted,
+                    raw_return_code=raw_return_code,
+                    stock_code=stock_code,
+                    order_type=int(order_type),
+                    order_volume=int(order_volume),
+                    price_type=int(price_type),
+                    price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
+                )
+                if accepted:
+                    return raw_return_code, f"下单成功，订单编号：{raw_return_code}"
+                return -1, f"下单失败: raw_return_code={raw_return_code}"
+            except TimeoutError as e:
+                self._last_order_diagnostic = build_qmt_order_submit_diagnostic(
+                    accepted=False,
+                    raw_return_code=None,
+                    stock_code=stock_code,
+                    order_type=int(order_type),
+                    order_volume=int(order_volume),
+                    price_type=int(price_type),
+                    price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
+                    exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
+                )
+                raise self._mark_operation_timeout("order submit", order_timeout_s, e) from e
+            except QMTNotAvailableError as e:
+                self._last_order_diagnostic = build_qmt_order_submit_diagnostic(
+                    accepted=False,
+                    raw_return_code=None,
+                    stock_code=stock_code,
+                    order_type=int(order_type),
+                    order_volume=int(order_volume),
+                    price_type=int(price_type),
+                    price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
+                    exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
+                )
+                raise
             except Exception as e:  # noqa: BLE001
+                self._last_order_diagnostic = build_qmt_order_submit_diagnostic(
+                    accepted=False,
+                    raw_return_code=None,
+                    stock_code=stock_code,
+                    order_type=int(order_type),
+                    order_volume=int(order_volume),
+                    price_type=int(price_type),
+                    price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
+                    exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
+                )
                 return -1, f"下单失败: {e!r}"
 
     def cancel_order(self, order_id: str) -> Tuple[bool, str]:
         with self._lock:
             self._require_connected()
+            self._last_cancel_diagnostic = None
+            cancel_timeout_s = _env_float(
+                "MINIQMT_CANCEL_TIMEOUT_SECONDS",
+                default=_env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0),
+            )
             try:
                 order_id_int = int(order_id)
-                result = self._trader.cancel_order_stock(self._account, order_id_int)
-                if result == 0:
+                result = _call_with_timeout(
+                    lambda: self._trader.cancel_order_stock(self._account, order_id_int),
+                    cancel_timeout_s,
+                )
+                raw_return_code = _coerce_int_or_none(result)
+                accepted = raw_return_code == 0
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock",
+                    cancel_method="order_id",
+                    accepted=accepted,
+                    raw_return_code=raw_return_code,
+                    order_id=str(order_id),
+                )
+                if accepted:
                     return True, "撤单成功"
-                else:
-                    return False, "撤单失败"
+                return False, f"撤单失败: raw_return_code={raw_return_code}"
+            except TimeoutError as e:
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock",
+                    cancel_method="order_id",
+                    accepted=False,
+                    raw_return_code=None,
+                    order_id=str(order_id),
+                    exception=e,
+                )
+                raise self._mark_operation_timeout("cancel order", cancel_timeout_s, e) from e
+            except QMTNotAvailableError:
+                raise
             except Exception as e:  # noqa: BLE001
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock",
+                    cancel_method="order_id",
+                    accepted=False,
+                    raw_return_code=None,
+                    order_id=str(order_id),
+                    exception=e,
+                )
                 return False, f"撤单失败: {e!r}"
 
     def cancel_order_by_sysid(self, market: int, order_sysid: str) -> Tuple[bool, str]:
         with self._lock:
             self._require_connected()
+            self._last_cancel_diagnostic = None
+            cancel_timeout_s = _env_float(
+                "MINIQMT_CANCEL_TIMEOUT_SECONDS",
+                default=_env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0),
+            )
             try:
-                result = self._trader.cancel_order_stock_sysid(self._account, market, order_sysid)
-                if result == 0:
+                result = _call_with_timeout(
+                    lambda: self._trader.cancel_order_stock_sysid(self._account, market, order_sysid),
+                    cancel_timeout_s,
+                )
+                raw_return_code = _coerce_int_or_none(result)
+                accepted = raw_return_code == 0
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock_sysid",
+                    cancel_method="market_order_sysid",
+                    accepted=accepted,
+                    raw_return_code=raw_return_code,
+                    market=int(market),
+                    order_sysid=str(order_sysid),
+                )
+                if accepted:
                     return True, "撤单成功"
-                else:
-                    return False, "撤单失败"
+                return False, f"撤单失败: raw_return_code={raw_return_code}"
+            except TimeoutError as e:
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock_sysid",
+                    cancel_method="market_order_sysid",
+                    accepted=False,
+                    raw_return_code=None,
+                    market=int(market) if str(market).strip() else None,
+                    order_sysid=str(order_sysid),
+                    exception=e,
+                )
+                raise self._mark_operation_timeout("cancel order by sysid", cancel_timeout_s, e) from e
+            except QMTNotAvailableError:
+                raise
             except Exception as e:  # noqa: BLE001
+                self._last_cancel_diagnostic = build_qmt_cancel_diagnostic(
+                    operation="cancel_order_stock_sysid",
+                    cancel_method="market_order_sysid",
+                    accepted=False,
+                    raw_return_code=None,
+                    market=int(market) if str(market).strip() else None,
+                    order_sysid=str(order_sysid),
+                    exception=e,
+                )
                 return False, f"撤单失败: {e!r}"
 
     def query_new_purchase_limit(self) -> Dict[str, Any]:
@@ -1211,3 +1583,7 @@ Env keys (existing + new optional):
         userdata_path=userdata_path,
         session_id=session_id,
     )
+
+
+
+

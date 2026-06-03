@@ -54,10 +54,38 @@ def _client(
 class FakeQmtClient:
     def __init__(self) -> None:
         self.place_order_calls: list[dict] = []
+        self.cancel_order_calls: list[str] = []
+        self.last_order_diagnostic: dict | None = None
+        self.last_cancel_diagnostic: dict | None = None
 
     def place_order(self, **kwargs) -> tuple[int, str]:
         self.place_order_calls.append(kwargs)
+        self.last_order_diagnostic = {
+            "schema_version": "qmt_order_submit_diagnostic_v1",
+            "accepted": True,
+            "raw_return_code": 10001,
+            "classification": "accepted",
+        }
         return 10001, "accepted"
+
+    def get_last_order_diagnostic(self) -> dict | None:
+        return dict(self.last_order_diagnostic) if self.last_order_diagnostic else None
+
+    def cancel_order(self, order_id: str) -> tuple[bool, str]:
+        self.cancel_order_calls.append(str(order_id))
+        self.last_cancel_diagnostic = {
+            "schema_version": "qmt_cancel_diagnostic_v1",
+            "operation": "cancel_order_stock",
+            "cancel_method": "order_id",
+            "accepted": False,
+            "raw_return_code": -1,
+            "order_id": str(order_id),
+            "classification": "xtquant_nonzero_return",
+        }
+        return False, "cancel failed: raw_return_code=-1"
+
+    def get_last_cancel_diagnostic(self) -> dict | None:
+        return dict(self.last_cancel_diagnostic) if self.last_cancel_diagnostic else None
 
 
 class FakeLiveApprovalService:
@@ -236,6 +264,8 @@ def test_raw_order_router_requires_explicit_diagnostic_switch(monkeypatch) -> No
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["order_id"] == 10001
+    assert response.json()["diagnostic"]["raw_return_code"] == 10001
+    assert response.json()["diagnostic"]["classification"] == "accepted"
     assert "administrator/POC diagnostics only" in response.json()["diagnostic_warning"]
     assert fake_client.place_order_calls == [
         {
@@ -248,6 +278,27 @@ def test_raw_order_router_requires_explicit_diagnostic_switch(monkeypatch) -> No
             "order_remark": "",
         }
     ]
+
+
+def test_raw_cancel_router_returns_broker_diagnostic(monkeypatch) -> None:
+    monkeypatch.setenv("QMT_TRADE_PASSWORD", "secret")
+    fake_client = FakeQmtClient()
+
+    response = _raw_client(fake_client, monkeypatch).post(
+        "/api/v1/qmt/cancel",
+        json={"trade_password": "secret", "order_id": "1090519216"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert "raw_return_code=-1" in body["message"]
+    assert body["diagnostic"]["schema_version"] == "qmt_cancel_diagnostic_v1"
+    assert body["diagnostic"]["cancel_method"] == "order_id"
+    assert body["diagnostic"]["order_id"] == "1090519216"
+    assert body["diagnostic"]["raw_return_code"] == -1
+    assert body["diagnostic"]["classification"] == "xtquant_nonzero_return"
+    assert fake_client.cancel_order_calls == ["1090519216"]
 
 
 def test_raw_batch_order_router_requires_explicit_diagnostic_switch(monkeypatch) -> None:

@@ -43,6 +43,7 @@ from backend.services.trading_core.errors import (
 
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .package_health import SelectionPackageHealthService
+from .price_guidance import attach_price_guidance
 from .repository import SelectionCenterRepository
 from .result_enrichment import SelectionResultEnrichmentService
 from .risk_policy import StockRiskPolicyService
@@ -161,15 +162,23 @@ class SelectionCenterService:
                 created_by="selection_center",
             )
             package_results = {
-                package_id: self.result_enrichment_service.enrich_candidates(
-                    candidates,
+                package_id: attach_price_guidance(
+                    self.result_enrichment_service.enrich_candidates(
+                        candidates,
+                        trade_date=trade_date,
+                        runtime_config=selection.runtime_config,
+                    ),
                     trade_date=trade_date,
                     runtime_config=selection.runtime_config,
                 )
                 for package_id, candidates in selection.package_results.items()
             }
-            aggregate_results = self.result_enrichment_service.enrich_candidates(
-                selection.aggregate_results,
+            aggregate_results = attach_price_guidance(
+                self.result_enrichment_service.enrich_candidates(
+                    selection.aggregate_results,
+                    trade_date=trade_date,
+                    runtime_config=selection.runtime_config,
+                ),
                 trade_date=trade_date,
                 runtime_config=selection.runtime_config,
             )
@@ -840,6 +849,11 @@ class SelectionCenterService:
                 )
                 for item in aggregate
             ]
+            aggregate = attach_price_guidance(
+                aggregate,
+                trade_date=run.trade_date,
+                runtime_config=run.runtime_config,
+            )
             if not aggregate:
                 if config.get("valid_no_candidate"):
                     completed = run.model_copy(

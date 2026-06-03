@@ -15,6 +15,7 @@ from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.coldstart_sentinel import ColdstartSentinelService, PaperV2DaemonUnavailableError
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
+from backend.services.paper_trading_v2.execution import list_minqmt_execution_quality_reports
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
@@ -1003,6 +1004,30 @@ def get_portfolio_minute_execution(
         _raise_http(exc)
 
 
+@router.get("/portfolios/{portfolio_id}/execution-quality")
+def get_portfolio_execution_quality(
+    portfolio_id: str,
+    trade_date: date | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    scan_limit: int = Query(default=500, ge=1, le=2000),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "execution_quality": list_minqmt_execution_quality_reports(
+                repository=PaperTradingV2Repository(),
+                portfolio_id=portfolio_id,
+                trade_date=trade_date,
+                run_id=run_id,
+                limit=limit,
+                scan_limit=scan_limit,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/portfolios/{portfolio_id}/session-capabilities")
 def get_portfolio_session_capabilities(portfolio_id: str) -> dict[str, Any]:
     try:
@@ -1148,11 +1173,31 @@ def _expose_order_diagnostics(row: dict[str, Any]) -> dict[str, Any]:
         "broker_rejection_reason",
         "broker_status_raw",
         "broker_audit",
+        "broker_error_code",
+        "broker_rejection_classification",
+        "diagnostic_completeness",
+        "diagnostic_gap",
+        "diagnostic_gap_reason",
+        "status_msg_best_available",
+        "status_msg_maybe_truncated",
+        "status_msg_encoding_warning",
     ):
         if enriched.get(key) is None and metadata.get(key) is not None:
             enriched[key] = metadata.get(key)
     if enriched.get("broker_diagnostic") is None and diagnostic:
         enriched["broker_diagnostic"] = diagnostic
+    for key in (
+        "broker_error_code",
+        "broker_rejection_classification",
+        "diagnostic_completeness",
+        "diagnostic_gap",
+        "diagnostic_gap_reason",
+        "status_msg_best_available",
+        "status_msg_maybe_truncated",
+        "status_msg_encoding_warning",
+    ):
+        if enriched.get(key) is None and diagnostic.get(key) is not None:
+            enriched[key] = diagnostic.get(key)
     if enriched.get("status_msg") is None:
         enriched["status_msg"] = enriched.get("broker_status_msg") or enriched.get("broker_rejection_reason")
     if enriched.get("error_msg") is None:

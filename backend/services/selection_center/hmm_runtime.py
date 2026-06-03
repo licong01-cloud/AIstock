@@ -258,6 +258,16 @@ class SectorHMMRuntime:
                     "coefficients_path": str(artifact.path),
                 },
             )
+        if not day_coefficients:
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact has empty coefficients for trade_date",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                },
+            )
         if not stock_sector_map:
             raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing stock sector mapping",
@@ -266,6 +276,69 @@ class SectorHMMRuntime:
                     "snapshot_id": profile.model_snapshot_id,
                     "trade_date": day_key,
                     "coefficients_path": str(artifact.path),
+                },
+            )
+        valid_sector_codes: set[str] = set()
+        for raw_sector_code, raw_coefficient in day_coefficients.items():
+            sector_code = str(raw_sector_code or "").strip()
+            if not sector_code:
+                raise HMMRuntimeUnavailableError(
+                    "HMM coefficient artifact contains an empty sector code",
+                    context={
+                        "package_id": package_id,
+                        "snapshot_id": profile.model_snapshot_id,
+                        "trade_date": day_key,
+                        "coefficients_path": str(artifact.path),
+                        "sector_code": raw_sector_code,
+                    },
+                )
+            _positive_finite_float(
+                raw_coefficient,
+                message="HMM sector coefficient must be positive finite",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                    "sector_code": sector_code,
+                    "coefficient": raw_coefficient,
+                },
+            )
+            valid_sector_codes.add(sector_code)
+        empty_map_symbols = [
+            str(symbol)
+            for symbol, sector_code in stock_sector_map.items()
+            if not str(sector_code or "").strip()
+        ]
+        if empty_map_symbols:
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact contains empty stock sector mapping values",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                    "symbol_samples": empty_map_symbols[:20],
+                    "missing_count": len(empty_map_symbols),
+                },
+            )
+        missing_sector_coverage = sorted(
+            {
+                str(sector_code).strip()
+                for sector_code in stock_sector_map.values()
+                if str(sector_code).strip() and str(sector_code).strip() not in valid_sector_codes
+            }
+        )
+        if missing_sector_coverage:
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact has stock sector mapping without coefficients",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                    "missing_sector_count": len(missing_sector_coverage),
+                    "missing_sector_samples": missing_sector_coverage[:20],
                 },
             )
         return {
@@ -278,6 +351,7 @@ class SectorHMMRuntime:
             "coefficients_path": str(artifact.path),
             "trade_date": day_key,
             "sector_count": len(day_coefficients),
+            "coefficient_count": len(valid_sector_codes),
             "stock_sector_map_count": len(stock_sector_map),
         }
 

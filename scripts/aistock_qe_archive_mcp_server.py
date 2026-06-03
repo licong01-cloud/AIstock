@@ -274,5 +274,140 @@ def qe_archive_query_hyperparam_history(model_type: str | None = None, param_key
     return _client().get("/query/hyperparams", params={"model_type": model_type, "param_key": param_key, "limit": limit})
 
 
+@mcp.tool()
+def qe_archive_query_analytics_view_status() -> dict[str, Any]:
+    """Return availability and row counts for the compact QE analytics views."""
+
+    return _client().get("/analytics/views")
+
+
+@mcp.tool()
+def qe_archive_query_run_leaderboard(
+    model_type: str | None = None,
+    min_icir: float | None = None,
+    min_ir: float | None = None,
+    limit: int = 20,
+    order_by: str = "cagr",
+) -> dict[str, Any]:
+    """Query compact run-level signal/return leaderboard rows."""
+
+    return _client().get(
+        "/analytics/run-leaderboard",
+        params={
+            "model_type": model_type,
+            "min_icir": min_icir,
+            "min_ir": min_ir,
+            "limit": limit,
+            "order_by": order_by,
+        },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_seed_robustness(
+    model_type: str | None = None,
+    min_seed_count: int = 2,
+    stable_only: bool = False,
+    limit: int = 20,
+    order_by: str = "cagr_mean",
+) -> dict[str, Any]:
+    """Query multi-seed robustness by compact config fingerprint."""
+
+    return _client().get(
+        "/analytics/seed-robustness",
+        params={
+            "model_type": model_type,
+            "min_seed_count": min_seed_count,
+            "stable_only": stable_only,
+            "limit": limit,
+            "order_by": order_by,
+        },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_factor_performance(
+    factor_name: str | None = None,
+    min_runs: int = 1,
+    limit: int = 20,
+    order_by: str = "best_cagr",
+) -> dict[str, Any]:
+    """Query compact factor performance and usage footprint rows."""
+
+    return _client().get(
+        "/analytics/factor-performance",
+        params={"factor_name": factor_name, "min_runs": min_runs, "limit": limit, "order_by": order_by},
+    )
+
+
+@mcp.tool()
+def qe_archive_query_model_hyperparam_seed_perf(
+    model_type: str | None = None,
+    hyperparam_hash: str | None = None,
+    limit: int = 20,
+    order_by: str = "cagr",
+) -> dict[str, Any]:
+    """Query compact model hyperparameter-by-seed performance rows."""
+
+    return _client().get(
+        "/analytics/model-hyperparam-seed-perf",
+        params={
+            "model_type": model_type,
+            "hyperparam_hash": hyperparam_hash,
+            "limit": limit,
+            "order_by": order_by,
+        },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_overfit_flags(
+    suspicious_only: bool = True,
+    model_type: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Query compact overfit and seed-outlier flags."""
+
+    return _client().get(
+        "/analytics/overfit-flags",
+        params={"suspicious_only": suspicious_only, "model_type": model_type, "limit": limit},
+    )
+
+
+@mcp.tool()
+def qe_archive_query_promotion_candidates(
+    model_type: str | None = None,
+    min_seed_count: int = 5,
+    limit: int = 20,
+    order_by: str = "cagr_mean",
+) -> dict[str, Any]:
+    """Query compact multi-seed promotion candidate configs."""
+
+    return _client().get(
+        "/analytics/promotion-candidates",
+        params={
+            "model_type": model_type,
+            "min_seed_count": min_seed_count,
+            "limit": limit,
+            "order_by": order_by,
+        },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_evolution_lineage(
+    task_id: str | None = None,
+    experiment_id: str | None = None,
+    model_type: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Query compact task/loop/experiment/run lineage rows."""
+
+    return _client().get(
+        "/analytics/evolution-lineage",
+        params={"task_id": task_id, "experiment_id": experiment_id, "model_type": model_type, "limit": limit},
+    )
+
+
 if __name__ == "__main__":
     mcp.run()

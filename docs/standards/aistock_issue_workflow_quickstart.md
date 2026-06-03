@@ -73,11 +73,27 @@ python scripts/aistock_issue_workflow.py doctor
 
 The `client_manifest` block is machine-readable. If `codex_skill_status` is `stale` or `missing_global`, the current repo CLI remains the source of truth, but older Codex windows may not auto-trigger the latest workflow. After the workflow branch is merged into `main`, run `install-client --apply` and restart old client windows before measuring workflow efficiency.
 
-Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.codegraph/` exists, Context Pack, finish artifacts, and PR Quality artifacts include `code_intelligence` refs such as `codegraph-context.md`, `affected-tests.json`, and `code-intelligence-summary.md`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default. PR Quality publishes these artifacts as warning-only acceleration hints; final validation still comes from AIstock nox / pytest / Validation Center gates.
+Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.codegraph/` exists, Context Pack, finish artifacts, and PR Quality artifacts include `code_intelligence` refs such as `codegraph-context.md`, `affected-tests.json`, and `code-intelligence-summary.md`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default. `doctor` and `postmortem` expose `h7_code_intelligence.readiness_next_command`, usually `codegraph init -i` when the index is missing. Run that command only when the current workflow needs graph context; missing graph data must not block ordinary T0/T1 fixes. PR Quality publishes these artifacts as warning-only acceleration hints; final validation still comes from AIstock nox / pytest / Validation Center gates.
 
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
+
+Stdout defaults to compact success output. A passing workflow command should show only the gate, issue id, branch/worktree or PR pointers, validation/CI counts, production gates, and the next action. Do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, skipped validation maps, or nox internals into chat when the command passed. Use `--output-format full-json` for local debugging, or `--output tmp/issue_workflow/<BUG-ID>/<name>.json` to persist full details as an ignored artifact. Failure output may include the smallest diagnostic signature needed to reproduce or unblock. Registry intake commands must stage only committable BUG registry files, not ignored `tmp/issue_workflow` artifacts.
+
+## Optimized Tool Use Contract
+
+For Codex, Claude Code, Cursor, and other agents, context discovery should be cheap by default:
+
+- Read the workflow output, Context Pack, and `fix-ready.json` before searching code.
+- Use `allowed_write_scope` and `changed_files` as the initial search boundary.
+- Prefer `rg <pattern> <scoped-file-or-dir>` over broad repository scans; broaden only when the scoped search fails or the Context Pack is stale.
+- Do not load archived standards, old design notes, full logs, or module restart plans unless the current BUG explicitly needs that history.
+- Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
+
+Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
+
+GitHub PR Quality now treats the P0/P1 evidence gate as blocking by default, so source fix PRs must provide linked issue context, scope, validation evidence, and production gates before merge. Local `python scripts/issue_flow.py pr-check` still stays warning-only unless `--enforce-p0-p1-evidence` or `AISTOCK_PR_QUALITY_ENFORCE_P0P1=true` is set. Code-intelligence and Semgrep artifacts remain report-only acceleration hints rather than merge blockers.
 ## Fast Path And Smoke Check
 
 Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:
@@ -105,6 +121,22 @@ python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/a
 
 `workflow-smoke` dry-runs the core chain with a synthetic ignored issue record: fast-path -> start dry-run -> finish plan-only -> postmortem preview. It must not create GitHub Issues, PRs, production DB writes, runtime restarts, or tracked root files. A passing smoke check reports `workflow_gate=passed` and `unexpected_dirty_paths=[]`.
 
+Use `nightly-intake-smoke` before changing CI/Nightly failure intake or when validating that auto-filed issues can enter the standard workflow without root pollution:
+
+```powershell
+python scripts/aistock_issue_workflow.py nightly-intake-smoke
+```
+
+`nightly-intake-smoke` builds a synthetic Nightly failure status, writes summary/context/GitHub-issue payload/candidate-history artifacts only under ignored `tmp/validation/nightly_failure_issue/smoke/`, verifies the Agent Handoff contains `triage-ci-issue` and `promote-ci-issue --create-registry-worktree --apply`, and checks `unexpected_dirty_paths=[]`. It does not create GitHub Issues, BUG JSON, PRs, runtime calls, DB writes, or tracked source files.
+
+Use `batch-workflow-smoke` before changing same-module batch handling or when validating that batch issue workflow still produces per-issue context and closure evidence without root pollution:
+
+```powershell
+python scripts/aistock_issue_workflow.py batch-workflow-smoke
+```
+
+`batch-workflow-smoke` uses two synthetic ignored BUG records, runs batch start plus finish in-process, verifies batch state, per-issue Context Packs, fix-ready JSON, PR body closing keywords, per-issue closure map, validation evidence, and `unexpected_dirty_paths=[]`. It does not create GitHub Issues, BUG JSON, PRs, runtime calls, DB writes, or tracked source files.
+
 ## CI / Nightly Failure Intake
 
 Auto-filed CI or Nightly P0/P1 GitHub Issues must contain actionable diagnostics plus an agent handoff. A valid issue body includes:
@@ -127,13 +159,14 @@ The command writes only ignored workflow artifacts under `tmp/issue_workflow/ci-
 - `context-pack.json`
 - `context-pack.md`
 
-If the triage result is a real regression candidate and no BUG JSON is linked yet, promote it from a clean task or registry worktree:
+If the triage result is a real regression candidate and no BUG JSON is linked yet, promote it through a clean registry worktree:
 
 ```powershell
-python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number> --apply
+python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number> --create-registry-worktree --apply
 ```
 
 After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
+Nightly jobs themselves must only write compact issue context, candidate history, and evidence under ignored `tmp/validation/...` artifact paths plus GitHub Issue comments/updates. They must not commit BUG JSON, mutate source files, or write tracked root files.
 
 If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 `infra_flaky`, do not promote it into a code BUG. Follow the returned
@@ -141,6 +174,10 @@ If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 runners, runner API permission failures, or missing
 `AISTOCK_RUNNER_HEALTH_TOKEN`. These issues should restore infrastructure and
 rerun CI/Nightly, not consume a developer window as a code repair.
+Auto-filed infra-only CI/Nightly issues should therefore expose only the
+`triage-ci-issue` entrypoint, `needs_bug_json=false`, and an infra action card.
+They must not present `promote-ci-issue` or `run --bug-id` as the next command
+unless triage later reclassifies the failure as a real code or test regression.
 
 ## Submit Or Register A New BUG
 
@@ -213,6 +250,8 @@ python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktre
 
 Then switch to the returned worktree and read:
 
+- `task_card_md` first, because it is the compact agent-neutral handoff for Codex, Claude Code, Cursor, and CLI clients
+- `task_card_json` when a machine-readable handoff is needed
 - `context_pack_md`
 - `fix_ready_path`
 - `state_path`
@@ -262,7 +301,17 @@ python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 
 Add `--watch-ci` only when the user asked the agent to watch GitHub checks.
 
-Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks missing validation evidence, failed allowed-scope checks, temp/cache artifacts in git status such as `.codex_tmp` or `.coverage`, and changed Python files that fail Ruff when Ruff is available. Fix the issue inside the same task worktree and rerun the command; do not create a PR first and clean it up later with follow-up style/artifact commits.
+Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks missing validation evidence, failed allowed-scope checks, uncommitted task files, temp/cache artifacts in git status such as `.codex_tmp` or `.coverage`, and changed Python files that fail Ruff when Ruff is available. Fix or commit the issue inside the same task worktree and rerun the command; do not create a PR first and clean it up later with follow-up style/artifact commits.
+
+When `--watch-ci` is used, the wrapper polls a compact check summary through `gh pr view --json statusCheckRollup`. Missing or not-yet-started checks are `checks_pending` with retry instructions, not a business failure. Full check JSON should be requested only when a failed check needs diagnosis.
+
+If the first watch exits while checks are still pending, refresh the workflow state with the compact command instead of manually editing `state.json` or requesting the full check rollup:
+
+```powershell
+python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-XXX --pr-url <PR_URL>
+```
+
+When checks pass, `watch-ci` updates the BUG workflow state to `ci_green` and returns `merge_only_if_user_authorized` as the next action.
 
 Do not stop at `validation_passed`. That state means required local evidence exists, but the work is not PR-ready yet. Commit only task files, then run the PR command from the issue worktree. The wrapper blocks PR automation from canonical root or `main` so accidental root pollution cannot become a PR.
 
@@ -303,7 +352,7 @@ python scripts/aistock_issue_workflow.py merge-finalizer `
   --apply
 ```
 
-The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
+The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Retries after GitHub/TLS/CI interruptions must reuse an existing open close-sync PR for the same BUG/source PR instead of appending duplicate registry commits. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
 
 
 ## Cleanup After Merge
@@ -314,7 +363,7 @@ After a PR is merged and close-sync is complete, dry-run cleanup first:
 python scripts/aistock_issue_workflow.py cleanup-after-merge --branch bug/BUG-XXX-scope --worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope --sync-root
 ```
 
-Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, non-equivalent dirty canonical root, or the currently checked-out branch. If the only root dirty files are byte-equivalent to `origin/main` because a previous close-sync wrote the same registry content locally, cleanup records `origin_equivalent_dirty_files` and safely restores those paths from `origin/main` before fast-forwarding. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR and tree equivalence before deleting the local branch:
+Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, non-equivalent dirty canonical root, or the currently checked-out branch. If the only root dirty files are byte-equivalent to `origin/main` because a previous close-sync wrote the same registry content locally, cleanup records `origin_equivalent_dirty_files` and safely restores those paths from `origin/main` before fast-forwarding. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR before deleting the local branch. The verification compares the source head changed paths to the source PR merge commit first, then falls back to current `origin/main`, so later close-sync BUG JSON drift does not force a manual cleanup:
 
 ```powershell
 python scripts/aistock_issue_workflow.py cleanup-after-merge `
@@ -332,7 +381,7 @@ After a PR is created, merged, or a workflow feels slow, generate the postmortem
 python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX
 ```
 
-The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time.
+The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. It also includes `phase_cost_table`, `h6_summary`, and `h7_code_intelligence` so agents can report the top time/token cost and CodeGraph readiness without pasting full JSON. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time. `code_repair_seconds` is reported only when explicit repair events exist; do not invent it from wall-clock gaps.
 
 ## Triage Current P0
 

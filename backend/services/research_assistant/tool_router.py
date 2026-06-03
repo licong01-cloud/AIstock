@@ -23,6 +23,14 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("outbox",), "qe_archive_list_outbox"),
     (McpDomain.QE_WAREHOUSE, ("backfill", "ruku", "louruku", "bulu"), "qe_archive_backfill_preview"),
     (McpDomain.QE_WAREHOUSE, ("source status", "source"), "qe_archive_get_source_status"),
+    (McpDomain.QE_WAREHOUSE, ("view", "views", "analytics view", "available views", "分析视图"), "qe_archive_query_analytics_view_status"),
+    (McpDomain.QE_WAREHOUSE, ("leaderboard", "run leaderboard", "ranking", "best run", "排行榜"), "qe_archive_query_run_leaderboard"),
+    (McpDomain.QE_WAREHOUSE, ("factor performance", "factor footprint", "因子表现"), "qe_archive_query_factor_performance"),
+    (McpDomain.QE_WAREHOUSE, ("model hyperparam", "hyperparam seed", "超参", "seed perf"), "qe_archive_query_model_hyperparam_seed_perf"),
+    (McpDomain.QE_WAREHOUSE, ("seed robustness", "seed stable", "seed stability", "种子鲁棒性", "seed"), "qe_archive_query_seed_robustness"),
+    (McpDomain.QE_WAREHOUSE, ("overfit", "suspicious", "red flag", "过拟合", "红旗"), "qe_archive_query_overfit_flags"),
+    (McpDomain.QE_WAREHOUSE, ("promotion candidate", "promote candidate", "晋升候选", "晋升榜"), "qe_archive_query_promotion_candidates"),
+    (McpDomain.QE_WAREHOUSE, ("lineage", "evolution lineage", "演进血缘", "血缘"), "qe_archive_query_evolution_lineage"),
     (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
     (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),
@@ -53,6 +61,10 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.EXECUTION_POLICY, ("validate", "fit", "suitable", "校验", "适配", "适合"), "execution_policy_validate_for_strategy"),
     (McpDomain.EXECUTION_POLICY, ("bind", "binding", "绑定"), "execution_policy_plan_binding"),
     (McpDomain.EXECUTION_POLICY, ("execution policy list", "minute algo", "执行策略库", "有什么", "有哪些", "可用"), "execution_policy_list_algos"),
+    (McpDomain.EXTERNAL_RESEARCH, ("paper", "papers", "academic", "arxiv", "semantic scholar", "literature", "\u8bba\u6587", "\u5b66\u672f", "\u6587\u732e"), "external_research_search_papers"),
+    (McpDomain.EXTERNAL_RESEARCH, ("fetch", "extract", "url", "\u6b63\u6587", "\u62bd\u53d6"), "external_research_fetch_extract"),
+    (McpDomain.EXTERNAL_RESEARCH, ("save", "evidence", "candidate", "\u4fdd\u5b58", "\u8bc1\u636e", "\u5019\u9009"), "external_research_save_evidence"),
+    (McpDomain.EXTERNAL_RESEARCH, ("web", "search", "external search", "\u7f51\u9875", "\u641c\u7d22", "\u5916\u90e8\u68c0\u7d22"), "external_research_search_web"),
 )
 
 def _norm(text: str) -> str:
@@ -82,6 +94,15 @@ def score_domains(message: str) -> list[dict[str, Any]]:
                 matched.append(term)
         if spec.domain == McpDomain.QE_WAREHOUSE and _contains_any(lower, WAREHOUSE_TERMS):
             score += 8
+        if spec.domain == McpDomain.QE_WAREHOUSE and any(
+            token in lower
+            for token in (
+                "leaderboard", "seed robustness", "promotion candidate", "overfit", "lineage",
+                "hyperparam seed", "factor performance", "analytics view", "排行榜", "种子鲁棒性",
+                "晋升候选", "过拟合", "演进血缘", "分析视图",
+            )
+        ):
+            score += 8
         if spec.domain == McpDomain.LOCAL_DATA and _contains_any(lower, WAREHOUSE_TERMS):
             score -= 6
         if spec.domain == McpDomain.LOCAL_DATA and (
@@ -109,6 +130,26 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             score += 8
         if spec.domain == McpDomain.EXECUTION_POLICY and ("执行策略库" in lower or "执行策略" in lower):
             score += 8
+        if spec.domain == McpDomain.EXTERNAL_RESEARCH and any(
+            token in lower
+            for token in (
+                "external research",
+                "external search",
+                "web search",
+                "paper search",
+                "academic search",
+                "arxiv",
+                "semantic scholar",
+                "literature",
+                "\u5916\u90e8\u7814\u7a76",
+                "\u5916\u90e8\u68c0\u7d22",
+                "\u7f51\u9875\u641c\u7d22",
+                "\u8bba\u6587\u68c0\u7d22",
+                "\u5b66\u672f\u68c0\u7d22",
+                "\u6587\u732e",
+            )
+        ):
+            score += 10
         if score > 0:
             scores.append({"domain": spec.domain, "score": score, "matched_terms": matched})
     scores.sort(key=lambda item: item["score"], reverse=True)
@@ -240,4 +281,8 @@ def route_examples() -> list[tuple[str, McpDomain]]:
         ("is POV suitable for this strategy", McpDomain.EXECUTION_POLICY),
         ("market state constraints for execution", McpDomain.EXECUTION_POLICY),
         ("bind execution policy plan", McpDomain.EXECUTION_POLICY),
+        ("search external research about HMM factor timing", McpDomain.EXTERNAL_RESEARCH),
+        ("paper search for factor decay literature", McpDomain.EXTERNAL_RESEARCH),
+        ("fetch extract from this research URL", McpDomain.EXTERNAL_RESEARCH),
+        ("\u4fdd\u5b58\u5916\u90e8\u8bc1\u636e\u5019\u9009", McpDomain.EXTERNAL_RESEARCH),
     ]

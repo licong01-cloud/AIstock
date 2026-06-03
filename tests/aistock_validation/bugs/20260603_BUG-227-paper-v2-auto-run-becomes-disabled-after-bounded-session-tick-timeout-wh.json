@@ -1,0 +1,82 @@
+{
+  "actual": "At 2026-06-03T09:47+08 scheduler.running=true thread_alive=true and qmt connected=true/mode=SIM/account_id=62266303, but bootstrap auto_run.enabled_portfolio_count=0. Portfolio paper_3bf764d1f95a44dd80e1852d2e87bef0 still has auto_run.enabled=true yet active_sessions=0 and latest session psess_baed8bc473dc4f5dbc56b30b77550446 is FAILED with PAPER_V2_SESSION_TICK_TIMEOUT; context includes stale_worker_completed_at=2026-06-03T01:40:48Z and stale_worker_result_status=LIVE_WAITING_FOR_BAR.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/scheduler.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/auto_run.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "tests/aistock_validation/bugs/20260603_BUG-227-paper-v2-auto-run-becomes-disabled-after-bounded-session-tick-timeout-wh.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/paper_trading_v2/test_session.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-227",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T01:49:00.344906Z",
+  "description": "At 2026-06-03T09:47+08 scheduler.running=true thread_alive=true and qmt connected=true/mode=SIM/account_id=62266303, but bootstrap auto_run.enabled_portfolio_count=0. Portfolio paper_3bf764d1f95a44dd80e1852d2e87bef0 still has auto_run.enabled=true yet active_sessions=0 and latest session psess_baed8bc473dc4f5dbc56b30b77550446 is FAILED with PAPER_V2_SESSION_TICK_TIMEOUT; context includes stale_worker_completed_at=2026-06-03T01:40:48Z and stale_worker_result_status=LIVE_WAITING_FOR_BAR.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-7f993f1cd4c9",
+      "timestamp": "2026-06-03T01:49:00.344902Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex_issue_workflow",
+      "note": "issue_flow.py fix-ready added backend/tests/paper_trading_v2/test_session.py for scheduler timeout regression coverage",
+      "timestamp": "2026-06-03T02:03:22.1002369Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-03 09:47 read-only API evidence: scheduler green, QMT green, enabled_portfolio_count=0, LocalSim auto-run session FAILED with stale_worker_completed_at and stale_worker_result_status=LIVE_WAITING_FOR_BAR."
+  ],
+  "expected": "A bounded session tick timeout must release the scheduler guard without silently removing the portfolio from unattended auto-run. If the worker later completes with a non-terminal waiting state, Paper v2 should reconcile the stale worker result safely or create/recover the next live-only session according to the auto-run policy, with clear diagnostics and no duplicate orders.",
+  "first_seen_at": "2026-06-03T01:49:00.344906Z",
+  "fix_branch": null,
+  "fix_commit": "146c8b543514068566e17a1224447daccbd8b86a",
+  "fixed_at": "2026-06-03T02:50:55.032391Z",
+  "github_issue_number": 622,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/622",
+  "last_seen_at": "2026-06-03T01:49:00.344906Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/626",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/paper-v2/session-scheduler/bootstrap-status, GET /api/v1/paper-v2/session-scheduler/status, GET /api/v1/paper-v2/portfolios/paper_3bf764d1f95a44dd80e1852d2e87bef0/auto-run/status, GET /api/v1/paper-v2/portfolios/paper_3bf764d1f95a44dd80e1852d2e87bef0/errors?limit=3 after a 60s live tick timeout.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 auto-run becomes disabled after bounded session tick timeout while stale worker later completes",
+  "trigger_condition": {
+    "fingerprint": "7f993f1cd4c92e0598d18c15",
+    "source_event_id": "FE-20260603-7f993f1cd4c9"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_session.py backend/tests/paper_trading_v2/test_auto_run.py -q -> 41 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed, ownership mapped=12 unmapped=0 ambiguous=0)",
+    "python -m nox -s l0 -> passed (guardrail blocking=0)",
+    "python -m nox -s paper_v2_backend -> passed (589 passed, 1 skipped, 2 xfailed)",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed (5 sessions successful; data quality WARN legacy ledger mismatches non-blocking)"
+  ],
+  "verification_run_id": null
+}

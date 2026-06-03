@@ -1,0 +1,69 @@
+{
+  "actual": "Static gate l0 on close-sync PR #586 failed although the PR only updates BUG-215 registry JSON. The blocker is TRADING-FALLBACK-001 matching backend/tests/selection_center/test_price_guidance.py:54 because a test function name contains degrades_without_default_price. This is a guardrail false positive: test declarations/names are not trading runtime fallback logic, and the false positive blocks unrelated workflow close-sync PRs. Required fix: keep runtime/backend guardrail protection, but prevent test function names or test-only files from creating new P0 TRADING-FALLBACK findings. Validation: targeted guardrail scan for backend/tests/selection_center/test_price_guidance.py must not block; nox l0 must pass; source PR and close-sync PRs should not be blocked by this false positive.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-216-guardrail-false-positive-scans-test-names-as-trading-fallback.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "backend/tests/test_aistock_guardrail_scan.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-216",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Targeted guardrail scan for backend/tests/selection_center/test_price_guidance.py no longer reports TRADING-FALLBACK-001."
+  ],
+  "created_at": "2026-06-02T12:40:29.685376Z",
+  "description": "Static gate l0 on close-sync PR #586 failed although the PR only updates BUG-215 registry JSON. The blocker is TRADING-FALLBACK-001 matching backend/tests/selection_center/test_price_guidance.py:54 because a test function name contains degrades_without_default_price. This is a guardrail false positive: test declarations/names are not trading runtime fallback logic, and the false positive blocks unrelated workflow close-sync PRs. Required fix: keep runtime/backend guardrail protection, but prevent test function names or test-only files from creating new P0 TRADING-FALLBACK findings. Validation: targeted guardrail scan for backend/tests/selection_center/test_price_guidance.py must not block; nox l0 must pass; source PR and close-sync PRs should not be blocked by this false positive.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-528c55b877aa",
+      "timestamp": "2026-06-02T12:40:29.685371Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-02T12:40:29.685376Z",
+  "fix_branch": null,
+  "fix_commit": "86a87f0e66e137597f04983207ac1ab00c1ff7d6",
+  "fixed_at": "2026-06-02T13:16:17.298904Z",
+  "github_issue_number": 587,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/587",
+  "last_seen_at": "2026-06-02T12:40:29.685376Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/589",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Guardrail false positive scans test names as trading fallback",
+  "trigger_condition": {
+    "fingerprint": "528c55b877aa926baffa79f8",
+    "source_event_id": "FE-20260602-528c55b877aa"
+  },
+  "validation_evidence": [
+    "PR #589 CI -> passed (mergeStateStatus=CLEAN; 16/16 checks success)",
+    "python scripts/aistock_guardrail_scan.py backend/tests/selection_center/test_price_guidance.py --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1 -> passed (findings=0, blocking=0)",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

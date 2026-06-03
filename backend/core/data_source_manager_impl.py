@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
@@ -150,7 +150,7 @@ class DataSourceManager:
                                 amt_vals = _field("amount")
 
                                 rows = []
-                                for dt, o, h, l, c, v, a in zip(
+                                for dt, o, h, low, c, v, a in zip(
                                     date_series,
                                     open_vals,
                                     high_vals,
@@ -164,7 +164,7 @@ class DataSourceManager:
                                             "date": dt.strftime("%Y-%m-%d"),
                                             "open": o,
                                             "high": h,
-                                            "low": l,
+                                            "low": low,
                                             "close": c,
                                             "volume": v,
                                             "amount": a,
@@ -576,7 +576,9 @@ class DataSourceManager:
 
         amount_raw = quote.get("Amount")
         try:
-            amount = float(amount_raw) / 1000 if amount_raw is not None else None
+            # TDX quote Amount is already in yuan; keep it aligned with
+            # the Tushare fallback, which also returns yuan.
+            amount = float(amount_raw) if amount_raw is not None else None
         except (TypeError, ValueError):
             amount = None
 

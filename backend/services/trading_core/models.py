@@ -132,6 +132,9 @@ class Fill(BaseModel):
 
     @model_validator(mode="after")
     def _fill_quantity_board_lot(self) -> "Fill":
+        authority = str((self.metadata or {}).get("authority_source") or "").upper()
+        if authority in {"MINIQMT_TRADE", "MINIQMT_TRADE_AGGREGATE"}:
+            return self
         _validate_board_lot_quantity(self.symbol, self.side, self.quantity, "fill quantity")
         return self
 

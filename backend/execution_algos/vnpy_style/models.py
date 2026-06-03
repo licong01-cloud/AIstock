@@ -7,10 +7,12 @@ Derived from vn.py/vnpy_algotrading AlgoTemplate and algo DTO usage at commit
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
+
+UTC = timezone.utc
 
 
 class VnpyAlgoStatus(str, Enum):

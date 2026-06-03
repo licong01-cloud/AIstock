@@ -212,6 +212,10 @@ def _make_runner(*, gh_available: bool = True, runner_online: bool = False):
             if gh_available:
                 return 0, "github.com\n  X Logged in to github.com as example (token)\n", ""
             return 1, "", "gh: not logged in"
+        if args == ["gh", "auth", "token"]:
+            if gh_available:
+                return 0, "gh-fallback-token\n", ""
+            return 1, "", "gh auth token unavailable"
         if args[:4] == ["gh", "run", "list", "--workflow"]:
             if gh_available:
                 return 0, gh_runs, ""
@@ -261,6 +265,74 @@ def test_platform_health_degrades_without_github_token(tmp_path: Path) -> None:
     assert payload["runner_health"]["state"] == "unavailable"
     assert payload["nightly_summary"]["data_state"] == "unavailable"
     assert "gh_auth_unavailable" in payload["reason_codes"]
+
+
+def test_platform_health_prefers_runner_health_token(tmp_path: Path) -> None:
+    _write_repo_fixture(tmp_path)
+    commands: list[list[str]] = []
+    gh_runners = json.dumps(
+        {
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 1,
+                    "name": "win-runner-1",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Windows",
+                    "labels": [{"name": "self-hosted"}, {"name": "windows"}],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    def runner(args: list[str], cwd: Path, timeout: int):  # noqa: ARG001
+        commands.append(args)
+        if args[:3] == ["git", "rev-parse", "--show-toplevel"]:
+            return 0, str(cwd) + "\n", ""
+        if args == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return 0, "true\n", ""
+        if args == ["git", "branch", "--show-current"]:
+            return 0, "main\n", ""
+        if args == ["git", "rev-parse", "HEAD"]:
+            return 0, "abc1234567890\n", ""
+        if args[:3] == ["git", "status", "--porcelain=v1"]:
+            return 0, "", ""
+        if args[:4] == ["git", "rev-list", "--left-right", "--count"]:
+            return 0, "0\t0\n", ""
+        if args == ["git", "config", "--get", "remote.origin.url"]:
+            return 0, "https://github.com/example/aistock.git\n", ""
+        if args[:3] == ["gh", "api", "repos/example/aistock/actions/runners"]:
+            return 0, gh_runners, ""
+        return 1, "", f"unexpected command: {args}"
+
+    service = ValidationPlatformHealthService(
+        repo_root=tmp_path,
+        env={"AISTOCK_RUNNER_HEALTH_TOKEN": "runner-token"},
+        command_runner=runner,
+    )
+
+    payload = service.runner_health()
+
+    assert payload["github_runner"]["state"] == "healthy"
+    assert payload["github_runner"]["auth_source"] == "env:AISTOCK_RUNNER_HEALTH_TOKEN"
+    assert ["gh", "auth", "status", "--hostname", "github.com"] not in commands
+    assert ["gh", "auth", "token"] not in commands
+
+
+def test_platform_health_uses_gh_auth_token_fallback(tmp_path: Path) -> None:
+    _write_repo_fixture(tmp_path)
+    service = ValidationPlatformHealthService(
+        repo_root=tmp_path,
+        env={},
+        command_runner=_make_runner(gh_available=True, runner_online=True),
+    )
+
+    payload = service.runner_health()
+
+    assert payload["github_runner"]["state"] == "queued"
+    assert payload["github_runner"]["auth_source"] == "gh:auth-token"
 
 
 def test_platform_health_blocks_dirty_repo_without_500(tmp_path: Path) -> None:

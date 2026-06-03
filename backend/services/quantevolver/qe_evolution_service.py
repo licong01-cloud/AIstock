@@ -2769,32 +2769,7 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json->'factor_list' AS factor_list,
-                               config_json->'factor_names' AS factor_names,
-                               config_json->>'model_id' AS model_id,
-                               config_json->>'strategy_id' AS strategy_id,
-                               config_json->>'label_horizon' AS label_horizon,
-                               config_json->>'execution_algo' AS execution_algo,
-                               metrics_json->>'IC' AS ic,
-                               metrics_json->>'ICIR' AS icir,
-                               COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                               COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                               COALESCE(
-                                   metrics_json->>'annualized_return',
-                                   metrics_json->>'excess_return_with_cost_annualized',
-                                   metrics_json#>>'{summary,annualized_return}'
-                               ) AS annualized_return,
-                               COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'excess_return_with_cost_max_drawdown',
-                                   metrics_json#>>'{summary,max_drawdown}'
-                               ) AS max_drawdown,
-                               COALESCE(
-                                   metrics_json->>'information_ratio',
-                                   metrics_json->>'sharpe',
-                                   metrics_json->>'excess_return_with_cost_IR',
-                                   metrics_json#>>'{summary,information_ratio}'
-                               ) AS information_ratio,
+                               config_json, metrics_json,
                                is_sota, status,
                                node_id, experiment_id, created_at, updated_at
                         FROM qe_evolution_loops
@@ -2934,32 +2909,7 @@ class AutoEvolutionScheduler:
                     return None
                 cur.execute("""
                     SELECT loop_id, task_id, loop_index, action_type,
-                           config_json->'factor_list' AS factor_list,
-                           config_json->'factor_names' AS factor_names,
-                           config_json->>'model_id' AS model_id,
-                           config_json->>'strategy_id' AS strategy_id,
-                           config_json->>'label_horizon' AS label_horizon,
-                           config_json->>'execution_algo' AS execution_algo,
-                           metrics_json->>'IC' AS ic,
-                           metrics_json->>'ICIR' AS icir,
-                           COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                           COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           COALESCE(
-                               metrics_json->>'annualized_return',
-                               metrics_json->>'excess_return_with_cost_annualized',
-                               metrics_json#>>'{summary,annualized_return}'
-                           ) AS annualized_return,
-                           COALESCE(
-                               metrics_json->>'max_drawdown',
-                               metrics_json->>'excess_return_with_cost_max_drawdown',
-                               metrics_json#>>'{summary,max_drawdown}'
-                           ) AS max_drawdown,
-                           COALESCE(
-                               metrics_json->>'information_ratio',
-                               metrics_json->>'sharpe',
-                               metrics_json->>'excess_return_with_cost_IR',
-                               metrics_json#>>'{summary,information_ratio}'
-                           ) AS information_ratio,
+                           config_json, metrics_json,
                            is_sota, status,
                            node_id, experiment_id, created_at, updated_at
                     FROM qe_evolution_loops
@@ -5670,15 +5620,18 @@ class AutoEvolutionScheduler:
             requested_seed = runtime_flags.get("random_seed")
             if requested_seed is None and not cfg.backtest_only:
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
+            seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
+            action_type = "ensemble_config" if seed_ensemble else "custom_config"
 
             config_record = {
-                "action_type": "custom_config",
+                "action_type": action_type,
                 "label": loop_config.get("label"),
                 "factor_list": cfg.factor_names,
                 "model_id": cfg.model_id,
                 "strategy_id": cfg.strategy_id,
                 "strategy_params": cfg.build_strategy_params(),
                 "runtime_flags": runtime_flags,
+                "ensemble": seed_ensemble,
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
                 "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
@@ -5733,6 +5686,7 @@ class AutoEvolutionScheduler:
                 "execution_algo_params": cfg.execution_algo_params or {},
                 "runtime_flags": runtime_flags,
                 "random_seed": requested_seed,
+                "ensemble": seed_ensemble,
                 "node_id": effective_node_id,
                 "backtest_only": cfg.backtest_only,
             }
@@ -5740,9 +5694,9 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
+                        UPDATE qe_evolution_loops SET config_json = %s, action_type = %s, updated_at = NOW()
                         WHERE loop_id = %s
-                    """, (json.dumps(config_record), evolution_loop_db_id))
+                    """, (json.dumps(config_record), action_type, evolution_loop_db_id))
                 conn.commit()
 
             # 3. 执行层提交

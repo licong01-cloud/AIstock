@@ -24,8 +24,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from backend.inference_engine import InferenceEngine
-import backend.inference_engine as inference_engine_module
+import backend.inference_engine as inference_engine_module  # noqa: E402
+from backend.inference_engine import InferenceEngine  # noqa: E402
 
 
 def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date) -> list[dict[str, Any]]:
@@ -161,5 +161,29 @@ def main() -> int:
     return 0
 
 
+def _extract_malformed_ts_code_samples(text: str, limit: int = 10) -> list[str]:
+    pattern = re.compile(r"\b\d{6}\.[A-Z]{1,4}\d{4}-\d{2}-\d{2}T[^\s,;\"'\]\)}]+")
+    samples: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(text or ""):
+        value = match.group(0)
+        if value not in seen:
+            samples.append(value)
+            seen.add(value)
+        if len(samples) >= limit:
+            break
+    return samples
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        diagnostic = {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "malformed_ts_code_samples": _extract_malformed_ts_code_samples(str(exc)),
+        }
+        print("AISTOCK_LIVE_INFERENCE_ERROR=" + json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr)
+        raise

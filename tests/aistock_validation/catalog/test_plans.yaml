@@ -327,6 +327,203 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: ra_phase0_baseline
+    title: Research Assistant Phase 0 baseline lock and scaffold gate
+    module: research_assistant
+    level: L0
+    command_key: nox_ra_phase0_baseline
+    nox_session: ra_phase0_baseline
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 600
+    evidence_kinds: [baseline, pytest, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
+  - plan_key: ra_phase1_memory_tree
+    title: Research Assistant Phase 1 L1 memory tree gate
+    module: research_assistant.memory_tree
+    level: L1
+    command_key: nox_ra_phase1_memory_tree
+    nox_session: ra_phase1_memory_tree
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, ddl_gate, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
+  - plan_key: ra_phase2_graph_context
+    title: Research Assistant Phase 2 graph context injection gate
+    module: research_assistant.graph_context
+    level: L1
+    command_key: nox_ra_phase2_graph_context
+    nox_session: ra_phase2_graph_context
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
+  - plan_key: ra_phase3_react_grounding
+    title: Research Assistant Phase 3 ReAct tool grounding gate
+    module: research_assistant.react_grounding
+    level: L2
+    command_key: nox_ra_phase3_react_grounding
+    nox_session: ra_phase3_react_grounding
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
+  - plan_key: ra_phase4_external_research
+    title: Research Assistant Phase 4 external research gate
+    module: research_assistant.external_research
+    level: L2.5
+    command_key: nox_ra_phase4_external_research
+    nox_session: ra_phase4_external_research
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, mcp_schema_smoke, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
+  - plan_key: ra_phase5_agent_teams
+    title: Research Assistant Phase 5 agent teams gate
+    module: research_assistant.agent_teams
+    level: L3
+    command_key: nox_ra_phase5_agent_teams
+    nox_session: ra_phase5_agent_teams
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    runner_enabled_l3_exception: workspace_scoped_design_gate
+    max_duration_seconds: 1200
+    evidence_kinds: [pytest, ddl_idempotency, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate]
+    resource_policy:
+      resource_mode: readonly
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      ddl_idempotency_real_postgres: true
+      production_ddl_gate: required_pending_user_approval
+  - plan_key: ra_phase6_qe_autonomy
+    title: Research Assistant Phase 6 QE autonomy gate
+    module: research_assistant.qe_autonomy
+    level: L4
+    command_key: nox_ra_phase6_qe_autonomy
+    nox_session: ra_phase6_qe_autonomy
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    runner_enabled_l3_exception: workspace_scoped_design_gate
+    max_duration_seconds: 1500
+    evidence_kinds: [pytest, ddl_idempotency, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 1500
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/research_assistant/20260602_ra_phase6_qe_autonomy_validation.md]
+      required_fields: [validation_run_id, final_head_commit, g1_local, g1_central, production_ddl_gate]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 6000
+    resource_policy:
+      resource_mode: readonly
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      ddl_idempotency_real_postgres: true
+      production_ddl_gate: required_pending_user_approval
+  - plan_key: ra_phase7_full_accept
+    title: Research Assistant Phase 7 frontend integration and full acceptance gate
+    module: research_assistant
+    level: L4
+    command_key: nox_ra_phase7_full_accept
+    nox_session: ra_phase7_full_accept
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: [8011, 8012]
+    allowed_frontend_ports: [3011, 3012]
+    forbidden_ports: [8001, 3000, 19080]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    runner_enabled_l3_exception: workspace_scoped_design_gate
+    max_duration_seconds: 2400
+    evidence_kinds: [pytest, lint, build, playwright, crosscheck, catalog_integrity, ownership]
+    mock_api_used: true
+    manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate, live_smoke_boundary]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 2400
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_validation.md]
+      required_fields: [validation_run_id, final_head_commit, g1_local, g1_central, cr_p7, phase7_crosscheck, production_gates]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 8000
+    resource_policy:
+      resource_mode: readonly
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      forbidden_ports: [8001, 3000, 19080]
+      production_ddl_gate: required_pending_user_approval
+      live_playwright_smoke_in_automatic_gate: false
+      production_8001_touched: false
+    automatic_gate_boundary:
+      - Backend coverage uses pytest/TestClient only; no live production backend.
+      - Frontend coverage uses Playwright route mocks on 3011/3012 and never calls 8001.
+      - The manual 600584 live smoke is read-only, user-started, and excluded from G1-central.
   - plan_key: research_assistant_backend
     title: Research Assistant Console backend and schema tests
     module: research_assistant

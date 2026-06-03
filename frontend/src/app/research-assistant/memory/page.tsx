@@ -6,6 +6,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState, formatDateTime } from "@/components/research-assistant/AssistantShared";
+import { MemoryTreeView } from "@/components/research-assistant/MemoryTreeView";
 import { researchAssistantApi, type AssistantContextPack, type AssistantMemory } from "@/lib/research-assistant/api";
 
 const MEMORY_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION";
@@ -79,6 +80,7 @@ export default function ResearchAssistantMemoryPage() {
     <main>
       <ApiErrorBox error={error} />
       <ApiErrorBox error={actionError} title="记忆操作失败" />
+      <MemoryTreeView items={memories} packs={packs} />
       <SectionCard title="Memory Ledger" eyebrow="source of truth">
         <div className="pv2-form-grid pv2-filter-card">
           <label className="pv2-field" htmlFor="ra-memory-title"><span>标题</span><input className="pv2-input" id="ra-memory-title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>

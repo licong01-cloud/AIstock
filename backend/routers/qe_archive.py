@@ -382,3 +382,136 @@ def query_qe_archive_hyperparams(
         "status": "success",
         "data": get_repository().query_hyperparam_history(model_type=model_type, param_key=param_key, limit=limit),
     }
+
+
+@router.get("/analytics/views", summary="QE archive analytics view availability")
+def query_qe_archive_analytics_view_status():
+    return {"status": "success", "data": get_repository().get_analytics_view_status()}
+
+
+@router.get("/analytics/run-leaderboard", summary="QE archive run leaderboard analytics")
+def query_qe_archive_run_leaderboard(
+    model_type: str | None = Query(None),
+    min_icir: float | None = Query(None),
+    min_ir: float | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    order_by: str = Query("cagr"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_run_leaderboard(
+            model_type=model_type,
+            min_icir=min_icir,
+            min_ir=min_ir,
+            limit=limit,
+            order_by=order_by,
+        ),
+    }
+
+
+@router.get("/analytics/seed-robustness", summary="QE archive seed robustness analytics")
+def query_qe_archive_seed_robustness(
+    model_type: str | None = Query(None),
+    min_seed_count: int = Query(2, ge=1, le=1000),
+    stable_only: bool = Query(False),
+    limit: int = Query(20, ge=1, le=100),
+    order_by: str = Query("cagr_mean"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_seed_robustness(
+            model_type=model_type,
+            min_seed_count=min_seed_count,
+            stable_only=stable_only,
+            limit=limit,
+            order_by=order_by,
+        ),
+    }
+
+
+@router.get("/analytics/factor-performance", summary="QE archive factor performance analytics")
+def query_qe_archive_factor_performance(
+    factor_name: str | None = Query(None),
+    min_runs: int = Query(1, ge=1, le=1000),
+    limit: int = Query(20, ge=1, le=100),
+    order_by: str = Query("best_cagr"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_factor_performance(
+            factor_name=factor_name,
+            min_runs=min_runs,
+            limit=limit,
+            order_by=order_by,
+        ),
+    }
+
+
+@router.get("/analytics/model-hyperparam-seed-perf", summary="QE archive model hyperparameter seed analytics")
+def query_qe_archive_model_hyperparam_seed_perf(
+    model_type: str | None = Query(None),
+    hyperparam_hash: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    order_by: str = Query("cagr"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_model_hyperparam_seed_perf(
+            model_type=model_type,
+            hyperparam_hash=hyperparam_hash,
+            limit=limit,
+            order_by=order_by,
+        ),
+    }
+
+
+@router.get("/analytics/overfit-flags", summary="QE archive overfit flag analytics")
+def query_qe_archive_overfit_flags(
+    suspicious_only: bool = Query(True),
+    model_type: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_overfit_flags(
+            suspicious_only=suspicious_only,
+            model_type=model_type,
+            limit=limit,
+        ),
+    }
+
+
+@router.get("/analytics/promotion-candidates", summary="QE archive promotion candidate analytics")
+def query_qe_archive_promotion_candidates(
+    model_type: str | None = Query(None),
+    min_seed_count: int = Query(5, ge=1, le=1000),
+    limit: int = Query(20, ge=1, le=100),
+    order_by: str = Query("cagr_mean"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_promotion_candidates(
+            model_type=model_type,
+            min_seed_count=min_seed_count,
+            limit=limit,
+            order_by=order_by,
+        ),
+    }
+
+
+@router.get("/analytics/evolution-lineage", summary="QE archive evolution lineage analytics")
+def query_qe_archive_evolution_lineage(
+    task_id: str | None = Query(None),
+    experiment_id: str | None = Query(None),
+    model_type: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_evolution_lineage(
+            task_id=task_id,
+            experiment_id=experiment_id,
+            model_type=model_type,
+            limit=limit,
+        ),
+    }

@@ -37,7 +37,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_mcp_skill_execution_v1_20260525"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_memory_tree_v1_20260601"
     for table in {
         "research_agent_tasks",
         "agent_task_events",

@@ -63,12 +63,15 @@ export type AssistantMemory = JsonObject & {
   memory_type?: string;
   namespace?: string;
   subject_key?: string;
+  tree_path?: string | null;
+  parent_key?: string | null;
+  scope?: string | null;
   title?: string;
   content_text?: string;
   approval_status?: string;
   risk_level?: string;
   source_ref?: string | null;
-  evidence_refs?: string[];
+  evidence_refs?: Array<string | AssistantEvidenceRef>;
   updated_at?: string;
 };
 
@@ -79,6 +82,42 @@ export type AssistantContextPack = JsonObject & {
   token_budget?: number;
   checksum?: string;
   pack_json?: JsonObject;
+};
+
+export type AssistantEvidenceRef = JsonObject & {
+  source?: string;
+  provenance?: JsonObject;
+  as_of?: string;
+  source_ref?: string;
+  confidence?: number;
+  trade_date?: string;
+  report_period?: string;
+};
+
+export type AssistantEvidenceCard = JsonObject & {
+  card_id: string;
+  title: string;
+  summary: string;
+  evidence_refs: AssistantEvidenceRef[];
+  status: "supported" | "insufficient" | "blocked" | string;
+};
+
+export type AssistantBlockerCard = JsonObject & {
+  blocker_id: string;
+  status: "blocked" | "approval_required" | "high_risk_pending" | string;
+  reason: string;
+  next_step: string;
+  provenance?: JsonObject;
+  as_of?: string;
+};
+
+export type AssistantMemoryTreeNode = JsonObject & {
+  node_id: string;
+  tree_path: string;
+  title: string;
+  memory_ids: string[];
+  children: AssistantMemoryTreeNode[];
+  evidence_refs: AssistantEvidenceRef[];
 };
 
 export type AssistantMcpServer = JsonObject & {
@@ -461,6 +500,20 @@ export type AssistantTraceEvent = JsonObject & {
   created_at?: string;
 };
 
+export type AssistantAgentRun = JsonObject & {
+  agent_run_id: string;
+  parent_task_id?: string;
+  agent_key?: string;
+  role?: string;
+  status?: string;
+  model_profile_id?: string;
+  trace_id?: string;
+  input_json?: JsonObject;
+  result_json?: JsonObject;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AssistantReport = JsonObject & {
   report_id: string;
   report_type?: string;
@@ -667,6 +720,12 @@ export const researchAssistantApi = {
   },
   addTaskEvent(taskId: string, payload: JsonObject): Promise<AssistantTaskEvent> {
     return post<AssistantTaskEvent>(`/research-assistant/tasks/${encodeURIComponent(taskId)}/events`, payload);
+  },
+  agentRuns(params: { parent_task_id?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantAgentRun>> {
+    return unwrap<AssistantPage<AssistantAgentRun>>(appendQuery("/research-assistant/agent-runs", { limit: 100, ...params }));
+  },
+  agentRun(agentRunId: string): Promise<AssistantAgentRun> {
+    return unwrap<AssistantAgentRun>(`/research-assistant/agent-runs/${encodeURIComponent(agentRunId)}`);
   },
   memories(params: { namespace?: string; memory_type?: string; approval_status?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantMemory>> {
     return unwrap<AssistantPage<AssistantMemory>>(appendQuery("/research-assistant/memories", { limit: 50, ...params }));

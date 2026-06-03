@@ -1,0 +1,32 @@
+nox > Running session ra_phase3_react_grounding
+nox > git diff --check
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe -m py_compile backend/services/research_assistant/react_grounding.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_tool_catalog_gate.py backend/tests/research_assistant/test_evidence_guard.py backend/tests/research_assistant/test_reflexion_retry.py backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py backend/tests/research_assistant/test_core_no_adapter_import.py backend/tests/research_assistant/test_service.py
+nox > python -m pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_tool_catalog_gate.py backend/tests/research_assistant/test_evidence_guard.py backend/tests/research_assistant/test_reflexion_retry.py backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py backend/tests/research_assistant/test_core_no_adapter_import.py backend/tests/research_assistant/test_service.py -q -p no:cacheprovider
+.......................................................                  [100%]
+55 passed in 13.75s
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/catalog/ra_phase3_react_grounding_integrity.json --fail-on-warning
+{
+  "schema_version": "aistock_validation_catalog_integrity_v1",
+  "generated_at": "2026-06-01T06:52:51.508982+00:00",
+  "repo_root": "F:\\Dev\\AIstock_worktrees\\ra-react-grounding-20260601",
+  "state": "passed",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0,
+    "finding_count": 0,
+    "plans": 41,
+    "runner_enabled_plans": 24,
+    "modules": 74,
+    "ui_targets": 50,
+    "file_ownership_rules": 65,
+    "resource_policies": 9,
+    "nox_sessions": 52,
+    "workflow_nox_sessions": 15,
+    "production_8001_touched": false,
+    "production_db_touched": false
+  },
+  "findings": []
+}
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_module_ownership_scan.py --output-json tmp/validation/module_ownership/ra_phase3_react_grounding_paths.json --summary-md tmp/validation/module_ownership/ra_phase3_react_grounding_paths.md --fail-on-unmapped --fail-on-ambiguous backend/services/research_assistant/react_grounding.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_tool_catalog_gate.py backend/tests/research_assistant/test_evidence_guard.py backend/tests/research_assistant/test_reflexion_retry.py backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py backend/tests/research_assistant/test_core_no_adapter_import.py backend/tests/research_assistant/test_service.py configs/research_assistant/runtime_context.yaml docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md tests/aistock_validation/history/research_assistant/20260601_ra_phase3_react_grounding_validation.md tests/aistock_validation/catalog/test_plans.yaml tests/aistock_validation/catalog/module_registry.yaml tests/aistock_validation/catalog/file_ownership.yaml backend/services/validation/plan_catalog.py noxfile.py
+Module ownership scan completed: files=17, mapped=17, unmapped=0, ambiguous=0
+nox > Session ra_phase3_react_grounding was successful in 16 seconds.

@@ -480,6 +480,67 @@ def test_strategy_package_repository_rejects_silent_manifest_replacement() -> No
         repo.save_manifest(changed)
 
 
+def test_postgres_repository_recovers_duplicate_source_version_race(monkeypatch) -> None:
+    repo = StrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_id": "pkg_existing",
+                "package_name": "existing",
+            }
+        )
+    )
+    existing = manifest_to_record(manifest)
+    duplicate = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_id": "pkg_duplicate",
+                "package_name": "duplicate",
+                "package_version": manifest.package_version,
+                "source": manifest.source,
+            }
+        )
+    )
+    find_calls = 0
+
+    def fake_find_by_source_version(**kwargs):
+        nonlocal find_calls
+        find_calls += 1
+        return None if find_calls == 1 else existing
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            if "INSERT INTO strategy_pkg.package (" in sql:
+                raise psycopg2.errors.UniqueViolation("duplicate source version")
+
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor()
+
+    monkeypatch.setattr(repo, "find_by_source_version", fake_find_by_source_version)
+    monkeypatch.setattr(repo, "_conn_factory", lambda: Conn())
+
+    saved_again = repo.save_manifest(duplicate)
+
+    assert saved_again.package_id == existing.package_id
+    assert find_calls == 2
+
+
 def test_strategy_package_execution_policy_requires_backtest_contract_and_hash() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))

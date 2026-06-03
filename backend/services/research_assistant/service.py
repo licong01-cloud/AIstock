@@ -13,6 +13,7 @@ import os
 import re
 import hashlib
 import subprocess
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from datetime import date
@@ -23,7 +24,11 @@ from typing import Any
 import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
+from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
 from .execution import ResearchAssistantExecutionMixin
+from .graph_context import expand_neighbors
+from .memory_curator import CuratorResult, MemoryCurator
+from .memory_tree import select_memory_branches
 from .models import (
     ActionProposalCreate,
     ActionProposalExecuteRequest,
@@ -55,6 +60,15 @@ from .models import (
     sha256_json,
     utc_now,
 )
+from .react_grounding import (
+    McpToolCall,
+    McpToolResult,
+    ModelTurn,
+    ReactGroundingConfig,
+    ToolCatalogEntry,
+    ToolGateDecision,
+    run_react_grounding_loop,
+)
 from .prompt_pack import (
     DEFAULT_PROMPT_PACK_PATH,
     PromptPackSnapshot,
@@ -65,6 +79,326 @@ from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, 
 from .domain_ontology import domain_prompt_key
 from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
+from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
+from .agent_teams.models import WorkerTask
+from .qe_autonomy import AutonomousEvolutionProviders, AutonomousEvolutionRuntime, request_from_mapping
+from .qe_autonomy.adapter import QeAutonomyAdapter, ResearchAssistantQeAutonomyRunStore
+
+
+class _ServiceAgentRunStore:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def queue_run(self, task: WorkerTask, *, agent_run_id: str, model_profile_id: str | None, trace_id: str | None) -> None:
+        self.service.repository.create_record(
+            "agent_runs",
+            {
+                "agent_run_id": agent_run_id,
+                "parent_task_id": task.parent_task_id,
+                "agent_key": task.agent_key,
+                "role": task.role,
+                "status": "queued",
+                "input_json": task.input_json,
+                "result_json": {},
+                "model_profile_id": model_profile_id,
+                "trace_id": trace_id,
+            },
+        )
+
+    def finish_run(self, result: WorkerRunResult) -> None:
+        status = "succeeded" if result.status == "succeeded" else "failed"
+        self.service.repository.update_record(
+            "agent_runs",
+            result.agent_run_id,
+            {
+                "status": status,
+                "result_json": result.as_reduce_item(),
+                "trace_id": result.trace_id,
+            },
+        )
+
+
+class _ServiceAgentContextProvider:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def build_for_worker(self, task: WorkerTask, agent: Any) -> dict[str, Any]:
+        return self.service.build_context_pack(
+            ContextPackBuildRequest(
+                task_id=task.parent_task_id,
+                agent_id=task.agent_key,
+                model_profile=agent.model_role,
+                user_message=task.objective,
+                token_budget=1800,
+            )
+        )
+
+
+class _ServiceAgentCatalogProvider:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def entries_for_worker(self, agent: Any) -> list[ToolCatalogEntry]:
+        all_entries = self.service._react_tool_catalog_entries()
+        allowed = agent.allowed_tool_pairs()
+        return [entry for entry in all_entries if (entry.server_key, entry.tool_name) in allowed]
+
+
+class _ServiceAgentWorkerExecutor:
+    def __init__(self, service: Any, *, user_message: str) -> None:
+        self.service = service
+        self.user_message = user_message
+
+    def run_worker(self, task: WorkerTask, agent: Any, context_pack: dict[str, Any], catalog_entries: list[ToolCatalogEntry]) -> WorkerRunResult:
+        cards: dict[str, Any] = {"agent_key": task.agent_key, "action_proposals": []}
+        if task.agent_key == "qe_experiment_designer" and isinstance(task.input_json.get("qe_autonomy_request"), dict):
+            report = self.service.run_qe_autonomous_evolution(dict(task.input_json["qe_autonomy_request"]))
+            report_dict = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+            status = "failed" if report_dict.get("status") == "failed" else "succeeded"
+            evidence_refs = tuple(sorted(str(ref) for ref in report_dict.get("evidence_refs", []) or ["qe_autonomy_report"]))
+            return WorkerRunResult(
+                agent_run_id="service_runtime_pending",
+                parent_task_id=task.parent_task_id,
+                agent_key=task.agent_key,
+                role=task.role,
+                status=status,
+                task_order=task.task_order,
+                summary=f"QE autonomy {report_dict.get('status')}: {report_dict.get('stop_reason')}",
+                artifacts=tuple(str(ref) for ref in report_dict.get("artifact_refs", []) or []),
+                evidence_refs=evidence_refs,
+                result_json={"autonomy_report": report_dict, "worker_consumed_autonomy": True},
+                context_pack_id=str(context_pack.get("context_pack_id") or ""),
+            )
+        provider = _ServiceReactMcpProvider(
+            service=self.service,
+            conversation_id=str(task.input_json.get("conversation_id") or "agent_team"),
+            task={"task_id": task.parent_task_id},
+            context_pack=context_pack,
+            cards=cards,
+            user_message=self.user_message,
+        )
+        def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+            context_summary = json.dumps(
+                {
+                    "agent_key": task.agent_key,
+                    "context_pack_id": context_pack.get("context_pack_id"),
+                    "route_reason": (context_pack.get("pack_json") or {}).get("route_reason"),
+                    "graph_relation_refs": (context_pack.get("pack_json") or {}).get("graph_relation_refs", [])[:3],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            return ModelTurn(
+                content=f"{task.agent_key} completed with isolated context; source=agent_team_context as_of={utc_now().date().isoformat()} {context_summary}",
+                provider="agent_team_worker",
+                model=agent.model_role,
+                duration_ms=0,
+                usage={},
+            )
+        result = run_react_grounding_loop(
+            messages=[
+                {"role": "system", "content": f"Agent Team worker {task.agent_key}; allowed_tools={sorted(agent.allowed_tool_pairs())}"},
+                {"role": "user", "content": task.objective},
+            ],
+            model_complete=model_complete,
+            mcp_provider=provider,
+            catalog_entries=catalog_entries,
+            config=ReactGroundingConfig(max_tool_iterations=agent.max_tool_iterations, evidence_required=True),
+        )
+        status = "succeeded" if result.evidence_guard.allowed else "failed"
+        return WorkerRunResult(
+            agent_run_id="service_runtime_pending",
+            parent_task_id=task.parent_task_id,
+            agent_key=task.agent_key,
+            role=task.role,
+            status=status,
+            task_order=task.task_order,
+            summary=result.final_text,
+            artifacts=tuple(str(ref) for tool_result in result.tool_results for ref in tool_result.artifact_refs),
+            evidence_refs=tuple(sorted({ref for tool_result in result.tool_results for ref in tool_result.source_refs} | {"agent_team_context"})),
+            result_json={"react_stopped_reason": result.stopped_reason, "tool_result_count": len(result.tool_results), "cards": cards},
+            context_pack_id=str(context_pack.get("context_pack_id") or ""),
+        )
+
+
+class _ServiceAgentCurator:
+    def create_candidates(self, parent_task_id: str, reduce_json: dict[str, Any]) -> list[dict[str, Any]]:
+        evidence_refs = reduce_json.get("evidence_refs") if isinstance(reduce_json.get("evidence_refs"), list) else []
+        if not evidence_refs:
+            return []
+        return [
+            {
+                "memory_type": "analysis_note",
+                "tree_path": "personal.task.agent_team_progress",
+                "approval_status": "draft",
+                "content_text": str(reduce_json.get("assistant_text") or ""),
+                "provenance_json": {"parent_task_id": parent_task_id, "source": "agent_team_reduce", "evidence_refs": evidence_refs},
+            }
+        ]
+
+
+class _ServiceReactMcpProvider:
+    def __init__(
+        self,
+        *,
+        service: Any,
+        conversation_id: str,
+        task: dict[str, Any],
+        context_pack: dict[str, Any],
+        cards: dict[str, Any],
+        user_message: str,
+    ) -> None:
+        self.service = service
+        self.conversation_id = conversation_id
+        self.task = task
+        self.context_pack = context_pack
+        self.cards = cards
+        self.user_message = user_message
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+        capability_key = self.service._capability_key_for_tool(call, route)
+        payload = dict(call.payload_json)
+        payload.setdefault("request", self.user_message)
+        payload.setdefault("route", route)
+        payload.setdefault("mcp_route_decision", route)
+        payload.setdefault("limit", 20)
+        proposal = self.service.create_action_proposal(
+            ActionProposalCreate(
+                task_id=self.task["task_id"],
+                conversation_id=self.conversation_id,
+                capability_key=capability_key,
+                proposal_type="mcp_tool",
+                title=f"Summary-first MCP read: {call.server_key}/{call.tool_name}",
+                summary=f"Auto-execute low-risk read-only MCP summary for route {call.server_key}/{call.tool_name}.",
+                input_json=payload,
+                expected_result_json={"summary_first": True, "server_key": call.server_key, "tool_name": call.tool_name},
+                context_pack_id=self.context_pack.get("context_pack_id"),
+                idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_read": call.server_key, "tool_name": call.tool_name, "payload": payload}),
+                created_by="research_assistant_react_grounding",
+            )
+        )
+        preflight = self.service.preflight_action_proposal(
+            proposal["action_proposal_id"],
+            ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+        )
+        if preflight["proposal"]["status"] != "preflight_passed":
+            result = McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="preflight_blocked",
+                summary="read-only preflight did not pass",
+                source_refs=["preflight"],
+                as_of=utc_now().date().isoformat(),
+                action_proposal_id=proposal["action_proposal_id"],
+                preflight=preflight["preflight"],
+                executed=False,
+                blocked_reason="preflight_blocked",
+            )
+            self.cards["mcp_execution_result"] = {
+                "auto_executed": False,
+                "status": "preflight_blocked",
+                "route": f"{call.server_key}/{call.tool_name}",
+                "server_key": call.server_key,
+                "tool_name": call.tool_name,
+                "action_proposal_id": proposal["action_proposal_id"],
+                "preflight": preflight["preflight"],
+                "summary_first": True,
+            }
+            return result
+        executed = self.service.execute_action_proposal(
+            proposal["action_proposal_id"],
+            ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+        )
+        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
+        result = McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status=str(executed.get("status") or "unknown"),
+            payload_json=summary_result,
+            source_refs=[str(summary_result.get("source") or "mcp_tool_event")],
+            as_of=utc_now().date().isoformat(),
+            artifact_refs=list(summary_result.get("artifact_refs") or tool_event.get("artifact_refs") or []),
+            summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
+            tool_event_id=tool_event.get("tool_event_id"),
+            action_proposal_id=proposal["action_proposal_id"],
+            preflight=preflight["preflight"],
+            executed=bool(executed.get("executed")),
+            error_json=dict(executed.get("error") or {}),
+        )
+        self.service._populate_cards_from_tool_execution(self.cards, proposal, executed, result)
+        return result
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+        capability_key = self.service._capability_key_for_tool(call, route)
+        payload = dict(call.payload_json)
+        payload.setdefault("request", self.user_message)
+        payload.setdefault("route", route)
+        payload.setdefault("mcp_route_decision", route)
+        proposal = self.service.create_action_proposal(
+            ActionProposalCreate(
+                task_id=self.task["task_id"],
+                conversation_id=self.conversation_id,
+                capability_key=capability_key,
+                proposal_type="mcp_tool",
+                title=f"Preflight MCP action: {call.server_key}/{call.tool_name}",
+                summary=f"Generate preflight and confirmation card for {call.server_key}/{call.tool_name}; ReAct will not execute write/high-risk tools.",
+                input_json=payload,
+                expected_result_json={"preflight_only": True, "server_key": call.server_key, "tool_name": call.tool_name},
+                context_pack_id=self.context_pack.get("context_pack_id"),
+                idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_preflight": call.server_key, "tool_name": call.tool_name, "payload": payload}),
+                created_by="research_assistant_react_grounding",
+            )
+        )
+        try:
+            preflight = self.service.preflight_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+        except Exception as exc:
+            preflight = {"proposal": proposal, "preflight": {"passed": False, "approval_required": True, "failed_checks": [{"check": "preflight", "detail": str(exc)}]}}
+        proposal_state = preflight.get("proposal") if isinstance(preflight.get("proposal"), dict) else proposal
+        preflight_payload = preflight.get("preflight") if isinstance(preflight.get("preflight"), dict) else {}
+        status = str(proposal_state.get("status") or "preflight_required")
+        self.cards.setdefault("action_proposals", [])
+        self.cards["action_proposals"].append(
+            {
+                "title": proposal["title"],
+                "risk": decision.risk_level,
+                "approval_required": True,
+                "status": status,
+                "action_proposal_id": proposal["action_proposal_id"],
+                "route": f"{call.server_key}/{call.tool_name}",
+                "required_confirmations": (decision.catalog_entry.required_confirmations if decision.catalog_entry else ()),
+            }
+        )
+        self.cards["mcp_execution_result"] = {
+            "auto_executed": False,
+            "executed": False,
+            "status": status if status in {"approval_required", "preflight_failed"} else "preflight_required",
+            "route": f"{call.server_key}/{call.tool_name}",
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "action_proposal_id": proposal["action_proposal_id"],
+            "preflight": preflight_payload,
+            "summary_first": True,
+        }
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status=self.cards["mcp_execution_result"]["status"],
+            payload_json={"preflight_only": True},
+            source_refs=["preflight"],
+            as_of=utc_now().date().isoformat(),
+            summary="preflight confirmation card generated; write/high-risk execution was not called",
+            action_proposal_id=proposal["action_proposal_id"],
+            preflight=preflight_payload,
+            executed=False,
+            blocked_reason="preflight_confirmation_required",
+        )
+
 
 
 logger = logging.getLogger("aistock.research_assistant.service")
@@ -128,6 +462,7 @@ class DialogueIntent(str, Enum):
     MODEL_REGISTRY_REQUEST = "model_registry_request"
     STRATEGY_GOVERNANCE_REQUEST = "strategy_governance_request"
     EXECUTION_POLICY_REQUEST = "execution_policy_request"
+    EXTERNAL_RESEARCH_REQUEST = "external_research_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
     AUDIT_REQUEST = "audit_request"
@@ -591,6 +926,82 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.llm_client = llm_client or ResearchAssistantLlmClient()
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
+
+
+    def run_agent_team(
+        self,
+        *,
+        parent_task_id: str,
+        objective: str,
+        requested_agent_keys: list[str] | None = None,
+        worker_inputs: dict[str, dict[str, object]] | None = None,
+        qe_autonomy_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        config = load_agent_teams_config(REPO_ROOT / "configs/research_assistant/agent_teams.yaml")
+        runtime = AgentTeamsRuntime(
+            config=config,
+            providers=AgentTeamsRuntimeProviders(
+                run_store=_ServiceAgentRunStore(self),
+                context_provider=_ServiceAgentContextProvider(self),
+                worker_executor=_ServiceAgentWorkerExecutor(self, user_message=objective),
+                tool_catalog_provider=_ServiceAgentCatalogProvider(self),
+                curator=_ServiceAgentCurator(),
+            ),
+            id_factory=lambda task: new_id(f"aar_{task.task_order:03d}_{task.agent_key}"),
+        )
+        merged_worker_inputs: dict[str, dict[str, object]] = {key: dict(value) for key, value in (worker_inputs or {}).items()}
+        if qe_autonomy_request is not None:
+            merged_worker_inputs.setdefault("qe_experiment_designer", {})["qe_autonomy_request"] = dict(qe_autonomy_request)
+        result = runtime.run(
+            parent_task_id=parent_task_id,
+            objective=objective,
+            requested_agent_keys=requested_agent_keys,
+            worker_inputs=merged_worker_inputs,
+        )
+        for candidate in result.memory_candidates:
+            if not candidate.get("provenance_json"):
+                continue
+            self.create_memory(MemoryCreate(
+                memory_type=str(candidate.get("memory_type") or "analysis_note"),
+                namespace="personal",
+                subject_key=str(candidate.get("tree_path") or "personal.task.agent_team_progress"),
+                title="Agent Teams progress candidate",
+                content_text=str(candidate.get("content_text") or ""),
+                content_json={"source": "agent_team_reduce"},
+                evidence_refs=list((candidate.get("provenance_json") or {}).get("evidence_refs") or []),
+                approval_status="draft",
+                tree_path=str(candidate.get("tree_path") or "personal.task.agent_team_progress"),
+                scope="personal",
+                node_type="fact",
+                provenance_json=dict(candidate.get("provenance_json") or {}),
+                trust_level="assistant_inferred",
+            ))
+        return {
+            "schema_version": "research_assistant_agent_team_result_v1",
+            "parent_task_id": result.parent_task_id,
+            "status": result.status,
+            "assistant_text": result.assistant_text,
+            "reduce_json": result.reduce_json,
+            "worker_results": [item.as_reduce_item() for item in result.worker_results],
+            "memory_candidates": list(result.memory_candidates),
+            "trace": list(result.trace),
+        }
+
+    def run_qe_autonomous_evolution(self, request_payload: dict[str, Any]) -> Any:
+        request = request_from_mapping(request_payload)
+        adapter = QeAutonomyAdapter()
+        runtime = AutonomousEvolutionRuntime(
+            providers=AutonomousEvolutionProviders(
+                run_store=ResearchAssistantQeAutonomyRunStore(self.repository),
+                loop_executor=adapter,
+                evaluator=adapter,
+                direction_decider=adapter,
+                config_generator=adapter,
+                submitter=adapter,
+            ),
+            id_factory=lambda prefix, stable_key: new_id(f"{prefix}_{stable_key}"),
+        )
+        return runtime.autonomous_evolve(request)
 
     def runtime_code_visibility(self) -> dict[str, Any]:
         current_commit = _git_output(["rev-parse", "HEAD"])
@@ -1428,6 +1839,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.MODEL_REGISTRY_REQUEST,
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
+            DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
         }:
             mode = DialogueMode.PLANNING
             reason = "explicit_task_request"
@@ -1650,6 +2062,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
+        route_decision = route_request(data.message)
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -1682,6 +2095,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 agent_id="research_assistant_primary",
                 model_profile=model_profile["model_profile_id"],
                 token_budget=preliminary_budget.context_pack_budget_tokens,
+                user_message=data.message,
+                dialogue_intent=dialogue_intent.value,
             )
         )
         budget_plan = self.context_budget_planner.plan(
@@ -1736,6 +2151,37 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             runtime_activation=runtime_activation,
             assembly_trace=assembly_trace,
         )
+        context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
+            existing_route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
+            route_card = dict(existing_route)
+            route_card.update(route_decision)
+            side_effect = str(route_card.get("side_effect") or "read_only")
+            route_card.update(
+                {
+                    "request": data.message,
+                    "summary_first": True,
+                    "preflight_required": side_effect != "read_only",
+                    "confirmation_required": side_effect == "confirmed_action",
+                    "ui_card": "mcp_route_decision",
+                }
+            )
+            route_card.setdefault("auto_execute", self._read_only_mcp_auto_execution_eligibility(route_card, mode_decision))
+            cards["mcp_route_decision"] = route_card
+        llm_result, messages, react_result = self._complete_chat_with_react_grounding(
+            user_message=data.message,
+            conversation_id=conversation_id,
+            task=task,
+            context_pack=context_pack,
+            messages=messages,
+            first_llm_result=llm_result,
+            cards=cards,
+            model_profile=model_profile,
+            budget_plan=budget_plan,
+            runtime_config=runtime_config,
+            mode_decision=mode_decision,
+        )
         trace = self.create_trace_event(
             TraceEventCreate(
                 task_id=task["task_id"],
@@ -1754,20 +2200,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "dialogue_intent": dialogue_intent.value,
                     "dialogue_mode": mode_decision.mode.value,
                     "mode_decision": mode_decision_json,
+                    "react_grounding": {
+                        "iterations": react_result.iterations,
+                        "tool_call_count": len(react_result.tool_calls),
+                        "tool_result_count": len(react_result.tool_results),
+                        "evidence_guard": react_result.evidence_guard.reason,
+                        "stopped_reason": react_result.stopped_reason,
+                    },
                 },
                 cost_json={"usage": llm_result.usage},
             )
         )
-        context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
-        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
-        self._maybe_auto_execute_read_only_mcp_route(
-            user_message=data.message,
-            conversation_id=conversation_id,
-            task=task,
-            context_pack=context_pack,
-            cards=cards,
-            mode_decision=mode_decision,
-        )
+        cards["react_grounding"] = self._react_grounding_card(react_result)
         cards["context_health"] = context_health
         cards["runtime_code"] = self.runtime_code_visibility()
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
@@ -1818,6 +2262,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
                 ),
             )
+        self._schedule_memory_curator(
+            user_message=data.message,
+            assistant_message=assistant_text,
+            conversation_id=conversation_id,
+            user_message_id=user_message["message_id"],
+            assistant_message_id=assistant_message["message_id"],
+            task_id=task["task_id"],
+        )
         task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
         public_cards = self._public_chat_cards(cards)
         return {
@@ -1936,6 +2388,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mcp_result_cards",
             "mcp_tool_event",
             "mcp_execution_result",
+            "react_grounding",
         }
         public = {key: value for key, value in cards.items() if key in public_keys}
         if isinstance(public.get("mcp_summary_result"), dict):
@@ -1994,10 +2447,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         mode = str((mode_decision or {}).get("mode") or DialogueMode.DIALOGUE.value)
         mode_cfg = self._dialogue_mode_config(mode)
         expose_context_pack = bool(mode_cfg.get("expose_context_pack"))
+        evidence_manifest = self._context_pack_evidence_manifest(context_pack)
         if expose_context_pack:
             context = (
-                f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
-                "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
+                f"Context Pack 摘要 / Context Pack summary: {context_pack.get('pack_summary')}\n"
+                "Use the audited context below. Ask a clarifying question when evidence is missing.\n"
+                f"{json.dumps(evidence_manifest, ensure_ascii=False, sort_keys=True)}"
             )
             messages.append({"role": "user", "content": context})
         else:
@@ -2005,8 +2460,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 {
                     "role": "system",
                     "content": (
-                        f"Internal Context Pack 摘要：{context_pack.get('pack_summary')}\n"
-                        "Do not mention Context Pack, memory counts, token budget, prompt bundle, or compression summaries unless the user asks for audit details."
+                        f"Internal Context Pack 摘要 / Context Pack summary: {context_pack.get('pack_summary')}\n"
+                        "Do not mention Context Pack, memory counts, token budget, prompt bundle, or compression summaries unless the user asks for audit details.\n"
+                        f"Context Pack Evidence Manifest: {json.dumps(evidence_manifest, ensure_ascii=False, sort_keys=True)}"
                     ),
                 }
             )
@@ -2017,6 +2473,56 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             messages.append({"role": "system", "content": mcp_catalog_context})
         messages.append({"role": "user", "content": user_message})
         return messages
+
+    @staticmethod
+    def _context_pack_evidence_manifest(context_pack: dict[str, Any]) -> dict[str, Any]:
+        pack_json = context_pack.get("pack_json") if isinstance(context_pack.get("pack_json"), dict) else {}
+        memory_route = pack_json.get("memory_route") if isinstance(pack_json.get("memory_route"), dict) else {}
+        graph_context = pack_json.get("graph_context") if isinstance(pack_json.get("graph_context"), dict) else {}
+        memory_items = pack_json.get("memory_items") if isinstance(pack_json.get("memory_items"), list) else []
+        compact_memories: list[dict[str, Any]] = []
+        for item in memory_items[:12]:
+            if not isinstance(item, dict):
+                continue
+            compact_memories.append(
+                {
+                    "memory_id": item.get("memory_id"),
+                    "memory_type": item.get("memory_type"),
+                    "tree_path": item.get("tree_path"),
+                    "scope": item.get("scope"),
+                    "resident": bool(item.get("resident")),
+                    "route_reason": item.get("route_reason"),
+                    "content_text": str(item.get("content_text") or "")[:280],
+                    "evidence_refs": list(item.get("evidence_refs") or [])[:4],
+                }
+            )
+        relation_refs = graph_context.get("relation_refs") if isinstance(graph_context.get("relation_refs"), list) else []
+        compact_relations: list[dict[str, Any]] = []
+        for item in relation_refs[:12]:
+            if not isinstance(item, dict):
+                continue
+            compact_relations.append(
+                {
+                    "relation_id": item.get("relation_id"),
+                    "relation_type": item.get("relation_type"),
+                    "source_entity_key": item.get("source_entity_key"),
+                    "target_entity_key": item.get("target_entity_key"),
+                    "neighbor_entity_key": item.get("neighbor_entity_key"),
+                    "neighbor_summary": item.get("neighbor_summary"),
+                    "evidence_refs": list(item.get("evidence_refs") or [])[:4],
+                }
+            )
+        return {
+            "memory_route": {
+                "route_reason": memory_route.get("route_reason"),
+                "matched_branches": list(memory_route.get("matched_branches") or [])[:12],
+            },
+            "memory_items": compact_memories,
+            "graph_context": {
+                "route_reason": graph_context.get("route_reason"),
+                "relation_refs": compact_relations,
+            },
+        }
 
     @staticmethod
     def _is_mcp_tool_catalog_inquiry(user_message: str) -> bool:
@@ -2771,6 +3277,220 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         }
         cards["status_rail"] = self._mcp_executed_status_rail()
 
+
+    def _complete_chat_with_react_grounding(
+        self,
+        *,
+        user_message: str,
+        conversation_id: str,
+        task: dict[str, Any],
+        context_pack: dict[str, Any],
+        messages: list[dict[str, str]],
+        first_llm_result: LlmCallResult,
+        cards: dict[str, Any],
+        model_profile: dict[str, Any],
+        budget_plan: ContextBudgetPlan,
+        runtime_config: dict[str, Any],
+        mode_decision: ModeDecision,
+    ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
+        route_seed = self._seeded_react_tool_call(cards, mode_decision)
+        first_turn_consumed = False
+
+        def model_complete(next_messages: list[dict[str, Any]]) -> ModelTurn:
+            nonlocal first_turn_consumed
+            if not first_turn_consumed and not route_seed:
+                first_turn_consumed = True
+                return ModelTurn(
+                    content=first_llm_result.content,
+                    provider=first_llm_result.provider,
+                    model=first_llm_result.model,
+                    duration_ms=first_llm_result.duration_ms,
+                    usage=first_llm_result.usage,
+                )
+            first_turn_consumed = True
+            result = self.llm_client.complete(
+                messages=next_messages,
+                model_profile=model_profile,
+                temperature=budget_plan.llm_temperature,
+                max_tokens=budget_plan.llm_max_tokens,
+            )
+            return ModelTurn(
+                content=result.content,
+                provider=result.provider,
+                model=result.model,
+                duration_ms=result.duration_ms,
+                usage=result.usage,
+            )
+
+        provider = _ServiceReactMcpProvider(
+            service=self,
+            conversation_id=conversation_id,
+            task=task,
+            context_pack=context_pack,
+            cards=cards,
+            user_message=user_message,
+        )
+        def fallback_tool_calls() -> list[McpToolCall]:
+            fallback = self._grounded_route_fallback_tool_call(cards, mode_decision)
+            return [fallback] if fallback else []
+
+        react_result = run_react_grounding_loop(
+            messages=messages,
+            model_complete=model_complete,
+            mcp_provider=provider,
+            catalog_entries=self._react_tool_catalog_entries(),
+            config=self._react_grounding_config(runtime_config),
+            seeded_tool_calls=[route_seed] if route_seed else None,
+            fallback_tool_calls=fallback_tool_calls,
+        )
+        final_turn = react_result.model_turns[-1] if react_result.model_turns else ModelTurn(
+            content=react_result.final_text,
+            provider=first_llm_result.provider,
+            model=first_llm_result.model,
+            duration_ms=first_llm_result.duration_ms,
+            usage=first_llm_result.usage,
+        )
+        grounded_llm_result = LlmCallResult(
+            content=react_result.final_text,
+            provider=final_turn.provider,
+            model=final_turn.model,
+            duration_ms=sum(turn.duration_ms for turn in react_result.model_turns) or first_llm_result.duration_ms,
+            usage=self._merge_llm_usage([turn.usage for turn in react_result.model_turns]),
+        )
+        return grounded_llm_result, [dict(item) for item in react_result.messages], react_result
+
+    def _react_grounding_config(self, runtime_config: dict[str, Any]) -> ReactGroundingConfig:
+        cfg = runtime_config.get("react_grounding") if isinstance(runtime_config.get("react_grounding"), dict) else {}
+        if "max_tool_iterations" not in cfg:
+            raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
+        return ReactGroundingConfig(
+            max_tool_iterations=int(cfg["max_tool_iterations"]),
+            evidence_required=bool(cfg.get("evidence_required", True)),
+            placeholder_patterns=tuple(str(item) for item in cfg.get("placeholder_patterns", [r"\bXX\b", r"\bX%\b", "approxX", "about X"])),
+        )
+
+    @staticmethod
+    def _merge_llm_usage(usages: list[dict[str, Any]]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for usage in usages:
+            for key, value in (usage or {}).items():
+                if isinstance(value, (int, float)):
+                    merged[key] = merged.get(key, 0) + value
+                else:
+                    merged[key] = value
+        return merged
+
+    def _react_tool_catalog_entries(self) -> list[ToolCatalogEntry]:
+        tools = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+        return [
+            ToolCatalogEntry(
+                server_key=str(tool.get("server_key") or ""),
+                tool_name=str(tool.get("tool_name") or ""),
+                status=str(tool.get("status") or ""),
+                risk_level=str(tool.get("risk_level") or "medium"),
+                side_effect_level=str(tool.get("side_effect_level") or "read_only"),
+                requires_approval=bool(tool.get("requires_approval")),
+                required_confirmations=tuple(str(item) for item in (tool.get("required_confirmations") or [])),
+            )
+            for tool in tools
+            if tool.get("server_key") and tool.get("tool_name")
+        ]
+
+    def _seeded_react_tool_call(self, cards: dict[str, Any], mode_decision: ModeDecision) -> McpToolCall | None:
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
+            return None
+        eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
+        route["auto_execute"] = eligibility
+        if eligibility.get("eligible"):
+            return McpToolCall(
+                server_key=str(route["server_key"]),
+                tool_name=str(route["tool_name"]),
+                payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+                stable_call_id=f"route:{route['server_key']}:{route['tool_name']}",
+                reason=str(route.get("reason") or "route_seed"),
+            )
+        return None
+
+    def _grounded_route_fallback_tool_call(self, cards: dict[str, Any], mode_decision: ModeDecision) -> McpToolCall | None:
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
+            return None
+        if str(route.get("side_effect") or "read_only") != "read_only":
+            return None
+        eligibility = route.get("auto_execute") if isinstance(route.get("auto_execute"), dict) else self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
+        route["auto_execute"] = eligibility
+        if not eligibility.get("eligible"):
+            return None
+        return McpToolCall(
+            server_key=str(route["server_key"]),
+            tool_name=str(route["tool_name"]),
+            payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+            stable_call_id=f"fallback:{route['server_key']}:{route['tool_name']}",
+            reason="evidence_guard_route_fallback",
+        )
+
+    @staticmethod
+    def _react_grounding_card(react_result: Any) -> dict[str, Any]:
+        return {
+            "schema_version": "research_assistant_react_grounding_v1",
+            "iterations": react_result.iterations,
+            "tool_call_count": len(react_result.tool_calls),
+            "tool_result_count": len(react_result.tool_results),
+            "stopped_reason": react_result.stopped_reason,
+            "evidence_guard": {
+                "allowed": react_result.evidence_guard.allowed,
+                "reason": react_result.evidence_guard.reason,
+                "source_count": react_result.evidence_guard.source_count,
+                "as_of_count": react_result.evidence_guard.as_of_count,
+            },
+        }
+
+    def _capability_key_for_tool(self, call: McpToolCall, route: dict[str, Any] | None = None) -> str:
+        if isinstance(route, dict) and route.get("domain"):
+            candidate = f"{route['domain']}.mcp_orchestration"
+            if self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"}):
+                return candidate
+        capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+        for capability in capabilities:
+            refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
+            if any(isinstance(ref, dict) and ref.get("server_key") == call.server_key and ref.get("tool_name") == call.tool_name for ref in refs):
+                return str(capability["capability_key"])
+        raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
+
+    def _populate_cards_from_tool_execution(self, cards: dict[str, Any], proposal: dict[str, Any], executed: dict[str, Any], result: McpToolResult) -> None:
+        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
+        cards["mcp_summary_result"] = summary_result
+        cards["mcp_result_cards"] = list(executed.get("human_cards") or [])
+        cards["mcp_tool_event"] = {
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "server_key": tool_event.get("server_key"),
+            "tool_name": tool_event.get("tool_name"),
+            "status": tool_event.get("status"),
+            "transport": tool_event.get("transport"),
+            "duration_ms": tool_event.get("duration_ms"),
+            "artifact_refs": tool_event.get("artifact_refs") or [],
+        }
+        cards["mcp_execution_result"] = {
+            "auto_executed": bool(executed.get("executed")),
+            "status": executed.get("status"),
+            "executed": bool(executed.get("executed")),
+            "route": f"{result.server_key}/{result.tool_name}",
+            "server_key": result.server_key,
+            "tool_name": result.tool_name,
+            "action_proposal_id": proposal["action_proposal_id"],
+            "proposal_status": (executed.get("proposal") or {}).get("status") if isinstance(executed.get("proposal"), dict) else None,
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "trace_id": executed.get("trace_id"),
+            "summary_first": bool(summary_result.get("summary_first", True)),
+            "response_summary": self._compact_mcp_summary_for_cards(summary_result),
+            "human_cards": list(executed.get("human_cards") or []),
+            "source_refs": list(result.source_refs),
+            "as_of": result.as_of,
+        }
+        cards["status_rail"] = self._mcp_executed_status_rail()
+
     def _read_only_mcp_auto_execution_eligibility(self, route: dict[str, Any], mode_decision: ModeDecision) -> dict[str, Any]:
         if not route.get("server_key") or not route.get("tool_name") or not route.get("domain"):
             return {"eligible": False, "reason": "route_missing_tool"}
@@ -2873,16 +3593,26 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
         raw_text = llm_text.strip()
         text = self._strip_assistant_tool_choice_markup(raw_text)
+        react_active = isinstance(cards.get("react_grounding"), dict)
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
-        if isinstance(execution, dict) and execution.get("auto_executed"):
+        if isinstance(execution, dict) and execution.get("auto_executed") and not react_active:
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
+        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        if (
+            react_active
+            and isinstance(execution, dict)
+            and execution.get("auto_executed")
+            and react_card.get("stopped_reason") == "evidence_summary_fallback"
+        ):
+            summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
-        if self._should_render_mcp_route_reply(route, mode_decision, raw_text):
+        if (not react_active or "<assistant_tool_choice" in raw_text.lower()) and self._should_render_mcp_route_reply(route, mode_decision, raw_text):
             return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
         if text:
             return self._apply_main_reply_policy(text, mode_decision)
@@ -2918,6 +3648,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "\n".join(lines)
 
     @staticmethod
+    def _render_react_execution_fallback_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        reply = ResearchAssistantService._render_mcp_execution_reply(execution, summary)
+        source_refs = execution.get("source_refs") if isinstance(execution.get("source_refs"), list) else []
+        source = str(source_refs[0] if source_refs else summary.get("source") or execution.get("tool_event_id") or "mcp_tool_event")
+        as_of = str(execution.get("as_of") or utc_now().date().isoformat())
+        return f"{reply}\nEvidence: source={source} as_of={as_of}."
+
+    @staticmethod
     def _strip_assistant_tool_choice_markup(text: str) -> str:
         cleaned = re.sub(r"<assistant_tool_choice\b[^>]*>.*?</assistant_tool_choice>", "", text, flags=re.IGNORECASE | re.DOTALL)
         return cleaned.strip()
@@ -2936,6 +3674,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.MODEL_REGISTRY_REQUEST,
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
+            DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
             DialogueIntent.QE_WAREHOUSE_REQUEST,
             DialogueIntent.RESEARCH_PIPELINE_REQUEST,
         }
@@ -3092,17 +3831,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def build_context_pack(self, request: ContextPackBuildRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ContextPackBuildRequest) else ContextPackBuildRequest(**request)
-        refs_by_type: dict[str, list[str]] = {}
-        memory_items: list[dict[str, Any]] = []
-        for memory_type in data.include_memory_types:
-            page = self.repository.list_records(
-                "memory_items",
-                filters={"namespace": data.namespace, "memory_type": memory_type, "approval_status": "approved"},
-                limit=self.configured_limit("memory_items_context_pack"),
-            )
-            refs = [item["memory_id"] for item in page["items"]]
-            refs_by_type[memory_type] = refs
-            memory_items.extend(page["items"])
         temp_refs = []
         if data.task_id:
             temp_page = self.repository.list_records("temp_memories", filters={"task_id": data.task_id}, limit=self.configured_limit("temp_memories_context_pack"))
@@ -3111,13 +3839,68 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         token_budget = data.token_budget or self.configured_limit("default_context_pack_token_budget")
         if token_budget > max_context_budget:
             raise ValueError(f"token_budget exceeds configured context_pack_max_token_budget: {max_context_budget}")
+        user_message = data.user_message or self._context_pack_user_message(data.task_id)
+        runtime_config = dict(self.active_runtime_config())
+        memory_tree_config = dict(runtime_config.get("memory_tree") or {})
+        memory_tree_config.update(
+            {
+                "namespace": data.namespace,
+                "token_budget": token_budget,
+                "candidate_limit": max(
+                    int(memory_tree_config.get("candidate_limit") or 0),
+                    self.configured_limit("memory_items_context_pack") * 4,
+                ),
+                "max_items": int(memory_tree_config.get("max_items") or self.configured_limit("memory_items_context_pack")),
+            }
+        )
+        runtime_config["memory_tree"] = memory_tree_config
+        memory_result = select_memory_branches(
+            user_message,
+            data.dialogue_intent,
+            repo=self.repository,
+            runtime_config=runtime_config,
+        )
+        refs_by_type = memory_result.refs_by_type
+        memory_items = memory_result.memory_items
+        graph_entity_keys = self._graph_entity_keys_for_memory_items(memory_items, user_message=user_message)
+        graph_context_config = dict(runtime_config.get("graph_context") or {})
+        graph_result = expand_neighbors(
+            graph_entity_keys,
+            repo=self.repository,
+            namespace=data.namespace,
+            hops=int(graph_context_config.get("hops") or 1),
+            relation_filter=graph_context_config.get("relation_filter"),
+            limit=int(graph_context_config.get("limit") or self.configured_limit("graph_summary_relations")),
+        )
+        code_intelligence_context = build_code_intelligence_context(repo_root=REPO_ROOT)
+        code_intelligence_refs = artifact_ref_paths(code_intelligence_context)
+        core_refs = [
+            *refs_by_type.get("core", []),
+            *refs_by_type.get("directive", []),
+            *refs_by_type.get("user_preference", []),
+            *refs_by_type.get("habit", []),
+            *refs_by_type.get("analysis_note", []),
+        ]
         pack_json = {
             "mandatory_rules": [
-                "Memory Ledger 是事实源，RAG/向量只能辅助召回。",
-                "正式 Issue 必须人工审核并同步 GitHub。",
-                "高风险 MCP/Skill 必须 preflight 和 approval。",
+                "Memory Ledger remains the source of truth; retrieval only selects approved memory.",
+                "Formal GitHub issue creation still requires explicit approval and sync.",
+                "High-risk MCP or skill execution requires preflight and approval.",
             ],
             "memory_items": memory_items,
+            "memory_route": {
+                "route_reason": memory_result.route_reason,
+                "matched_branches": memory_result.matched_branches,
+                "omitted_refs": memory_result.omitted_refs,
+            },
+            "graph_context": {
+                "route_reason": graph_result.route_reason,
+                "relation_refs": graph_result.relation_refs,
+                "seed_entity_keys": graph_result.seed_entity_keys,
+                "neighbor_entity_keys": graph_result.neighbor_entity_keys,
+                "omitted_relation_refs": graph_result.omitted_relation_refs,
+            },
+            "code_intelligence_context": code_intelligence_context,
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -3129,16 +3912,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "agent_id": data.agent_id,
             "model_profile": data.model_profile,
             "token_budget": token_budget,
-            "core_memory_refs": refs_by_type.get("core", []),
+            "core_memory_refs": core_refs,
             "procedural_memory_refs": refs_by_type.get("procedural", []),
             "architecture_memory_refs": refs_by_type.get("architecture", []),
             "task_state_refs": refs_by_type.get("task_state", []),
             "experiment_memory_refs": refs_by_type.get("experiment", []),
-            "graph_relation_refs": [],
-            "external_source_refs": [],
+            "graph_relation_refs": graph_result.graph_relation_refs,
+            "external_source_refs": code_intelligence_refs,
             "temp_memory_refs": temp_refs,
-            "omitted_relevant_refs": [],
-            "pack_summary": f"Context Pack: {len(memory_items)} approved memories, {len(temp_refs)} temp memories",
+            "omitted_relevant_refs": memory_result.omitted_refs,
+            "pack_summary": (
+                f"Context Pack: {len(memory_items)} tree-selected memories, "
+                f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories, "
+                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}"
+            ),
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
         }
@@ -3154,6 +3941,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "retrieval_reason": {
                         "context_pack_id": context_pack_id,
                         "memory_type": item.get("memory_type"),
+                        "tree_path": item.get("tree_path"),
+                        "matched_branches": memory_result.matched_branches,
                         "source": "context_pack_build",
                     },
                     "used_in_prompt": True,
@@ -3163,9 +3952,153 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     },
                 },
             )
+            self._mark_memory_used(item)
         if data.task_id:
-            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack 已构建", payload_json={"context_pack_id": row["context_pack_id"]}))
+            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack built", payload_json={"context_pack_id": row["context_pack_id"]}))
         return context_pack
+
+    def _context_pack_user_message(self, task_id: str | None) -> str | None:
+        if not task_id:
+            return None
+        task = self.repository.get_record("tasks", task_id)
+        if not task:
+            return None
+        input_json = task.get("input_json") or {}
+        if isinstance(input_json, dict):
+            value = input_json.get("user_message") or input_json.get("message")
+            if value:
+                return str(value)
+        return None
+
+    def _graph_entity_keys_for_memory_items(self, memory_items: list[dict[str, Any]], *, user_message: str | None = None) -> list[str]:
+        keys: set[str] = set()
+        query_terms = self._graph_query_terms(user_message)
+        for item in memory_items:
+            tree_path = str(item.get("tree_path") or item.get("subject_key") or "")
+            if tree_path.startswith("personal."):
+                continue
+            item_keys: set[str] = set()
+            item_keys.update(self._graph_entity_keys_from_path(tree_path))
+            content_json = item.get("content_json") or {}
+            if isinstance(content_json, dict):
+                item_keys.update(self._graph_entity_keys_from_content(content_json))
+            keys.update(key for key in item_keys if self._graph_entity_key_matches_query(key, query_terms))
+        return sorted(keys)
+
+    @staticmethod
+    def _graph_entity_keys_from_path(path: str) -> set[str]:
+        keys: set[str] = set()
+        direct_prefixes = ("module.", "capability.", "mcp.", "api.", "process.", "dataset.", "strategy.", "model.")
+        if path.startswith(direct_prefixes):
+            keys.add(path)
+        parts = [part for part in path.split(".") if part]
+        if len(parts) >= 3 and parts[0] == "project" and parts[1] in {
+            "module",
+            "capability",
+            "mcp",
+            "api",
+            "process",
+            "dataset",
+            "strategy",
+            "model",
+        }:
+            keys.add(".".join(parts[1:]))
+        return keys
+
+    @staticmethod
+    def _graph_entity_keys_from_content(content_json: dict[str, Any]) -> set[str]:
+        keys: set[str] = set()
+        raw_entity_keys = content_json.get("entity_keys") or []
+        if isinstance(raw_entity_keys, str):
+            raw_entity_keys = [raw_entity_keys]
+        for value in raw_entity_keys:
+            if value:
+                keys.add(str(value))
+        if content_json.get("entity_key"):
+            keys.add(str(content_json["entity_key"]))
+        if content_json.get("capability_key"):
+            keys.add(f"capability.{content_json['capability_key']}")
+        if content_json.get("mcp_server"):
+            server_key = str(content_json["mcp_server"]).lower().replace("aistock-", "").replace("-", "_")
+            keys.add(f"mcp.{server_key}")
+        return keys
+
+    @staticmethod
+    def _graph_query_terms(user_message: str | None) -> set[str]:
+        if not user_message:
+            return set()
+        normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in str(user_message))
+        generic_terms = {"module", "capability", "mcp", "api", "process", "dataset", "strategy", "model"}
+        return {term for term in normalized.split() if len(term) >= 3 and term not in generic_terms}
+
+    @staticmethod
+    def _graph_entity_key_matches_query(entity_key: str, query_terms: set[str]) -> bool:
+        if not query_terms:
+            return True
+        generic_terms = {"module", "capability", "mcp", "api", "process", "dataset", "strategy", "model"}
+        key_terms = [
+            term
+            for term in re.split(r"[^a-zA-Z0-9]+", entity_key.lower())
+            if len(term) >= 3 and term not in generic_terms
+        ]
+        return bool(key_terms and any(term in query_terms for term in key_terms))
+
+    def _mark_memory_used(self, item: dict[str, Any]) -> None:
+        memory_id = item.get("memory_id")
+        if not memory_id:
+            return
+        self.repository.update_record(
+            "memory_items",
+            str(memory_id),
+            {
+                "last_used_at": utc_now().isoformat(),
+                "use_count": int(item.get("use_count") or 0) + 1,
+            },
+        )
+
+    def _schedule_memory_curator(
+        self,
+        *,
+        user_message: str,
+        assistant_message: str,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        task_id: str,
+    ) -> None:
+        def run_curator() -> CuratorResult:
+            result = MemoryCurator(self.repository).curate_turn(
+                user_message=user_message,
+                assistant_message=assistant_message,
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                task_id=task_id,
+            )
+            changed = result.created_branch_ids or result.created_memory_ids or result.updated_memory_ids
+            if changed or result.approval_required_ids:
+                self.add_task_event(
+                    task_id,
+                    TaskEventCreate(
+                        event_type="memory_written",
+                        message="Memory curator processed chat turn",
+                        payload_json={
+                            "created_branch_ids": result.created_branch_ids,
+                            "created_memory_ids": result.created_memory_ids,
+                            "updated_memory_ids": result.updated_memory_ids,
+                            "approval_required_ids": result.approval_required_ids,
+                            "skipped": result.skipped,
+                            "async_worker": self.repository.health().get("mode") != "in_memory_test_only",
+                        },
+                    ),
+                )
+            return result
+
+        if self.repository.health().get("mode") == "in_memory_test_only":
+            run_curator()
+            return
+        threading.Thread(target=run_curator, name="research-assistant-memory-curator", daemon=True).start()
+
 
 
     def create_graph_entity(self, request: GraphEntityCreate | dict[str, Any]) -> dict[str, Any]:

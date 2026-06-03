@@ -14,6 +14,7 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
@@ -70,7 +71,15 @@ jobs:
     env:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: Sanity - docker + target dir reachable
         run: |
@@ -106,13 +115,10 @@ jobs:
             ls -la "${DR_TARGET_DIR}" || true
           } > tmp/dr/snapshot_metadata_${{ github.run_id }}.txt
 
-      - name: Upload DR metadata (NOT the dump bytes)
+      - name: Print DR metadata (NOT the dump bytes)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-metadata-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          find tmp/dr -maxdepth 2 -type f -print -exec cat {} \; 2>/dev/null || true
 
   dr-validate:
     name: DR validation (dump validity + schema diff + retention)
@@ -122,7 +128,15 @@ jobs:
     env:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: nox -s dr_validate
         run: |
@@ -130,13 +144,10 @@ jobs:
           conda activate AIstock
           python -m nox -s dr_validate
 
-      - name: Upload DR validate evidence
+      - name: Print DR validate evidence
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-validate-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          find tmp/dr -maxdepth 2 -type f -print -exec cat {} \; 2>/dev/null || true
 
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
@@ -149,7 +160,15 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       # Activates the local AIstock conda env. The runner must have conda on PATH
       # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
@@ -186,13 +205,10 @@ jobs:
         env:
           QE_READ_L3_SKIP_UI: '1'
 
-      - name: Upload validation history
+      - name: Print validation history manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-l3-history-${{ github.run_id }}
-          path: tests/aistock_validation/history/
-          if-no-files-found: ignore
+        run: |
+          find tests/aistock_validation/history -maxdepth 2 -type f | head -100 || true
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
@@ -202,7 +218,15 @@ jobs:
     env:
       PAPER_V2_SKIP_REALTIME: '1'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
       - name: nox -s paper_v2_live
         run: |
@@ -210,13 +234,10 @@ jobs:
           conda activate AIstock
           python -m nox -s paper_v2_live
 
-      - name: Upload paper-v2 live evidence
+      - name: Print paper-v2 live evidence manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: paper-v2-live-${{ github.run_id }}
-          path: tmp/paper_v2/
-          if-no-files-found: ignore
+        run: |
+          find tmp/paper_v2 -maxdepth 2 -type f | head -100 || true
 
   code-intelligence-weekly:
     name: Code intelligence weekly graph summary
@@ -225,12 +246,31 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" \
+            --source "${AISTOCK_SELF_HOSTED_SOURCE}" \
+            --dest "${GITHUB_WORKSPACE}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --summary-json "${RUNNER_TEMP}/aistock_self_hosted_workspace/${GITHUB_JOB}.json"
 
-      - name: Build Understand Anything summary placeholders
+      - name: Build CodeGraph freshness artifact
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
+          mkdir -p "${OUT_DIR}"
+          python scripts/code_intelligence_adapter.py freshness \
+            --output-dir "${OUT_DIR}" \
+            --output "${OUT_DIR}/codegraph-freshness.stdout.json" || true
+          cat "${OUT_DIR}/codegraph-freshness.md" || true
+
+      - name: Build weekly Understand Anything summaries
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" != "7" ]; then
-            echo "Skipping weekly code intelligence graph summary outside Sunday UTC."
+            echo "Skipping weekly Understand Anything summary outside Sunday UTC."
             exit 0
           fi
           source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -241,17 +281,14 @@ jobs:
             --output-dir "${OUT_DIR}" \
             --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
 
-      - name: Upload code intelligence graph summaries
+      - name: Print code intelligence graph summary manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-intelligence-weekly-${{ github.run_id }}
-          path: tmp/validation/code-intelligence/
-          if-no-files-found: ignore
+        run: |
+          find tmp/validation/code-intelligence -maxdepth 3 -type f | head -100 || true
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
+    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live, code-intelligence-weekly]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -274,11 +311,12 @@ jobs:
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           DATE=$(date +%Y%m%d)
-          SUMMARY_DIR="tests/aistock_validation/history/${DATE}"
+          SUMMARY_DIR="tmp/validation/nightly_summary/${DATE}"
           mkdir -p "${SUMMARY_DIR}"
           cat <<EOF > "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           # Nightly run ${RUN_ID} ${DATE}
@@ -288,41 +326,71 @@ jobs:
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
+          - code-intelligence-weekly: ${CODE_INTELLIGENCE_RESULT}
 
           Run: ${RUN_URL}
           EOF
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
-      - name: Auto-register failure as actionable GitHub Issue
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
-        uses: actions/github-script@v7
+      - name: Build Nightly failure issue context
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p tmp/validation/nightly_failure_issue
+          cat > tmp/validation/nightly_failure_issue/status.json <<EOF
+          {
+            "statuses": {
+              "runnerPreflight": "${RUNNER_PREFLIGHT_RESULT}",
+              "drSnapshot": "${DR_RESULT}",
+              "drValidate": "${DR_VALIDATE_RESULT}",
+              "nightlyL3": "${L3_RESULT}",
+              "paperV2Live": "${LIVE_RESULT}",
+              "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
+            },
+            "run_id": "${{ github.run_id }}",
+            "run_url": "${RUN_URL}"
+          }
+          EOF
+          python scripts/ci_failure_issue_summary.py \
+            --repo "${{ github.repository }}" \
+            --nightly-status-json tmp/validation/nightly_failure_issue/status.json \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${RUN_URL}" \
+            --severity "P1" \
+            --source-name "AIstock Nightly" \
+            --branch "${{ github.ref_name }}" \
+            --commit "${{ github.sha }}" \
+            --output tmp/validation/nightly_failure_issue/summary.json \
+            --markdown-output tmp/validation/nightly_failure_issue/body.md \
+            --context-output tmp/validation/nightly_failure_issue/context-pack.json \
+            --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
+            --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
+            --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
+            --stdout-format compact
+
+      - name: Upload Nightly failure issue context
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-failure-issue-context
+          path: tmp/validation/nightly_failure_issue/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Auto-register failure as actionable GitHub Issue
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        uses: actions/github-script@v7
         with:
           script: |
-            const statuses = {
-              runnerPreflight: process.env.RUNNER_PREFLIGHT_RESULT || "?",
-              drSnapshot: process.env.DR_RESULT || "?",
-              drValidate: process.env.DR_VALIDATE_RESULT || "?",
-              nightlyL3: process.env.L3_RESULT || "?",
-              paperV2Live: process.env.LIVE_RESULT || "?",
-            };
-            const runId = process.env.GITHUB_RUN_ID || "0";
-            const runUrl = process.env.RUN_URL;
-            const runnerFailed = statuses.runnerPreflight === "failure";
-            const fingerprint = runnerFailed
-              ? "runner-preflight-unavailable"
-              : `nightly-${statuses.runnerPreflight}-${statuses.drSnapshot}-${statuses.drValidate}-${statuses.nightlyL3}-${statuses.paperV2Live}`;
-            const marker = `<!-- aistock-nightly-failure:${fingerprint} -->`;
-            const title = runnerFailed
-              ? "P1 Nightly blocked: self-hosted Windows runner unavailable"
-              : `P1 Nightly failed: runner=${statuses.runnerPreflight} dr=${statuses.drSnapshot}/${statuses.drValidate} l3=${statuses.nightlyL3} live=${statuses.paperV2Live}`;
-
+            const fs = require('fs');
+            const payload = JSON.parse(fs.readFileSync('tmp/validation/nightly_failure_issue/github-issue-payload.json', 'utf8'));
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner,
@@ -330,61 +398,11 @@ jobs:
               per_page: 100,
             });
             const existingLabels = new Set(allLabels.map((label) => label.name));
-            const labels = ["aistock:bug", "severity:p1", "P1", "module:validation", "module:validation.runner", "source:nightly", "status:open"]
+            const labels = (payload.labels || [])
               .filter((label) => existingLabels.has(label));
-
-            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
-              owner,
-              repo,
-              state: "open",
-              per_page: 100,
-            });
-            const existing = openIssues.find((issue) =>
-              !issue.pull_request && ((issue.body || "").includes(marker) || issue.title === title)
-            );
-
-            const buildBody = (issueNumber) => [
-              marker,
-              "# AIstock Nightly failure",
-              "",
-              "## Summary",
-              "- severity: P1",
-              "- module: validation.runner",
-              "- workflow: AIstock Nightly L3 + DR",
-              `- run: [${runId}](${runUrl})`,
-              `- runner-preflight: ${statuses.runnerPreflight}`,
-              `- dr-snapshot: ${statuses.drSnapshot}`,
-              `- dr-validate: ${statuses.drValidate}`,
-              `- nightly-l3: ${statuses.nightlyL3}`,
-              `- paper-v2-live: ${statuses.paperV2Live}`,
-              "",
-              "## Expected",
-              "Nightly should either run on the self-hosted Windows runner or fail fast with actionable runner-health evidence.",
-              "",
-              "## Actual",
-              runnerFailed
-                ? "The GitHub-hosted runner-preflight job failed before self-hosted jobs were queued."
-                : "One or more Nightly jobs failed or were skipped.",
-              "",
-              "## Diagnostics",
-              "- Required self-hosted runner labels: self-hosted, windows.",
-              `- Runner health artifact: runner-health-${runId}.`,
-              "- If runner-preflight failed, inspect the artifact and either restart/register the Windows runner or configure AISTOCK_RUNNER_HEALTH_TOKEN with repository Administration read permission.",
-              "- This issue was filed by GitHub Actions without writing BUG JSON in the production root checkout.",
-              "",
-              "## Next command",
-              "```powershell",
-              `python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber}`,
-              `python scripts/aistock_issue_workflow.py promote-ci-issue --issue ${issueNumber} --apply`,
-              "```",
-              "",
-              "## Production gates",
-              "- production_ddl_gate: noop",
-              "- production_frontend_dependency_gate: noop",
-              "- production_backend_dependency_gate: noop",
-              "",
-            ].join("\n");
-
+            const marker = payload.dedupe.nightly_marker || payload.dedupe.marker;
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
+            const existing = openIssues.find((issue) => !issue.pull_request && ((issue.body || "").includes(marker) || issue.title === payload.title));
             let issueNumber;
             if (existing) {
               issueNumber = existing.number;
@@ -392,16 +410,14 @@ jobs:
                 owner,
                 repo,
                 issue_number: issueNumber,
-                body: `Nightly failure repeated in run [${runId}](${runUrl}).\n\n` +
-                  `runner-preflight=${statuses.runnerPreflight}, dr-snapshot=${statuses.drSnapshot}, ` +
-                  `dr-validate=${statuses.drValidate}, nightly-l3=${statuses.nightlyL3}, paper-v2-live=${statuses.paperV2Live}.`,
+                body: payload.recurrence_comment,
               });
               const updateParams = {
                 owner,
                 repo,
                 issue_number: issueNumber,
-                title,
-                body: buildBody(issueNumber),
+                title: payload.title,
+                body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
               };
               if (labels.length > 0) {
                 updateParams.labels = labels;
@@ -411,7 +427,7 @@ jobs:
               const createParams = {
                 owner,
                 repo,
-                title,
+                title: payload.title,
                 body: "Preparing actionable Nightly diagnostics...",
               };
               if (labels.length > 0) {
@@ -423,7 +439,7 @@ jobs:
                 owner,
                 repo,
                 issue_number: issueNumber,
-                body: buildBody(issueNumber),
+                body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
               });
             }
             core.info(`Nightly failure issue: #${issueNumber}`);
@@ -433,5 +449,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-summary-${{ github.run_id }}
-          path: tests/aistock_validation/history/
+          path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
+

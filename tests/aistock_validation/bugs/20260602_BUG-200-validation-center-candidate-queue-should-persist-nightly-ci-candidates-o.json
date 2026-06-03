@@ -1,0 +1,76 @@
+{
+  "actual": "Validation Center reads tmp/validation/ci_failure_issue and tmp/validation/nightly_failure_issue directly alongside stable roots, leaving nightly candidate history dependent on temporary artifacts.",
+  "allowed_write_scope": [
+    "backend/services/validation/pipeline_center.py",
+    "scripts/ci_failure_issue_summary.py",
+    "backend/tests/test_validation_pipeline_center_phase1.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "tests/aistock_validation/bugs/20260602_BUG-200-validation-center-candidate-queue-should-persist-nightly-ci-candidates-o.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-200",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T03:03:26.887966Z",
+  "description": "Validation Center reads tmp/validation/ci_failure_issue and tmp/validation/nightly_failure_issue directly alongside stable roots, leaving nightly candidate history dependent on temporary artifacts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-40035935b1cf",
+      "timestamp": "2026-06-02T03:03:26.887961Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "CI/nightly candidate artifacts can be persisted into a stable tests/aistock_validation candidate history path with deterministic dedupe, and Validation Center continues to read the persisted candidate queue.",
+  "first_seen_at": "2026-06-02T03:03:26.887966Z",
+  "fix_branch": null,
+  "fix_commit": "88174fbd3a9b2bf640c033255a0116d4a88df285",
+  "fixed_at": "2026-06-02T03:43:39.251930Z",
+  "github_issue_number": 529,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/529",
+  "last_seen_at": "2026-06-02T03:03:26.887966Z",
+  "module": "validation.center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/530",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/ci_failure_issue_summary.py --manual-summary <summary> --output tmp/validation/nightly_failure_issue/summary.json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_coverage_backend",
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation.center"
+  ],
+  "title": "Validation Center candidate queue should persist nightly CI candidates outside tmp",
+  "trigger_condition": {
+    "fingerprint": "40035935b1cff8d37a49200b",
+    "source_event_id": "FE-20260602-40035935b1cf"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/test_validation_pipeline_center_phase1.py::test_issue_candidate_queue_reads_context_pack_and_dedupes_payloads backend/tests/test_validation_pipeline_center_phase1.py::test_issue_candidate_queue_reads_persisted_history_without_tmp -q -p no:cacheprovider -> 16 passed",
+    "python -m ruff check scripts/ci_failure_issue_summary.py backend/services/validation/pipeline_center.py backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/test_validation_pipeline_center_phase1.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_center_backend -> passed",
+    "python -m nox -s validation_catalog_integrity validation_coverage_backend guardrail_changed_files validation_module_registry_l0 -> passed",
+    "GitHub PR #530 CI -> passed"
+  ],
+  "verification_run_id": null
+}

@@ -34,6 +34,7 @@ CONFIG_FILES = {
 }
 
 CommandRunner = Callable[[list[str], Path, int], tuple[int, str, str]]
+GITHUB_TOKEN_ENV_ORDER = ("AISTOCK_RUNNER_HEALTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
 
 
 def _now_iso() -> str:
@@ -98,11 +99,21 @@ def _cron_hint(cron: str | None) -> str | None:
     return f"GitHub cron (UTC): {cron}"
 
 
-def _default_command_runner(args: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
+def _default_command_runner(
+    args: list[str],
+    cwd: Path,
+    timeout: int,
+    env_overrides: Mapping[str, str] | None = None,
+) -> tuple[int, str, str]:
     try:
+        run_env = None
+        if env_overrides:
+            run_env = os.environ.copy()
+            run_env.update(env_overrides)
         completed = subprocess.run(
             args,
             cwd=str(cwd),
+            env=run_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -136,7 +147,9 @@ class ValidationPlatformHealthService:
     ) -> None:
         self.repo_root_hint = Path(repo_root or REPO_ROOT).expanduser()
         self.env = env if env is not None else os.environ
+        self._uses_default_command_runner = command_runner is None
         self.command_runner = command_runner or _default_command_runner
+        self._github_token_cache: dict[str, tuple[str | None, str | None, list[str], str | None]] = {}
 
     def summary(self) -> dict[str, Any]:
         repo_root, repo_context = self._collect_repo_context()
@@ -412,14 +425,21 @@ class ValidationPlatformHealthService:
         reason_codes: list[str] = []
         state = "healthy"
         data_state = "complete"
-        code, out, err = self._run(["gh", "auth", "status", "--hostname", "github.com"], cwd=repo_root, timeout=8)
-        if code != 0:
-            data_state = "unavailable"
-            state = "unavailable"
-            reason_codes.append("gh_auth_unavailable")
-            message = (err or out or "gh auth status unavailable").strip()
+        token, token_source, token_reasons, token_message = self._resolve_github_token(repo_root)
+        if token:
+            auth_source = token_source
+            message = f"github token source {token_source}; token value redacted"
         else:
-            message = "gh auth status ok; token value redacted"
+            code, out, err = self._run(["gh", "auth", "status", "--hostname", "github.com"], cwd=repo_root, timeout=8)
+            if code != 0:
+                data_state = "unavailable"
+                state = "unavailable"
+                reason_codes.extend(token_reasons or ["gh_auth_unavailable"])
+                message = (token_message or err or out or "gh auth status unavailable").strip()
+                auth_source = None
+            else:
+                auth_source = "gh:auth-status"
+                message = "gh auth status ok; token value redacted"
         repo = self._github_repository(repo_root)
         if repo.get("error"):
             reason_codes.append(repo["reason_code"])
@@ -433,6 +453,7 @@ class ValidationPlatformHealthService:
             "data_state": data_state,
             "repository": repo.get("repository"),
             "repository_source": repo.get("source"),
+            "auth_source": auth_source,
             "message": message,
             "reason_codes": _dedupe(reason_codes),
             "production_8001_touched": False,
@@ -573,6 +594,7 @@ class ValidationPlatformHealthService:
             ],
             cwd=repo_root,
             timeout=20,
+            env_overrides=self._github_command_env(repo_root),
         )
         if code != 0:
             return {
@@ -617,6 +639,7 @@ class ValidationPlatformHealthService:
             ],
             cwd=repo_root,
             timeout=20,
+            env_overrides=self._github_command_env(repo_root),
         )
         if code != 0:
             latest_run = dict(latest_run)
@@ -673,6 +696,9 @@ class ValidationPlatformHealthService:
 
     def _github_runner_health(self, repo_root: Path, github_connectivity: dict[str, Any]) -> dict[str, Any]:
         repo = github_connectivity.get("repository")
+        github_env = self._github_command_env(repo_root)
+        _, auth_source, _, _ = self._resolve_github_token(repo_root)
+        auth_source = auth_source or github_connectivity.get("auth_source")
         if github_connectivity.get("data_state") == "unavailable":
             return {
                 "schema_version": RUNNER_SCHEMA,
@@ -685,6 +711,7 @@ class ValidationPlatformHealthService:
                 "busy_count": 0,
                 "offline_count": 0,
                 "runners": [],
+                "auth_source": auth_source,
                 "reason_codes": ["github_connectivity_unavailable"],
                 "production_8001_touched": False,
             }
@@ -700,6 +727,7 @@ class ValidationPlatformHealthService:
                 "busy_count": 0,
                 "offline_count": 0,
                 "runners": [],
+                "auth_source": auth_source,
                 "reason_codes": ["github_repository_unavailable"],
                 "production_8001_touched": False,
             }
@@ -711,6 +739,7 @@ class ValidationPlatformHealthService:
             ],
             cwd=repo_root,
             timeout=20,
+            env_overrides=github_env,
         )
         if code != 0:
             return {
@@ -724,6 +753,7 @@ class ValidationPlatformHealthService:
                 "busy_count": 0,
                 "offline_count": 0,
                 "runners": [],
+                "auth_source": auth_source,
                 "reason_codes": ["runner_api_unavailable"],
                 "message": (err or out or "gh api actions runners unavailable").strip(),
                 "production_8001_touched": False,
@@ -742,6 +772,7 @@ class ValidationPlatformHealthService:
                 "busy_count": 0,
                 "offline_count": 0,
                 "runners": [],
+                "auth_source": auth_source,
                 "reason_codes": ["runner_api_invalid_json"],
                 "production_8001_touched": False,
             }
@@ -775,6 +806,7 @@ class ValidationPlatformHealthService:
             "busy_count": len(busy),
             "offline_count": len(offline),
             "runners": runners,
+            "auth_source": auth_source,
             "reason_codes": reason_codes,
             "production_8001_touched": False,
         }
@@ -826,7 +858,9 @@ class ValidationPlatformHealthService:
                 "AISTOCK_VALIDATION_EXPECT_BRANCH": self.env.get("AISTOCK_VALIDATION_EXPECT_BRANCH") or "",
                 "AISTOCK_VALIDATION_CONFIG_STRICT": self.env.get("AISTOCK_VALIDATION_CONFIG_STRICT") or "1",
                 "GITHUB_REPOSITORY": self.env.get("GITHUB_REPOSITORY") or "",
+                "AISTOCK_RUNNER_HEALTH_TOKEN_SET": bool(self.env.get("AISTOCK_RUNNER_HEALTH_TOKEN")),
                 "GH_TOKEN_SET": bool(self.env.get("GH_TOKEN")),
+                "GITHUB_TOKEN_SET": bool(self.env.get("GITHUB_TOKEN")),
             },
         }
 
@@ -959,7 +993,6 @@ class ValidationPlatformHealthService:
         created_at = payload.get("createdAt") or payload.get("created_at")
         updated_at = payload.get("updatedAt") or payload.get("updated_at")
         created_dt = _parse_iso(str(created_at) if created_at else None)
-        updated_dt = _parse_iso(str(updated_at) if updated_at else None)
         queue_duration_seconds = None
         if created_dt:
             queue_duration_seconds = max(0, int((datetime.now(timezone.utc) - created_dt).total_seconds()))
@@ -1059,8 +1092,48 @@ class ValidationPlatformHealthService:
             return default
         return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
 
-    def _run(self, args: list[str], *, cwd: Path, timeout: int) -> tuple[int, str, str]:
+    def _resolve_github_token(self, repo_root: Path) -> tuple[str | None, str | None, list[str], str | None]:
+        cache_key = _safe_display_path(repo_root)
+        cached = self._github_token_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        for key in GITHUB_TOKEN_ENV_ORDER:
+            token = str(self.env.get(key) or "").strip()
+            if token:
+                result = (token, f"env:{key}", [], None)
+                self._github_token_cache[cache_key] = result
+                return result
+
+        code, out, err = self._run(["gh", "auth", "token"], cwd=repo_root, timeout=8)
+        token = (out or "").strip()
+        if code == 0 and token:
+            result = (token, "gh:auth-token", [], None)
+            self._github_token_cache[cache_key] = result
+            return result
+
+        message = (err or out or "github token unavailable").strip()
+        result = (None, None, ["github_token_unavailable", "gh_auth_unavailable"], message)
+        self._github_token_cache[cache_key] = result
+        return result
+
+    def _github_command_env(self, repo_root: Path) -> dict[str, str] | None:
+        token, _, _, _ = self._resolve_github_token(repo_root)
+        if not token:
+            return None
+        return {"GH_TOKEN": token}
+
+    def _run(
+        self,
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: int,
+        env_overrides: Mapping[str, str] | None = None,
+    ) -> tuple[int, str, str]:
         try:
+            if env_overrides and self._uses_default_command_runner:
+                return _default_command_runner(args, cwd, timeout, env_overrides=env_overrides)
             return self.command_runner(args, cwd, timeout)
         except Exception as exc:  # noqa: BLE001
             return 1, "", str(exc)

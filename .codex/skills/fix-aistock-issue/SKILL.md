@@ -22,6 +22,8 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Do not touch production runtime services, write production DB, or apply DDL without explicit approval.
 - Preserve per-issue evidence even when batching same-module issues.
 - Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, lacks validation evidence, or `doctor` returns `workflow_gate=blocked`.
+- Read the returned Context Pack and `allowed_write_scope` before searching code. Default to `rg` only against scoped files/directories; use broad repo search only after a scoped search fails and record the reason in the final report.
+- Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
 
 ## Workflow
 
@@ -37,14 +39,14 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
    Compatibility fallback:
    `python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktree`
 4. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
-5. Fix only within `allowed_write_scope`; if more files are needed, stop and ask for scope expansion.
+5. Fix only within `allowed_write_scope`; run targeted `rg`/reads inside that scope first. If more files are needed, stop and ask for scope expansion.
 6. If the window restarts, run:
    `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`
 7. After code changes, run:
    `python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only`
 8. Run every required validation plan.
 9. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
-10. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`. The wrapper runs the pre-PR gate for scope, validation evidence, temp artifacts, and changed-file Ruff lint.
+10. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`. The wrapper runs the pre-PR gate for scope, validation evidence, uncommitted task files, temp artifacts, and changed-file Ruff lint.
 11. If PR automation reports canonical-root/main blocking, switch to the returned issue worktree and resume there. Never push/create PR from root main.
 12. Stop before merge unless the user explicitly requested merge.
 13. After an approved merge, run:
