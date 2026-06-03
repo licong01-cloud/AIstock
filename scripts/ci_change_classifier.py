@@ -10,9 +10,12 @@ BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-auto-link.yml",
+    ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",
     ".github/workflows/semgrep.yml",
     ".github/workflows/test.yml",
+    ".github/requirements/pr-quality.txt",
+    ".github/requirements/semgrep.txt",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
