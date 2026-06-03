@@ -233,6 +233,124 @@ for each watchlist item (status in ENTERED/HOLDING):
 
 **T+1 标注（v1 ★4）**：当日建仓的 STOP_LOSS 在 advisory 层只能记 `STOP_LOSS_DEFERRED_T1`，提示"次一可交易日方可执行"，不得标记为当日已退出。
 
+#### 5.2 Top20 复评策略：重跑信号，但不全量覆盖荐股池
+
+**设计决议**：每日复评必须每天重新运行 Selection Center，但新产生的 Top20 只代表"今日新候选/入选信号"，不得直接全量替换昨日荐股池。生命周期主池采用**原活跃荐股 + 今日候选缓冲池**的合并评估：
+
+```text
+N = 20                       # 主荐股目标数量
+K = 40 或 60                 # 复评缓冲池，建议 2N 或 3N
+today_signal = 今日重新运行选股，至少保留 top K 与所有 active_pool 的 rank/score evidence
+active_pool = watchlist 中 status in ENTERED/HOLDING 的荐股
+review_universe = active_pool ∪ today_signal.topK
+
+for item in active_pool:
+  先执行停牌/ST/退市/除权等资格与数据处理
+  再执行 ExitGuard 风险退出、盈利保护、alpha/rank 衰减、持有期检查
+
+for candidate in today_signal.top20 - active_pool:
+  若主荐股未满 N，可进入 ENTERED
+  若主荐股已满，仅替换已触发退出、连续弱化或跌出缓冲区的旧荐股
+  若只是 rank 边界抖动（如新股 rank=19、旧股 rank=21），不得替换
+```
+
+**阈值分离（hysteresis）**：
+
+- `rank_enter_threshold = 20`：进入 Top20 可成为新荐股候选。
+- `rank_exit_threshold = 40`（或 `2N`）：已有荐股跌出持有缓冲区才进入 alpha 衰减退出候选。
+- `rank_drop_confirm_days = 2`：连续确认后退出，避免单日噪声造成高换手。
+- `daily_replacement_budget = 20% of N`：普通替换每日最多约 4 只；硬止损、退市、ST/资格失效不受该上限约束。
+
+**证据要求**：
+
+- 每日 selection evidence 不得只保存 Top20；至少要覆盖 `topK + active_pool`，否则旧荐股跌出 Top20 后无法区分 rank=21 与 rank=300。
+- 若 active item 当日缺 rank/score evidence，必须记录 `RANK_MISSING_DATA_ERROR` / `EVIDENCE_MISSING_DATA_ERROR` 并 fail-fast 或 `WAITING_DATA`，不得静默退出或填默认 rank。
+- UI 必须分开展示"今日策略 Top20"与"荐股生命周期池/每日复评结果"，避免用户误解为昨日荐股被无理由覆盖。
+
+该规则对应机构指数与组合管理中的缓冲区/低换手原则：MSCI、FTSE Russell、S&P 等指数方法论普遍使用 buffer/banding 降低成分边界换手；组合再平衡文献中的 no-trade region / turnover-constrained rebalancing 也要求资产接近目标时不交易、越界后再调整。本设计只把该原则用于 advisory 生命周期状态，不产生交易、订单或 ledger。
+
+#### 5.3 退出机制：止损、止盈、alpha 衰减与到期退出
+
+**设计决议**：进入 Top20 后必须形成独立 `advisory_episode` 语义。同一股票从 ENTERED/HOLDING 到 EXITED 是一次荐股生命周期；未来重新进入 Top20 时必须生成新的 episode，不得复活旧生命周期。
+
+退出不是"跌出 Top20 即退出"，而由 ExitGuard 在每日复评中按优先级判断：
+
+```text
+for each active advisory item:
+  load entry_cost, entry_date, entry_rank, high_since_entry, holding_days
+  load today current_price, latest_rank, latest_score, suspend/ST/delist/limit info
+  apply corporate action factor to entry_cost, stop_price, take_price
+
+  if suspended:
+    action = WAITING_SUSPENDED
+  elif delisted or ST/eligibility failed:
+    action = EXIT_ELIGIBILITY
+  elif hard_stop_loss_triggered:
+    action = STOP_LOSS or STOP_LOSS_DEFERRED_T1
+  elif trailing_profit_lock_triggered:
+    action = TAKE_PROFIT_TRAILING
+  elif alpha_decay_triggered and return_bps >= 0:
+    action = TAKE_PROFIT_ALPHA_DECAY
+  elif alpha_decay_triggered and return_bps < 0:
+    action = ALPHA_RANK_DROP_EXIT
+  elif time_stop_triggered:
+    action = TIME_STOP
+  else:
+    action = HOLD / HOLD_STRONG / HOLD_WEAK
+```
+
+**止损目标**：限制单只荐股最大亏损，并阻止"推荐后明显破位但系统继续显示持有"。
+
+- `hard_stop_price = adjusted_entry_cost * (1 - max_loss_bps / 10000)`，第一版建议 `max_loss_bps=600`。
+- `soft_stop_price = adjusted_entry_cost - volatility_multiple * ATR`，第一版建议 `volatility_multiple=2.5`；soft stop 可先记 `SOFT_STOP_WARNING`，次日确认后退出。
+- 当日建仓当日触发 hard stop 时，仅记 `STOP_LOSS_DEFERRED_T1`，status 不立即 EXITED，遵守 A 股 T+1 语义。
+
+**止盈目标**：保护已有收益，避免盈利完全回吐；多因子荐股第一版不建议固定到价即全部止盈，默认采用 trailing stop + alpha 衰减止盈：
+
+- `trailing_activate_bps = 800`：收益达到约 8% 后激活追踪止盈。
+- `trailing_stop_bps = 400`：从 `high_since_entry` 回撤约 4% 后触发 `TAKE_PROFIT_TRAILING`。
+- `alpha_decay_exit`：若 `latest_rank > rank_exit_threshold` 且连续 `confirm_days=2`，有盈利则 `TAKE_PROFIT_ALPHA_DECAY`，亏损则 `ALPHA_RANK_DROP_EXIT`。
+- 固定 `take_profit_bps` 仅作为动量/事件策略族的可选 policy，不作为多因子 TopK 默认规则；启用固定止盈必须生成新的 `policy_sha256` 并进入质量报告分桶。
+
+**第一版 policy 建议**：
+
+```json
+{
+  "exit_guard": {
+    "stop_loss": {
+      "enabled": true,
+      "max_loss_bps": 600,
+      "volatility_multiple": 2.5,
+      "soft_confirm_days": 1,
+      "t1_handling": "defer_to_next_tradable_day"
+    },
+    "take_profit": {
+      "enabled": true,
+      "mode": "trailing_or_alpha_decay",
+      "fixed_take_profit_enabled": false,
+      "trailing_activate_bps": 800,
+      "trailing_stop_bps": 400
+    },
+    "alpha_decay_exit": {
+      "enabled": true,
+      "rank_exit_threshold": 40,
+      "confirm_days": 2
+    },
+    "time_stop": {
+      "enabled": false,
+      "max_holding_days": 20
+    }
+  }
+}
+```
+
+**记录与 UI 要求**：
+
+- 每次退出必须记录 `action`、`reason_code`、`policy_sha256`、`evidence_id`、当日价格、当日 rank/score、收益率、止损价、止盈/追踪止盈价。
+- `EXITED` 后的 item 不再参与 active_pool；同 code 重新入选时生成新 episode，并在质量报告中独立计算。
+- UI 对每只荐股展示：入选日期/入选 rank/入选价、当前 rank/当前价/收益率、当前 stop/take/trailing 价、最新复评 action、退出原因与证据链。
+- 退出只改变 advisory lifecycle 状态，不写 Paper v2 ledger、不调用 OMS/broker、不产生模拟或真实成交。
+
 ---
 
 ## 6. 实施阶段（粗粒度 5 阶段 + 严格验收）
@@ -273,7 +391,7 @@ for each watchlist item (status in ENTERED/HOLDING):
 
 - **目标**：实现 §5 状态机与每日复评闭环，"观察选股/荐股效果"的主场。
 - **复用**：`app.watchlist_items`（扩列 `status`/`exited_at`/`exit_reason`/`planned_entry`/`actual_entry` 或新增 `app.advisory_lifecycle` + `app.advisory_daily_review` 表，二选一在 Phase 2 设计评审定）；`/to-watchlist` 端点；`selection.daily_selection_evidence`；Phase 0 `exit_guard` evaluator。
-- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；T+1 标注（★4）；advisory 退出仅改 status，不成交。
+- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；Top20 重跑但不全量覆盖荐股池，采用 `active_pool ∪ topK` 合并复评、入选/退出阈值分离、替换预算；ExitGuard 覆盖 stop loss、trailing/take profit、alpha/rank 衰减、time stop；T+1 标注（★4）；advisory 退出仅改 status，不成交。
 - **范围-不做**：**绝不**写 Paper v2 ledger、**绝不**下单；不依赖 QE 验证（advisory 可先用 rule_default policy）。
 - **验收标准（客观）**：
   1. 状态机迁移完备且单测覆盖全部合法/非法迁移。
@@ -283,6 +401,9 @@ for each watchlist item (status in ENTERED/HOLDING):
   5. 边界标注：生命周期记录显式标 `layer=advisory`，与 Paper v2 区分。
   6. `advisory_daily_review` 为 append-only；每日 job 对同 (item, trade_date) **幂等可重跑**（重跑产出一致或带 version）。
   7. 除权除息/拆股跨日：`actual_entry_cost` 与 stop/take 价按 `$factor` 调整正确（针对性测试）；停牌 item 记 `WAITING`/carry 而非用陈旧价触发止损。
+  8. Top20 复评语义正确：每日新 Top20 不直接全量覆盖旧荐股；旧荐股在 `rank_enter=20`、`rank_exit=40`、`confirm_days=2` 等 hysteresis 规则下保留或退出；普通替换受 `daily_replacement_budget` 限制。
+  9. selection evidence 覆盖 `topK + active_pool`；active item 缺 rank/score evidence 时 fail-fast 或记 `WAITING_DATA`，不得静默退出或填默认 rank。
+  10. 退出机制覆盖 STOP_LOSS / STOP_LOSS_DEFERRED_T1 / TAKE_PROFIT_TRAILING / TAKE_PROFIT_ALPHA_DECAY / ALPHA_RANK_DROP_EXIT / TIME_STOP / EXIT_ELIGIBILITY；同 code 重新入选必须生成新 episode。
 - **审核 checklist**：状态机正确、每日复评幂等可重跑、T+1 正确、复权/停牌处理正确、零成交/零 ledger、与 Paper v2 边界清晰、reason/evidence 齐全。
 - **门槛**：上述 + 我签核。
 
