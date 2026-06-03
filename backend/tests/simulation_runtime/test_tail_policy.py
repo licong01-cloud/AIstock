@@ -3,10 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-import pytest
-
 from backend.services.paper_trading_v2.broker.base import CancelAck, OrderHandle, OrderHandleStatus
-from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot
+from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
@@ -21,7 +19,7 @@ from backend.services.simulation_runtime import (
     TailHandlingPolicyService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import PositionLot
 
 
@@ -248,5 +246,5 @@ def test_tail_policy_fails_fast_when_policy_payload_is_missing() -> None:
     )
 
     assert result.failed_count == 1
-    assert result.results[0].error["type"] == "StrategyPackageValidationError"
+    assert result.results[0].error["type"] == RuntimeConfigInvalidError.__name__
     assert "TailHandlingPolicy execution requires explicit policy payload" in result.results[0].error["message"]
