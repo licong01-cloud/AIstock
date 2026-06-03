@@ -138,6 +138,53 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _infra_action_reason(summary: dict[str, Any]) -> str | None:
+    statuses = summary.get("nightly_statuses") if isinstance(summary.get("nightly_statuses"), dict) else {}
+    if statuses.get("runner_preflight") == "failure":
+        return "self_hosted_runner_unavailable"
+    text = "\n".join(
+        [
+            str(summary.get("issue_title") or ""),
+            str(summary.get("manual_summary") or ""),
+            *[
+                str(item)
+                for job in summary.get("failed_jobs") or []
+                for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
+                if item
+            ],
+        ]
+    ).lower()
+    infra_tokens = [
+        "self-hosted windows runner unavailable",
+        "no online github actions runner",
+        "unable to query github runner health",
+        "aistock_runner_health_token",
+    ]
+    if any(token in text for token in infra_tokens):
+        return "runner_health_infrastructure"
+    return None
+
+
+def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
+    infra_reason = _infra_action_reason(summary)
+    if infra_reason:
+        return {
+            "mode": "infra_action_only",
+            "needs_bug_json": False,
+            "reason": infra_reason,
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "next_actions": [
+                    "Restore or register the self-hosted Windows GitHub Actions runner.",
+                    "Verify runner labels include: self-hosted, windows.",
+                    "Configure AISTOCK_RUNNER_HEALTH_TOKEN if runner API access is denied.",
+                    "Rerun the failed workflow after infrastructure is healthy.",
+                ],
+            },
+        }
+    return {"mode": "bug_promotion", "needs_bug_json": True, "reason": "code_or_test_failure"}
+
+
 def _infer_module(job_name: str, nox_session: str | None, failed_tests: list[str]) -> str | None:
     haystack = " ".join([job_name, nox_session or "", *failed_tests]).lower()
     module_patterns = [
@@ -532,13 +579,22 @@ def build_agent_handoff(
 ) -> dict[str, Any]:
     issue_arg = str(github_issue_number) if github_issue_number else "<issue-number>"
     issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    handoff_mode = _handoff_mode(summary)
     reproduce = _safe_command(str(summary.get("reproduce_command") or ""))
     required_verification = [
         item
         for item in [
             reproduce,
-            "Run the validation plan selected after BUG JSON promotion.",
-            "Keep GitHub Issue, BUG JSON, PR, and validation evidence synchronized.",
+            (
+                "Restore infrastructure and rerun CI/Nightly; do not promote to BUG JSON unless triage changes classification."
+                if not handoff_mode["needs_bug_json"]
+                else "Run the validation plan selected after BUG JSON promotion."
+            ),
+            (
+                "Keep GitHub Issue comments and rerun evidence synchronized."
+                if not handoff_mode["needs_bug_json"]
+                else "Keep GitHub Issue, BUG JSON, PR, and validation evidence synchronized."
+            ),
         ]
         if item
     ]
@@ -553,25 +609,32 @@ def build_agent_handoff(
             stop_conditions.append("Diagnostic extraction is partial; inspect the linked CI run before assigning fix scope.")
     if not suspected_files:
         stop_conditions.append("No suspected files were extracted; run triage before editing code.")
+    if not handoff_mode["needs_bug_json"]:
+        stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+    workflow_entrypoints = {
+        "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
+    }
+    next_commands = [workflow_entrypoints["triage"]]
+    if handoff_mode["needs_bug_json"]:
+        workflow_entrypoints["promote"] = (
+            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
+            "--create-registry-worktree --apply"
+        )
+        workflow_entrypoints["fix_after_promotion"] = (
+            "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree"
+        )
+        next_commands.extend([workflow_entrypoints["promote"], workflow_entrypoints["fix_after_promotion"]])
+    else:
+        workflow_entrypoints["promote"] = "not_applicable_infra_action_only"
+        workflow_entrypoints["fix_after_promotion"] = "not_applicable_infra_action_only"
     return {
         "schema_version": "aistock_ci_failure_agent_handoff_v1",
         "intended_clients": ["Codex", "Claude Code", "Cursor", "generic CLI/IDE agent"],
-        "workflow_entrypoints": {
-            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            "promote": (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
-                "--create-registry-worktree --apply"
-            ),
-            "fix_after_promotion": "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
-        },
-        "next_commands": [
-            f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
-                "--create-registry-worktree --apply"
-            ),
-            "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
-        ],
+        "handoff_mode": handoff_mode["mode"],
+        "needs_bug_json": handoff_mode["needs_bug_json"],
+        "infra_action": handoff_mode.get("infra_action"),
+        "workflow_entrypoints": workflow_entrypoints,
+        "next_commands": next_commands,
         "allowed_write_scope": suspected_files,
         "required_verification": required_verification,
         "regression_locator": summary.get("last_green_locator"),
@@ -668,11 +731,16 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
         "",
     ]
     policy = handoff.get("issue_creation_policy") if isinstance(handoff.get("issue_creation_policy"), dict) else {}
+    infra_action = handoff.get("infra_action") if isinstance(handoff.get("infra_action"), dict) else {}
     if policy:
         lines.append(f"- issue_creation_allowed: `{policy.get('allowed')}`")
         lines.append(f"- issue_creation_reason: `{policy.get('reason') or 'unknown'}`")
         if policy.get("next_command"):
             lines.append(f"- issue_creation_next_command: `{policy.get('next_command')}`")
+    lines.append(f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`")
+    lines.append(f"- needs_bug_json: `{handoff.get('needs_bug_json')}`")
+    if infra_action:
+        lines.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
     for command in handoff.get("next_commands") or []:
         lines.append(f"- `{command}`")
     lines.extend(
@@ -1146,12 +1214,27 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.extend(["", "## Extraction Errors", ""])
         for error in summary.get("extraction_errors") or []:
             lines.append(f"- `{str(error)}`")
+    infra_action = handoff.get("infra_action") if isinstance(handoff.get("infra_action"), dict) else {}
+    handoff_prelude = [
+        f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`",
+        f"- needs_bug_json: `{handoff.get('needs_bug_json')}`",
+    ]
+    if infra_action:
+        handoff_prelude.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
+        handoff_prelude.extend([f"- {item}" for item in infra_action.get("next_actions") or []])
+    bug_linkage_line = (
+        "- BUG ID: not applicable for infra-only issue unless `triage-ci-issue` later reclassifies it."
+        if handoff.get("needs_bug_json") is False
+        else "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`."
+    )
     lines.extend(
         [
             "",
             "## Agent Handoff",
             "",
             "Run these commands from a clean AIstock worktree. They are agent-neutral and work for Codex, Claude Code, Cursor, or a human operator.",
+            "",
+            *handoff_prelude,
             "",
             "```bash",
             *handoff["next_commands"],
@@ -1175,7 +1258,7 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
             "",
             "## BUG JSON Linkage",
             "",
-            "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
+            bug_linkage_line,
             "",
             "## Production Gates",
             "",
