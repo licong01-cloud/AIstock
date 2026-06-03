@@ -30,8 +30,8 @@
   "expected": "Self-hosted Nightly DR and code-intelligence jobs should execute the local workspace preparation step successfully on the Windows runner, without depending on GitHub checkout/network for those jobs.",
   "first_seen_at": "2026-06-03T10:50:04.923593Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e25ced8d400d33cafbddfca6c6067d059f1a3439",
+  "fixed_at": "2026-06-03T11:30:32.870017Z",
   "github_issue_number": 645,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/645",
   "last_seen_at": "2026-06-03T10:50:04.923593Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/647",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -61,5 +62,8 @@
     "fingerprint": "7fe11d0472790e0d89f45a23",
     "source_event_id": "FE-20260603-7fe11d047279"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -q -> passed (22 passed); python -m ruff check scripts/ci/prepare_self_hosted_workspace.py backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed; python -m nox -s validation_catalog_integrity validation_module_registry_l0 guardrail_changed_files -> passed; python -m nox -s l0 -> passed; PowerShell prepare_self_hosted_workspace smoke -> passed; python -m nox -s validation_center_backend -> passed (355 passed); git diff --check -> passed; nightly.yml YAML parse -> passed; GitHub PR #647 CI -> all green"
+  ],
   "verification_run_id": null
 }
