@@ -908,6 +908,14 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
             if item.get("github_issue_number")
         ]
     )
+    bug_id_signals = _unique_strings(
+        _infer_bug_ids_from_text(branch, commit_subjects, pr_title, pr_body, *changed_files)
+        + [
+            str(item.get("bug_id") or "").upper()
+            for item in bug_records
+            if item.get("bug_id")
+        ]
+    )
     inferred_scope: list[str] = []
     for record in bug_records:
         inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
@@ -925,6 +933,7 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "bug_records": bug_records,
         "pr_metadata_present": bool(pr_title or pr_body),
         "linked_issues": linked,
+        "bug_id_signals": bug_id_signals,
         "inferred_allowed_scope": _unique_strings(inferred_scope),
         "severity_signals": _unique_strings(
             [
@@ -1000,7 +1009,13 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
         + _as_list(issue_record.get("severity_guess"))
         + _as_list(inferred.get("severity_signals"))
     )
-    is_high_risk = severity in {"P0", "P1"}
+    explicit_bug_context = bool(
+        _as_list(issue_record.get("bug_id"))
+        or _as_list(inferred.get("bug_json_paths"))
+        or _as_list(inferred.get("bug_id_signals"))
+    )
+    explicit_severity = bool(_as_list(issue_record.get("severity")) or _as_list(issue_record.get("severity_guess")))
+    is_high_risk = severity in {"P0", "P1"} and (explicit_bug_context or explicit_severity)
     validation_evidence_present = bool(
         issue_record.get("verification_run_id")
         or _as_list(issue_record.get("validation_evidence"))
@@ -1092,6 +1107,7 @@ def build_pr_quality(
             "bug_json_paths": inferred["bug_json_paths"],
             "pr_metadata_present": inferred["pr_metadata_present"],
             "severity_signals": inferred["severity_signals"],
+            "bug_id_signals": inferred["bug_id_signals"],
             "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
             "bug_record_validation_evidence": inferred["bug_record_validation_evidence"],
             "pr_body_production_gates": inferred["pr_body_production_gates"],

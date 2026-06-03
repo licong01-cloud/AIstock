@@ -601,6 +601,47 @@ def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
     }
 
 
+def test_pr_check_does_not_treat_workflow_gate_design_pr_as_high_risk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix(validation): enforce P0/P1 PR evidence gate by default")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## What\n"
+        "- enable GitHub PR Quality P0/P1 evidence gate by default\n"
+        "## Scope notes\n"
+        "- GitHub Issue #257 remains an infra blocker and is not fixed by this PR",
+    )
+    monkeypatch.setattr(
+        flow,
+        "_git_output",
+        lambda args, cwd=flow.REPO_ROOT, check=True: (
+            "codex/workflow-pr-quality-evidence-20260603"
+            if args[:2] == ["branch", "--show-current"]
+            else "fix(validation): enforce p0 p1 pr evidence gate by default"
+        ),
+    )
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            ".github/workflows/pr-quality.yml",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "not_applicable"
+    assert gate["blocking"] == []
+
+
 def test_pr_check_t3_feature_warns_without_design_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
