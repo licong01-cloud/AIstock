@@ -1,0 +1,133 @@
+schema_version: research_assistant_phase7_crosscheck_v1
+plan_key: ra_phase7_full_accept
+phase0_6_anchors:
+  phase0:
+    required_tokens:
+      - "Phase 0 基线锁定锚点"
+      - "4eeaf2bc8978de575f29e7e2b7f8394c266b724d"
+      - "research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db"
+  phase1:
+    required_tokens:
+      - "Phase 1 G3 回填锚点"
+      - "research-assistant-memory-tree_20260601_013143_l1_ra-phase1-memory-tree_df500446_runner-validation__9756376ad7"
+  phase2:
+    required_tokens:
+      - "Phase 2 G3 traceability anchor"
+      - "research-assistant-graph-context_20260601_034550_l1_ra-phase2-graph-context_1c12af30_runner-validation__a76fcb4bd8"
+  phase3:
+    required_tokens:
+      - "ReAct 回灌"
+      - "research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0"
+  phase4:
+    required_tokens:
+      - "外部研究 MCP"
+      - "research-assistant-external-research_20260601_143547_l2-5_ra-phase4-external-research_e06c2074_runner-validation__8a33f0e7ac"
+  phase5:
+    required_tokens:
+      - "Agent Teams"
+      - "research-assistant-agent-teams_20260601_171920_l3_ra-phase5-agent-teams_58979854_runner-validation__9d5a66f1cc"
+  phase6:
+    required_tokens:
+      - "QE 自主闭环"
+      - "5049e2a6a6e1b9f679ac2c737304051ef568fa76"
+      - "research-assistant-qe-autonomy_20260602_072520_l4_ra-phase6-qe-autonomy_53872040_runner-validation__31cd146f58"
+      - "production_ddl_gate `required_pending_user_approval`"
+dai_classification:
+  DAI-MEM-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_memory_tree_retrieval.py, frontend/src/components/research-assistant/MemoryTreeView.tsx]
+  DAI-MEM-002:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_memory_dedup_scope.py, frontend/src/components/research-assistant/MemoryTreeView.tsx]
+  DAI-MEM-003:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_memory_autogrow.py, frontend/src/components/research-assistant/MemoryTreeView.tsx]
+  DAI-MEM-004:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_memory_tree_retrieval.py, frontend/src/components/research-assistant/MemoryTreeView.tsx]
+  DAI-MEM-005:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_memory_tree_retrieval.py]
+  DAI-GND-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_react_tool_loop.py, frontend/src/components/research-assistant/EvidenceCard.tsx]
+  DAI-GND-002:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_tool_catalog_gate.py]
+  DAI-GND-003:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_evidence_guard.py, frontend/src/components/research-assistant/EvidenceCard.tsx]
+  DAI-GRAPH-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_graph_injected_into_context.py, frontend/src/components/research-assistant/MemoryTreeView.tsx]
+  DAI-EXT-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_external_research_evidence_first.py, frontend/src/components/research-assistant/EvidenceCard.tsx]
+  DAI-TEAM-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_agent_teams_parallel.py, frontend/src/components/research-assistant/AgentTeamsRunView.tsx]
+  DAI-TEAM-002:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_orchestrator_reduce.py, frontend/src/components/research-assistant/AgentTeamsRunView.tsx]
+  DAI-QE-001:
+    status: hard_pass
+    evidence: [backend/tests/research_assistant/test_qe_autonomous_loop.py, backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py]
+  DAI-PARADIGM-001:
+    status: hard_pass
+    evidence: [scripts/research_assistant_phase7_crosscheck.py]
+  DAI-DRIFT-001:
+    status: hard_pass
+    evidence: [scripts/research_assistant_phase7_crosscheck.py]
+  DAI-CODE-001:
+    status: future_phase_pending
+    phase: Phase 8
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-CODE-002:
+    status: future_phase_pending
+    phase: Phase 8
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-REPORT-001:
+    status: future_phase_pending
+    phase: Phase 9
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-LEARN-001:
+    status: future_phase_pending
+    phase: Phase 10-12
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-LEARN-002:
+    status: future_phase_pending
+    phase: Phase 11-12
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-DRIFT-002:
+    status: hard_pass
+    evidence: [scripts/research_assistant_phase7_crosscheck.py]
+  DAI-PORT-001:
+    status: future_phase_pending
+    phase: Phase 13-15
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-PORT-002:
+    status: future_phase_pending
+    phase: Phase 13
+    evidence: [backend/tests/research_assistant/test_core_no_adapter_import.py]
+  DAI-PORT-003:
+    status: future_phase_pending
+    phase: Phase 14
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+  DAI-PORT-004:
+    status: future_phase_pending
+    phase: Phase 15
+    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+defect_classification:
+  DEF-01: {status: hard_pass, evidence: [backend/tests/research_assistant/test_react_tool_loop.py]}
+  DEF-02: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_tree_retrieval.py]}
+  DEF-03: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_scoring.py]}
+  DEF-04: {status: hard_pass, evidence: [backend/tests/research_assistant/test_graph_injected_into_context.py]}
+  DEF-05: {status: hard_pass, evidence: [backend/tests/research_assistant/test_agent_teams_parallel.py]}
+  DEF-06: {status: hard_pass, evidence: [backend/tests/research_assistant/test_qe_autonomous_loop.py]}
+  DEF-07: {status: hard_pass, evidence: [backend/tests/research_assistant/test_external_research_evidence_first.py]}
+  DEF-08: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_tree_ddl_contract.py]}
+  DEF-09: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_dedup_scope.py]}
+  DEF-10: {status: future_phase_pending, phase: Phase 8, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
+  DEF-11: {status: future_phase_pending, phase: Phase 9, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
+  DEF-12: {status: future_phase_pending, phase: Phase 10-12, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
+  DEF-13: {status: future_phase_pending, phase: Phase 13-15, evidence: [backend/tests/research_assistant/test_core_no_adapter_import.py]}

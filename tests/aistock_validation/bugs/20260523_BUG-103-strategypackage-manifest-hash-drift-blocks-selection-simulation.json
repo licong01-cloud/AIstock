@@ -1,47 +1,7 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-103",
-  "title": "P0: StrategyPackage manifest_sha256 drift blocks Selection Center and Paper v2/MiniQMT readiness",
-  "description": "StrategyPackage manifest/hash drift blocks package discovery, Selection Center selectable package enumeration, fresh daily selection evidence generation, and safe Paper v2 LocalSim/MiniQMT simulation readiness for affected packages.",
-  "module": "strategy_package",
-  "severity": "P0",
-  "risk_area": "paper_v2_selection_simulation_miniqmt_readiness",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "strategy_package_manifest_hash_mismatch_blocks_selection_and_simulation_readiness",
-    "live_date": "2026-05-23",
-    "backend": "http://127.0.0.1:8001",
-    "affected_paths": [
-      "/api/v1/strategy-packages",
-      "/api/v1/selection-center/selectable-packages",
-      "/api/v1/qmt/virtual-strategies/summary"
-    ]
-  },
-  "reproduce_command": "powershell -NoProfile -Command \"Invoke-RestMethod http://127.0.0.1:8001/api/v1/strategy-packages?limit=20; Invoke-RestMethod http://127.0.0.1:8001/api/v1/selection-center/selectable-packages?limit=20; Invoke-RestMethod http://127.0.0.1:8001/api/v1/qmt/virtual-strategies/summary\"",
-  "evidence_uris": [
-    "file:backend/services/strategy_package/repository.py",
-    "file:backend/services/selection_center",
-    "file:backend/services/simulation_runtime",
-    "file:backend/services/qmt_strategy_ledger",
-    "github:https://github.com/licong01-cloud/AIstock/issues/172",
-    "commit:6650cc64c4fc2d2a8ce195db9f849aedb4370a3a",
-    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
-  ],
-  "fingerprint": "abce01e18fac96e7",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-05-23T02:09:17Z",
-  "first_seen_at": "2026-05-23T02:09:17Z",
-  "last_seen_at": "2026-05-27T06:22:22Z",
-  "fixed_at": null,
-  "submitted_at": "2026-05-23T02:09:17Z",
-  "closed_at": null,
-  "github_issue_number": 172,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/172",
   "allowed_write_scope": [
     "backend/services/strategy_package/",
+    "backend/routers/strategy_packages.py",
     "backend/services/selection_center/",
     "backend/services/simulation_runtime/",
     "backend/services/qmt_strategy_ledger/",
@@ -54,13 +14,79 @@
     "tests/aistock_validation/bugs/",
     "tests/aistock_validation/history/"
   ],
-  "suspected_modules": [
-    "backend/services/strategy_package/repository.py",
-    "strategy package persistence data",
-    "Selection Center package enumeration",
-    "SimulationRuntime daily selection evidence",
-    "MiniQMT virtual strategy bindings"
+  "assigned_agent": null,
+  "batch_id": "BATCH-PAPER-V2-READINESS-20260523",
+  "batch_issues": [
+    "BUG-103",
+    "BUG-104"
   ],
+  "batch_strategy": "shared_registry_worktree",
+  "bug_id": "BUG-103",
+  "closed_at": null,
+  "closure_requirements": [
+    "No stale 2026-05-20 selection binding is used as a Monday 2026-05-25 trading signal.",
+    "Current MiniQMT POC strategies either point to repaired valid packages with fresh selection evidence or are explicitly disabled/quarantined.",
+    "Selection Center package discovery is not globally blocked by one corrupt historical package unless the selected package itself is corrupt.",
+    "Any production data repair is reviewed, audited, and separately verified before claiming unattended readiness.",
+    "The fix report includes production_ddl_gate, production_backend_dependency_gate, and production_frontend_dependency_gate."
+  ],
+  "created_at": "2026-05-23T02:09:17Z",
+  "description": "StrategyPackage manifest/hash drift blocks package discovery, Selection Center selectable package enumeration, fresh daily selection evidence generation, and safe Paper v2 LocalSim/MiniQMT simulation readiness for affected packages.",
+  "events": [
+    {
+      "action": "github_issue_created",
+      "actor": "codex-app",
+      "note": "Mirrored to GitHub issue #172 because Validation MCP sync is currently blocked by an unrelated UTF-8 BOM parse error in a stale worktree registry entry.",
+      "timestamp": "2026-05-23T02:09:17Z"
+    },
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "Found during Paper v2 readiness audit for unattended AIstock selection, LocalSim paper trading, and MiniQMT paper-sim operation.",
+      "timestamp": "2026-05-23T02:09:17Z"
+    },
+    {
+      "action": "close_sync_audit_keep_open",
+      "actor": "codex-app",
+      "note": "Audit keeps BUG-103 open: 6650cc64 isolated/quarantined corrupt package drift and added manifest-integrity/repair APIs, but live /api/v1/strategy-packages/manifest-integrity?limit=500 still reports drifted_count=10. Operator-reviewed production repair/quarantine evidence and fresh daily selection evidence are still required.",
+      "timestamp": "2026-05-27T06:22:22Z"
+    },
+    {
+      "action": "scope_expanded_router_repair_api",
+      "actor": "codex-app",
+      "note": "Expanded BUG-103 repair scope to include the StrategyPackage router endpoint that passes explicit manifest hash confirmation fields to the service layer; no production data mutation is performed.",
+      "timestamp": "2026-05-29T02:56:00+08:00"
+    }
+  ],
+  "evidence_uris": [
+    "file:backend/services/strategy_package/repository.py",
+    "file:backend/services/selection_center",
+    "file:backend/services/simulation_runtime",
+    "file:backend/services/qmt_strategy_ledger",
+    "github:https://github.com/licong01-cloud/AIstock/issues/172",
+    "commit:6650cc64c4fc2d2a8ce195db9f849aedb4370a3a",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "fingerprint": "abce01e18fac96e7",
+  "first_seen_at": "2026-05-23T02:09:17Z",
+  "fix_branch": null,
+  "fix_commit": "2d7c4d38116b4b0dc85d76743596da5f4111c9ea",
+  "fixed_at": "2026-06-03T11:25:26.735133Z",
+  "github_issue_number": 172,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/172",
+  "last_seen_at": "2026-05-27T06:22:22Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "This registry-only commit does not implement the fix.",
+    "Do not start or restart production backend as part of issue registration.",
+    "Do not mutate production StrategyPackage data or submit MiniQMT orders as part of issue registration."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/313",
+  "process_level": "B",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "powershell -NoProfile -Command \"Invoke-RestMethod http://127.0.0.1:8001/api/v1/strategy-packages?limit=20; Invoke-RestMethod http://127.0.0.1:8001/api/v1/selection-center/selectable-packages?limit=20; Invoke-RestMethod http://127.0.0.1:8001/api/v1/qmt/virtual-strategies/summary\"",
   "required_verification": [
     "Diagnostic enumerates all package_id/version records with manifest_sha256 drift and reports current binding impact.",
     "Approved repair/quarantine workflow has durable audit evidence and rollback/restore procedure; no silent hash overwrite.",
@@ -70,44 +96,41 @@
     "Regression tests cover repository validation and corrupt-package isolation/quarantine behavior.",
     "BUG registry JSON and GitHub issue remain synchronized."
   ],
-  "closure_requirements": [
-    "No stale 2026-05-20 selection binding is used as a Monday 2026-05-25 trading signal.",
-    "Current MiniQMT POC strategies either point to repaired valid packages with fresh selection evidence or are explicitly disabled/quarantined.",
-    "Selection Center package discovery is not globally blocked by one corrupt historical package unless the selected package itself is corrupt.",
-    "Any production data repair is reviewed, audited, and separately verified before claiming unattended readiness.",
-    "The fix report includes production_ddl_gate, production_backend_dependency_gate, and production_frontend_dependency_gate."
-  ],
-  "events": [
-    {
-      "timestamp": "2026-05-23T02:09:17Z",
-      "actor": "codex-app",
-      "action": "github_issue_created",
-      "note": "Mirrored to GitHub issue #172 because Validation MCP sync is currently blocked by an unrelated UTF-8 BOM parse error in a stale worktree registry entry."
-    },
-    {
-      "timestamp": "2026-05-23T02:09:17Z",
-      "actor": "codex-app",
-      "action": "discovered",
-      "note": "Found during Paper v2 readiness audit for unattended AIstock selection, LocalSim paper trading, and MiniQMT paper-sim operation."
-    },
-    {
-      "timestamp": "2026-05-27T06:22:22Z",
-      "actor": "codex-app",
-      "action": "close_sync_audit_keep_open",
-      "note": "Audit keeps BUG-103 open: 6650cc64 isolated/quarantined corrupt package drift and added manifest-integrity/repair APIs, but live /api/v1/strategy-packages/manifest-integrity?limit=500 still reports drifted_count=10. Operator-reviewed production repair/quarantine evidence and fresh daily selection evidence are still required."
-    }
+  "risk_area": "paper_v2_selection_simulation_miniqmt_readiness",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "submitted_at": "2026-05-23T02:09:17Z",
+  "suspected_modules": [
+    "backend/services/strategy_package/repository.py",
+    "strategy package persistence data",
+    "Selection Center package enumeration",
+    "SimulationRuntime daily selection evidence",
+    "MiniQMT virtual strategy bindings"
   ],
   "task_tier": "T2",
-  "process_level": "B",
-  "batch_id": "BATCH-PAPER-V2-READINESS-20260523",
-  "batch_issues": [
-    "BUG-103",
-    "BUG-104"
+  "title": "P0: StrategyPackage manifest_sha256 drift blocks Selection Center and Paper v2/MiniQMT readiness",
+  "trigger_condition": {
+    "affected_paths": [
+      "/api/v1/strategy-packages",
+      "/api/v1/selection-center/selectable-packages",
+      "/api/v1/qmt/virtual-strategies/summary"
+    ],
+    "backend": "http://127.0.0.1:8001",
+    "live_date": "2026-05-23",
+    "scenario": "strategy_package_manifest_hash_mismatch_blocks_selection_and_simulation_readiness"
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/services/strategy_package/repository.py backend/services/strategy_package/service.py backend/routers/strategy_packages.py -> passed",
+    "python -m pytest backend/tests/strategy_package/test_repository_service.py backend/tests/strategy_package/test_manifest_integrity_router.py -q -p no:cacheprovider -> 37 passed",
+    "python -m pytest backend/tests/selection_center/test_selection_center_api.py -q -p no:cacheprovider -> 8 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; mapped 12/unmapped 0/ambiguous 0)",
+    "python -m nox -s l0 -> passed (guardrail blocking 0)",
+    "python -m nox -s paper_v2_backend -> 594 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed; data quality non-strict legacy warning only",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed",
+    "python -m nox -s validation_center_backend -> 355 passed; coverage line 80.07 branch 62.25",
+    "PR #313 CI -> checks_passed"
   ],
-  "batch_strategy": "shared_registry_worktree",
-  "non_goals": [
-    "This registry-only commit does not implement the fix.",
-    "Do not start or restart production backend as part of issue registration.",
-    "Do not mutate production StrategyPackage data or submit MiniQMT orders as part of issue registration."
-  ]
+  "verification_run_id": null
 }

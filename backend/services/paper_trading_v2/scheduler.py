@@ -117,6 +117,7 @@ class PaperTradingV2SessionScheduler:
         auto_run_recovery = self.auto_run_coordinator.recover_enabled_portfolios(
             limit=limit,
             as_of_time=as_of_time,
+            blocked_portfolio_ids=self._active_abandoned_portfolio_ids(),
         )
         sessions = self.repository.list_tickable_sessions(statuses=TICKABLE_SESSION_STATUSES, limit=limit)
         result: dict[str, Any] = {
@@ -272,7 +273,9 @@ class PaperTradingV2SessionScheduler:
                 "policy": SESSION_TICK_TIMEOUT_POLICY,
                 "scheduler_guard_released": True,
                 "terminal_state": PaperSessionStatus.FAILED.value,
+                "portfolio_after_timeout_state": PortfolioStatus.FAILED.value,
                 "portfolio_terminal_state": PortfolioStatus.FAILED.value,
+                "auto_run_recoverable": False,
                 "orphan_worker_status_field": "abandoned_session_ticks",
             },
         }
@@ -292,7 +295,8 @@ class PaperTradingV2SessionScheduler:
             completed_at=datetime.now(UTC),
             last_error=payload,
         )
-        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.FAILED)
+        portfolio_status = self._timeout_portfolio_status(session, payload)
+        self.repository.update_portfolio_status(session.portfolio_id, portfolio_status)
         self.repository.save_session_event(
             session_id=session.session_id,
             event_type=event_type,
@@ -334,6 +338,34 @@ class PaperTradingV2SessionScheduler:
             event_type="SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED",
         )
 
+    def _timeout_portfolio_status(self, session: Any, payload: dict[str, Any]) -> PortfolioStatus:
+        context = payload.setdefault("context", {})
+        try:
+            portfolio = self.repository.get_portfolio(session.portfolio_id)
+        except Exception:  # pragma: no cover - repository implementations already fail loudly elsewhere.
+            portfolio = None
+        if getattr(portfolio, "auto_run_enabled", False):
+            context.update(
+                {
+                    "auto_run_enabled": True,
+                    "auto_run_recoverable": True,
+                    "portfolio_after_timeout_state": PortfolioStatus.READY.value,
+                    "portfolio_recovery_state": PortfolioStatus.READY.value,
+                    "portfolio_terminal_state": None,
+                    "recovery_policy": "auto_run_recover_after_stale_worker_completes",
+                }
+            )
+            return PortfolioStatus.READY
+        context.update(
+            {
+                "auto_run_enabled": bool(getattr(portfolio, "auto_run_enabled", False)),
+                "auto_run_recoverable": False,
+                "portfolio_after_timeout_state": PortfolioStatus.FAILED.value,
+                "portfolio_terminal_state": PortfolioStatus.FAILED.value,
+            }
+        )
+        return PortfolioStatus.FAILED
+
     def _remember_abandoned_session_tick(self, session_id: str, active: dict[str, Any]) -> None:
         with self._lock:
             self._abandoned_session_ticks[session_id] = active
@@ -349,6 +381,19 @@ class PaperTradingV2SessionScheduler:
                     key=lambda key: self._abandoned_session_ticks[key].get("abandoned_at") or datetime.max.replace(tzinfo=UTC),
                 )
                 self._abandoned_session_ticks.pop(oldest_id, None)
+
+    def _active_abandoned_portfolio_ids(self) -> set[str]:
+        portfolio_ids: set[str] = set()
+        with self._lock:
+            for session_id, active in list(self._abandoned_session_ticks.items()):
+                thread = active.get("thread")
+                if not getattr(thread, "is_alive", lambda: False)():
+                    self._abandoned_session_ticks.pop(session_id, None)
+                    continue
+                portfolio_id = active.get("portfolio_id")
+                if portfolio_id:
+                    portfolio_ids.add(str(portfolio_id))
+        return portfolio_ids
 
     def _active_session_timeout_payload(self, session: Any, *, now: datetime) -> dict[str, Any] | None:
         with self._lock:

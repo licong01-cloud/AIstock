@@ -778,6 +778,59 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
 
+def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+
+    payload = workflow.build_nightly_intake_smoke_plan()
+
+    assert payload["schema_version"] == "aistock_nightly_intake_smoke_v1"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["github_writes"] is False
+    assert payload["unexpected_dirty_paths"] == []
+    assert payload["candidate_history_path"].startswith("tmp/validation/nightly_failure_issue/smoke/")
+    assert "tests/aistock_validation/history" not in payload["candidate_history_path"]
+    for path in payload["artifacts"].values():
+        assert path.startswith("tmp/validation/nightly_failure_issue/smoke/")
+        assert (isolated_workflow_root / path).exists()
+    assert (isolated_workflow_root / payload["candidate_history_path"]).exists()
+    assert "triage-ci-issue" in payload["handoff_entrypoints"]["triage"]
+    assert "promote-ci-issue" in payload["handoff_entrypoints"]["promote"]
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_batch_workflow_smoke_writes_only_tmp_artifacts_and_per_issue_closure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+
+    payload = workflow.build_batch_workflow_smoke_plan()
+
+    assert payload["schema_version"] == "aistock_batch_workflow_smoke_v1"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["github_writes"] is False
+    assert payload["unexpected_dirty_paths"] == []
+    assert payload["finish"]["workflow_gate"] == "ready_for_pr"
+    assert payload["finish"]["scope_check"]["status"] == "passed"
+    assert payload["finish"]["per_issue_commit_map"] == {
+        "BUG-000": "synthetic-shared-pr",
+        "BUG-001": "synthetic-shared-pr",
+    }
+    assert set(payload["finish"]["per_issue_closure_map"]) == {"BUG-000", "BUG-001"}
+    for path in payload["artifacts"].values():
+        assert path.startswith("tmp/issue_workflow/")
+        assert (isolated_workflow_root / path).exists()
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
 def test_code_intelligence_doctor_reports_bootstrap_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -851,6 +904,72 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert payload["code_intelligence"]["codegraph"]["status"] == "ok"
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_doctor_warns_when_bug_allocator_lags_github(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    _write_json(workflow.BUGS_ROOT / ".bug_id_allocator.json", {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
+    codex_home = isolated_workflow_root / "codex_home"
+    (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(workflow, "_run_command", lambda *_args, **_kwargs: {"ok": True, "stdout": "{}", "stderr": ""})
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [{"bug_id": "BUG-217", "number": 217, "kind": "github_issue", "source": "https://github.example/issues/588"}],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok"},
+            "understand_anything": {"status": "available"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=False)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["bug_id_allocation"]["next_number"] == 218
+    assert payload["bug_id_allocation"]["github_max_number"] == 217
+    assert any("bug id allocation" in warning for warning in payload["warnings"])
+    assert compact["bug_id_allocation"]["next_number"] == 218
 
 
 def test_doctor_compact_reports_codegraph_bootstrap_next_command(
@@ -1506,6 +1625,60 @@ def test_submit_bug_allocator_scans_stale_worktrees(
     assert payload["bug_id"] == "BUG-137"
     assert payload["bug_id_allocation"]["global_max_number"] == 136
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
+
+
+def test_submit_bug_allocator_scans_github_only_bug_ids(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-217",
+                    "number": 217,
+                    "kind": "github_issue",
+                    "source": "https://github.example/issues/588",
+                    "github_issue_number": 588,
+                    "github_state": "OPEN",
+                }
+            ],
+            [],
+        ),
+    )
+
+    payload = workflow.build_submit_bug_plan(
+        title="Allocator GitHub-only regression",
+        module="validation",
+        severity="P1",
+        description="A GitHub-only BUG id should advance allocation.",
+        expected="The next BUG id should be globally unique.",
+        actual="The local allocator points at BUG-216 while GitHub has BUG-217.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="592",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/592",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    assert payload["bug_id"] == "BUG-218"
+    assert payload["bug_id_allocation"]["global_max_number"] == 217
+    assert payload["bug_id_allocation"]["warnings"]
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 218
 
 
 def test_submit_bug_explicit_duplicate_fails_before_github_create(
@@ -2500,6 +2673,92 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     ]
 
 
+def test_merge_finalizer_relocates_before_cleaning_current_source_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    source_worktree = isolated_workflow_root / "task"
+    close_sync_root = isolated_workflow_root / "registry"
+    source_worktree.mkdir()
+    close_sync_root.mkdir()
+    cleanup_cwds: list[Path] = []
+
+    monkeypatch.chdir(source_worktree)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "workflow_gate": "close_synced",
+            "registry_root": str(close_sync_root),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "merge_commit": "merge123",
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+    )
+
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        cleanup_cwds.append(Path.cwd())
+        assert not workflow._cwd_is_inside(kwargs.get("worktree"))
+        return {
+            "workflow_gate": "cleanup_done",
+            "branch": kwargs["branch"],
+            "worktree": kwargs.get("worktree"),
+            "sync_root": kwargs.get("sync_root"),
+        }
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(source_worktree),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "complete"
+    assert payload["cleanup_cwd_relocation"] == {
+        "from": str(source_worktree),
+        "to": str(isolated_workflow_root),
+        "reason": "cleanup_target_contains_current_cwd",
+        "relocated": True,
+    }
+    assert cleanup_cwds == [isolated_workflow_root, isolated_workflow_root]
+    assert Path.cwd() == isolated_workflow_root
+
+
 def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3406,6 +3665,10 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
 
     assert payload["workflow_gate"] == "cleanup_done"
     assert "currently checked-out branch" not in " ".join(payload["blocking"])
+    assert payload["worktree_is_current_cwd"] is True
+    assert any(item["action"] == "relocate_current_cwd" for item in payload["actions"])
+    assert any(item["command"].startswith("chdir ") for item in payload["applied"])
+    assert Path.cwd() == isolated_workflow_root
     assert (("branch", "--show-current"), isolated_workflow_root) in calls
     assert all(cwd == isolated_workflow_root for args, cwd in executed if args[:2] in {("git", "worktree"), ("git", "branch")})
 
@@ -3916,6 +4179,7 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
         "summarize_actions_run",
         lambda **kwargs: summary,
     )
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_triage_ci_issue_plan(issue_number=197)
 
@@ -3937,6 +4201,127 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith(
         "--issue 197 --create-registry-worktree --apply"
     )
+
+
+def test_triage_ci_issue_preserves_issue_locator_and_marks_superseded_main_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 584,
+        "title": "[P1][l0] main CI failed: ##[error]Process completed with exit code 1.",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/584",
+        "body": """<!-- aistock-issue-on-test-fail:26819596553 -->
+
+## Failure Summary
+
+- Diagnostic status: `complete`
+- Workflow/source: `AIstock CI`
+- Run: https://github.com/licong01-cloud/AIstock/actions/runs/26819596553
+- Branch: `main`
+- Commit: `a80f327f93c3b4c235e11e0e5b25d714c4874e9e`
+
+## Regression Locator
+
+- last_green_status: `found`
+- commit_range: `dae8bd170066..a80f327f93c3`
+- previous_success_run: https://github.com/licong01-cloud/AIstock/actions/runs/26817889738
+
+## Suggested Triage
+
+- [ ] real_regression
+- [ ] infra_flaky
+""",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock CI",
+        "run_id": "26819596553",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26819596553",
+        "branch": "main",
+        "commit": "a80f327f93c3b4c235e11e0e5b25d714c4874e9e",
+        "failed_jobs": [
+            {
+                "job_name": "Static gate (l0 + module registry)",
+                "nox_session": "l0",
+                "failed_tests": [],
+                "error_signature": "##[error]Process completed with exit code 1.",
+                "key_log_excerpt": ["nox > Session l0 failed."],
+                "suspected_module": "validation",
+                "suspected_files": [],
+            }
+        ],
+        "suspected_modules": ["validation"],
+        "suspected_files": [],
+        "fingerprint": "ci-1b05b81d088257d5",
+        "last_green_locator": {
+            "schema_version": "aistock_ci_last_green_locator_v1",
+            "status": "not_found",
+            "commit_range": None,
+            "previous_success_run": None,
+        },
+        "reproduce_command": "python -m nox -s l0",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(
+        workflow,
+        "_find_superseding_main_success",
+        lambda summary: {
+            "run_id": "26825497246",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26825497246",
+            "head_sha": "440e410af8a8e999cfc7e73a85482758a089e39f",
+            "created_at": "2026-06-02T14:12:36Z",
+        },
+    )
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=584)
+
+    locator = payload["failure_event"]["last_green_locator"]
+    assert locator["status"] == "found"
+    assert locator["commit_range"] == "dae8bd170066..a80f327f93c3"
+    assert locator["previous_success_run"]["run_id"] == "26817889738"
+    assert payload["classification_recommendation"] == "superseded_by_later_main_success"
+    assert payload["needs_bug_json"] is False
+    assert payload["superseded_action"]["workflow_gate"] == "superseded_by_latest_main_success"
+    assert payload["superseded_action"]["superseding_run"]["run_id"] == "26825497246"
+    assert payload["next_command"].startswith("gh issue close 584")
+    assert payload["context_pack"]["last_green_locator"]["source"] == "github_issue_body"
+    assert payload["context_pack"]["agent_handoff"]["next_commands"] == [payload["next_command"]]
+    assert "promote" not in payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]
+    assert payload["failure_event"]["candidate_status"] == "superseded_by_later_main_success"
+
+
+def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [
+            {
+                "error_signature": "##[error]Process completed with exit code 1.",
+                "key_log_excerpt": ["nox > Session l0 failed."],
+            }
+        ],
+    }
+    issue = {
+        "title": "[P1][l0] main CI failed",
+        "body": """## Failure Summary
+
+- Diagnostic status: `complete`
+
+## Suggested Triage
+
+- [ ] infra_flaky
+- [ ] real_regression
+""",
+    }
+
+    assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
 
 
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
@@ -4005,6 +4390,7 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         "summarize_actions_run",
         lambda **kwargs: summary,
     )
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(
         issue_number=197,
@@ -4066,6 +4452,7 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
     monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
     monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, bug_id=None)
 
@@ -4073,6 +4460,107 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     assert "--create-registry-worktree --apply" in payload["next_command"]
     assert payload["triage"]["needs_bug_json"] is True
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_triage_ci_issue_compact_output_keeps_actionable_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+            "detected_run_id": "26378872481",
+            "next_command": "python scripts/aistock_issue_workflow.py promote-ci-issue --issue 197 --create-registry-worktree --apply",
+            "classification_recommendation": "real_regression_candidate",
+            "needs_bug_json": True,
+            "failure_event_path": "tmp/issue_workflow/ci-issue-197/failure-event.json",
+            "context_pack_md_path": "tmp/issue_workflow/ci-issue-197/context-pack.md",
+            "github_issue": {
+                "number": 197,
+                "url": "https://github.com/licong01-cloud/AIstock/issues/197",
+                "title": "[P1] AIstock CI failed on main",
+                "state": "OPEN",
+                "body": "verbose body should stay hidden",
+            },
+            "summary": {
+                "diagnostic_status": "complete",
+                "workflow": "AIstock CI",
+                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
+                "suspected_modules": ["validation"],
+                "suspected_files": ["scripts/aistock_issue_workflow.py"],
+                "reproduce_command": "python -m nox -s validation_center_backend",
+                "failed_jobs": [{"key_log_excerpt": ["large excerpt should stay hidden"]}],
+            },
+            "suggested_bug": {
+                "module": "validation",
+                "severity": "P1",
+                "title": "CI failure requires triage",
+                "risk_area": "ci_failure_intake",
+                "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+                "required_verification": ["validation_center_backend"],
+            },
+        }
+    )
+
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["classification_recommendation"] == "real_regression_candidate"
+    assert compact["diagnostic_status"] == "complete"
+    assert compact["needs_bug_json"] is True
+    assert compact["github_issue"]["number"] == 197
+    assert compact["suggested_bug"]["module"] == "validation"
+    assert compact["suggested_bug"]["allowed_write_scope_count"] == 1
+    assert "body" not in compact["github_issue"]
+    assert "summary" not in compact
+    assert "large excerpt" not in json.dumps(compact)
+
+
+def test_triage_ci_issue_compact_output_keeps_infra_action_without_full_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+            "next_command": "infra_action_required_no_code_bug",
+            "classification_recommendation": "infra_blocker",
+            "needs_bug_json": False,
+            "github_issue": {
+                "number": 257,
+                "url": "https://github.com/licong01-cloud/AIstock/issues/257",
+                "title": "P1 Nightly blocked: self-hosted Windows runner unavailable",
+                "state": "OPEN",
+            },
+            "summary": {
+                "diagnostic_status": "complete",
+                "workflow": "AIstock Nightly L3 + DR",
+                "failed_jobs": [
+                    {
+                        "error_signature": "runner outage",
+                        "key_log_excerpt": ["full runner log should stay hidden"],
+                    }
+                ],
+            },
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "reason": "CI/Nightly failure is classified as infrastructure, not a code regression.",
+                "next_actions": [
+                    "restore or register the self-hosted Windows GitHub Actions runner",
+                    "verify runner labels include: self-hosted, windows",
+                ],
+                "production_gates": {
+                    "production_ddl_gate": "noop",
+                    "production_frontend_dependency_gate": "noop",
+                    "production_backend_dependency_gate": "noop",
+                },
+            },
+        }
+    )
+
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["classification_recommendation"] == "infra_blocker"
+    assert compact["needs_bug_json"] is False
+    assert compact["infra_action"]["workflow_gate"] == "infra_action_required"
+    assert compact["infra_action"]["next_actions"][0].startswith("restore or register")
+    assert "summary" not in compact
+    assert "full runner log" not in json.dumps(compact)
 
 
 def test_promote_ci_issue_blocks_infra_runner_outage(
@@ -4116,6 +4604,7 @@ def test_promote_ci_issue_blocks_infra_runner_outage(
     monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
     monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
     monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(issue_number=257, apply=True, bug_id=None)
 

@@ -93,6 +93,23 @@ def test_scanner_respects_rule_exclude_globs_for_tests(tmp_path: Path) -> None:
     assert not any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
 
 
+def test_trading_fallback_guardrail_ignores_test_file_names(tmp_path: Path) -> None:
+    scanner = _load_module()
+    test_file = tmp_path / "backend" / "tests" / "selection_center" / "test_price_guidance.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "def test_missing_signal_ref_price_degrades_without_default_price():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([test_file], rules=rules, root=tmp_path)
+
+    assert not any(finding.rule_id == "TRADING-FALLBACK-001" for finding in findings)
+
+
 def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
     scanner = _load_module()
     root_script = tmp_path / "one_off_debug.py"

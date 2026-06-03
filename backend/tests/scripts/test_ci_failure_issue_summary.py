@@ -329,6 +329,196 @@ def test_candidate_history_persistence_dedupes_by_fingerprint(tmp_path: Path) ->
     assert payload["last_seen_at"] == "2026-06-02T01:00:00Z"
 
 
+def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "databaseId": 300,
+                    "workflowName": "AIstock CI",
+                    "displayTitle": "CI",
+                    "event": "pull_request",
+                    "headBranch": "bug/example",
+                    "headSha": "abcdef1234567890",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
+                }
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    payload = summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock",
+        run_id="300",
+        wait_for_completion=True,
+        wait_attempts=1,
+        wait_seconds=0,
+    )
+
+    assert payload["diagnostic_status"] == "deferred"
+    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["issue_creation_policy"]["reason"] == summary.LOGS_NOT_READY_REASON
+    assert "CI run is still in progress" in payload["failure_event"]["normalized_error"]
+    with pytest.raises(ValueError, match="not actionable yet"):
+        summary.build_github_issue_payload(payload)
+    assert all("--job" not in call for call in calls)
+
+
+def test_actions_run_defers_issue_when_job_log_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(args: list[str], **_: object) -> dict[str, object]:
+        if "--job" in args:
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "run 300 is still in progress; logs will be available when it is complete",
+            }
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "databaseId": 300,
+                    "workflowName": "AIstock CI",
+                    "displayTitle": "CI",
+                    "event": "pull_request",
+                    "headBranch": "bug/example",
+                    "headSha": "abcdef1234567890",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
+                }
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    payload = summary.summarize_actions_run(repo="licong01-cloud/AIstock", run_id="300")
+
+    assert payload["diagnostic_status"] == "deferred"
+    assert payload["failed_jobs"][0]["nox_session"] == "paper_v2_backend"
+    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["issue_creation_policy"]["reason"] == summary.LOGS_NOT_READY_REASON
+
+
+def test_actions_run_retries_job_log_until_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    job_log_calls = 0
+
+    def fake_run(args: list[str], **_: object) -> dict[str, object]:
+        nonlocal job_log_calls
+        if "--job" in args:
+            job_log_calls += 1
+            if job_log_calls == 1:
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": "run 300 is still in progress; logs will be available when it is complete",
+                }
+            return {"ok": True, "stdout": CI_LOG, "stderr": ""}
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "databaseId": 300,
+                    "workflowName": "AIstock CI",
+                    "displayTitle": "CI",
+                    "event": "pull_request",
+                    "headBranch": "bug/example",
+                    "headSha": "abcdef1234567890",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
+                }
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    monkeypatch.setattr(summary.time, "sleep", lambda _: None)
+    monkeypatch.setattr(summary, "locate_last_green_run", lambda payload, repo: summary._last_green_payload(payload, status="not_requested"))
+
+    payload = summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock",
+        run_id="300",
+        log_attempts=2,
+        log_wait_seconds=0,
+    )
+
+    assert job_log_calls == 2
+    assert payload["diagnostic_status"] == "complete"
+    assert payload["issue_creation_policy"]["allowed"] is True
+    assert payload["failed_jobs"][0]["failed_tests"]
+
+
+def test_cli_deferred_summary_skips_github_issue_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_path = tmp_path / "summary.json"
+    issue_payload_path = tmp_path / "github-issue-payload.json"
+
+    def fake_summary(**_: object) -> dict[str, object]:
+        return summary.finalize_summary(
+            {
+                "schema_version": "aistock_ci_failure_summary_v1",
+                "generated_at": "2026-06-02T00:00:00Z",
+                "severity": "P1",
+                "workflow": "AIstock CI",
+                "run_id": "300",
+                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+                "branch": "bug/example",
+                "commit": "abcdef1234567890",
+                "failed_jobs": [],
+                "extraction_errors": [
+                    "run 300 is still in progress after 1 check(s); logs will be available when it is complete"
+                ],
+                "defer_issue_creation": True,
+            }
+        )
+
+    monkeypatch.setattr(summary, "summarize_actions_run", fake_summary)
+
+    assert summary.main(
+        [
+            "--run-id",
+            "300",
+            "--output",
+            str(output_path),
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert stdout_payload["diagnostic_status"] == "deferred"
+    assert stdout_payload["issue_creation_policy"]["allowed"] is False
+    assert artifact_payload["issue_creation_policy"]["reason"] == summary.LOGS_NOT_READY_REASON
+    assert not issue_payload_path.exists()
+
+
+def test_parse_job_log_extracts_docker_pull_failure_signature() -> None:
+    log = """
+Backend tests (rl_execution_smoke)\tUNKNOWN STEP\t2026-06-02T07:40:00Z nox > Running session rl_execution_smoke
+Backend tests (rl_execution_smoke)\tUNKNOWN STEP\t2026-06-02T07:40:01Z ##[error]Docker pull failed with exit code 1
+Backend tests (rl_execution_smoke)\tUNKNOWN STEP\t2026-06-02T07:40:02Z nox > Session rl_execution_smoke failed.
+"""
+
+    parsed = summary.parse_job_log(log, job_name="Backend tests (rl_execution_smoke)")
+
+    assert parsed["nox_session"] == "rl_execution_smoke"
+    assert parsed["command"] is None
+    assert parsed["error_signature"] == "Docker pull failed with exit code 1"
+
+
 
 def test_locate_last_green_run_finds_previous_success() -> None:
     payload = summary.finalize_summary(
@@ -427,6 +617,7 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
                 "drValidate": "success",
                 "nightlyL3": "failure",
                 "paperV2Live": "skipped",
+                "codeIntelligence": "success",
             },
             "run_id": "9001",
             "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
@@ -441,13 +632,38 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert payload["nightly_failed_stages"] == ["nightly_l3"]
     assert payload["issue_title"].startswith("P1 Nightly failed:")
     assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
-    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped -->" in issue_payload["body"]
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
     assert "module:validation.runner" in issue_payload["labels"]
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
     assert context_pack["token_budget"]["full_logs_included"] is False
+
+
+def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "success",
+                "paperV2Live": "success",
+                "codeIntelligence": "failure",
+            },
+            "run_id": "9003",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9003",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+
+    assert payload["nightly_failed_stages"] == ["code_intelligence"]
+    assert "code=failure" in payload["issue_title"]
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-success-success-failure -->" in issue_payload["body"]
+    assert "- code_intelligence: `failure`" in issue_payload["body"]
 
 
 def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
@@ -468,3 +684,35 @@ def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     assert payload["nightly_fingerprint"] == "runner-preflight-unavailable"
     assert "<!-- aistock-nightly-failure:runner-preflight-unavailable -->" in issue_payload["body"]
     assert "self-hosted Windows runner unavailable" in issue_payload["body"]
+    assert payload["agent_handoff"]["handoff_mode"] == "infra_action_only"
+    assert payload["agent_handoff"]["needs_bug_json"] is False
+    assert payload["agent_handoff"]["next_commands"] == [
+        "python scripts/aistock_issue_workflow.py triage-ci-issue --issue <issue-number>"
+    ]
+    assert payload["agent_handoff"]["workflow_entrypoints"]["promote"] == "not_applicable_infra_action_only"
+    assert "promote-ci-issue" not in issue_payload["body"]
+    assert "needs_bug_json: `False`" in issue_payload["body"]
+    assert "BUG ID: not applicable for infra-only issue" in issue_payload["body"]
+
+
+def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "runner-preflight": "failure",
+            "dr-snapshot": "skipped",
+            "dr-validate": "skipped",
+            "nightly-l3": "skipped",
+            "paper-v2-live": "skipped",
+        },
+        run_id="9002",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
+    )
+
+    context_pack = summary.build_context_pack(payload, github_issue_number=257)
+    markdown = summary.render_context_pack_markdown(context_pack)
+
+    assert context_pack["agent_handoff"]["handoff_mode"] == "infra_action_only"
+    assert context_pack["agent_handoff"]["needs_bug_json"] is False
+    assert "triage-ci-issue --issue 257" in markdown
+    assert "promote-ci-issue" not in markdown
+    assert "needs_bug_json: `False`" in markdown

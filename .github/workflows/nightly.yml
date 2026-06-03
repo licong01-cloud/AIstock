@@ -14,6 +14,7 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
@@ -67,76 +68,103 @@ jobs:
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
     runs-on: [self-hosted, windows]
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
     env:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: Sanity - docker + target dir reachable
         run: |
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "::error::docker not on PATH on this self-hosted runner"
+          if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            Write-Host "::error::docker not on PATH on this self-hosted runner"
             exit 1
-          fi
-          if [ ! -d "${DR_TARGET_DIR}" ]; then
-            echo "::error::DR target dir ${DR_TARGET_DIR} missing on this runner"
+          }
+          if (-not (Test-Path -LiteralPath $env:DR_TARGET_DIR -PathType Container)) {
+            Write-Host "::error::DR target dir $env:DR_TARGET_DIR missing on this runner"
             exit 1
-          fi
+          }
 
       - name: Run dr_snapshot_prod_db.py
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python scripts/dr_snapshot_prod_db.py --target-dir "${DR_TARGET_DIR}"
+          conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR"
 
       - name: Run dr_cleanup_old_snapshots.py (apply)
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python scripts/dr_cleanup_old_snapshots.py --target-dir "${DR_TARGET_DIR}" --apply
+          conda run -n AIstock python scripts/dr_cleanup_old_snapshots.py --target-dir "$env:DR_TARGET_DIR" --apply
 
       - name: Capture DR snapshot metadata (no dump bytes)
         if: always()
         run: |
-          DATE=$(date +%Y%m%d)
-          mkdir -p tmp/dr
-          {
-            echo "DR snapshot run ${{ github.run_id }} ${DATE}"
-            echo "target_dir=${DR_TARGET_DIR}"
-            ls -la "${DR_TARGET_DIR}" || true
-          } > tmp/dr/snapshot_metadata_${{ github.run_id }}.txt
+          $date = Get-Date -Format yyyyMMdd
+          New-Item -ItemType Directory -Force -Path "tmp/dr" | Out-Null
+          $out = "tmp/dr/snapshot_metadata_${{ github.run_id }}.txt"
+          "DR snapshot run ${{ github.run_id }} $date" | Set-Content -Path $out -Encoding UTF8
+          "target_dir=$env:DR_TARGET_DIR" | Add-Content -Path $out -Encoding UTF8
+          if (Test-Path -LiteralPath $env:DR_TARGET_DIR -PathType Container) {
+            Get-ChildItem -LiteralPath $env:DR_TARGET_DIR -Force |
+              Select-Object Name, Length, LastWriteTime |
+              Format-Table -AutoSize |
+              Out-String |
+              Add-Content -Path $out -Encoding UTF8
+          } else {
+            "target_dir_missing" | Add-Content -Path $out -Encoding UTF8
+          }
 
-      - name: Upload DR metadata (NOT the dump bytes)
+      - name: Print DR metadata (NOT the dump bytes)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-metadata-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          if (Test-Path -LiteralPath "tmp/dr") {
+            Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File | ForEach-Object {
+              Write-Host $_.FullName
+              Get-Content -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+            }
+          }
 
   dr-validate:
     name: DR validation (dump validity + schema diff + retention)
     needs: dr-snapshot
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
     env:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: nox -s dr_validate
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python -m nox -s dr_validate
+          conda run -n AIstock python -m nox -s dr_validate
 
-      - name: Upload DR validate evidence
+      - name: Print DR validate evidence
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dr-validate-${{ github.run_id }}
-          path: tmp/dr/
-          if-no-files-found: ignore
+        run: |
+          if (Test-Path -LiteralPath "tmp/dr") {
+            Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File | ForEach-Object {
+              Write-Host $_.FullName
+              Get-Content -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+            }
+          }
 
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
@@ -148,75 +176,93 @@ jobs:
     needs: dr-validate
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: powershell
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       # Activates the local AIstock conda env. The runner must have conda on PATH
       # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
       # for env setup pointers). GitHub-hosted Linux runners can't do this.
       - name: Sanity - conda AIstock env present
         run: |
-          if ! command -v conda >/dev/null 2>&1; then
-            echo "::error::conda not on PATH on this self-hosted runner"
+          if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
+            Write-Host "::error::conda not on PATH on this self-hosted runner"
             exit 1
-          fi
-          conda env list | grep -E "^AIstock\s" || (echo "::error::conda env AIstock missing"; exit 1)
+          }
+          $envLines = conda env list
+          if (-not ($envLines -match '^AIstock\s')) {
+            Write-Host "::error::conda env AIstock missing"
+            exit 1
+          }
 
       - name: nox -s paper_v2_l3
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python -m nox -s paper_v2_l3
+          conda run -n AIstock python -m nox -s paper_v2_l3
         env:
           PAPER_V2_SKIP_REALTIME: '1'
 
       - name: nox -s qe_archive_l3
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python -m nox -s qe_archive_l3
+          conda run -n AIstock python -m nox -s qe_archive_l3
         env:
           QE_ARCHIVE_L3_SKIP_UI: '1'
 
       - name: nox -s qe_read_l3
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python -m nox -s qe_read_l3
+          conda run -n AIstock python -m nox -s qe_read_l3
         env:
           QE_READ_L3_SKIP_UI: '1'
 
-      - name: Upload validation history
+      - name: Print validation history manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-l3-history-${{ github.run_id }}
-          path: tests/aistock_validation/history/
-          if-no-files-found: ignore
+        run: |
+          if (Test-Path -LiteralPath "tests/aistock_validation/history") {
+            Get-ChildItem -LiteralPath "tests/aistock_validation/history" -Recurse -File |
+              Select-Object -First 100 -ExpandProperty FullName
+          }
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
     needs: nightly-l3
     runs-on: [self-hosted, windows]
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
     env:
       PAPER_V2_SKIP_REALTIME: '1'
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
+        run: |
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: nox -s paper_v2_live
         run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python -m nox -s paper_v2_live
+          conda run -n AIstock python -m nox -s paper_v2_live
 
-      - name: Upload paper-v2 live evidence
+      - name: Print paper-v2 live evidence manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: paper-v2-live-${{ github.run_id }}
-          path: tmp/paper_v2/
-          if-no-files-found: ignore
+        run: |
+          if (Test-Path -LiteralPath "tmp/paper_v2") {
+            Get-ChildItem -LiteralPath "tmp/paper_v2" -Recurse -File |
+              Select-Object -First 100 -ExpandProperty FullName
+          }
 
   code-intelligence-weekly:
     name: Code intelligence weekly graph summary
@@ -224,38 +270,60 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Understand Anything summary placeholders
+      - name: Prepare local workspace (no GitHub checkout)
+        timeout-minutes: 2
         run: |
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" != "7" ]; then
-            echo "Skipping weekly code intelligence graph summary outside Sunday UTC."
-            exit 0
-          fi
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
-          mkdir -p "${OUT_DIR}"
-          python scripts/code_intelligence_adapter.py freshness \
-            --output-dir "${OUT_DIR}" \
-            --output "${OUT_DIR}/codegraph-freshness.stdout.json" || true
-          cat "${OUT_DIR}/codegraph-freshness.md" || true
-          python scripts/code_intelligence_adapter.py ua-summary-all \
-            --output-dir "${OUT_DIR}" \
-            --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
+          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
-      - name: Upload code intelligence graph summaries
+      - name: Build CodeGraph freshness artifact
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py freshness `
+            --output-dir $outDir `
+            --output "$outDir/codegraph-freshness.stdout.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "CodeGraph freshness command exited with $LASTEXITCODE; continuing."
+            $global:LASTEXITCODE = 0
+            # PowerShell equivalent of bash non-blocking suffix: || true
+          }
+          if (Test-Path -LiteralPath "$outDir/codegraph-freshness.md") {
+            Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
+          }
+
+      - name: Build weekly Understand Anything summaries
+        run: |
+          # Equivalent to the previous bash weekly guard: date -u +%u.
+          if ($env:GITHUB_EVENT_NAME -eq "schedule" -and (Get-Date).ToUniversalTime().DayOfWeek -ne "Sunday") {
+            Write-Host "Skipping weekly Understand Anything summary outside Sunday UTC."
+            exit 0
+          }
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
+            --output-dir $outDir `
+            --output "$outDir/ua-summary-manifest.stdout.json"
+
+      - name: Print code intelligence graph summary manifest
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-intelligence-weekly-${{ github.run_id }}
-          path: tmp/validation/code-intelligence/
-          if-no-files-found: ignore
+        run: |
+          if (Test-Path -LiteralPath "tmp/validation/code-intelligence") {
+            Get-ChildItem -LiteralPath "tmp/validation/code-intelligence" -Recurse -File |
+              Select-Object -First 100 -ExpandProperty FullName
+          }
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
+    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live, code-intelligence-weekly]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -278,6 +346,7 @@ jobs:
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -292,19 +361,21 @@ jobs:
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
+          - code-intelligence-weekly: ${CODE_INTELLIGENCE_RESULT}
 
           Run: ${RUN_URL}
           EOF
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p tmp/validation/nightly_failure_issue
@@ -315,7 +386,8 @@ jobs:
               "drSnapshot": "${DR_RESULT}",
               "drValidate": "${DR_VALIDATE_RESULT}",
               "nightlyL3": "${L3_RESULT}",
-              "paperV2Live": "${LIVE_RESULT}"
+              "paperV2Live": "${LIVE_RESULT}",
+              "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
             },
             "run_id": "${{ github.run_id }}",
             "run_url": "${RUN_URL}"
@@ -339,7 +411,7 @@ jobs:
             --stdout-format compact
 
       - name: Upload Nightly failure issue context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: nightly-failure-issue-context
@@ -348,7 +420,7 @@ jobs:
           retention-days: 14
 
       - name: Auto-register failure as actionable GitHub Issue
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
@@ -414,3 +486,5 @@ jobs:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
+
+

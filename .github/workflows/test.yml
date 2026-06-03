@@ -31,6 +31,7 @@ jobs:
     outputs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
+      workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
       - uses: actions/checkout@v4
@@ -190,9 +191,39 @@ jobs:
             tmp/coverage/
           if-no-files-found: ignore
 
+  workflow-validation-tests:
+    name: Workflow validation fast lane
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.workflow_validation_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install workflow validation deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest ruff nox requests
+
+      - name: Run focused workflow validation tests
+        run: |
+          python -m pytest \
+            backend/tests/scripts/test_ci_change_classifier.py \
+            backend/tests/scripts/test_issue_flow.py \
+            backend/tests/scripts/test_aistock_issue_workflow.py \
+            backend/tests/scripts/test_ci_failure_issue_summary.py \
+            backend/tests/scripts/test_code_intelligence_adapter.py \
+            -q -p no:cacheprovider
+
   failure-bug-register:
     name: Auto-register CI failures as BUGs
-    needs: backend-tests
+    needs: [backend-tests, workflow-validation-tests]
     # Keep this job green/no-op when backend tests pass or are intentionally
     # skipped, so PR check summaries do not report a skipped registrar as
     # another failure. The failure path below still comments when backend
@@ -206,16 +237,17 @@ jobs:
       issues: write
     steps:
       - name: No backend failure to register
-        if: ${{ needs.backend-tests.result != 'failure' }}
+        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' }}
         run: |
           echo "backend-tests result: ${{ needs.backend-tests.result }}"
+          echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
           echo "No CI failure BUG registration required."
 
       - uses: actions/checkout@v4
-        if: ${{ needs.backend-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
 
       - name: Build CI failure issue context
-        if: ${{ needs.backend-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -229,6 +261,8 @@ jobs:
             --source-name "AIstock CI" \
             --branch "${{ github.head_ref || github.ref_name }}" \
             --commit "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --log-attempts 3 \
+            --log-wait-seconds 10 \
             --output tmp/validation/ci_failure_issue/summary.json \
             --markdown-output tmp/validation/ci_failure_issue/body.md \
             --context-output tmp/validation/ci_failure_issue/context-pack.json \
@@ -236,7 +270,7 @@ jobs:
             --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json
 
       - name: Upload CI failure issue context
-        if: ${{ needs.backend-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: pr-ci-failure-issue-context
@@ -245,7 +279,7 @@ jobs:
           retention-days: 14
 
       - name: Create or update CI failure issue
-        if: ${{ needs.backend-tests.result == 'failure' }}
+        if: ${{ (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure') && hashFiles('tmp/validation/ci_failure_issue/github-issue-payload.json') != '' }}
         uses: actions/github-script@v7
         with:
           script: |

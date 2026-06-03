@@ -26,6 +26,7 @@ def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     assert payload["classification"] == "close_sync_metadata_only"
     assert payload["close_sync_metadata_only"] is True
     assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is False
     assert payload["static_gate_required"] is True
     assert payload["pr_quality_required"] is True
 
@@ -59,6 +60,56 @@ def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
     assert payload["classification"] == "full_ci_required"
     assert payload["backend_required"] is True
     assert payload["non_bug_registry_files"] == ["scripts/aistock_issue_workflow.py"]
+
+
+def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            ".github/workflows/dependency-update-validate.yml",
+            ".github/workflows/test.yml",
+            ".github/requirements/pr-quality.txt",
+            ".github/requirements/semgrep.txt",
+            "scripts/ci_change_classifier.py",
+            "backend/tests/scripts/test_ci_change_classifier.py",
+            "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["close_sync_metadata_only"] is False
+
+
+def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_issue_workflow.py",
+            "backend/routers/validation.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "full_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["workflow_validation_required"] is False
+
+
+def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+
+    assert jobs["classify-changes"]["outputs"]["workflow_validation_required"].endswith(
+        "steps.classify.outputs.workflow_validation_required }}"
+    )
+    assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
+    assert jobs["workflow-validation-tests"]["if"] == (
+        "needs.classify-changes.outputs.workflow_validation_required == 'true'"
+    )
+    assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
 def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
@@ -95,4 +146,5 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
 
     assert json.loads(out.read_text(encoding="utf-8"))["backend_required"] is False
     assert "backend_required=false" in github_out.read_text(encoding="utf-8")
+    assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"

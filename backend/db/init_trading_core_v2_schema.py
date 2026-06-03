@@ -309,10 +309,25 @@ DDL: list[str] = [
         reference_price DOUBLE PRECISION,
         component_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
         reason TEXT,
+        suggested_entry_price_band JSONB,
+        suggested_stop_loss_zone JSONB,
+        guidance_status TEXT,
+        price_guard_policy_sha256 TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(run_id, package_id, symbol)
     )
     """,
+    """
+    ALTER TABLE selection.package_result
+        ADD COLUMN IF NOT EXISTS suggested_entry_price_band JSONB,
+        ADD COLUMN IF NOT EXISTS suggested_stop_loss_zone JSONB,
+        ADD COLUMN IF NOT EXISTS guidance_status TEXT,
+        ADD COLUMN IF NOT EXISTS price_guard_policy_sha256 TEXT
+    """,
+    "COMMENT ON COLUMN selection.package_result.suggested_entry_price_band IS 'Advisory-only green/yellow/red suggested buy interval generated from signal_ref_price; not an order or broker limit price.';",
+    "COMMENT ON COLUMN selection.package_result.suggested_stop_loss_zone IS 'Advisory-only soft/hard stop-loss zone generated for display; enforced trading requires later QE validation.';",
+    "COMMENT ON COLUMN selection.package_result.guidance_status IS 'Guidance provenance status: rule_default, bucket_calibrated, or qe_validated; Stage 1 must remain rule_default.';",
+    "COMMENT ON COLUMN selection.package_result.price_guard_policy_sha256 IS 'Stable SHA-256 of the advisory PriceGuard/ExitGuard policy used to generate display guidance.';",
     """
     CREATE TABLE IF NOT EXISTS selection.aggregate_result (
         aggregate_id BIGSERIAL PRIMARY KEY,

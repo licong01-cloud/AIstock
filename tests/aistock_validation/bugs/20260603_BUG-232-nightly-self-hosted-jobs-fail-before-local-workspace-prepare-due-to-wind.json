@@ -1,0 +1,69 @@
+{
+  "actual": "Runner preflight succeeds, but DR snapshot and Code intelligence weekly graph summary fail in Prepare local workspace with /bin/bash: F:Devgithub-actions-runner..._temp<uuid>.sh: No such file or directory.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "tests/aistock_validation/bugs/20260603_BUG-232-nightly-self-hosted-jobs-fail-before-local-workspace-prepare-due-to-wind.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-232",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T10:50:04.923593Z",
+  "description": "Runner preflight succeeds, but DR snapshot and Code intelligence weekly graph summary fail in Prepare local workspace with /bin/bash: F:Devgithub-actions-runner..._temp<uuid>.sh: No such file or directory.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-7fe11d047279",
+      "timestamp": "2026-06-03T10:50:04.923587Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/26875459631"
+  ],
+  "expected": "Self-hosted Nightly DR and code-intelligence jobs should execute the local workspace preparation step successfully on the Windows runner, without depending on GitHub checkout/network for those jobs.",
+  "first_seen_at": "2026-06-03T10:50:04.923593Z",
+  "fix_branch": null,
+  "fix_commit": "e25ced8d400d33cafbddfca6c6067d059f1a3439",
+  "fixed_at": "2026-06-03T11:30:32.870017Z",
+  "github_issue_number": 645,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/645",
+  "last_seen_at": "2026-06-03T10:50:04.923593Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/647",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 26875459631 --repo licong01-cloud/AIstock --job 79261438967 --log",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly self-hosted jobs fail before local workspace prepare due to Windows bash temp script path",
+  "trigger_condition": {
+    "fingerprint": "7fe11d0472790e0d89f45a23",
+    "source_event_id": "FE-20260603-7fe11d047279"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -q -> passed (22 passed); python -m ruff check scripts/ci/prepare_self_hosted_workspace.py backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed; python -m nox -s validation_catalog_integrity validation_module_registry_l0 guardrail_changed_files -> passed; python -m nox -s l0 -> passed; PowerShell prepare_self_hosted_workspace smoke -> passed; python -m nox -s validation_center_backend -> passed (355 passed); git diff --check -> passed; nightly.yml YAML parse -> passed; GitHub PR #647 CI -> all green"
+  ],
+  "verification_run_id": null
+}

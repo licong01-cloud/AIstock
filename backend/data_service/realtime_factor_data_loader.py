@@ -13,7 +13,6 @@ RealtimeFactorDataLoader - 实时因子数据加载器
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date, datetime
 from typing import Dict, List, Optional, Union
 
@@ -21,25 +20,19 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from backend.services.market_data.instrument_validator import (
+    DEFAULT_SQL_CHUNK_SIZE,
+    load_chunks_with_logging,
+    normalize_and_validate_ts_codes,
+    normalize_ts_code,
+)
 
 logger = logging.getLogger("aistock.realtime_factor_data_loader")
 
 # 价格单位转换：数据库存储为厘，输出为元
 PRICE_UNIT_DIVISOR = 1000.0
-TS_CODE_PATTERN = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
-INVALID_INSTRUMENT_SAMPLE_LIMIT = 10
-
-
 def _normalize_realtime_instrument(code: object) -> str:
-    s = str(code).strip()
-    if not s:
-        return s
-    if "." in s:
-        return s.upper()
-    up = s.upper()
-    if len(up) == 8 and up[:2] in {"SH", "SZ", "BJ"} and up[2:].isdigit():
-        return f"{up[2:]}.{up[:2]}"
-    return up
+    return normalize_ts_code(code)
 
 
 def _validate_realtime_instruments(
@@ -49,28 +42,12 @@ def _validate_realtime_instruments(
     start_date: object | None = None,
     end_date: object | None = None,
 ) -> List[str]:
-    if instruments is None:
-        raw_values: List[object] = []
-    elif isinstance(instruments, str):
-        raw_values = [instruments]
-    else:
-        raw_values = list(instruments)
-    normalized: List[str] = []
-    invalid: List[Dict[str, str]] = []
-    for index, raw in enumerate(raw_values):
-        value = _normalize_realtime_instrument(raw)
-        normalized.append(value)
-        if not TS_CODE_PATTERN.fullmatch(value):
-            invalid.append({"index": str(index), "raw": str(raw), "normalized": value})
-
-    if invalid:
-        samples = invalid[:INVALID_INSTRUMENT_SAMPLE_LIMIT]
-        raise ValueError(
-            "invalid ts_code values before SQL execution: "
-            f"source={source} instruments_count={len(raw_values)} invalid_count={len(invalid)} "
-            f"start_date={start_date} end_date={end_date} invalid_samples={samples}"
-        )
-    return normalized
+    return normalize_and_validate_ts_codes(
+        instruments,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 class RealtimeFactorDataLoader:
@@ -332,47 +309,89 @@ class RealtimeFactorDataLoader:
             start_date=start_date,
             end_date=end_date,
         )
-        placeholders = ",".join(["%s"] * len(ts_codes))
+        # 1. 加载未复权原始行情。大股票池必须分块查询并记录 correlation，
+        # 避免盘中执行窗口触发不可诊断的超长 SQL / Broken pipe。
+        def _load_raw_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> pd.DataFrame:
+            placeholders = ",".join(["%s"] * len(chunk))
+            sql_raw = f"""
+                SELECT trade_date, ts_code,
+                       open_li, high_li, low_li, close_li, volume_hand, amount_li
+                FROM market.kline_daily_raw
+                WHERE ts_code IN ({placeholders})
+                  AND trade_date >= %s
+                  AND trade_date <= %s
+                ORDER BY trade_date, ts_code
+            """
+            params_raw = chunk + [start_date.isoformat(), end_date.isoformat()]
+            try:
+                with get_conn() as conn:
+                    return pd.read_sql(sql_raw, conn, params=params_raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "RealtimeFactorDataLoader raw chunk failed: correlation_id=%s symbols=%s start=%s end=%s error=%s",
+                    correlation_id,
+                    len(chunk),
+                    start_date,
+                    end_date,
+                    exc,
+                )
+                raise
 
-        # 1. 加载未复权原始行情
-        sql_raw = f"""
-            SELECT trade_date, ts_code,
-                   open_li, high_li, low_li, close_li, volume_hand, amount_li
-            FROM market.kline_daily_raw
-            WHERE ts_code IN ({placeholders})
-              AND trade_date >= %s
-              AND trade_date <= %s
-            ORDER BY trade_date, ts_code
-        """
-        params_raw = ts_codes + [start_date.isoformat(), end_date.isoformat()]
-
-        try:
-            with get_conn() as conn:
-                df_raw = pd.read_sql(sql_raw, conn, params=params_raw)
-        except Exception as e:
-            logger.error(f"数据库查询失败(kline_daily_raw): {e}")
-            raise
+        raw_chunks = load_chunks_with_logging(
+            ts_codes=ts_codes,
+            source="RealtimeFactorDataLoader._fetch_from_db.raw",
+            start_date=start_date,
+            end_date=end_date,
+            chunk_size=DEFAULT_SQL_CHUNK_SIZE,
+            loader=_load_raw_chunk,
+        )
+        df_raw = pd.concat(
+            [chunk for chunk in raw_chunks if not chunk.empty],
+            ignore_index=True,
+        ) if raw_chunks else pd.DataFrame()
 
         if df_raw.empty:
             return pd.DataFrame()
 
         # 2. 加载复权因子（查询到今天，确保能获取最新 adj_factor 用于归一化）
         today = date_type.today()
-        sql_adj = f"""
-            SELECT ts_code, trade_date, adj_factor
-            FROM market.adj_factor
-            WHERE ts_code IN ({placeholders})
-              AND trade_date >= %s AND trade_date <= %s
-            ORDER BY ts_code, trade_date
-        """
-        params_adj = ts_codes + [start_date.isoformat(), today.isoformat()]
 
-        try:
-            with get_conn() as conn:
-                df_adj = pd.read_sql(sql_adj, conn, params=params_adj)
-        except Exception as e:
-            logger.error(f"数据库查询失败(adj_factor): {e}")
-            raise
+        def _load_adj_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> pd.DataFrame:
+            placeholders = ",".join(["%s"] * len(chunk))
+            sql_adj = f"""
+                SELECT ts_code, trade_date, adj_factor
+                FROM market.adj_factor
+                WHERE ts_code IN ({placeholders})
+                  AND trade_date >= %s AND trade_date <= %s
+                ORDER BY ts_code, trade_date
+            """
+            params_adj = chunk + [start_date.isoformat(), today.isoformat()]
+            try:
+                with get_conn() as conn:
+                    return pd.read_sql(sql_adj, conn, params=params_adj)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "RealtimeFactorDataLoader adj_factor chunk failed: correlation_id=%s symbols=%s start=%s end=%s error=%s",
+                    correlation_id,
+                    len(chunk),
+                    start_date,
+                    today,
+                    exc,
+                )
+                raise
+
+        adj_chunks = load_chunks_with_logging(
+            ts_codes=ts_codes,
+            source="RealtimeFactorDataLoader._fetch_from_db.adj_factor",
+            start_date=start_date,
+            end_date=today,
+            chunk_size=DEFAULT_SQL_CHUNK_SIZE,
+            loader=_load_adj_chunk,
+        )
+        df_adj = pd.concat(
+            [chunk for chunk in adj_chunks if not chunk.empty],
+            ignore_index=True,
+        ) if adj_chunks else pd.DataFrame()
 
         if df_adj.empty:
             raise RuntimeError(f"adj_factor 表中没有找到复权因子数据: {ts_codes[:5]}")

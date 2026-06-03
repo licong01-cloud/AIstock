@@ -92,6 +92,8 @@ For Codex, Claude Code, Cursor, and other agents, context discovery should be ch
 - Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
 
 Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
+
+GitHub PR Quality now treats the P0/P1 evidence gate as blocking by default, so source fix PRs must provide linked issue context, scope, validation evidence, and production gates before merge. Local `python scripts/issue_flow.py pr-check` still stays warning-only unless `--enforce-p0-p1-evidence` or `AISTOCK_PR_QUALITY_ENFORCE_P0P1=true` is set. Code-intelligence and Semgrep artifacts remain report-only acceleration hints rather than merge blockers.
 ## Fast Path And Smoke Check
 
 Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:
@@ -118,6 +120,22 @@ python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/a
 ```
 
 `workflow-smoke` dry-runs the core chain with a synthetic ignored issue record: fast-path -> start dry-run -> finish plan-only -> postmortem preview. It must not create GitHub Issues, PRs, production DB writes, runtime restarts, or tracked root files. A passing smoke check reports `workflow_gate=passed` and `unexpected_dirty_paths=[]`.
+
+Use `nightly-intake-smoke` before changing CI/Nightly failure intake or when validating that auto-filed issues can enter the standard workflow without root pollution:
+
+```powershell
+python scripts/aistock_issue_workflow.py nightly-intake-smoke
+```
+
+`nightly-intake-smoke` builds a synthetic Nightly failure status, writes summary/context/GitHub-issue payload/candidate-history artifacts only under ignored `tmp/validation/nightly_failure_issue/smoke/`, verifies the Agent Handoff contains `triage-ci-issue` and `promote-ci-issue --create-registry-worktree --apply`, and checks `unexpected_dirty_paths=[]`. It does not create GitHub Issues, BUG JSON, PRs, runtime calls, DB writes, or tracked source files.
+
+Use `batch-workflow-smoke` before changing same-module batch handling or when validating that batch issue workflow still produces per-issue context and closure evidence without root pollution:
+
+```powershell
+python scripts/aistock_issue_workflow.py batch-workflow-smoke
+```
+
+`batch-workflow-smoke` uses two synthetic ignored BUG records, runs batch start plus finish in-process, verifies batch state, per-issue Context Packs, fix-ready JSON, PR body closing keywords, per-issue closure map, validation evidence, and `unexpected_dirty_paths=[]`. It does not create GitHub Issues, BUG JSON, PRs, runtime calls, DB writes, or tracked source files.
 
 ## CI / Nightly Failure Intake
 
@@ -156,6 +174,10 @@ If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 runners, runner API permission failures, or missing
 `AISTOCK_RUNNER_HEALTH_TOKEN`. These issues should restore infrastructure and
 rerun CI/Nightly, not consume a developer window as a code repair.
+Auto-filed infra-only CI/Nightly issues should therefore expose only the
+`triage-ci-issue` entrypoint, `needs_bug_json=false`, and an infra action card.
+They must not present `promote-ci-issue` or `run --bug-id` as the next command
+unless triage later reclassifies the failure as a real code or test regression.
 
 ## Submit Or Register A New BUG
 

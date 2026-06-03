@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -13,15 +14,24 @@ from typing import Any, Callable
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
 CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
-NIGHTLY_STATUS_KEYS = ("runner_preflight", "dr_snapshot", "dr_validate", "nightly_l3", "paper_v2_live")
+NIGHTLY_STATUS_KEYS = (
+    "runner_preflight",
+    "dr_snapshot",
+    "dr_validate",
+    "nightly_l3",
+    "paper_v2_live",
+    "code_intelligence",
+)
 NIGHTLY_STATUS_ALIASES = {
     "runner_preflight": ("runnerPreflight", "runner-preflight", "runner_preflight"),
     "dr_snapshot": ("drSnapshot", "dr-snapshot", "dr_snapshot"),
     "dr_validate": ("drValidate", "dr-validate", "dr_validate"),
     "nightly_l3": ("nightlyL3", "nightly-l3", "nightly_l3"),
     "paper_v2_live": ("paperV2Live", "paper-v2-live", "paper_v2_live"),
+    "code_intelligence": ("codeIntelligence", "code-intelligence", "code_intelligence", "code-intelligence-weekly"),
 }
 NIGHTLY_FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
+LOGS_NOT_READY_REASON = "actions_run_still_in_progress_logs_unavailable"
 
 
 def _utc_now() -> str:
@@ -87,6 +97,100 @@ def _unique(values: list[str]) -> list[str]:
 
 def _status_value(value: Any) -> str:
     return str(value or "unknown").strip().lower() or "unknown"
+
+
+def _session_from_job_name(job_name: str | None) -> str | None:
+    text = str(job_name or "")
+    match = re.search(r"\(([A-Za-z0-9_.-]+)\)", text)
+    return match.group(1) if match else None
+
+
+def _logs_not_ready_error(value: Any) -> bool:
+    text = str(value or "").lower()
+    return "run" in text and "still in progress" in text and "log" in text
+
+
+def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
+    diagnostic_status = summary.get("diagnostic_status") or "partial"
+    errors = summary.get("extraction_errors") or []
+    failed_jobs = summary.get("failed_jobs") or []
+    has_actionable_failure = any(job.get("failed_tests") or job.get("error_signature") for job in failed_jobs)
+    run_id = str(summary.get("run_id") or "").strip()
+    if diagnostic_status == "deferred":
+        next_command = (
+            f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
+            "--output tmp/validation/ci_failure_issue/summary.json "
+            "--markdown-output tmp/validation/ci_failure_issue/body.md "
+            "--context-output tmp/validation/ci_failure_issue/context-pack.json "
+            "--context-markdown-output tmp/validation/ci_failure_issue/context-pack.md "
+            "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json"
+        )
+        return {
+            "allowed": False,
+            "reason": LOGS_NOT_READY_REASON if any(_logs_not_ready_error(error) for error in errors) else "diagnostics_not_actionable",
+            "next_command": next_command,
+        }
+    if diagnostic_status == "partial" and not has_actionable_failure:
+        return {
+            "allowed": False,
+            "reason": "diagnostics_not_actionable",
+            "next_command": (
+                f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
+                "--output tmp/validation/ci_failure_issue/summary.json"
+            ),
+        }
+    return {
+        "allowed": True,
+        "reason": "ready" if diagnostic_status == "complete" else "partial_but_actionable",
+        "next_command": None,
+    }
+
+
+def _infra_action_reason(summary: dict[str, Any]) -> str | None:
+    statuses = summary.get("nightly_statuses") if isinstance(summary.get("nightly_statuses"), dict) else {}
+    if statuses.get("runner_preflight") == "failure":
+        return "self_hosted_runner_unavailable"
+    text = "\n".join(
+        [
+            str(summary.get("issue_title") or ""),
+            str(summary.get("manual_summary") or ""),
+            *[
+                str(item)
+                for job in summary.get("failed_jobs") or []
+                for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
+                if item
+            ],
+        ]
+    ).lower()
+    infra_tokens = [
+        "self-hosted windows runner unavailable",
+        "no online github actions runner",
+        "unable to query github runner health",
+        "aistock_runner_health_token",
+    ]
+    if any(token in text for token in infra_tokens):
+        return "runner_health_infrastructure"
+    return None
+
+
+def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
+    infra_reason = _infra_action_reason(summary)
+    if infra_reason:
+        return {
+            "mode": "infra_action_only",
+            "needs_bug_json": False,
+            "reason": infra_reason,
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "next_actions": [
+                    "Restore or register the self-hosted Windows GitHub Actions runner.",
+                    "Verify runner labels include: self-hosted, windows.",
+                    "Configure AISTOCK_RUNNER_HEALTH_TOKEN if runner API access is denied.",
+                    "Rerun the failed workflow after infrastructure is healthy.",
+                ],
+            },
+        }
+    return {"mode": "bug_promotion", "needs_bug_json": True, "reason": "code_or_test_failure"}
 
 
 def _infer_module(job_name: str, nox_session: str | None, failed_tests: list[str]) -> str | None:
@@ -237,6 +341,7 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
     lines = normalize_log(log_text)
     joined = "\n".join(lines)
     nox_session = _first_match(lines, [r"nox > Running session ([A-Za-z0-9_.-]+)", r"nox -s ([A-Za-z0-9_.-]+)"])
+    nox_session = nox_session or _session_from_job_name(job_name)
     command = _first_match(
         lines,
         [
@@ -255,11 +360,14 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         ],
     )
     error_signature = None
+    docker_exit_code = _first_match(lines, [r"Docker pull failed with exit code ([0-9]+)"])
     for pattern in [r"FAILED\s+[^\s]+::[^\s]+\s+-\s+(.+)", r"\b(E\s+assert\s+.+)", r"(assert\s+.+)"]:
         match = re.search(pattern, joined)
         if match:
             error_signature = match.group(1)
             break
+    if not error_signature and docker_exit_code:
+        error_signature = f"Docker pull failed with exit code {docker_exit_code}"
     error_signature = error_signature or _first_match(
         lines,
         [
@@ -326,7 +434,13 @@ def _fingerprint_source(summary: dict[str, Any]) -> str:
 def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     failed_jobs = summary.get("failed_jobs") or []
     diagnostic_status = "partial"
-    if failed_jobs and any(job.get("failed_tests") or job.get("error_signature") or job.get("command") for job in failed_jobs):
+    errors = summary.get("extraction_errors") or []
+    has_actionable_failure = any(job.get("failed_tests") or job.get("error_signature") for job in failed_jobs)
+    if summary.get("defer_issue_creation") or (errors and any(_logs_not_ready_error(error) for error in errors) and not has_actionable_failure):
+        diagnostic_status = "deferred"
+    elif errors and not has_actionable_failure:
+        diagnostic_status = "partial"
+    elif failed_jobs and any(job.get("failed_tests") or job.get("error_signature") or job.get("command") for job in failed_jobs):
         diagnostic_status = "complete"
     elif summary.get("extraction_errors"):
         diagnostic_status = "partial"
@@ -342,7 +456,7 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary["suspected_files"] = _unique(files)
     first_job = failed_jobs[0] if failed_jobs else {}
     first_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
-    nox_session = first_job.get("nox_session") or first_job.get("job_name") or "ci"
+    nox_session = first_job.get("nox_session") or _session_from_job_name(first_job.get("job_name")) or "ci"
     branch = summary.get("branch") or "unknown"
     failure_name = first_test or first_job.get("error_signature") or summary.get("manual_summary") or "diagnostic extraction incomplete"
     summary["issue_title"] = f"[{summary.get('severity') or 'P1'}][{nox_session}] {branch} CI failed: {failure_name}"[:240]
@@ -356,6 +470,7 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary.setdefault("production_frontend_dependency_gate", "noop")
     summary.setdefault("production_backend_dependency_gate", "noop")
     summary.setdefault("last_green_locator", _last_green_payload(summary, status="not_requested"))
+    summary["issue_creation_policy"] = _issue_creation_policy(summary)
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
@@ -395,6 +510,9 @@ def _all_error_signatures(summary: dict[str, Any]) -> list[str]:
 
 
 def _primary_failure(summary: dict[str, Any]) -> str:
+    policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if policy.get("reason") == LOGS_NOT_READY_REASON:
+        return "CI run is still in progress; Actions logs are not ready"
     first_job = _first_failed_job(summary)
     failed_tests = first_job.get("failed_tests") or []
     if failed_tests:
@@ -468,44 +586,67 @@ def build_agent_handoff(
     github_issue_number: int | str | None = None,
 ) -> dict[str, Any]:
     issue_arg = str(github_issue_number) if github_issue_number else "<issue-number>"
+    issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    handoff_mode = _handoff_mode(summary)
     reproduce = _safe_command(str(summary.get("reproduce_command") or ""))
     required_verification = [
         item
         for item in [
             reproduce,
-            "Run the validation plan selected after BUG JSON promotion.",
-            "Keep GitHub Issue, BUG JSON, PR, and validation evidence synchronized.",
+            (
+                "Restore infrastructure and rerun CI/Nightly; do not promote to BUG JSON unless triage changes classification."
+                if not handoff_mode["needs_bug_json"]
+                else "Run the validation plan selected after BUG JSON promotion."
+            ),
+            (
+                "Keep GitHub Issue comments and rerun evidence synchronized."
+                if not handoff_mode["needs_bug_json"]
+                else "Keep GitHub Issue, BUG JSON, PR, and validation evidence synchronized."
+            ),
         ]
         if item
     ]
     suspected_files = list(summary.get("suspected_files") or [])
     stop_conditions = []
     if summary.get("diagnostic_status") != "complete":
-        stop_conditions.append("Diagnostic extraction is partial; inspect the linked CI run before assigning fix scope.")
+        if issue_policy.get("allowed") is False:
+            stop_conditions.append(
+                "Diagnostic extraction is deferred because the Actions run is still in progress; rerun summary generation after completion."
+            )
+        else:
+            stop_conditions.append("Diagnostic extraction is partial; inspect the linked CI run before assigning fix scope.")
     if not suspected_files:
         stop_conditions.append("No suspected files were extracted; run triage before editing code.")
+    if not handoff_mode["needs_bug_json"]:
+        stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+    workflow_entrypoints = {
+        "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
+    }
+    next_commands = [workflow_entrypoints["triage"]]
+    if handoff_mode["needs_bug_json"]:
+        workflow_entrypoints["promote"] = (
+            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
+            "--create-registry-worktree --apply"
+        )
+        workflow_entrypoints["fix_after_promotion"] = (
+            "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree"
+        )
+        next_commands.extend([workflow_entrypoints["promote"], workflow_entrypoints["fix_after_promotion"]])
+    else:
+        workflow_entrypoints["promote"] = "not_applicable_infra_action_only"
+        workflow_entrypoints["fix_after_promotion"] = "not_applicable_infra_action_only"
     return {
         "schema_version": "aistock_ci_failure_agent_handoff_v1",
         "intended_clients": ["Codex", "Claude Code", "Cursor", "generic CLI/IDE agent"],
-        "workflow_entrypoints": {
-            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            "promote": (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
-                "--create-registry-worktree --apply"
-            ),
-            "fix_after_promotion": "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
-        },
-        "next_commands": [
-            f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
-                "--create-registry-worktree --apply"
-            ),
-            "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
-        ],
+        "handoff_mode": handoff_mode["mode"],
+        "needs_bug_json": handoff_mode["needs_bug_json"],
+        "infra_action": handoff_mode.get("infra_action"),
+        "workflow_entrypoints": workflow_entrypoints,
+        "next_commands": next_commands,
         "allowed_write_scope": suspected_files,
         "required_verification": required_verification,
         "regression_locator": summary.get("last_green_locator"),
+        "issue_creation_policy": issue_policy,
         "token_budget": {
             "target_tokens": 4000,
             "max_tokens": 8000,
@@ -557,6 +698,7 @@ def build_context_pack(
         "severity": event["severity_guess"],
         "diagnostic_status": event["diagnostic_status"],
         "problem_statement": _primary_failure(summary),
+        "issue_creation_policy": handoff.get("issue_creation_policy") or {},
         "github_issue_number": str(github_issue_number) if github_issue_number else None,
         "github_issue_url": github_issue_url or _github_issue_url(github_issue_number),
         "failure_event": event,
@@ -596,6 +738,17 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
         "## Agent Handoff",
         "",
     ]
+    policy = handoff.get("issue_creation_policy") if isinstance(handoff.get("issue_creation_policy"), dict) else {}
+    infra_action = handoff.get("infra_action") if isinstance(handoff.get("infra_action"), dict) else {}
+    if policy:
+        lines.append(f"- issue_creation_allowed: `{policy.get('allowed')}`")
+        lines.append(f"- issue_creation_reason: `{policy.get('reason') or 'unknown'}`")
+        if policy.get("next_command"):
+            lines.append(f"- issue_creation_next_command: `{policy.get('next_command')}`")
+    lines.append(f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`")
+    lines.append(f"- needs_bug_json: `{handoff.get('needs_bug_json')}`")
+    if infra_action:
+        lines.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
     for command in handoff.get("next_commands") or []:
         lines.append(f"- `{command}`")
     lines.extend(
@@ -625,6 +778,12 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
 
 def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
     """Build the GitHub issue payload used by CI registrar workflows."""
+    policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if policy.get("allowed") is False:
+        raise ValueError(
+            f"CI failure issue is not actionable yet: {policy.get('reason')}; "
+            f"rerun after completion with `{policy.get('next_command')}`"
+        )
     severity = summary.get("severity") or "P1"
     if severity not in {"P0", "P1"}:
         raise ValueError("Only P0/P1 auto-file behavior is allowed.")
@@ -693,6 +852,11 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         },
         "recurrence_comment": render_recurrence_comment(summary),
     }
+
+
+def _dedupe_marker(summary: dict[str, Any]) -> str:
+    fingerprint = summary.get("fingerprint") or f"run-{summary.get('run_id') or 'unknown'}"
+    return f"<!-- aistock-ci-failure-fingerprint:{fingerprint} -->"
 
 
 def render_recurrence_comment(summary: dict[str, Any]) -> str:
@@ -824,6 +988,7 @@ def summarize_nightly_status(
                 f"dr={statuses.get('dr_snapshot')}/{statuses.get('dr_validate')}",
                 f"l3={statuses.get('nightly_l3')}",
                 f"live={statuses.get('paper_v2_live')}",
+                f"code={statuses.get('code_intelligence')}",
             ]
         )
     )
@@ -864,20 +1029,33 @@ def summarize_actions_run(
     run_url: str | None = None,
     severity: str = "P1",
     log_provider: Callable[[str, str], str] | None = None,
+    wait_for_completion: bool = False,
+    wait_attempts: int = 1,
+    wait_seconds: float = 20.0,
+    log_attempts: int = 1,
+    log_wait_seconds: float = 10.0,
 ) -> dict[str, Any]:
-    result = _run(
-        [
-            "gh",
-            "run",
-            "view",
-            str(run_id),
-            "--repo",
-            repo,
-            "--json",
-            "databaseId,name,workflowName,displayTitle,event,headBranch,headSha,status,conclusion,url,jobs",
-        ],
-        timeout=120,
-    )
+    run_view_args = [
+        "gh",
+        "run",
+        "view",
+        str(run_id),
+        "--repo",
+        repo,
+        "--json",
+        "databaseId,name,workflowName,displayTitle,event,headBranch,headSha,status,conclusion,url,jobs",
+    ]
+    attempts = max(1, wait_attempts if wait_for_completion else 1)
+    result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "run view not attempted"}
+    run_payload: dict[str, Any] = {}
+    for attempt in range(attempts):
+        result = _run(run_view_args, timeout=120)
+        if result.get("ok"):
+            run_payload = json.loads(str(result.get("stdout") or "{}"))
+            if not wait_for_completion or _status_value(run_payload.get("status")) == "completed":
+                break
+        if wait_for_completion and attempt + 1 < attempts:
+            time.sleep(max(0.0, wait_seconds))
     extraction_errors: list[str] = []
     if not result.get("ok"):
         extraction_errors.append(result.get("stderr") or result.get("stdout") or "gh run view failed")
@@ -895,7 +1073,28 @@ def summarize_actions_run(
                 "extraction_errors": extraction_errors,
             }
         )
-    run_payload = json.loads(str(result.get("stdout") or "{}"))
+    if wait_for_completion and _status_value(run_payload.get("status")) != "completed":
+        extraction_errors.append(
+            f"run {run_id} is still in progress after {attempts} check(s); logs will be available when it is complete"
+        )
+        return finalize_summary(
+            {
+                "schema_version": "aistock_ci_failure_summary_v1",
+                "generated_at": _utc_now(),
+                "severity": severity,
+                "workflow": run_payload.get("workflowName") or run_payload.get("name"),
+                "display_title": run_payload.get("displayTitle"),
+                "event": run_payload.get("event"),
+                "run_id": str(run_payload.get("databaseId") or run_id),
+                "run_url": run_payload.get("url") or run_url,
+                "branch": run_payload.get("headBranch"),
+                "commit": run_payload.get("headSha"),
+                "conclusion": run_payload.get("conclusion"),
+                "failed_jobs": [],
+                "extraction_errors": extraction_errors,
+                "defer_issue_creation": True,
+            }
+        )
     failed_jobs: list[dict[str, Any]] = []
     for job in run_payload.get("jobs") or []:
         if job.get("conclusion") != "failure":
@@ -905,7 +1104,13 @@ def summarize_actions_run(
         if log_provider is not None:
             log_text = log_provider(str(run_id), job_id)
         else:
-            log_result = _run(["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"], timeout=180)
+            log_result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "log fetch not attempted"}
+            for attempt in range(max(1, log_attempts)):
+                log_result = _run(["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"], timeout=180)
+                if log_result.get("ok") or not _logs_not_ready_error(log_result.get("stderr") or log_result.get("stdout")):
+                    break
+                if attempt + 1 < max(1, log_attempts):
+                    time.sleep(max(0.0, log_wait_seconds))
             if log_result.get("ok"):
                 log_text = str(log_result.get("stdout") or "")
             else:
@@ -969,6 +1174,19 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.extend(["", "## Nightly Statuses", ""])
         for key in NIGHTLY_STATUS_KEYS:
             lines.append(f"- {key}: `{statuses.get(key) or 'unknown'}`")
+    policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if policy:
+        lines.extend(
+            [
+                "",
+                "## Issue Creation Policy",
+                "",
+                f"- allowed: `{policy.get('allowed')}`",
+                f"- reason: `{policy.get('reason') or 'unknown'}`",
+            ]
+        )
+        if policy.get("next_command"):
+            lines.append(f"- next_command: `{policy.get('next_command')}`")
     lines.extend(
         [
             "",
@@ -1005,12 +1223,27 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.extend(["", "## Extraction Errors", ""])
         for error in summary.get("extraction_errors") or []:
             lines.append(f"- `{str(error)}`")
+    infra_action = handoff.get("infra_action") if isinstance(handoff.get("infra_action"), dict) else {}
+    handoff_prelude = [
+        f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`",
+        f"- needs_bug_json: `{handoff.get('needs_bug_json')}`",
+    ]
+    if infra_action:
+        handoff_prelude.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
+        handoff_prelude.extend([f"- {item}" for item in infra_action.get("next_actions") or []])
+    bug_linkage_line = (
+        "- BUG ID: not applicable for infra-only issue unless `triage-ci-issue` later reclassifies it."
+        if handoff.get("needs_bug_json") is False
+        else "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`."
+    )
     lines.extend(
         [
             "",
             "## Agent Handoff",
             "",
             "Run these commands from a clean AIstock worktree. They are agent-neutral and work for Codex, Claude Code, Cursor, or a human operator.",
+            "",
+            *handoff_prelude,
             "",
             "```bash",
             *handoff["next_commands"],
@@ -1034,7 +1267,7 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
             "",
             "## BUG JSON Linkage",
             "",
-            "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
+            bug_linkage_line,
             "",
             "## Production Gates",
             "",
@@ -1067,7 +1300,7 @@ def _repo_root() -> Path:
 
 
 def _default_candidate_history_dir() -> Path:
-    return _repo_root() / "tests" / "aistock_validation" / "history" / "issue_candidates"
+    return _repo_root() / "tmp" / "validation" / "ci_failure_issue" / "candidate_history"
 
 
 def _safe_filename(value: Any, *, fallback: str = "candidate") -> str:
@@ -1130,7 +1363,7 @@ def _build_candidate_history(summary: dict[str, Any], *, existing: dict[str, Any
             "severity": str(summary.get("severity") or "P1").upper(),
             "status": "new",
             "fingerprint": fingerprint,
-            "dedupe_key": (build_github_issue_payload(summary).get("dedupe") or {}).get("marker"),
+            "dedupe_key": _dedupe_marker(summary),
             "allowed_write_scope": handoff.get("allowed_write_scope") or summary.get("suspected_files") or [],
             "required_validation": handoff.get("required_verification") or [],
             "evidence": event.get("evidence_refs") or [],
@@ -1139,6 +1372,7 @@ def _build_candidate_history(summary: dict[str, Any], *, existing: dict[str, Any
         "agent_handoff": handoff,
         "source_summary": {
             "diagnostic_status": summary.get("diagnostic_status"),
+            "issue_creation_policy": summary.get("issue_creation_policy") or {},
             "workflow": summary.get("workflow"),
             "run_id": summary.get("run_id"),
             "run_url": summary.get("run_url"),
@@ -1174,6 +1408,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--run-id")
     parser.add_argument("--run-url")
+    parser.add_argument("--wait-for-completion", action="store_true", help="Poll the Actions run before extracting logs.")
+    parser.add_argument("--wait-attempts", type=int, default=1, help="Number of run-status checks when --wait-for-completion is set.")
+    parser.add_argument("--wait-seconds", type=float, default=20.0, help="Delay between run-status checks.")
+    parser.add_argument("--log-attempts", type=int, default=1, help="Number of failed-job log fetch attempts.")
+    parser.add_argument("--log-wait-seconds", type=float, default=10.0, help="Delay between failed-job log fetch attempts.")
     parser.add_argument("--severity", default="P1", choices=["P0", "P1", "P2", "P3"])
     parser.add_argument("--manual-summary")
     parser.add_argument("--nightly-status-json", help="Parse compact Nightly job result JSON instead of Actions logs.")
@@ -1191,7 +1430,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidate-history-dir",
         help=(
             "Persist compact candidate handoff JSON under this stable directory. "
-            "If omitted, tmp/validation CI/Nightly outputs are mirrored to tests/aistock_validation/history/issue_candidates."
+            "If omitted, CI/Nightly outputs under tmp/validation write candidate history next to the output artifact; "
+            "other invocations do not persist candidate history."
         ),
     )
     parser.add_argument("--no-candidate-history", action="store_true", help="Do not persist compact candidate history JSON.")
@@ -1200,6 +1440,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, candidate_history_path: Path | None = None) -> dict[str, Any]:
+    policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    github_issue_payload_ref = None if policy.get("allowed") is False else args.github_issue_payload_output
     if args.stdout_format == "full-json":
         payload = dict(summary)
         if candidate_history_path:
@@ -1212,6 +1454,7 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
         "issue_title": summary.get("issue_title"),
         "fingerprint": summary.get("fingerprint"),
         "nightly_failed_stages": summary.get("nightly_failed_stages") or [],
+        "issue_creation_policy": summary.get("issue_creation_policy") or {},
         "suspected_modules": summary.get("suspected_modules") or [],
         "suspected_files_count": len(summary.get("suspected_files") or []),
         "failed_jobs_count": len(summary.get("failed_jobs") or []),
@@ -1220,7 +1463,7 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
             "markdown": args.markdown_output,
             "context": args.context_output,
             "context_markdown": args.context_markdown_output,
-            "github_issue_payload": args.github_issue_payload_output,
+            "github_issue_payload": github_issue_payload_ref,
             "candidate_history": str(candidate_history_path) if candidate_history_path else None,
         },
     }
@@ -1261,7 +1504,17 @@ def main(argv: list[str] | None = None) -> int:
             commit=args.commit,
         )
     elif args.run_id:
-        summary = summarize_actions_run(repo=args.repo, run_id=str(args.run_id), run_url=args.run_url, severity=args.severity)
+        summary = summarize_actions_run(
+            repo=args.repo,
+            run_id=str(args.run_id),
+            run_url=args.run_url,
+            severity=args.severity,
+            wait_for_completion=args.wait_for_completion,
+            wait_attempts=args.wait_attempts,
+            wait_seconds=args.wait_seconds,
+            log_attempts=args.log_attempts,
+            log_wait_seconds=args.log_wait_seconds,
+        )
     else:
         raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
@@ -1270,7 +1523,14 @@ def main(argv: list[str] | None = None) -> int:
     context_pack = build_context_pack(summary)
     _write_json(args.context_output, context_pack)
     _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
-    _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
+    policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if args.github_issue_payload_output and policy.get("allowed") is not False:
+        _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
+    elif args.github_issue_payload_output:
+        try:
+            Path(args.github_issue_payload_output).unlink()
+        except FileNotFoundError:
+            pass
     history_dir = None if args.no_candidate_history else (args.candidate_history_dir or _auto_candidate_history_dir(args.output))
     candidate_history_path = persist_candidate_history(summary, history_dir=history_dir)
     sys.stdout.write(json.dumps(build_stdout_payload(summary, args, candidate_history_path=candidate_history_path), ensure_ascii=True, indent=2, sort_keys=True) + "\n")
