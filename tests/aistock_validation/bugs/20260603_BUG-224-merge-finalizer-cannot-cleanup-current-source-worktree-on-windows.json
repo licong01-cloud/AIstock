@@ -30,8 +30,8 @@
   "expected": "Full authorized aftercare completes merge, close-sync persistence, root sync, and safe cleanup without manual fallback.",
   "first_seen_at": "2026-06-02T18:12:38.104205Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9aa9c290ca7df737ed09a7dd67494a863fb7d2da",
+  "fixed_at": "2026-06-03T02:30:23.455801Z",
   "github_issue_number": 607,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/607",
   "last_seen_at": "2026-06-02T18:12:38.104205Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/608",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -63,5 +64,8 @@
     "fingerprint": "4a66b9780b6d31abf9a36a8d",
     "source_event_id": "FE-20260603-4a66b9780b6d"
   },
+  "validation_evidence": [
+    "PR #608 CI green and merged -> passed"
+  ],
   "verification_run_id": null
 }
