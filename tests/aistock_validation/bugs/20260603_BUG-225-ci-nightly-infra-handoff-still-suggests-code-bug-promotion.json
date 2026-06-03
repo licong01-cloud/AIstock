@@ -31,8 +31,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-02T18:59:57.717528Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c6eaacc8f8ba7d726f76329c11b2d6c67649196f",
+  "fixed_at": "2026-06-03T02:31:50.763500Z",
   "github_issue_number": 609,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/609",
   "last_seen_at": "2026-06-02T18:59:57.717528Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/610",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "02347f633ea7b28efa15c95c",
     "source_event_id": "FE-20260603-02347f633ea7"
   },
+  "validation_evidence": [
+    "PR #610 CI green and merged -> passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "fix_ready"
 }
