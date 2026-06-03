@@ -339,6 +339,10 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode merge --pr-
 
 Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, commits the BUG registry close-sync change, opens or reuses a close-sync PR, and prepares cleanup state. If `gh pr merge` exits non-zero after GitHub has already merged the PR, the wrapper must re-check the PR state, record `recovered_from_local_merge_error`, and continue to close-sync instead of leaving a manual fallback. Merge automation still does not touch production runtime or DB, and it commits only `tests/aistock_validation/bugs/**` from the close-sync worktree; unexpected dirty files block the close-sync PR.
 
+When the user explicitly authorizes merging a PR or branch into `main`, the workflow must complete the full aftercare loop unless the user says otherwise: merge the source PR, persist and merge close-sync when required, fast-forward the canonical root `F:\Dev\AIstock` to `origin/main`, verify local `main` equals GitHub `main`, and clean only the task-scoped branch/worktree that passed the safety checks. Do not report a merge as complete while the canonical root is behind `origin/main`, a required close-sync PR is still open, or a task branch/worktree cleanup step is still blocked.
+
+If the merged change declares `production_ddl_gate=pending` or otherwise includes a committed production DDL/migration requirement, the same explicit merge authorization requires applying that exact committed DDL after `main` is merged and locally synced, then verifying the schema/API evidence before reporting restart readiness. Do not invent ad hoc DDL outside the committed migration or design. If the DDL cannot be applied or verified safely, stop with `production_ddl_gate=pending` and state that the feature is not restart-ready.
+
 If the source/fix PR has already been merged, use the v2.3 finalizer instead of manually chaining close-sync, cleanup, and postmortem commands:
 
 ```powershell
@@ -438,4 +442,6 @@ Every completed issue-fix PR report must include:
 - `production_ddl_gate`
 - `production_frontend_dependency_gate`
 - `production_backend_dependency_gate`
+- local/GitHub sync proof: canonical `F:\Dev\AIstock` `main` equals `origin/main` after merge
+- DDL status: `noop`, `applied_and_verified`, or explicit `pending` blocker; if merge approval included required DDL, include the applied migration and verification evidence
 - explicit statement that production runtime and production DB were untouched, or a blocking gate if they were not
