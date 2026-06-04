@@ -25,22 +25,22 @@
       "timestamp": "2026-06-04T03:17:32.201368Z"
     },
     {
-      "timestamp": "2026-06-04T03:19:10Z",
-      "actor": "codex",
       "action": "scope_expand",
-      "note": "Expanded allowed_write_scope to repository idempotency fix and qmt_strategy_ledger regression test after fast-path classification."
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope to repository idempotency fix and qmt_strategy_ledger regression test after fast-path classification.",
+      "timestamp": "2026-06-04T03:19:10Z"
     },
     {
-      "timestamp": "2026-06-04T03:23:37.522875+00:00",
-      "actor": "codex",
       "action": "fix_validated",
-      "note": "Moved Postgres cash-entry account validation behind ON CONFLICT insert success and added regression coverage for duplicate cash_id idempotency."
+      "actor": "codex",
+      "note": "Moved Postgres cash-entry account validation behind ON CONFLICT insert success and added regression coverage for duplicate cash_id idempotency.",
+      "timestamp": "2026-06-04T03:23:37.522875+00:00"
     },
     {
-      "timestamp": "2026-06-04T03:24:54.500608+00:00",
-      "actor": "codex",
       "action": "scope_expand",
-      "note": "Added actual regression test file backend/tests/qmt_strategy_ledger/test_repository.py after implementation used repository-level unit coverage."
+      "actor": "codex",
+      "note": "Added actual regression test file backend/tests/qmt_strategy_ledger/test_repository.py after implementation used repository-level unit coverage.",
+      "timestamp": "2026-06-04T03:24:54.500608+00:00"
     }
   ],
   "evidence_uris": [
@@ -49,8 +49,8 @@
   "expected": "Repeated MiniQMT sync-snapshot calls must be idempotent: when cash_id already exists, repository once-semantics must skip hypothetical account validation/update and return inserted=false instead of raising or mutating balances.",
   "first_seen_at": "2026-06-04T03:17:32.201373Z",
   "fix_branch": "bug/BUG-249-miniqmt-ledger-sync-is-not-idempotent-after-cash-20260604",
-  "fix_commit": null,
-  "fixed_at": "2026-06-04T03:23:37.522875+00:00",
+  "fix_commit": "038264eb1a9efc3f3b572e6d22bbd63800a2b6ed",
+  "fixed_at": "2026-06-04T03:31:28.851529Z",
   "github_issue_number": 699,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/699",
   "last_seen_at": "2026-06-04T03:17:32.201373Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/700",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -78,13 +79,13 @@
     "fingerprint": "28c3db3db2f91353397e27c2",
     "source_event_id": "FE-20260604-28c3db3db2f9"
   },
-  "verification_run_id": null,
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
   "validation_evidence": [
     "python -m pytest backend/tests/qmt_strategy_ledger/test_repository.py::test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exists backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 14 passed",
     "python -m pytest backend/tests/qmt_strategy_ledger -q -> 107 passed",
     "python -m ruff check backend/services/qmt_strategy_ledger/repository.py backend/tests/qmt_strategy_ledger/test_repository.py -> passed",
     "python -m nox -s l0 -> passed, blocking=0",
     "python -m nox -s validation_module_registry_l0 -> passed"
-  ]
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
