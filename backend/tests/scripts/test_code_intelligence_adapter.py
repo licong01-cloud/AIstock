@@ -449,6 +449,48 @@ def test_codegraph_freshness_trusts_up_to_date_status_over_old_mtime(tmp_path: P
     assert "### Notes" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
 
 
+def test_latest_codegraph_freshness_reads_newest_artifact_without_external_call(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "old.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-03T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "warning",
+                "freshness": "stale",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/old.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "new.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "freshness_basis": "codegraph_status",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/new.json",
+                "summary_ref": "tmp/validation/code-intelligence/nightly-1/new.md",
+                "index_summary": {"files": 10, "nodes": 20, "edges": 30},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = adapter.latest_codegraph_freshness(tmp_path)
+
+    assert payload["schema_version"] == "aistock_codegraph_latest_freshness_v1"
+    assert payload["workflow_gate"] == "ready"
+    assert payload["latest"]["freshness"] == "fresh"
+    assert payload["latest"]["artifact_path"].endswith("new.json")
+    assert payload["latest"]["index_summary"]["nodes"] == 20
+
+
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
     monkeypatch.setattr(

@@ -381,6 +381,8 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
             value["h7_code_intelligence"],
             "status",
             "codegraph_status",
+            "codegraph_freshness",
+            "codegraph_freshness_ref",
             "fallback_used",
             "readiness_next_command",
             "fallback_reason",
@@ -583,6 +585,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 payload["h7_code_intelligence"],
                 "workflow_gate",
                 "codegraph_status",
+                "codegraph_freshness",
+                "codegraph_freshness_ref",
                 "fallback_used",
                 "readiness_next_command",
                 "fallback_reason",
@@ -1016,6 +1020,8 @@ def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifac
 def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str, Any]:
     code_intel = code_intel or {}
     codegraph = code_intel.get("codegraph") if isinstance(code_intel.get("codegraph"), dict) else {}
+    freshness = code_intel.get("codegraph_freshness") if isinstance(code_intel.get("codegraph_freshness"), dict) else {}
+    latest_freshness = freshness.get("latest") if isinstance(freshness.get("latest"), dict) else {}
     ua = code_intel.get("understand_anything") if isinstance(code_intel.get("understand_anything"), dict) else {}
     bootstrap = code_intel.get("bootstrap_commands") if isinstance(code_intel.get("bootstrap_commands"), dict) else {}
     context = code_intel.get("context") if isinstance(code_intel.get("context"), dict) else {}
@@ -1038,6 +1044,8 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
         "workflow_gate": "warning" if fallback_used else "ready",
         "status": code_intel.get("status") or codegraph_status,
         "codegraph_status": codegraph_status,
+        "codegraph_freshness": latest_freshness.get("freshness"),
+        "codegraph_freshness_ref": latest_freshness.get("artifact_path"),
         "understand_anything_status": ua.get("status"),
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
@@ -4839,6 +4847,8 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
                 "",
                 f"- status: `{h7_code_intelligence.get('status') or 'unknown'}`",
                 f"- codegraph_status: `{h7_code_intelligence.get('codegraph_status') or 'unknown'}`",
+                f"- codegraph_freshness: `{h7_code_intelligence.get('codegraph_freshness') or 'not_available'}`",
+                f"- codegraph_freshness_ref: `{h7_code_intelligence.get('codegraph_freshness_ref') or 'not_available'}`",
                 f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
                 f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
                 "",

@@ -18,6 +18,10 @@ DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.3"
 CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
 DEFAULT_UA_MODULES = ["issue_workflow", "validation_center", "paper_v2", "research_assistant", "qe"]
+CODE_INTELLIGENCE_ARTIFACT_ROOTS = (
+    Path("tmp") / "validation" / "code-intelligence",
+    Path("tests") / "aistock_validation" / "history" / "code-intelligence",
+)
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -208,6 +212,75 @@ def _codegraph_command() -> str | None:
 def _codegraph_bootstrap_command() -> str:
     command = _codegraph_command() or "codegraph"
     return f"{command} init -i"
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _latest_codegraph_freshness_artifact(root: Path) -> dict[str, Any] | None:
+    candidates: list[tuple[str, float, Path, dict[str, Any]]] = []
+    for relative_root in CODE_INTELLIGENCE_ARTIFACT_ROOTS:
+        artifact_root = root / relative_root
+        if not artifact_root.exists():
+            continue
+        for path in artifact_root.rglob("*.json"):
+            payload = _read_json_if_exists(path)
+            if (payload or {}).get("schema_version") != "aistock_codegraph_freshness_v1":
+                continue
+            generated_at = str(payload.get("generated_at") or "")
+            try:
+                modified_at = path.stat().st_mtime
+            except OSError:
+                modified_at = 0.0
+            candidates.append((generated_at, modified_at, path, payload or {}))
+    if not candidates:
+        return None
+    _, _, path, payload = sorted(candidates, key=lambda item: (item[0], item[1], str(item[2])), reverse=True)[0]
+    return {
+        "schema_version": payload.get("schema_version"),
+        "artifact_type": "codegraph_freshness",
+        "provider": payload.get("provider") or "codegraph",
+        "workflow_gate": payload.get("workflow_gate"),
+        "freshness": payload.get("freshness"),
+        "freshness_basis": payload.get("freshness_basis"),
+        "status": payload.get("status"),
+        "generated_at": payload.get("generated_at"),
+        "git_commit": payload.get("git_commit"),
+        "graph_root": payload.get("graph_root"),
+        "graph_root_source": payload.get("graph_root_source"),
+        "artifact_path": _repo_rel(path, root),
+        "summary_ref": payload.get("summary_ref"),
+        "index_summary": payload.get("index_summary") or {},
+        "warnings": payload.get("warnings") or [],
+        "notes": payload.get("notes") or [],
+        "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
+    }
+
+
+def latest_codegraph_freshness(root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    latest = _latest_codegraph_freshness_artifact(root)
+    warnings: list[str] = []
+    if latest is None:
+        warnings.append("No CodeGraph freshness artifact found; use the live doctor/status fallback.")
+    elif latest.get("freshness") != "fresh":
+        warnings.append(f"Latest CodeGraph freshness is {latest.get('freshness') or 'unknown'}.")
+    return {
+        "schema_version": "aistock_codegraph_latest_freshness_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "artifact_roots": [_repo_rel(root / item, root) for item in CODE_INTELLIGENCE_ARTIFACT_ROOTS],
+        "latest": latest,
+        "warnings": warnings,
+    }
 
 
 def _understand_graph_path(root: Path) -> Path:
@@ -556,12 +629,14 @@ def build_doctor_report(root: Path | None = None, *, skip_external: bool = False
     root = root or REPO_ROOT
     catalog = _load_catalog(root)
     codegraph = codegraph_status(root, skip_external=skip_external)
+    freshness = latest_codegraph_freshness(root)
     ua = understand_anything_status(root)
     warnings: list[str] = []
     if not codegraph.get("available"):
         warnings.append("CodeGraph CLI is unavailable; issue workflow will fall back to existing rg/catalog context.")
     elif not codegraph.get("index_exists"):
         warnings.append(f"CodeGraph index is missing; run {codegraph.get('bootstrap_command')} when code intelligence context is needed.")
+    warnings.extend(f"freshness artifact: {item}" for item in freshness.get("warnings") or [])
     if not ua.get("graph_exists"):
         warnings.append("Understand Anything graph is missing; this is non-blocking for normal issue workflow.")
     return {
@@ -573,6 +648,7 @@ def build_doctor_report(root: Path | None = None, *, skip_external: bool = False
         "repo_root": str(root),
         "catalog": catalog,
         "codegraph": codegraph,
+        "codegraph_freshness": freshness,
         "understand_anything": ua,
         "bootstrap_commands": {
             "codegraph": codegraph.get("bootstrap_command"),
@@ -930,6 +1006,12 @@ def cmd_freshness(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_latest_freshness(args: argparse.Namespace) -> int:
+    payload = latest_codegraph_freshness(root=Path(args.root) if args.root else REPO_ROOT)
+    _emit(payload, args.output)
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -1014,6 +1096,14 @@ def build_parser() -> argparse.ArgumentParser:
     freshness.add_argument("--skip-external", action="store_true")
     freshness.add_argument("--output")
     freshness.set_defaults(func=cmd_freshness)
+
+    latest_freshness = sub.add_parser(
+        "latest-freshness",
+        help="Read the latest warning-only CodeGraph freshness artifact without invoking CodeGraph.",
+    )
+    latest_freshness.add_argument("--root")
+    latest_freshness.add_argument("--output")
+    latest_freshness.set_defaults(func=cmd_latest_freshness)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)
