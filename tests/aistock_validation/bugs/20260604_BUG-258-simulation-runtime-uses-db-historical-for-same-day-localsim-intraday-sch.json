@@ -31,8 +31,8 @@
   "expected": "During same-day execution window, LocalSim scheduler submissions use TDX_REALTIME regardless of a DB_HISTORICAL historical/replay default; MiniQMT bindings keep MiniQMT realtime/broker semantics and are not resubmitted if an execution plan already exists.",
   "first_seen_at": "2026-06-04T06:31:44.940739Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a3decc02054af8aa6867e270577a5dbd8ded1b31",
+  "fixed_at": "2026-06-04T07:21:17.994912Z",
   "github_issue_number": 724,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/724",
   "last_seen_at": "2026-06-04T06:31:44.940739Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/728",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -60,5 +61,17 @@
     "fingerprint": "8110a3cf44259371b1b40b9d",
     "source_event_id": "FE-20260604-8110a3cf4425"
   },
+  "validation_evidence": [
+    "after rebase: python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "after rebase: python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 27 passed",
+    "python -m nox -s localsim_unattended_l3 -> 37 passed",
+    "python -m nox -s miniqmt_sim_stub_l3 -> 50 passed",
+    "python -m nox -s simulation_dual_backend_l4 -> 97 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan mapped=12",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
   "verification_run_id": null
 }
