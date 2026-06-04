@@ -195,7 +195,7 @@ test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("request", (request) => {
     const url = request.url();
-    if (url.includes(":3000") || url.includes(":19080")) forbiddenRequests.push(url);
+    if (url.includes(":8001") || url.includes(":3000") || url.includes(":19080")) forbiddenRequests.push(url);
   });
 
   await page.route("**/api/v1/research-assistant/**", async (route) => {

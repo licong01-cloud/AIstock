@@ -2716,8 +2716,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "profile_distribution": profile_distribution,
             "requested_server_key": requested_server_key,
             "canonical_server_key": canonical_server_key,
-            "backend_health": {"status": "not_checked", "reason": "5a backend catalog slice does not run live backend smoke"},
-            "recent_smoke": {"status": "not_run", "reason": "5a backend catalog slice"},
+            "backend_health": {"status": "not_checked", "reason": "Phase 5 catalog UI gate does not run live backend smoke"},
+            "recent_smoke": {"status": "not_run", "reason": "Phase 5 validation uses explicit no-live-smoke status"},
         }
 
     def _resolve_mcp_catalog_tool(self, server_key: str, tool_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
