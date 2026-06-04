@@ -112,6 +112,21 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
     assert payload["workflow_validation_required"] is True
 
 
+def test_issue_on_test_fail_workflow_change_uses_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            ".github/workflows/issue-on-test-fail.yml",
+            "scripts/ci_failure_issue_summary.py",
+            "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+
+
 def test_workflow_validation_only_allows_same_task_bug_metadata(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260604_BUG-257-workflow-fast-lane.json"
     allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"
