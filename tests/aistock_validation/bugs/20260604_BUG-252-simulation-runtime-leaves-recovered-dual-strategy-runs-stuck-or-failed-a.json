@@ -1,0 +1,64 @@
+{
+  "actual": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-04 reports active_run_count=2: LocalSim simrun_a128248f1663f6c2 and simrun_043a8b3858471d8e remain SUBMITTING. MiniQMT simrun_e22704ae4492c70a and simrun_eeeb4b11faa9689e remain FAILED_RETRYABLE despite qmt_batch_status=SUCCEEDED, broker_called=true, 58 distinct broker orders, 82 distinct trades, zero unattributed rows, and latest reconciliation qmtrec_1e802d132ff44144b9474f6f5483fa9b SUCCEEDED with issue_count=0.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260604_BUG-252-simulation-runtime-leaves-recovered-dual-strategy-runs-stuck-or-failed-a.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-252",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T04:13:49.545354Z",
+  "description": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-04 reports active_run_count=2: LocalSim simrun_a128248f1663f6c2 and simrun_043a8b3858471d8e remain SUBMITTING. MiniQMT simrun_e22704ae4492c70a and simrun_eeeb4b11faa9689e remain FAILED_RETRYABLE despite qmt_batch_status=SUCCEEDED, broker_called=true, 58 distinct broker orders, 82 distinct trades, zero unattributed rows, and latest reconciliation qmtrec_1e802d132ff44144b9474f6f5483fa9b SUCCEEDED with issue_count=0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-7ed47a32d658",
+      "timestamp": "2026-06-04T04:13:49.545350Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/dual_strategy_paper_validation_20260604_after_bug251/api_sync_reconciliation_after_bug251.json",
+    "tmp/validation/dual_strategy_paper_validation_20260604_after_bug251/db_validation_after_bug251.json",
+    "tmp/validation/dual_strategy_paper_validation_20260604_after_bug251/runtime_stale_run_details_before_bug252.json"
+  ],
+  "expected": "Restart recovery must safely terminalize or reconcile existing simulation runs without duplicate broker calls: LocalSim SUBMITTING runs with no broker_called and persisted plans should be either safely submitted once or marked with actionable terminal evidence; MiniQMT runs with broker_called=true must never resubmit and should run idempotent sync/reconciliation to move to SUCCEEDED when ledger reconciliation succeeds.",
+  "first_seen_at": "2026-06-04T04:13:49.545354Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 708,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/708",
+  "last_seen_at": "2026-06-04T04:13:49.545354Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "After BUG-251 restart: GET /api/v1/simulation-runtime/runs?trade_date=2026-06-04&limit=20; POST /api/v1/qmt/virtual-strategies/sync-snapshot twice; POST /api/v1/qmt/virtual-strategies/reconciliation. Observe MiniQMT ledger succeeds but simulation_daily_run statuses remain SUBMITTING/FAILED_RETRYABLE.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "Simulation runtime leaves recovered dual-strategy runs stuck or failed after broker/reconciliation success",
+  "trigger_condition": {
+    "fingerprint": "7ed47a32d658def95519b483",
+    "source_event_id": "FE-20260604-7ed47a32d658"
+  },
+  "verification_run_id": null
+}

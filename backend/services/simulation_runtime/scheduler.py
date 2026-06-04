@@ -1345,7 +1345,33 @@ class SimulationLifecycleScheduler:
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
             status = "NO_REBALANCE"
-        if self._should_submit_existing_plan(run, plan=plan, submit=submit):
+        if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
+            runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
+            context = self.context_provider.load_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+            )
+            sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
+            reconciliation = self._reconcile_after_submit(binding=binding, run=run, context=context)
+            self._persist_strategy_performance(binding=binding, run=run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(run.run_id)
+            status = self._result_status_after_post_submit(
+                "RECOVERED",
+                tail_result=None,
+                reconciliation=reconciliation,
+            )
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status=status,
+                run=latest_run,
+                execution_plan=plan,
+                sync_result=sync_result,
+                reconciliation_result=reconciliation,
+            )
+        if self._should_submit_existing_plan(binding=binding, run=run, plan=plan, submit=submit):
             runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
             context = self.context_provider.load_context(
                 runtime_release=runtime_release,
@@ -1511,21 +1537,65 @@ class SimulationLifecycleScheduler:
         return marks
 
     @staticmethod
-    def _should_submit_existing_plan(run: SimulationDailyRun, *, plan: ExecutionPlan, submit: bool) -> bool:
+    def _should_submit_existing_plan(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        submit: bool,
+    ) -> bool:
+        if not submit or not plan.intents or run.run_payload_json.get("broker_called"):
+            return False
+        statuses = {
+            SimulationDailyRunStatus.CREATED,
+            SimulationDailyRunStatus.PRECHECKING,
+            SimulationDailyRunStatus.SIGNAL_GENERATING,
+            SimulationDailyRunStatus.TARGET_GENERATING,
+            SimulationDailyRunStatus.PLANNING_EXECUTION,
+            SimulationDailyRunStatus.FAILED_RETRYABLE,
+        }
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            statuses.add(SimulationDailyRunStatus.SUBMITTING)
+        return run.status in statuses
+
+    @staticmethod
+    def _should_reconcile_existing_miniqmt_run(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        submit: bool,
+    ) -> bool:
         return (
             submit
-            and bool(plan.intents)
+            and binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and bool(run.run_payload_json.get("broker_called"))
             and run.status
             in {
-                SimulationDailyRunStatus.CREATED,
-                SimulationDailyRunStatus.PRECHECKING,
-                SimulationDailyRunStatus.SIGNAL_GENERATING,
-                SimulationDailyRunStatus.TARGET_GENERATING,
-                SimulationDailyRunStatus.PLANNING_EXECUTION,
+                SimulationDailyRunStatus.SUBMITTING,
+                SimulationDailyRunStatus.INTRADAY_RUNNING,
+                SimulationDailyRunStatus.RECONCILING,
                 SimulationDailyRunStatus.FAILED_RETRYABLE,
             }
-            and not run.run_payload_json.get("broker_called")
+            and SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
         )
+
+    @staticmethod
+    def _mini_qmt_batch_succeeded(payload: dict[str, Any]) -> bool:
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
+        if status not in {"SUCCEEDED", "PREVIEW_SUCCEEDED"}:
+            return False
+        if batch.get("success") is False:
+            return False
+        try:
+            failed = int(batch.get("failed", payload.get("failed_intents", 0)) or 0)
+        except (TypeError, ValueError):
+            return False
+        try:
+            total = int(batch.get("total", payload.get("submitted_intents", 0)) or 0)
+        except (TypeError, ValueError):
+            return False
+        return total > 0 and failed == 0
 
     def _sync_before_submit(
         self,
