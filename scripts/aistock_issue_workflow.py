@@ -8,8 +8,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -728,10 +730,11 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 compact["postmortem_preview"] = _pick(preview, "bug_id", "timing_summary", "stale_pr_check")
     elif schema.endswith("_postmortem_v1"):
         compact.update(_compact_postmortem(payload) or {})
-    elif schema.endswith("_close_sync_v1"):
+    elif schema.endswith("_close_sync_v1") or schema.endswith("_close_sync_batch_v1"):
         compact.update(
             _pick(
                 payload,
+                "bug_ids",
                 "source_bug_json",
                 "registry_root",
                 "current_status",
@@ -741,6 +744,7 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "production_gates",
                 "dry_run",
                 "updated_bug_json",
+                "updated_bug_jsons",
                 "timing_summary",
             )
         )
@@ -963,6 +967,47 @@ def _read_events(bug_id: str, root: Path | None = None) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             events.append(payload)
     return events
+
+
+def _prior_postmortem_paths(bug_id: str, roots: list[Path]) -> list[Path]:
+    candidates: list[Path] = []
+    known_roots = roots + [REPO_ROOT, _canonical_root()]
+    for root in known_roots:
+        candidates.extend(
+            [
+                root / WORKFLOW_ROOT / bug_id / "postmortem.json",
+                root / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json",
+            ]
+        )
+    worktree_root = _default_worktree_root()
+    if worktree_root.exists():
+        candidates.extend(worktree_root.glob(f"*/{WORKFLOW_ROOT.as_posix()}/{bug_id}/postmortem*.json"))
+    return _unique_existing_paths(candidates)
+
+
+def _load_prior_postmortem(bug_id: str, roots: list[Path]) -> dict[str, Any] | None:
+    paths = _prior_postmortem_paths(bug_id, roots)
+    if not paths:
+        return None
+    def sort_key(path: Path) -> tuple[float, str]:
+        try:
+            return (path.stat().st_mtime, str(path))
+        except OSError:
+            return (0.0, str(path))
+
+    path = sorted(paths, key=sort_key)[-1]
+    try:
+        payload = _load_json(path)
+    except WorkflowError:
+        return None
+    payload = dict(payload)
+    payload.setdefault("schema_version", "aistock_issue_workflow_postmortem_v1")
+    payload["workflow_gate"] = payload.get("workflow_gate") or "artifact_fallback"
+    payload["artifact_fallback"] = {
+        "reason": "workflow_state_missing_or_cleaned",
+        "path": str(path),
+    }
+    return payload
 
 
 def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str, Any]:
@@ -1644,6 +1689,16 @@ def _close_sync_worktree_names(*, bug_id: str) -> tuple[str, Path]:
     return branch, _default_worktree_root() / name
 
 
+def _close_sync_batch_worktree_names(*, bug_ids: list[str]) -> tuple[str, Path]:
+    normalized = [item.strip().upper() for item in bug_ids if item.strip()]
+    label = "-".join(normalized[:3])
+    if len(normalized) > 3:
+        label = f"{label}-plus-{len(normalized) - 3}"
+    name = f"{label}-close-sync-batch-{_today_compact()}".strip("-")
+    branch = f"chore/{name}"
+    return branch, _default_worktree_root() / name
+
+
 def _maybe_create_registry_worktree(
     *,
     title: str,
@@ -1664,6 +1719,33 @@ def _maybe_create_registry_worktree(
         return plan
     if worktree.exists():
         raise WorkflowError(f"target registry worktree already exists: {worktree}")
+    _git(["fetch", "origin", "main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    plan["created"] = True
+    return plan
+
+
+def _maybe_create_fix_chain_worktree(
+    *,
+    record: dict[str, Any],
+    bug_id: str,
+    create: bool,
+    dry_run: bool,
+    task_slug: str | None = None,
+) -> dict[str, Any]:
+    branch, worktree = _target_names(record, bug_id, task_slug)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+        "registration_strategy": "fix_pr_persists_bug_registration",
+    }
+    if not create or dry_run:
+        return plan
+    if worktree.exists():
+        raise WorkflowError(f"target fix-chain worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
     _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
@@ -1693,6 +1775,42 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
             raise WorkflowError(f"target close-sync worktree is not a git checkout: {worktree}")
         if git.get("dirty"):
             raise WorkflowError(f"target close-sync worktree is dirty: {worktree}")
+        plan["reused"] = True
+        plan["git"] = git
+        return plan
+    if _git_ref_exists(branch):
+        _git(["worktree", "add", str(worktree), branch])
+        plan["reused_branch"] = True
+    else:
+        _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    plan["created"] = True
+    return plan
+
+
+def _maybe_create_close_sync_batch_worktree(
+    *,
+    bug_ids: list[str],
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    branch, worktree = _close_sync_batch_worktree_names(bug_ids=bug_ids)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+        "bug_ids": bug_ids,
+    }
+    if not create or dry_run:
+        return plan
+    _git(["fetch", "origin", "main"])
+    if worktree.exists():
+        git = _git_snapshot(worktree)
+        if not git.get("ok"):
+            raise WorkflowError(f"target close-sync batch worktree is not a git checkout: {worktree}")
+        if git.get("dirty"):
+            raise WorkflowError(f"target close-sync batch worktree is dirty: {worktree}")
         plan["reused"] = True
         plan["git"] = git
         return plan
@@ -1955,6 +2073,44 @@ def _registry_commit_next_command(worktree: str | Path, bug_id: str, *, continue
         issue_arg = f' --issue-json "{issue_json}"' if issue_json else " --issue-json <BUG_JSON>"
         parts.append(f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id}{issue_arg} --mode plan --create-worktree")
     return " && ".join(parts)
+
+
+def _commit_bug_registration_in_fix_worktree(root: Path, bug_id: str) -> dict[str, Any]:
+    dirty = [
+        path for path in _dirty_files(root)
+        if path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    ]
+    if not dirty:
+        return {"workflow_gate": "no_changes", "root": str(root), "branch": _branch_for_path(root)}
+    unexpected = sorted(
+        path for path in _dirty_files(root)
+        if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    )
+    if unexpected:
+        raise WorkflowError(
+            "fix-chain registration worktree has unexpected dirty files outside BUG registry: "
+            + ", ".join(unexpected[:10])
+        )
+    started = time.monotonic()
+    actions: list[dict[str, Any]] = []
+    add = _run_command(["git", "add", *COMMITTABLE_BUG_REGISTRY_PATHS], cwd=root, timeout=60)
+    actions.append({"command": f"git add {' '.join(COMMITTABLE_BUG_REGISTRY_PATHS)}", "result": add})
+    if not add.get("ok"):
+        raise WorkflowError(add.get("stderr") or add.get("stdout") or "fix-chain registration git add failed")
+    commit = _run_command(["git", "commit", "-m", f"chore(issue): register {bug_id}"], cwd=root, timeout=120)
+    actions.append({"command": f"git commit -m chore(issue): register {bug_id}", "result": commit})
+    if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
+        raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "fix-chain registration git commit failed")
+    commit_sha = _run_command(["git", "rev-parse", "--short=12", "HEAD"], cwd=root, timeout=30)
+    return {
+        "workflow_gate": "committed",
+        "root": str(root),
+        "branch": _branch_for_path(root),
+        "changed_files": dirty,
+        "actions": actions,
+        "commit": str(commit_sha.get("stdout") or "").strip() if commit_sha.get("ok") else None,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
 
 
 def _issue_json_path_for_worktree(source_path: Path, target_root: Path) -> Path:
@@ -2618,10 +2774,15 @@ def build_submit_bug_plan(
     apply: bool,
     allow_current_worktree: bool = False,
     create_registry_worktree: bool = False,
+    create_fix_worktree: bool = False,
     registry_pr_only: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     effective_apply = apply and not dry_run
+    if create_fix_worktree and create_registry_worktree:
+        raise WorkflowError("--create-fix-worktree and --create-registry-worktree are mutually exclusive")
+    if create_fix_worktree and registry_pr_only:
+        raise WorkflowError("--create-fix-worktree cannot be combined with --registry-pr-only")
     if effective_apply and not create_github and not (github_issue_number and github_issue_url):
         raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
     registry_worktree_plan = _maybe_create_registry_worktree(
@@ -2636,8 +2797,11 @@ def build_submit_bug_plan(
         if create_registry_worktree
         else _registry_target_root()
     )
+    github_create_root = _canonical_root() if create_fix_worktree else registry_root
     allocation_root = registry_root if registry_root.exists() else _registry_target_root()
-    registry_guard = _validate_registry_apply_target(registry_root) if effective_apply else None
+    registry_guard = None if (effective_apply and create_fix_worktree) else (
+        _validate_registry_apply_target(registry_root) if effective_apply else None
+    )
     if registry_guard and registry_guard["blocking"] and not allow_current_worktree:
         raise WorkflowError("; ".join(registry_guard["blocking"]))
     reservation_path: Path | None = None
@@ -2746,7 +2910,10 @@ def build_submit_bug_plan(
             raise WorkflowError(f"BUG JSON already exists: {bug_path}")
 
         if create_github and not record.get("github_issue_url") and effective_apply:
-            _write_text(github_body_path, _render_github_issue_body(record, candidate))
+            github_body_for_create = github_body_path
+            if create_fix_worktree:
+                github_body_for_create = Path(tempfile.gettempdir()) / "aistock_issue_workflow" / f"{canonical_bug_id}-github-issue-body.md"
+            _write_text(github_body_for_create, _render_github_issue_body(record, candidate))
             github_title = f"{canonical_bug_id} {severity}: {title}"
             result = _execute_checked(
                 [
@@ -2758,11 +2925,11 @@ def build_submit_bug_plan(
                     "--title",
                     github_title,
                     "--body-file",
-                    str(github_body_path),
+                    str(github_body_for_create),
                     "--label",
                     _csv_arg(_issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)),
                 ],
-                cwd=registry_root,
+        cwd=github_create_root,
                 timeout=120,
             )
             issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
@@ -2778,6 +2945,23 @@ def build_submit_bug_plan(
         has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
         if effective_apply and not has_linkage:
             raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+        fix_worktree_plan = _maybe_create_fix_chain_worktree(
+            record=record,
+            bug_id=canonical_bug_id,
+            create=create_fix_worktree,
+            dry_run=dry_run or not apply,
+        )
+        fix_chain_root = Path(fix_worktree_plan["worktree"]) if create_fix_worktree else None
+        write_root = fix_chain_root if fix_chain_root is not None and effective_apply else registry_root
+        write_output_dir = write_root / WORKFLOW_ROOT / canonical_bug_id
+        write_candidate_path = write_output_dir / "candidate.json"
+        write_github_body_path = write_output_dir / "github-issue-body.md"
+        write_bug_path = _issue_json_path_for_worktree(bug_path, write_root) if write_root != registry_root else bug_path
+        fix_worktree_guard = _validate_registry_apply_target(write_root) if (effective_apply and create_fix_worktree) else None
+        if fix_worktree_guard and fix_worktree_guard["blocking"] and not allow_current_worktree:
+            raise WorkflowError("; ".join(fix_worktree_guard["blocking"]))
+        if write_root != registry_root:
+            _add_record_allowed_scope(record, _repo_rel(write_bug_path, write_root))
 
         payload = {
         "schema_version": "aistock_issue_workflow_submit_bug_v1",
@@ -2792,13 +2976,20 @@ def build_submit_bug_plan(
                 "target_root": str(registry_root),
                 "canonical_root": str(_canonical_root().resolve()),
                 "blocking": [],
-                "warnings": ["registry worktree will be created on apply"],
+                "warnings": [
+                    "BUG registry will be persisted in the fix worktree/branch"
+                    if create_fix_worktree
+                    else "registry worktree will be created on apply"
+                ],
                 "planned": True,
             }
-            if create_registry_worktree and not registry_root.exists()
+            if (create_fix_worktree or (create_registry_worktree and not registry_root.exists()))
             else _validate_registry_apply_target(registry_root)
         ),
         "registry_worktree_plan": registry_worktree_plan,
+        "fix_worktree_plan": fix_worktree_plan,
+        "fix_worktree_guard": fix_worktree_guard,
+        "registration_strategy": "fix_pr_persists_bug_registration" if create_fix_worktree else "registry_intake_then_fix_worktree",
         "candidate_path": _repo_rel(candidate_path, registry_root),
         "github_issue_body_path": _repo_rel(github_body_path, registry_root),
         "bug_json_path": _repo_rel(bug_path, registry_root),
@@ -2821,18 +3012,25 @@ def build_submit_bug_plan(
             "reservation_path": str(reservation_path) if reservation_path else None,
         },
         "next_agent_steps": [
-            "switch_to_registry_worktree",
-            "commit_registry_only_pr_without_fix" if registry_pr_only else "commit_registry_files_then_continue_fix_worktree",
+            "switch_to_fix_worktree_and_continue_fix" if create_fix_worktree else "switch_to_registry_worktree",
+            "commit_registry_only_pr_without_fix" if registry_pr_only else (
+                "continue_fix_in_same_branch" if create_fix_worktree else "commit_registry_files_then_continue_fix_worktree"
+            ),
             "do_not_write_bug_json_in_canonical_root",
         ] if effective_apply else [
             "create_or_switch_to_clean_registry_worktree",
             "rerun_submit_bug_with_github_linkage",
         ],
-        "next_command": _registry_commit_next_command(
-            registry_root,
-            canonical_bug_id,
-            continue_fix=not registry_pr_only,
-            issue_json=_repo_rel(bug_path, registry_root),
+        "next_command": (
+            f"cd /d {fix_chain_root} && python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
+            f"--issue-json \"{_repo_rel(write_bug_path, write_root)}\" --mode plan"
+            if effective_apply and create_fix_worktree and fix_chain_root
+            else _registry_commit_next_command(
+                registry_root,
+                canonical_bug_id,
+                continue_fix=not registry_pr_only,
+                issue_json=_repo_rel(bug_path, registry_root),
+            )
         )
         if effective_apply
         else (
@@ -2842,25 +3040,42 @@ def build_submit_bug_plan(
         }
 
         if effective_apply:
-            _write_json(candidate_path, {"event": event, "candidate": candidate})
-            _write_text(github_body_path, _render_github_issue_body(record, candidate))
-            _write_json(bug_path, record)
-            _write_allocator(allocated_number, registry_root)
+            _write_json(write_candidate_path, {"event": event, "candidate": candidate})
+            _write_text(write_github_body_path, _render_github_issue_body(record, candidate))
+            _write_json(write_bug_path, record)
+            _write_allocator(allocated_number, write_root)
+            fix_registration_commit = (
+                _commit_bug_registration_in_fix_worktree(write_root, canonical_bug_id)
+                if create_fix_worktree and write_root != registry_root
+                else None
+            )
             _write_state(
                 canonical_bug_id,
                 state="discovered",
-                root=registry_root,
-                branch=_branch_for_path(registry_root),
-                workflow_role="registry_intake",
+                root=write_root,
+                branch=_branch_for_path(write_root),
+                workflow_role="fix" if create_fix_worktree else "registry_intake",
                 registry_pr_only=registry_pr_only,
-                source_bug_json=_repo_rel(bug_path, registry_root),
-                candidate_path=_repo_rel(candidate_path, registry_root),
+                source_bug_json=_repo_rel(write_bug_path, write_root),
+                target_bug_json=_repo_rel(write_bug_path, write_root),
+                candidate_path=_repo_rel(write_candidate_path, write_root),
                 github_issue_number=record.get("github_issue_number"),
                 github_issue_url=record.get("github_issue_url"),
-                next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
+                worktree=str(write_root) if create_fix_worktree else None,
+                fix_chain_registration_commit=fix_registration_commit,
+                next_actions=(
+                    ["run_issue_workflow_plan_in_current_fix_worktree", "read_context_pack", "fix", "validate", "create_pr"]
+                    if create_fix_worktree
+                    else ["run_issue_workflow_plan", "create_worktree", "read_context_pack"]
+                ),
             )
-            payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
-            payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
+            payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, write_root), write_root)
+            payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, write_root), write_root)
+            payload["candidate_path"] = _repo_rel(write_candidate_path, write_root)
+            payload["github_issue_body_path"] = _repo_rel(write_github_body_path, write_root)
+            payload["bug_json_path"] = _repo_rel(write_bug_path, write_root)
+            if fix_registration_commit:
+                payload["fix_registration_commit"] = fix_registration_commit
             payload["fix_chain"] = {
                 "registry_pr_required": registry_pr_only,
                 "continue_to_fix_in_same_workflow": not registry_pr_only,
@@ -2869,16 +3084,29 @@ def build_submit_bug_plan(
                     None
                     if registry_pr_only
                     else (
-                        f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
-                        f"--issue-json \"{_repo_rel(bug_path, registry_root)}\" --mode plan --create-worktree"
+                        f"cd /d {fix_chain_root} && python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
+                        f"--issue-json \"{_repo_rel(write_bug_path, write_root)}\" --mode plan"
+                        if create_fix_worktree and fix_chain_root
+                        else (
+                            f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
+                            f"--issue-json \"{_repo_rel(bug_path, registry_root)}\" --mode plan --create-worktree"
+                        )
                     )
                 ),
-                "default_path": "registry_pr_only" if registry_pr_only else "commit_registry_then_create_fix_worktree",
+                "default_path": (
+                    "registry_pr_only"
+                    if registry_pr_only
+                    else ("single_fix_branch_registration_and_fix" if create_fix_worktree else "commit_registry_then_create_fix_worktree")
+                ),
                 "stop_reason": "registry_pr_only_requested" if registry_pr_only else None,
                 "note": (
                     "User explicitly requested registry-only tracking; stop after the registry PR."
                     if registry_pr_only
-                    else "BUG registration seeds a registry-intake state. Commit the BUG JSON, then create a separate fix worktree from latest origin/main using the registry BUG JSON until it lands on main."
+                    else (
+                        "BUG registration has been committed in the fix branch; continue coding and include that BUG JSON in the fix PR."
+                        if create_fix_worktree
+                        else "BUG registration seeds a registry-intake state. Commit the BUG JSON, then create a separate fix worktree from latest origin/main using the registry BUG JSON until it lands on main."
+                    )
                 ),
             }
         return payload
@@ -5012,6 +5240,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
     candidates = [(root, _load_state(canonical_bug_id, root)) for root in roots]
     candidates = [(root, state) for root, state in candidates if state]
     if not candidates:
+        prior = _load_prior_postmortem(canonical_bug_id, roots)
+        if prior:
+            return prior
         raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
     root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events = _read_events(canonical_bug_id, root)
@@ -5670,6 +5901,122 @@ def _execute_checked(args: list[str], *, cwd: Path | None = None, timeout: int =
     if not result.get("ok"):
         raise WorkflowError(result.get("stderr") or result.get("stdout") or f"command failed: {' '.join(args)}")
     return result
+
+
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if callable(is_junction) and is_junction():
+            return True
+        attrs = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+        return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except OSError:
+        return False
+
+
+def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:
+    profile: dict[str, Any] = {
+        "path": str(path),
+        "inside_worktree_root": _is_inside(path, _default_worktree_root()) if path.exists() else False,
+        "regular_entries": [],
+        "reparse_entries": [],
+        "empty_dirs": [],
+        "missing": not path.exists(),
+    }
+    if not path.exists():
+        profile["safe_reparse_or_empty_only"] = True
+        return profile
+
+    def scan_dir(directory: Path) -> None:
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: item.as_posix())
+        except OSError:
+            profile["regular_entries"].append(_repo_rel(directory, path))
+            return
+        if not children and directory != path:
+            profile["empty_dirs"].append(_repo_rel(directory, path))
+            return
+        for child in children:
+            rel = _repo_rel(child, path)
+            if _is_reparse_or_symlink(child):
+                profile["reparse_entries"].append(rel)
+            elif child.is_dir():
+                scan_dir(child)
+            else:
+                profile["regular_entries"].append(rel)
+
+    scan_dir(path)
+    profile["safe_reparse_or_empty_only"] = bool(profile["inside_worktree_root"]) and not profile["regular_entries"]
+    return profile
+
+
+def _remove_reparse_or_empty_tree(path: Path) -> dict[str, Any]:
+    profile = _orphan_worktree_dir_profile(path)
+    if not profile.get("safe_reparse_or_empty_only"):
+        raise WorkflowError(f"refusing orphan worktree cleanup with regular files: {profile.get('regular_entries')}")
+    removed: list[str] = []
+    if not path.exists():
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "profile": profile, "removed": removed}
+
+    def remove_children(directory: Path) -> None:
+        for child in sorted(directory.iterdir(), key=lambda item: item.as_posix(), reverse=True):
+            if _is_reparse_or_symlink(child):
+                if child.is_dir():
+                    child.rmdir()
+                else:
+                    child.unlink()
+                removed.append(_repo_rel(child, path))
+            elif child.is_dir():
+                remove_children(child)
+                try:
+                    child.rmdir()
+                    removed.append(_repo_rel(child, path))
+                except OSError:
+                    pass
+
+    remove_children(path)
+    path.rmdir()
+    removed.append(".")
+    return {
+        "ok": True,
+        "returncode": 0,
+        "stdout": json.dumps({"removed": removed}, ensure_ascii=True),
+        "stderr": "",
+        "profile": profile,
+        "removed": removed,
+    }
+def _looks_like_reparse_cleanup_failure(result: dict[str, Any]) -> bool:
+    text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}".lower()
+    return any(token in text for token in ("invalid argument", "junction", "reparse", "node_modules"))
+
+
+def _remove_worktree_with_reparse_fallback(*, root: Path, worktree_path: Path) -> dict[str, Any]:
+    result = _run_command(["git", "worktree", "remove", str(worktree_path)], cwd=root, timeout=120)
+    payload: dict[str, Any] = {
+        "ok": bool(result.get("ok")),
+        "primary": result,
+        "fallback_used": False,
+    }
+    if result.get("ok") or not worktree_path.exists():
+        return payload
+    if not _looks_like_reparse_cleanup_failure(result):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or f"git worktree remove failed: {worktree_path}")
+    fallback = _remove_reparse_or_empty_tree(worktree_path)
+    prune = _run_command(["git", "worktree", "prune"], cwd=root, timeout=60)
+    payload.update(
+        {
+            "ok": not worktree_path.exists(),
+            "fallback_used": True,
+            "fallback_reason": "git_worktree_remove_left_reparse_or_empty_tree",
+            "fallback": fallback,
+            "prune": prune,
+        }
+    )
+    if not payload["ok"]:
+        raise WorkflowError(f"worktree reparse fallback did not remove {worktree_path}")
+    return payload
 
 
 def _check_name(item: dict[str, Any]) -> str:
@@ -6433,10 +6780,11 @@ def build_registry_intake_cleanup_plan(
             if not action.get("safe"):
                 continue
             if action["action"] == "remove_worktree":
+                worktree_path = Path(str(action["worktree"]))
                 applied.append(
                     {
                         "command": f"git worktree remove {action['worktree']}",
-                        "result": _execute_checked(["git", "worktree", "remove", str(action["worktree"])], cwd=REPO_ROOT, timeout=120),
+                        "result": _remove_worktree_with_reparse_fallback(root=REPO_ROOT, worktree_path=worktree_path),
                     }
                 )
             elif action["action"] == "delete_local_branch":
@@ -6664,6 +7012,9 @@ def _maybe_commit_and_pr_close_sync(
     branch = ((close_sync.get("registry_worktree_plan") or {}).get("branch") or "")
     if not root.exists() or not branch:
         return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
+    bug_ids = flow._unique_strings(flow._as_list(close_sync.get("bug_ids")) or [bug_id])
+    label = str(close_sync.get("batch_id") or bug_id)
+    title_label = label if len(bug_ids) > 1 else bug_id
     changed_files = _close_sync_changed_files(close_sync)
     if not changed_files:
         return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
@@ -6695,8 +7046,9 @@ def _maybe_commit_and_pr_close_sync(
     actions.append({"command": f"git add {' '.join(changed_files)}", "result": add})
     if not add.get("ok"):
         raise WorkflowError(add.get("stderr") or add.get("stdout") or "close-sync git add failed")
-    commit = _run_command(["git", "commit", "-m", f"chore(issue): close-sync {bug_id} after merge"], cwd=root, timeout=120)
-    actions.append({"command": f"git commit -m chore(issue): close-sync {bug_id} after merge", "result": commit})
+    commit_message = f"chore(issue): close-sync {title_label} after merge"
+    commit = _run_command(["git", "commit", "-m", commit_message], cwd=root, timeout=120)
+    actions.append({"command": f"git commit -m {commit_message}", "result": commit})
     if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
         raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
     commit_sha = _run_command(["git", "rev-parse", "--short=12", "HEAD"], cwd=root, timeout=30)
@@ -6706,12 +7058,13 @@ def _maybe_commit_and_pr_close_sync(
     if not push.get("ok"):
         raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
 
-    body_path = root / WORKFLOW_ROOT / bug_id / "close-sync-pr-body.md"
+    body_path = root / WORKFLOW_ROOT / label / "close-sync-pr-body.md"
     body_lines = [
-        f"## {bug_id} close-sync",
+        f"## {title_label} close-sync",
         "",
         f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
+        f"- BUG IDs: `{', '.join(bug_ids)}`",
         "- BUG JSON status: `fixed`",
         "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
         "",
@@ -6734,7 +7087,7 @@ def _maybe_commit_and_pr_close_sync(
             "--head",
             branch,
             "--title",
-            f"chore(issue): close-sync {bug_id}",
+            f"chore(issue): close-sync {title_label}",
             "--body-file",
             str(body_path),
         ],
@@ -7717,6 +8070,163 @@ def build_close_sync_plan(
     return payload
 
 
+def build_close_sync_batch_plan(
+    *,
+    bug_ids: list[str],
+    pr_url: str | None,
+    apply: bool,
+    allow_missing_linkage: bool,
+    validation_evidence: list[str] | None = None,
+    merge_commit: str | None = None,
+    production_gates: dict[str, str] | None = None,
+    skip_github_check: bool = False,
+    create_registry_worktree: bool = False,
+    allow_current_worktree: bool = False,
+) -> dict[str, Any]:
+    canonical_bug_ids = flow._unique_strings([item.strip().upper() for item in bug_ids if item.strip()])
+    if not canonical_bug_ids:
+        raise WorkflowError("close-sync-batch requires at least one --bug-id")
+    evidence = [item for item in validation_evidence or [] if item.strip()]
+    gates = production_gates or _production_gates_payload()
+    records: list[dict[str, Any]] = []
+    source_paths: list[Path] = []
+    for item in canonical_bug_ids:
+        record, source_path = find_bug_record(bug_id=item, issue_json=None)
+        missing = _require_github_linkage(record, allow_missing=allow_missing_linkage)
+        status = str(record.get("status") or "").strip()
+        if status not in flow.VALID_BUG_STATUSES:
+            raise WorkflowError(f"{item} has invalid status for close/sync: {status!r}")
+        records.append({"bug_id": item, "record": record, "source_path": source_path, "missing_github_linkage": missing})
+        source_paths.append(source_path)
+    registry_worktree_plan = _maybe_create_close_sync_batch_worktree(
+        bug_ids=canonical_bug_ids,
+        create=create_registry_worktree,
+        dry_run=not apply,
+    )
+    close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
+    target_pairs: list[tuple[str, dict[str, Any], Path, list[str]]] = []
+    if create_registry_worktree and apply:
+        for item, record, source_path in [(row["bug_id"], row["record"], row["source_path"]) for row in records]:
+            rel_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
+            target_source = close_sync_root / rel_source
+            if not target_source.exists():
+                raise WorkflowError(f"BUG JSON does not exist in close-sync batch worktree: {target_source}")
+            target_record = _load_json(target_source)
+            target_pairs.append((item, target_record, target_source, []))
+    else:
+        target_pairs = [
+            (row["bug_id"], row["record"], row["source_path"], row["missing_github_linkage"])
+            for row in records
+        ]
+    apply_guard = _validate_close_sync_apply_target(close_sync_root) if apply else None
+    if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError("; ".join(apply_guard["blocking"]))
+    batch_id = "-".join(canonical_bug_ids)
+    output_dir = close_sync_root / WORKFLOW_ROOT / batch_id
+    workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_issue_workflow_close_sync_batch_v1",
+        "generated_at": _utc_now(),
+        "batch_id": batch_id,
+        "bug_ids": canonical_bug_ids,
+        "source_bug_jsons": [_repo_rel(path, close_sync_root) for path in source_paths],
+        "registry_root": str(close_sync_root),
+        "registry_worktree_plan": registry_worktree_plan,
+        "apply_guard": apply_guard,
+        "merged_pr": pr_url,
+        "merge_commit": merge_commit,
+        "validation_evidence": evidence,
+        "production_gates": gates,
+        "dry_run": not apply,
+        "workflow_gate": workflow_gate,
+        "per_issue": [
+            {
+                "bug_id": item,
+                "github_issue_number": record.get("github_issue_number"),
+                "github_issue_url": record.get("github_issue_url"),
+                "source_bug_json": _repo_rel(path, close_sync_root),
+                "missing_github_linkage": missing,
+            }
+            for item, record, path, missing in target_pairs
+        ],
+        "next_agent_steps": [
+            "verify_shared_source_pr_covers_each_bug",
+            "run_close_sync_batch_apply_from_clean_registry_worktree",
+            "sync_each_github_issue_status",
+            "persist_one_close_sync_pr_for_the_batch",
+        ],
+    }
+    _write_json(output_dir / "close-sync-batch-plan.json", payload)
+    if not apply:
+        return payload
+    if not pr_url:
+        raise WorkflowError("close-sync-batch --apply requires --pr-url")
+    if not evidence:
+        raise WorkflowError("close-sync-batch --apply requires at least one --validation-evidence")
+    started = time.monotonic()
+    pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
+    merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
+    updated_paths: list[str] = []
+    github_syncs: dict[str, Any] = {}
+    for item, record, source_path, _missing in target_pairs:
+        updated = dict(record)
+        updated.update(
+            {
+                "status": "fixed",
+                "fixed_at": _utc_now(),
+                "fix_commit": merge_commit,
+                "pr_url": pr_url,
+                "validation_evidence": evidence,
+                **gates,
+            }
+        )
+        _write_json(source_path, updated)
+        updated_paths.append(_repo_rel(source_path, close_sync_root))
+        issue_evidence = {
+            **payload,
+            "workflow_gate": "close_synced",
+            "bug_id": item,
+            "merge_commit": merge_commit,
+            "updated_bug_json": _repo_rel(source_path, close_sync_root),
+        }
+        github_syncs[item] = (
+            {"status": "skipped_github_check_disabled"}
+            if skip_github_check
+            else _sync_github_issue_after_close(updated, issue_evidence, root=close_sync_root)
+        )
+        _write_state(
+            item,
+            state="close_synced",
+            root=close_sync_root,
+            pr_url=pr_url,
+            commit=merge_commit,
+            validation_evidence=evidence,
+            production_gates=gates,
+            github_issue_sync=github_syncs[item],
+            next_actions=["persist_batch_close_sync_pr", "sync_local_main", "cleanup_after_merge"],
+        )
+        _append_event(
+            item,
+            event="close_sync_batch_apply",
+            state="close_synced",
+            root=close_sync_root,
+            duration_seconds=0.0,
+            evidence={"batch_id": batch_id, "pr_url": pr_url, "merge_commit": merge_commit},
+        )
+    evidence_payload = {
+        **payload,
+        "workflow_gate": "close_synced",
+        "dry_run": False,
+        "pr_check": pr_check,
+        "merge_commit": merge_commit,
+        "updated_bug_jsons": updated_paths,
+        "github_issue_sync": github_syncs,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+    _write_json(output_dir / "close-sync-batch-evidence.json", evidence_payload)
+    return evidence_payload
+
+
 def build_cleanup_after_merge_plan(
     *,
     branch: str,
@@ -7747,6 +8257,7 @@ def build_cleanup_after_merge_plan(
     worktree_exists = bool(worktree_path and worktree_path.exists())
     worktree_empty = False
     worktree_is_current_cwd = False
+    worktree_orphan_profile: dict[str, Any] | None = None
     if worktree_path and worktree_path.exists():
         try:
             current_cwd = Path.cwd().resolve()
@@ -7764,6 +8275,8 @@ def build_cleanup_after_merge_plan(
             bool(status_result.get("ok")) and worktree_branch == branch
         )
         worktree_clean = bool(status_result.get("ok")) and status_result.get("stdout") == ""
+        if not worktree_registered:
+            worktree_orphan_profile = _orphan_worktree_dir_profile(worktree_path)
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
     root_dirty_files = _dirty_files(root) if root.exists() else []
     origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
@@ -7781,7 +8294,13 @@ def build_cleanup_after_merge_plan(
         blocking.append(f"branch is not merged into origin/main: {branch}")
     if worktree_path and worktree_exists and worktree_is_current_cwd and apply and not root.exists():
         blocking.append(f"refusing to remove the current working directory because canonical root is unavailable: {worktree_path}")
-    if worktree_path and worktree_exists and not worktree_registered and not worktree_empty:
+    if (
+        worktree_path
+        and worktree_exists
+        and not worktree_registered
+        and not worktree_empty
+        and not (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")
+    ):
         blocking.append(f"worktree path exists but is not a registered git worktree: {worktree_path}")
     if worktree_path and worktree_registered and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
@@ -7808,10 +8327,14 @@ def build_cleanup_after_merge_plan(
         if worktree_is_current_cwd:
             actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
         actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
-    elif worktree_path and worktree_exists and worktree_empty:
+    elif worktree_path and worktree_exists and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
         if worktree_is_current_cwd:
             actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
-        actions.append({"action": "remove_empty_worktree_dir", "worktree": str(worktree_path), "safe": merge_verified})
+        actions.append({
+            "action": "remove_orphan_worktree_dir",
+            "worktree": str(worktree_path),
+            "safe": merge_verified and bool((worktree_orphan_profile or {"safe_reparse_or_empty_only": worktree_empty}).get("safe_reparse_or_empty_only")),
+        })
     if branch in local_branches:
         actions.append({"action": "delete_local_branch", "branch": branch, "safe": merge_verified})
     if remote_ref:
@@ -7832,6 +8355,7 @@ def build_cleanup_after_merge_plan(
         "worktree_exists": worktree_exists,
         "worktree_registered": worktree_registered,
         "worktree_empty": worktree_empty,
+        "worktree_orphan_profile": worktree_orphan_profile,
         "worktree_is_current_cwd": worktree_is_current_cwd,
         "pre_cleanup_fetch": pre_cleanup_fetch,
         "root_git": root_git,
@@ -7898,13 +8422,13 @@ def build_cleanup_after_merge_plan(
                 }
             )
         if worktree_path and worktree_path.exists() and worktree_registered:
-            applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=root, timeout=120)})
-        elif worktree_path and worktree_path.exists() and worktree_empty:
-            worktree_path.rmdir()
+            applied.append({"command": f"git worktree remove {worktree_path}", "result": _remove_worktree_with_reparse_fallback(root=root, worktree_path=worktree_path)})
+        elif worktree_path and worktree_path.exists() and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
+            removed = _remove_reparse_or_empty_tree(worktree_path)
             applied.append(
                 {
-                    "command": f"rmdir {worktree_path}",
-                    "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
+                    "command": f"remove orphan worktree dir {worktree_path}",
+                    "result": removed,
                 }
             )
         if branch in local_branches:
@@ -8064,6 +8588,7 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         apply=args.apply,
         allow_current_worktree=args.allow_current_worktree,
         create_registry_worktree=args.create_registry_worktree,
+        create_fix_worktree=args.create_fix_worktree,
         registry_pr_only=args.registry_pr_only,
         dry_run=args.dry_run,
     )
@@ -8188,6 +8713,29 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
 
 
+def cmd_close_sync_batch(args: argparse.Namespace) -> int:
+    payload = build_close_sync_batch_plan(
+        bug_ids=list(args.bug_id or []),
+        pr_url=args.pr_url,
+        apply=args.apply,
+        allow_missing_linkage=args.allow_missing_linkage,
+        validation_evidence=list(args.validation_evidence or []),
+        merge_commit=args.merge_commit,
+        production_gates=_production_gates_payload(args),
+        skip_github_check=args.skip_github_check,
+        create_registry_worktree=args.create_registry_worktree,
+        allow_current_worktree=args.allow_current_worktree,
+    )
+    if args.apply and args.create_pr:
+        payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
+            bug_id=payload["bug_ids"][0],
+            close_sync=payload,
+            validation_evidence=list(args.validation_evidence or []),
+        )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
+
+
 def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_plan(
         branch=args.branch,
@@ -8281,6 +8829,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit_bug.add_argument("--create-github", action="store_true", help="Use gh to create the linked GitHub Issue when --apply is set.")
     submit_bug.add_argument("--apply", action="store_true", help="Write candidate/BUG JSON and update allocator after GitHub linkage exists.")
     submit_bug.add_argument("--create-registry-worktree", action="store_true", help="Create a clean registry worktree/branch from origin/main before writing BUG JSON.")
+    submit_bug.add_argument("--create-fix-worktree", action="store_true", help="Fast-chain BUG registration into a new fix worktree/branch so the fix PR persists the BUG JSON.")
     submit_bug.add_argument("--registry-pr-only", action="store_true", help="Stop after a registry-only BUG PR; normal workflows continue directly to fix.")
     submit_bug.add_argument("--dry-run", action="store_true", help="Plan registry worktree creation without writing files or creating a worktree.")
     submit_bug.add_argument(
@@ -8496,6 +9045,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_options(close)
     close.set_defaults(func=cmd_close_sync)
+
+    close_batch = sub.add_parser("close-sync-batch", help="Close-sync multiple BUG JSON records in one registry worktree/PR.")
+    close_batch.add_argument("--bug-id", action="append", required=True)
+    close_batch.add_argument("--pr-url")
+    close_batch.add_argument("--apply", action="store_true")
+    close_batch.add_argument("--allow-missing-linkage", action="store_true")
+    close_batch.add_argument("--validation-evidence", action="append")
+    close_batch.add_argument("--merge-commit")
+    close_batch.add_argument("--production-ddl-gate", default="noop")
+    close_batch.add_argument("--production-frontend-dependency-gate", default="noop")
+    close_batch.add_argument("--production-backend-dependency-gate", default="noop")
+    close_batch.add_argument("--skip-github-check", action="store_true")
+    close_batch.add_argument("--create-registry-worktree", action="store_true")
+    close_batch.add_argument("--create-pr", action="store_true", help="Commit, push, and open one close-sync PR for the batch after --apply.")
+    close_batch.add_argument(
+        "--allow-current-worktree",
+        action="store_true",
+        help="Override close-sync root/main guard for tests or audited recovery only.",
+    )
+    add_output_options(close_batch)
+    close_batch.set_defaults(func=cmd_close_sync_batch)
 
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
     cleanup.add_argument("--branch", required=True)

@@ -16,7 +16,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - For small or unclear scope, run `python scripts/aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context and validation plan before loading more files.
 - If `doctor` reports stale or missing client wrappers, run `install-client --apply` after this workflow branch is merged, then restart old Codex/Claude windows before judging workflow behavior.
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint and `scripts/issue_flow.py` only as a lower-level helper.
-- Do not write BUG JSON or allocator changes in the canonical root checkout. If registering a BUG, use a clean task/registry worktree/branch or the wrapper will block `submit-bug --apply`.
+- Do not write BUG JSON or allocator changes in the canonical root checkout. If registering a BUG that will be fixed immediately, prefer `submit-bug --create-fix-worktree --apply`; use `--create-registry-worktree` only for intake-only or CI/Nightly promotion lanes.
 - After validation passes, do not stop at `validation_passed`; commit task files, push the task branch, and create the PR when the user requested PR-ready workflow.
 - Do not merge to `main` unless the user explicitly asks for merge.
 - Do not touch production runtime services, write production DB, or apply DDL without explicit approval.
@@ -31,8 +31,9 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 1. Health-check the environment:
    `python scripts/aistock_issue_workflow.py doctor`
 2. If the user asks to submit/register a new BUG, run:
-   `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-registry-worktree --apply`
-   If the command cannot create or link GitHub Issue, or if the registry guard says the target is canonical root/main/dirty, stop before committing any BUG JSON. Continue only from a clean issue/registry worktree.
+   `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`
+   If the command cannot create or link GitHub Issue, stop before committing BUG JSON. Continue from the returned fix worktree and include the BUG JSON in the fix PR.
+   Use `--create-registry-worktree` instead of `--create-fix-worktree` only when the user explicitly wants intake-only tracking or when CI/Nightly promotion must not start a fix branch.
    After successful submit, follow `fix_chain.run_next_command` in the same workflow instead of opening a separate registry-only PR, unless the user explicitly asked for intake-only registration.
 3. If the user names an existing BUG, run:
    `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`
@@ -74,19 +75,25 @@ After the shared fix, run:
 
 `python scripts/aistock_issue_workflow.py finish-batch --batch-id <BATCH-ID> --validation-evidence "<command> -> passed"`
 
+After a compatible batch PR merges, prefer one aftercare PR:
+
+`python scripts/aistock_issue_workflow.py close-sync-batch --bug-id BUG-XXX --bug-id BUG-YYY --pr-url <PR_URL> --validation-evidence "<command> -> passed" --create-registry-worktree --create-pr --apply`
+
 ## Completion Report
 
 Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary (`queue_seconds`, `active_fix_seconds`, validation, PR/CI, and aftercare), and whether production runtime or DB was untouched.
 
 ## Post-Merge Sync And Cleanup
 
-After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
+After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready. For compatible multi-BUG PRs, use `close-sync-batch` so close-sync, GitHub comments, and PR persistence happen once with per-issue evidence.
 
 When the user explicitly authorizes merge automation, `run --mode merge --pr-url <PR_URL> --merge --validation-evidence "<command> -> passed"` may merge only after green checks, then close-sync and prepare cleanup. Without `--merge`, the command must stop with a merge-authorization gate.
 
 If the source PR is already merged, prefer the v2.3 finalizer instead of manually chaining close-sync and cleanup:
 `python scripts/aistock_issue_workflow.py merge-finalizer --bug-id BUG-XXX --source-pr-url <PR_URL> --source-branch <branch> --source-worktree <worktree> --validation-evidence "<command> -> passed" --sync-root --apply`.
 Use `--merge-close-sync-pr --cleanup` only when the user explicitly authorized the full aftercare loop and checks are green.
+
+Cleanup can remove safe orphaned task worktree directories that contain only empty folders or reparse/junction links under `AIstock_worktrees`; it must still refuse regular files and never use `reset --hard` or `git clean`.
 
 ## Client Install
 

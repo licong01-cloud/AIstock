@@ -634,11 +634,12 @@ rules:
       - docs/codex_project_memory.md
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
+      - .claude/commands/fix-aistock-issue.md
     primary_module: docs.standards
     impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs
     risk_level: medium
-    ownership_reason: Codex project instructions and validation skills make development standards discoverable to Codex App and CLI sessions.
+    ownership_reason: Codex and Claude project instructions make development standards discoverable to agent sessions.
   - rule_id: docs_architecture
     priority: 50
     include:
