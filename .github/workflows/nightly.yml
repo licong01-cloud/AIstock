@@ -328,6 +328,32 @@ jobs:
               Select-Object -First 100 -ExpandProperty FullName
           }
 
+      - name: Build code intelligence upload manifest
+        if: always()
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py run-manifest `
+            --output-dir $outDir `
+            --artifact-name "code-intelligence-${{ github.run_id }}" `
+            --run-id "${{ github.run_id }}" `
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" `
+            --branch "${{ github.ref_name }}" `
+            --commit "${{ github.sha }}" `
+            --output "$outDir/code-intelligence-run-manifest.stdout.json"
+          if (Test-Path -LiteralPath "$outDir/code-intelligence-run-manifest.md") {
+            Get-Content -LiteralPath "$outDir/code-intelligence-run-manifest.md"
+          }
+
+      - name: Upload code intelligence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-intelligence-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}/
+          if-no-files-found: warn
+          retention-days: 14
+
   full-summary:
     name: Nightly summary + auto-bug on failure
     needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live, code-intelligence-weekly]

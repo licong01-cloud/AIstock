@@ -491,6 +491,69 @@ def test_latest_codegraph_freshness_reads_newest_artifact_without_external_call(
     assert payload["latest"]["index_summary"]["nodes"] == 20
 
 
+def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "codegraph-freshness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "codegraph-freshness.md").write_text("## CodeGraph Freshness\n", encoding="utf-8")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_code_intelligence_run_manifest(
+        root=tmp_path,
+        output_dir=artifact_dir,
+        artifact_name="code-intelligence-12345",
+        run_id="12345",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/12345",
+        branch="main",
+        commit="abc123",
+    )
+
+    assert payload["schema_version"] == "aistock_code_intelligence_run_manifest_v1"
+    assert payload["workflow_gate"] == "ready"
+    assert payload["artifact_name"] == "code-intelligence-12345"
+    assert payload["download"]["gh_command"] == (
+        "gh run download 12345 --repo licong01-cloud/AIstock "
+        "-n code-intelligence-12345 -D tmp/validation/code-intelligence/downloaded/12345"
+    )
+    assert payload["download"]["local_latest_freshness_command"] == "python scripts/code_intelligence_adapter.py latest-freshness"
+    assert payload["consumable_refs"]["codegraph_freshness_json"].endswith("codegraph-freshness.json")
+    assert (tmp_path / payload["artifact_path"]).exists()
+    markdown = (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+    assert "Code Intelligence Run Manifest" in markdown
+    assert "Agent Consumption" in markdown
+
+
+def test_code_intelligence_run_manifest_warns_without_freshness_json(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "missing"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_code_intelligence_run_manifest(root=tmp_path, output_dir=artifact_dir, run_id="999")
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["consumable_refs"]["codegraph_freshness_json"] is None
+    assert payload["warnings"]
+
+
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
     monkeypatch.setattr(
