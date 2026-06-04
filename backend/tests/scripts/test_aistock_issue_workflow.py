@@ -1073,6 +1073,12 @@ def test_doctor_omits_codegraph_bootstrap_when_ready(
                 "index_exists": True,
                 "bootstrap_command": "codegraph init -i",
             },
+            "codegraph_freshness": {
+                "latest": {
+                    "freshness": "fresh",
+                    "artifact_path": "tmp/validation/code-intelligence/codegraph-freshness.json",
+                }
+            },
             "understand_anything": {"status": "not_required_missing"},
             "bootstrap_commands": {"codegraph": "codegraph init -i"},
         },
@@ -1083,7 +1089,10 @@ def test_doctor_omits_codegraph_bootstrap_when_ready(
 
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert payload["h7_code_intelligence"]["fallback_used"] is False
+    assert payload["h7_code_intelligence"]["codegraph_freshness"] == "fresh"
+    assert payload["h7_code_intelligence"]["codegraph_freshness_ref"].endswith("codegraph-freshness.json")
     assert payload["h7_code_intelligence"]["readiness_next_command"] is None
+    assert compact["h7_code_intelligence"]["codegraph_freshness"] == "fresh"
     assert compact["h7_code_intelligence"]["readiness_next_command"] is None
 
 
