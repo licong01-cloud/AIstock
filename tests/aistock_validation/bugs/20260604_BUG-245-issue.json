@@ -26,10 +26,10 @@
       "timestamp": "2026-06-04T01:57:53.134774Z"
     },
     {
-      "timestamp": "2026-06-04T02:05:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Corrected non-existent backend/services/qmt_strategy path to qmt_strategy_ledger and added regression test directories for BUG-245 fix."
+      "actor": "codex",
+      "note": "Corrected non-existent backend/services/qmt_strategy path to qmt_strategy_ledger and added regression test directories for BUG-245 fix.",
+      "timestamp": "2026-06-04T02:05:00Z"
     }
   ],
   "evidence_uris": [
@@ -38,8 +38,8 @@
   "expected": "双策略包无值守模拟盘应进入可审计终态；MiniQMT 已接受订单应按策略归因并完成对账；LocalSim 提交异常应落到失败终态。",
   "first_seen_at": "2026-06-04T01:57:53.134778Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "013183fd7f64ebc3a133a7a538a2775d4fcc4554",
+  "fixed_at": "2026-06-04T02:25:19.705558Z",
   "github_issue_number": 688,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/688",
   "last_seen_at": "2026-06-04T01:57:53.134778Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/690",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -66,5 +67,8 @@
     "fingerprint": "0db8c152130cd5a49c24f9ef",
     "source_event_id": "FE-20260604-0db8c152130c"
   },
+  "validation_evidence": [
+    "post-rebase local validation passed; gh pr checks 690 passed 16 checks failed=0; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
   "verification_run_id": null
 }
