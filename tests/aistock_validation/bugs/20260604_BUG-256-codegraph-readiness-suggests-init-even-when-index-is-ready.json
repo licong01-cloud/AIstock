@@ -28,9 +28,9 @@
   "expected": "When CodeGraph readiness workflow_gate is ready, readiness_next_command should be not_required or omitted; bootstrap/init command should only appear for unavailable, missing_index, stale, or fallback states.",
   "first_seen_at": "2026-06-04T05:53:08.841134Z",
   "fix_branch": "bug/BUG-256-codegraph-readiness-suggests-init-even-when-inde-20260604",
-  "fix_commit": null,
+  "fix_commit": "68471a7207fb0099449ae3c042f9e92447a609f6",
   "fix_started_at": "2026-06-04T06:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-06-04T06:18:17.674019Z",
   "github_issue_number": 720,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/720",
   "last_seen_at": "2026-06-04T05:53:08.841134Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/721",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "6c1dc7f1a1a0793cd430f453",
     "source_event_id": "FE-20260604-6c1dc7f1a1a0"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k codegraph_bootstrap_or_doctor_omits_codegraph_bootstrap_when_ready_or_doctor_reports_ready_when_client_entries_exist -> 3 passed; ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed; git diff --check -> passed; workflow-smoke changed-file scripts/aistock_issue_workflow.py module validation -> passed; doctor compact -> h7 readiness ready and readiness_next_command null; nox -s l0 validation_center_backend validation_module_registry_l0 -> passed; nox -s validation_catalog_integrity validation_coverage_backend -> passed; nox -s guardrail_changed_files -- --changed-only -> passed; watch-ci PR #721 -> checks_passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "validation_passed_pending_pr"
 }
