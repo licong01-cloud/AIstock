@@ -525,6 +525,50 @@ def test_scheduler_submits_existing_local_plan_after_restart_when_broker_was_not
     assert restarted.results[0].run.run_payload_json["broker_order_handles"][0]["backend_id"] == "local_sim"
 
 
+def test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared")}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    interrupted = repo.update_simulation_daily_run(
+        planned.results[0].run.run_id,
+        status=SimulationDailyRunStatus.SUBMITTING,
+        payload_patch={"last_stage": "SUBMITTING"},
+    )
+    assert interrupted.run_payload_json.get("broker_called") is None
+
+    broker = FakeLocalSimBroker()
+    scheduler.context_provider = CountingContextProvider(
+        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared", local_broker=broker)}
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    assert recovered.results[0].status == "SUBMITTED"
+    assert recovered.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert [intent.intent_id for intent in broker.submitted] == [
+        intent.intent_id for intent in planned.results[0].execution_plan.intents
+    ]
+    assert recovered.results[0].run.run_payload_json["broker_called"] is True
+    assert recovered.results[0].run.run_payload_json["last_stage"] == "SUCCEEDED"
+
+
 def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -712,6 +756,101 @@ def test_scheduler_miniqmt_restart_syncs_before_submit_and_reconciles_after_subm
     }
     assert restarted.reused_count == 1
     assert len(broker.place_order_payloads) == 2
+
+
+def test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_scheduler_qmt_recover_called",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_scheduler_qmt_recover_called",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker()
+    snapshot_client = FakeQmtSnapshotClient(
+        positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
+    )
+    managed_order_service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
+
+    def context_with_positions(quantity: int) -> SimulationRunContext:
+        return SimulationRunContext(
+            portfolio_id="portfolio_qmt",
+            current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
+            current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+            managed_order_service=managed_order_service,
+            qmt_ledger_repository=qmt_repo,
+            qmt_sync_service=QmtStrategyLedgerSyncService(
+                repository=qmt_repo,
+                qmt_client=snapshot_client,
+                account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+                trade_date=TRADE_DATE,
+                calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+            ),
+            qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+            broker_positions=[{"stock_code": "000003.SZ", "quantity": quantity, "can_sell": quantity}],
+        )
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={qmt_binding.binding_id: context_with_positions(1)}
+        ),
+    )
+    failed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    placed_count = len(broker.place_order_payloads)
+    failed_run = repo.get_simulation_daily_run(failed.results[0].run.run_id)
+    assert failed.results[0].status == "RECONCILIATION_WARNING"
+    assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert failed_run.run_payload_json["broker_called"] is True
+    assert failed_run.run_payload_json["qmt_batch_status"] == "SUCCEEDED"
+
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={qmt_binding.binding_id: context_with_positions(77)}
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    recovered_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered.results[0].status == "RECONCILED"
+    assert recovered_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert recovered_run.run_payload_json["reconcile_after_submit"]["run"]["status"] == "SUCCEEDED"
+    assert len(broker.place_order_payloads) == placed_count
 
 
 def test_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
