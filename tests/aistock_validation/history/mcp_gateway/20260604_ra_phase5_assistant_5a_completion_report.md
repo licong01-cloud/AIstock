@@ -4,9 +4,9 @@
 - Worktree：`F:\Dev\AIstock_worktrees\ra-phase5-assistant-integration-20260604`
 - Branch：`codex/ra-phase5-assistant-integration-20260604`
 - Base：`origin/main` @ `f88a0c76`
-- 实现提交：`d8b55ed6 feat(research-assistant): consume gateway manifest catalog`
-- Validation Runner：`valjob_20260604_093414_0985cde6`
-- G1 run_id：`research-assistant_20260604_093524_l4_mcp-gateway-phase5-assistant_0985cde6_runner-validation__2d64d1d1ba`
+- 实现提交：`24021029 feat(research-assistant): consume gateway manifest catalog`
+- Validation Runner：`valjob_20260604_095658_90d35390`
+- G1 run_id：`research-assistant_20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-validation__8c711daee1`
 
 > Phase 5 后端切片，非完整 Phase 5；UI/审计/E2E 在 5b 完成。
 
@@ -124,12 +124,12 @@ nox > Session mcp_gateway_phase5_assistant was successful in a minute.
 ### 6.2 Validation Center / controlled runner
 
 ```text
-job_id=valjob_20260604_093414_0985cde6
+job_id=valjob_20260604_095658_90d35390
 status=passed
 return_code=0
-workspace_commit=d8b55ed6
-run_id=research-assistant_20260604_093524_l4_mcp-gateway-phase5-assistant_0985cde6_runner-validation__2d64d1d1ba
-runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_093524_l4_mcp-gateway-phase5-assistant_0985cde6_runner-runner-log.txt
+workspace_commit=24021029
+run_id=research-assistant_20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-validation__8c711daee1
+runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-runner-log.txt
 ```
 
 ## 7. G1/G2/G3 三闸门
@@ -140,10 +140,10 @@ runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_093524
 |---|---|
 | plan_key | `mcp_gateway_phase5_assistant` |
 | expected_branch | `codex/ra-phase5-assistant-integration-20260604` |
-| expected_commit | `d8b55ed6` |
-| job_id | `valjob_20260604_093414_0985cde6` |
+| expected_commit | `24021029` |
+| job_id | `valjob_20260604_095658_90d35390` |
 | exit_code | 0 |
-| run_id | `research-assistant_20260604_093524_l4_mcp-gateway-phase5-assistant_0985cde6_runner-validation__2d64d1d1ba` |
+| run_id | `research-assistant_20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-validation__8c711daee1` |
 | status | PASS |
 
 ### G2：DESIGN-COMPLIANCE-001 矩阵（5a 后端切片）
@@ -165,8 +165,8 @@ runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_093524
 
 | 文档 | 行/内容 | commit |
 |---|---|---|
-| `docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md` §7 Phase 5 | 新增 5a 后端切片说明，明确 UI/审计/E2E 留给 5b，5a 不声明完整 Phase 5 完成。 | `d8b55ed6` implementation row；本报告提交包含 doc 回填。 |
-| `docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md` §10 | 更新“智能助手读取统一 catalog”和“高风险工具 preflight/approval”两行到 `PASS_5A_BACKEND (d8b55ed6)`，记录 G1 run_id。 | `d8b55ed6` implementation row；本报告提交包含 doc 回填。 |
+| `docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md` §7 Phase 5 | 新增 5a 后端切片说明，明确 UI/审计/E2E 留给 5b，5a 不声明完整 Phase 5 完成。 | `24021029` implementation row；本报告提交包含 doc 回填。 |
+| `docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md` §10 | 更新“智能助手读取统一 catalog”和“高风险工具 preflight/approval”两行到 `PASS_5A_BACKEND (24021029)`，记录 G1 run_id。 | `24021029` implementation row；本报告提交包含 doc 回填。 |
 
 ## 8. Production gates
 
