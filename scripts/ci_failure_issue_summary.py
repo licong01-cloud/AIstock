@@ -197,6 +197,13 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
                 ],
             },
         }
+    issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if summary.get("diagnostic_status") != "complete" and issue_policy.get("allowed") is False:
+        return {
+            "mode": "triage_only",
+            "needs_bug_json": False,
+            "reason": issue_policy.get("reason") or "triage_required_before_bug_promotion",
+        }
     suspected_files = summary.get("suspected_files") or []
     if summary.get("diagnostic_status") != "complete" and not suspected_files:
         return {
@@ -941,6 +948,10 @@ def _nightly_failed_keys(statuses: dict[str, str]) -> list[str]:
     return failed
 
 
+def _nightly_actionable_failed_keys(statuses: dict[str, str]) -> list[str]:
+    return [key for key in _nightly_failed_keys(statuses) if key != "code_intelligence"]
+
+
 def _nightly_fingerprint(statuses: dict[str, str]) -> str:
     if statuses.get("runner_preflight") == "failure":
         return "runner-preflight-unavailable"
@@ -995,6 +1006,8 @@ def summarize_nightly_status(
     fingerprint = _nightly_fingerprint(statuses)
     runner_failed = statuses.get("runner_preflight") == "failure"
     failed_keys = _nightly_failed_keys(statuses)
+    actionable_failed_keys = _nightly_actionable_failed_keys(statuses)
+    code_intelligence_only = bool(failed_keys) and not actionable_failed_keys
     title = (
         "P1 Nightly blocked: self-hosted Windows runner unavailable"
         if runner_failed
@@ -1023,10 +1036,15 @@ def summarize_nightly_status(
             "commit": effective_commit,
             "manual_summary": title,
             "failed_jobs": [job] if failed_keys else [],
-            "extraction_errors": [] if failed_keys else ["nightly status payload did not include a failing stage"],
+            "extraction_errors": (
+                ["code intelligence warning-only stage failed; no actionable Nightly issue payload required"]
+                if code_intelligence_only
+                else ([] if failed_keys else ["nightly status payload did not include a failing stage"])
+            ),
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,
             "nightly_failed_stages": failed_keys,
+            "defer_issue_creation": code_intelligence_only,
         }
     )
     summary["fingerprint_source"] = fingerprint

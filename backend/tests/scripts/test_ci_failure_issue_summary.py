@@ -729,11 +729,39 @@ def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
         branch="main",
         commit="abcdef1234567890",
     )
-    issue_payload = summary.build_github_issue_payload(payload)
 
     assert payload["nightly_failed_stages"] == ["code_intelligence"]
+    assert payload["diagnostic_status"] == "deferred"
+    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
+    assert payload["agent_handoff"]["needs_bug_json"] is False
     assert "code=failure" in payload["issue_title"]
-    assert "<!-- aistock-nightly-failure:nightly-success-success-success-success-success-failure -->" in issue_payload["body"]
+    with pytest.raises(ValueError, match="not actionable yet"):
+        summary.build_github_issue_payload(payload)
+
+
+def test_nightly_status_summary_keeps_payload_when_code_intelligence_fails_with_actionable_stage() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "failure",
+                "paperV2Live": "success",
+                "codeIntelligence": "failure",
+            },
+            "run_id": "9004",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9004",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+
+    assert payload["nightly_failed_stages"] == ["nightly_l3", "code_intelligence"]
+    assert payload["issue_creation_policy"]["allowed"] is True
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-success-failure -->" in issue_payload["body"]
     assert "- code_intelligence: `failure`" in issue_payload["body"]
 
 
