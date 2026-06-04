@@ -575,7 +575,7 @@ def list_skill_usage_events(
 @router.get("/mcp/servers", response_model=ResearchAssistantResponse)
 def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        page = service.list_records("mcp_servers", limit_key="router_mcp_servers")
+        page = service.list_mcp_servers()
         page["items"] = [_summarize_mcp_server_record(dict(item)) for item in page["items"]]
         page["summary_first"] = True
         return _success(page)
@@ -608,6 +608,17 @@ MCP_TOOL_SUMMARY_FIELDS = {
     "risk_level",
     "side_effect_level",
     "requires_approval",
+    "module",
+    "profile",
+    "profile_tags",
+    "manifest_risk_level",
+    "assistant_usable",
+    "requires_confirmation",
+    "backend_endpoint",
+    "migration_state",
+    "response_budget",
+    "catalog_source",
+    "legacy_server_aliases",
     "status",
     "created_at",
     "updated_at",
@@ -646,7 +657,7 @@ def list_mcp_tools(
         resolved_limit = limit or compact_default_limit
         if not include_schema:
             resolved_limit = min(resolved_limit, compact_default_limit)
-        page = service.list_records("mcp_tools", filters={"server_key": server_key, "risk_level": risk_level}, search=search, limit=resolved_limit, offset=offset)
+        page = service.list_mcp_tools(server_key=server_key, risk_level=risk_level, search=search, limit=resolved_limit, offset=offset)
         page["items"] = [_summarize_mcp_tool_record(dict(item), include_schema=include_schema) for item in page["items"]]
         page["summary_first"] = not include_schema
         page["detail_available"] = True

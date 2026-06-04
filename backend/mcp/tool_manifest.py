@@ -344,6 +344,24 @@ SIDE_EFFECT_NAME_TOKENS = (
 NON_DIRECT_RISK_LEVELS = {"write_confirmed", "long_running", "production_adjacent", "external_network"}
 
 TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
+    "external_research_search_web": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="L2.5 evidence-first read-only retrieval; results enter external.*/personal.topic.* as candidates, never direct conclusions",
+    ),
+    "external_research_search_papers": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="L2.5 evidence-first read-only retrieval; results enter external.*/personal.topic.* as candidates, never direct conclusions",
+    ),
+    "external_research_fetch_extract": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="L2.5 evidence-first read-only retrieval; results enter external.*/personal.topic.* as candidates, never direct conclusions",
+    ),
     "factor_library_plan_register": ToolMetadataOverride(
         risk_level="read_only",
         assistant_usable="direct_or_catalog",
@@ -403,6 +421,96 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         assistant_usable="direct_or_catalog",
         requires_confirmation=False,
         reason="plan-only preview: LocalDataManagementService.plan_repair inspects overview/status and defers execution to local_data_apply_repair_confirmed",
+    ),
+    "local_data_list_sync_targets": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:209 uses GET /targets and LocalDataManagementService.list_sync_targets returns risk_level=read_only",
+    ),
+    "local_data_get_sync_target": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:223 uses GET /targets/{target_id} and service returns risk_level=read_only",
+    ),
+    "local_data_list_sync_attempts": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:230 uses GET /sync-attempts and service returns risk_level=read_only",
+    ),
+    "local_data_list_schedules": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:427 uses GET /schedules and LocalDataManagementService.list_schedules uses read_only",
+    ),
+    "local_data_get_schedule_defaults": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:441 uses GET /schedules/defaults and service returns risk_level=read_only",
+    ),
+    "local_data_list_source_test_runs": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:530 uses GET /testing/runs and service list_source_test_runs uses read_only",
+    ),
+    "local_data_list_source_test_schedules": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/local_data.py:544 uses GET /testing/schedules and service list_source_test_schedules uses read_only",
+    ),
+    "local_data_get_repair_status": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only status evidence: LocalDataManagementService.get_repair_status returns risk_level=read_only and only summarizes overview/jobs/targets",
+    ),
+    "qe_archive_list_runs": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:93 uses GET /runs and repository list_runs returns recent archived runs",
+    ),
+    "qe_archive_get_run_quality": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:97 uses GET /runs/{run_id}/quality and repository returns row-count quality checks",
+    ),
+    "qe_archive_list_backfill_runs": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:204 uses GET /backfill/runs and router exposes a GET list endpoint",
+    ),
+    "qe_archive_get_backfill_run": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:208 uses GET /backfill/runs/{backfill_run_id} and router exposes a GET detail endpoint",
+    ),
+    "qe_archive_query_run_leaderboard": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:274 uses GET /analytics/run-leaderboard and repository only queries leaderboard rows",
+    ),
+    "list_validation_runs": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/validation.py:58 uses GET /runs and validation router lists history runs",
+    ),
+    "get_validation_run": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/validation.py:71 uses GET /runs/{run_id} and validation router returns run detail",
     ),
     "assistant_add_task_event": ToolMetadataOverride(
         risk_level="production_adjacent",
@@ -559,13 +667,13 @@ def platform_tool_count() -> int:
     return len(MODULE_TOOL_NAMES["catalog"])
 
 
-def _has_plan_only_read_exemption(tool_name: str) -> bool:
+def _has_read_only_override_exemption(tool_name: str) -> bool:
     override = TOOL_METADATA_OVERRIDES.get(tool_name)
     return bool(
         override
         and override.risk_level == "read_only"
         and override.assistant_usable == "direct_or_catalog"
-        and "plan-only preview" in override.reason
+        and ("plan-only preview" in override.reason or "read-only" in override.reason.lower() or "GET " in override.reason)
     )
 
 
@@ -616,8 +724,8 @@ def validate_manifest(entries: Iterable[ToolManifestEntry] = TOOL_MANIFEST) -> l
             errors.append(f"high-risk tool must require preflight: {entry.tool_name}")
         if entry.risk_level == "read_only" and entry.assistant_usable != "direct_or_catalog":
             errors.append(f"read_only tool should be direct_or_catalog unless reclassified: {entry.tool_name}")
-        if _has_side_effect_name_token(entry.tool_name) and entry.risk_level == "read_only" and not _has_plan_only_read_exemption(entry.tool_name):
-            errors.append(f"side-effect-looking tool is read_only without plan-only override: {entry.tool_name}")
+        if _has_side_effect_name_token(entry.tool_name) and entry.risk_level == "read_only" and not _has_read_only_override_exemption(entry.tool_name):
+            errors.append(f"side-effect-looking tool is read_only without explicit read-only override: {entry.tool_name}")
     return errors
 
 

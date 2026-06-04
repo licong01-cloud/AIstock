@@ -861,6 +861,83 @@ def mcp_gateway_manifest_quality(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
+    """Run Phase 5a RA manifest-catalog backend consumption gates."""
+    phase5a_paths = [
+        "backend/mcp/tool_manifest.py",
+        "backend/routers/research_assistant.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_api.py",
+        "backend/tests/research_assistant/test_execution_closure.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+        "backend/tests/research_assistant/test_service.py",
+        "tests/mcp/test_mcp_tool_manifest.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md",
+        "tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_design.md",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/mcp",
+        "backend/services/research_assistant",
+        "backend/routers/research_assistant.py",
+        "scripts/aistock_mcp_gateway.py",
+        "scripts/aistock_mcp_gateway_doctor.py",
+        external=True,
+    )
+    session.run("python", "scripts/aistock_mcp_gateway.py", "--self-check", "--profile=lite", external=True)
+    session.run("python", "scripts/aistock_mcp_gateway_doctor.py", "--json", external=True)
+    _run_pytest(
+        session,
+        "tests/mcp",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/research_assistant/test_api.py",
+        "backend/tests/research_assistant/test_execution_closure.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/mcp_gateway_phase5_assistant_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase5a_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def ra_phase0_baseline(session: nox.Session) -> None:
     """Run Phase 0 baseline, scaffold, catalog, and ownership gates."""
     phase0_paths = [

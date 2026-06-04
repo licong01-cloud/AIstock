@@ -23,6 +23,8 @@ from typing import Any
 
 import jsonschema
 
+from backend.mcp.tool_manifest import TOOL_MANIFEST, TOOL_MANIFEST_BY_NAME
+
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
 from .execution import ResearchAssistantExecutionMixin
@@ -77,7 +79,16 @@ from .prompt_pack import (
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 from .domain_ontology import domain_prompt_key
-from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
+from .mcp_catalog_sync import (
+    canonicalize_server_key,
+    default_mcp_servers,
+    default_mcp_tools,
+    enrich_mcp_server_record,
+    gateway_catalog,
+    manifest_entry_to_mcp_tool,
+    server_key_for_module,
+    workflow_capabilities as catalog_workflow_capabilities,
+)
 from .tool_router import route_request
 from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
 from .agent_teams.models import WorkerTask
@@ -262,6 +273,7 @@ class _ServiceReactMcpProvider:
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
+        payload.setdefault("selected_tool", {"server_key": call.server_key, "tool_name": call.tool_name})
         payload.setdefault("limit", 20)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
@@ -608,6 +620,22 @@ DEFAULT_MCP_SERVERS: list[dict[str, Any]] = default_mcp_servers()
 
 
 DEFAULT_MCP_TOOLS: list[dict[str, Any]] = default_mcp_tools()
+
+MCP_TOOL_DB_COLUMNS = {
+    "tool_id",
+    "server_key",
+    "tool_name",
+    "title",
+    "description",
+    "risk_level",
+    "side_effect_level",
+    "requires_approval",
+    "input_schema_json",
+    "output_schema_json",
+    "preflight_schema_json",
+    "required_confirmations",
+    "status",
+}
 
 
 DEFAULT_WORKFLOW_CAPABILITIES: list[dict[str, Any]] = [
@@ -1052,10 +1080,31 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if not isinstance(configured, list):
                 raise ValueError("planner.workflow_capabilities must be a list when configured")
             source = [dict(item) for item in configured]
-        merged: dict[str, dict[str, Any]] = {str(item.get("capability_key")): dict(item) for item in source}
+        merged: dict[str, dict[str, Any]] = {
+            str(item.get("capability_key")): self._canonicalize_capability_mcp_refs(dict(item))
+            for item in source
+        }
         for item in catalog_workflow_capabilities():
-            merged[str(item["capability_key"])] = dict(item)
+            merged[str(item["capability_key"])] = self._canonicalize_capability_mcp_refs(dict(item))
         return list(merged.values())
+
+    @staticmethod
+    def _canonicalize_capability_mcp_refs(capability: dict[str, Any]) -> dict[str, Any]:
+        refs = capability.get("mcp_tool_refs")
+        if refs is None:
+            return capability
+        if not isinstance(refs, list):
+            raise ValueError(f"capability {capability.get('capability_key')} mcp_tool_refs must be a list")
+        canonical_refs: list[dict[str, Any]] = []
+        for ref in refs:
+            if not isinstance(ref, dict):
+                raise ValueError(f"capability {capability.get('capability_key')} mcp_tool_refs entries must be objects")
+            item = dict(ref)
+            if item.get("server_key"):
+                item["server_key"] = canonicalize_server_key(str(item["server_key"]))
+            canonical_refs.append(item)
+        capability["mcp_tool_refs"] = canonical_refs
+        return capability
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -1293,8 +1342,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         for item in DEFAULT_MCP_TOOLS:
             tool_id = f"mcp_tool_{item['server_key']}_{item['tool_name']}".replace("-", "_")
             payload = {"tool_id": tool_id, "status": "enabled", **item}
-            payload.pop("domain", None)
-            self.repository.create_record("mcp_tools", payload)
+            db_payload = {key: value for key, value in payload.items() if key in MCP_TOOL_DB_COLUMNS}
+            self.repository.create_record("mcp_tools", db_payload)
             seeded["mcp_tools"] += 1
         for item in DEFAULT_MODEL_PROFILES:
             profile = dict(item)
@@ -1367,7 +1416,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         capabilities: list[dict[str, Any]] = []
         approved_tools = {
             (str(tool.get("server_key")), str(tool.get("tool_name"))): tool
-            for tool in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            for tool in self._manifest_mcp_catalog_records()
             if include_disabled or str(tool.get("status")) in {"enabled", "approved", "ready"}
         }
         approved_skills = {
@@ -2062,7 +2111,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
-        route_decision = route_request(data.message)
+        route_decision = self._canonicalize_mcp_route(dict(route_request(data.message)))
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -2532,17 +2581,185 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         tool_terms = ("tool", "tools", "工具", "能力", "列表", "哪些", "可用", "使用", "access", "available", "use")
         return any(term in lower for term in tool_terms)
 
+    def _mcp_runtime_tool_overlays(self) -> dict[tuple[str, str], dict[str, Any]]:
+        overlays: dict[tuple[str, str], dict[str, Any]] = {}
+        try:
+            tools = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+        except Exception:
+            raise
+        for tool in tools:
+            server_key = str(tool.get("server_key") or "")
+            tool_name = str(tool.get("tool_name") or "")
+            if not server_key or not tool_name:
+                continue
+            try:
+                canonical = canonicalize_server_key(server_key)
+            except KeyError:
+                continue
+            key = (canonical, tool_name)
+            current = overlays.get(key)
+            if current is None or str(tool.get("status") or "") in {"disabled", "blocked", "deprecated"}:
+                overlays[key] = dict(tool)
+        return overlays
+
+    def _mcp_runtime_server_overlays(self) -> dict[str, dict[str, Any]]:
+        overlays: dict[str, dict[str, Any]] = {}
+        for server in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]:
+            server_key = str(server.get("server_key") or "")
+            if not server_key:
+                continue
+            try:
+                canonical = canonicalize_server_key(server_key)
+            except KeyError:
+                continue
+            overlays[canonical] = dict(server)
+        return overlays
+
+    def _manifest_mcp_server_records(self) -> list[dict[str, Any]]:
+        overlays = self._mcp_runtime_server_overlays()
+        records: list[dict[str, Any]] = []
+        for server in default_mcp_servers():
+            item = dict(server)
+            overlay = overlays.get(str(item["server_key"]))
+            if overlay:
+                if str(overlay.get("status") or "") in {"disabled", "blocked", "deprecated"}:
+                    item["status"] = overlay["status"]
+                health = dict(item.get("health_json") if isinstance(item.get("health_json"), dict) else {})
+                overlay_health = overlay.get("health_json") if isinstance(overlay.get("health_json"), dict) else {}
+                health.update({key: value for key, value in overlay_health.items() if key not in health})
+                item["health_json"] = health
+                for key in ("last_checked_at", "created_at", "updated_at"):
+                    if overlay.get(key) is not None:
+                        item[key] = overlay[key]
+            item["server_id"] = f"mcp_server_{item['server_key']}".replace("-", "_")
+            records.append(enrich_mcp_server_record(item))
+        return records
+
+    def list_mcp_servers(self) -> dict[str, Any]:
+        items = self._manifest_mcp_server_records()
+        return {
+            "items": items,
+            "total": len(items),
+            "page": 1,
+            "page_size": len(items),
+            "has_more": False,
+            "source": "gateway_manifest_derived_catalog",
+            "summary_first": True,
+        }
+
+    def _manifest_mcp_catalog_records(self) -> list[dict[str, Any]]:
+        catalog = gateway_catalog()
+        overlays = self._mcp_runtime_tool_overlays()
+        records: list[dict[str, Any]] = []
+        for entry in TOOL_MANIFEST:
+            server_key = server_key_for_module(entry.module, catalog)
+            tool = manifest_entry_to_mcp_tool(entry, overlay=overlays.get((server_key, entry.tool_name)), catalog=catalog)
+            tool["tool_id"] = f"mcp_tool_{tool['server_key']}_{tool['tool_name']}".replace("-", "_")
+            overlay = overlays.get((server_key, entry.tool_name))
+            if overlay:
+                for key in ("created_at", "updated_at"):
+                    if overlay.get(key) is not None:
+                        tool[key] = overlay[key]
+            records.append(tool)
+        return records
+
+    def list_mcp_tools(
+        self,
+        *,
+        server_key: str | None = None,
+        risk_level: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        items = self._manifest_mcp_catalog_records()
+        requested_server_key = server_key
+        canonical_server_key: str | None = None
+        if server_key:
+            canonical_server_key = canonicalize_server_key(server_key)
+            items = [item for item in items if item.get("server_key") == canonical_server_key]
+        if risk_level:
+            items = [item for item in items if item.get("risk_level") == risk_level or item.get("manifest_risk_level") == risk_level]
+        if search:
+            needle = search.strip().lower()
+            items = [
+                item
+                for item in items
+                if needle in str(item.get("tool_name") or "").lower()
+                or needle in str(item.get("description") or "").lower()
+                or needle in str(item.get("module") or "").lower()
+                or needle in str(item.get("backend_endpoint") or "").lower()
+                or any(needle in str(tag).lower() for tag in item.get("profile_tags") or [])
+            ]
+        total = len(items)
+        resolved_limit = max(1, int(limit or 50))
+        resolved_offset = max(0, int(offset or 0))
+        page_items = items[resolved_offset : resolved_offset + resolved_limit]
+        risk_distribution: dict[str, int] = {}
+        profile_distribution: dict[str, int] = {}
+        for item in items:
+            risk_key = str(item.get("manifest_risk_level") or item.get("risk_level") or "unknown")
+            risk_distribution[risk_key] = risk_distribution.get(risk_key, 0) + 1
+            profile_key = str(item.get("profile") or "unknown")
+            profile_distribution[profile_key] = profile_distribution.get(profile_key, 0) + 1
+        return {
+            "items": page_items,
+            "total": total,
+            "page": resolved_offset // resolved_limit + 1,
+            "page_size": resolved_limit,
+            "has_more": resolved_offset + resolved_limit < total,
+            "source": "gateway_manifest_derived_catalog",
+            "catalog_source": "gateway_manifest_derived_catalog",
+            "manifest_tool_count": len(TOOL_MANIFEST),
+            "server_count": len(default_mcp_servers()),
+            "risk_distribution": risk_distribution,
+            "profile_distribution": profile_distribution,
+            "requested_server_key": requested_server_key,
+            "canonical_server_key": canonical_server_key,
+            "backend_health": {"status": "not_checked", "reason": "5a backend catalog slice does not run live backend smoke"},
+            "recent_smoke": {"status": "not_run", "reason": "5a backend catalog slice"},
+        }
+
+    def _resolve_mcp_catalog_tool(self, server_key: str, tool_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        catalog = gateway_catalog()
+        requested_server_key = str(server_key or "")
+        canonical = canonicalize_server_key(requested_server_key, catalog)
+        entry = TOOL_MANIFEST_BY_NAME.get(str(tool_name or ""))
+        if entry is None:
+            raise KeyError(f"MCP tool not registered in gateway manifest: {tool_name}")
+        expected_server_key = server_key_for_module(entry.module, catalog)
+        if entry.module not in catalog.server_key_to_modules.get(canonical, ()):
+            raise KeyError(f"MCP tool {tool_name} belongs to {expected_server_key}, not {server_key}")
+        tool = manifest_entry_to_mcp_tool(entry, overlay=self._mcp_runtime_tool_overlays().get((expected_server_key, entry.tool_name)), catalog=catalog)
+        tool["tool_id"] = f"mcp_tool_{tool['server_key']}_{tool['tool_name']}".replace("-", "_")
+        if requested_server_key != expected_server_key:
+            tool["requested_server_key"] = requested_server_key
+            tool["canonical_server_key"] = expected_server_key
+            tool["legacy_server_alias"] = requested_server_key if requested_server_key in catalog.legacy_aliases else None
+        server = next(item for item in self._manifest_mcp_server_records() if item["server_key"] == expected_server_key)
+        return tool, server
+
+    def _canonicalize_mcp_route(self, route: dict[str, Any]) -> dict[str, Any]:
+        if not route.get("server_key") or not route.get("tool_name"):
+            return route
+        tool, _server = self._resolve_mcp_catalog_tool(str(route["server_key"]), str(route["tool_name"]))
+        original_server_key = str(route.get("server_key") or "")
+        route["server_key"] = str(tool["server_key"])
+        route["manifest_risk_level"] = tool.get("manifest_risk_level")
+        route["risk_level"] = tool.get("risk_level")
+        route["side_effect_level"] = tool.get("side_effect_level")
+        route["requires_approval"] = tool.get("requires_approval")
+        route["assistant_usable"] = tool.get("assistant_usable")
+        route["profile"] = tool.get("profile")
+        route["module"] = tool.get("module")
+        if original_server_key != route["server_key"]:
+            route["requested_server_key"] = original_server_key
+            route["canonicalized_from"] = original_server_key
+        return route
+
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
-        servers = [
-            enrich_mcp_server_record(item)
-            for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
-            if str(item.get("status") or "") in {"ready", "enabled", "ok"}
-        ]
-        tools = [
-            item
-            for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
-            if str(item.get("status") or "") in {"enabled", "ready", "approved"}
-        ]
+        servers = [item for item in self._manifest_mcp_server_records() if str(item.get("status") or "") in {"ready", "enabled", "ok"}]
+        tools = [item for item in self._manifest_mcp_catalog_records() if str(item.get("status") or "") in {"enabled", "ready", "approved"}]
         capabilities = [
             item
             for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
@@ -2552,9 +2769,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
         servers_by_key = {str(server.get("server_key") or ""): server for server in servers}
         return {
-            "source": "assistant_mcp_tools_runtime_catalog",
+            "source": "gateway_manifest_derived_catalog",
             "server_count": len(servers),
             "tool_count": len(tools),
+            "manifest_tool_count": len(TOOL_MANIFEST),
             "capability_count": len(capabilities),
             "servers": servers,
             "servers_by_key": servers_by_key,
@@ -2568,7 +2786,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return None
         catalog = self._mcp_tool_catalog_snapshot()
         lines = [
-            "Runtime MCP catalog snapshot from assistant_mcp_tools; answer only from this audited catalog.",
+            "Runtime MCP catalog snapshot from the unified gateway manifest; answer only from this audited catalog.",
             f"Enabled servers: {catalog['server_count']}; enabled tools: {catalog['tool_count']}; approved capabilities: {catalog['capability_count']}.",
             "Explain capabilities in a human, task-oriented style. Avoid limitation-first phrasing.",
             "Mention that list/overview tools are summary-first and large matrices/logs/model weights use artifact_ref.",
@@ -3025,7 +3243,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        mcp_route = dict(route_request(user_message))
+        mcp_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
         route_domain = str(mcp_route.get("domain") or "general")
         is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
             route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
@@ -3381,7 +3599,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return merged
 
     def _react_tool_catalog_entries(self) -> list[ToolCatalogEntry]:
-        tools = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+        tools = self._manifest_mcp_catalog_records()
         return [
             ToolCatalogEntry(
                 server_key=str(tool.get("server_key") or ""),
@@ -3500,8 +3718,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {"eligible": False, "reason": "route_not_read_only"}
         if mode_decision.allowed_tool_side_effect == "none":
             return {"eligible": False, "reason": "dialogue_mode_disallows_tools"}
-        tool = self.repository.find_one("mcp_tools", {"server_key": str(route["server_key"]), "tool_name": str(route["tool_name"])})
-        if not tool:
+        try:
+            tool, _server = self._resolve_mcp_catalog_tool(str(route["server_key"]), str(route["tool_name"]))
+        except KeyError:
             return {"eligible": False, "reason": "tool_not_registered"}
         if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
             return {"eligible": False, "reason": "tool_not_enabled", "tool_status": tool.get("status")}
@@ -4164,12 +4383,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def preflight_mcp_tool(self, request: McpPreflightRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, McpPreflightRequest) else McpPreflightRequest(**request)
-        tool = self.repository.find_one("mcp_tools", {"server_key": data.server_key, "tool_name": data.tool_name})
-        if not tool:
-            raise KeyError(f"MCP tool not registered: {data.server_key}/{data.tool_name}")
-        server = self.repository.find_one("mcp_servers", {"server_key": data.server_key})
-        if not server:
-            raise KeyError(f"MCP server not registered: {data.server_key}")
+        tool, server = self._resolve_mcp_catalog_tool(data.server_key, data.tool_name)
+        canonical_server_key = str(tool["server_key"])
         risk = str(tool.get("risk_level") or "medium")
         side_effect = str(tool.get("side_effect_level") or "read_only")
         requires_approval = bool(tool.get("requires_approval")) or self._side_effect_requires_approval(side_effect, risk)
@@ -4188,9 +4403,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         passed = not requires_approval and not failures
         status = "failed" if failures else "approval_required" if requires_approval else "passed"
         result = {
-            "server_key": data.server_key,
+            "server_key": canonical_server_key,
+            "requested_server_key": data.server_key,
+            "canonical_server_key": canonical_server_key,
             "tool_name": data.tool_name,
+            "module": tool.get("module"),
+            "profile": tool.get("profile"),
             "risk_level": risk,
+            "manifest_risk_level": tool.get("manifest_risk_level"),
+            "assistant_usable": tool.get("assistant_usable"),
+            "backend_endpoint": tool.get("backend_endpoint"),
+            "migration_state": tool.get("migration_state"),
             "side_effect_level": side_effect,
             "requires_approval": requires_approval,
             "passed": passed,
@@ -4200,6 +4423,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "failed_checks": failures,
             "payload_digest": sha256_json(data.payload_json),
             "idempotency_key": data.idempotency_key,
+            "catalog_source": "gateway_manifest_derived_catalog",
+            "evidence_refs": [f"manifest:{data.tool_name}", f"profile:{tool.get('profile')}"],
         }
         preflight_schema = tool.get("preflight_schema_json") if isinstance(tool.get("preflight_schema_json"), dict) else {}
         gateway_manifest = preflight_schema.get("gateway_manifest") if isinstance(preflight_schema.get("gateway_manifest"), dict) else {}
@@ -4220,7 +4445,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             {
                 "tool_event_id": new_id("mcptev"),
                 "task_id": data.task_id,
-                "server_key": data.server_key,
+                "server_key": canonical_server_key,
                 "tool_name": data.tool_name,
                 "event_type": "preflight",
                 "status": status,
@@ -4237,7 +4462,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 TaskEventCreate(
                     event_type=event_type,
                     severity="error" if failures else "warning" if requires_approval else "info",
-                    message=f"MCP preflight {status}: {data.server_key}/{data.tool_name}",
+                    message=f"MCP preflight {status}: {canonical_server_key}/{data.tool_name}",
                     payload_json=result,
                 ),
             )
