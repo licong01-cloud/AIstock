@@ -182,6 +182,8 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["controlled_ops_api"] is True
     assert scheduler["manual_tick_endpoint_enabled"] is True
     assert scheduler["scheduler_control_api_enabled"] is False
+    assert scheduler["account_slot_persistence"]["enabled"] is True
+    assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "fail_fast"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
     assert [window["window_id"] for window in scheduler["schedule_windows"]] == [
@@ -305,6 +307,8 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
         capital_allocation=100_000,
         broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_minqmt_qmt_sim_account_sim",
+        strategy_slot_id="slot_live_admission_qmt",
         strategy_name="LiveAdmissionQMT",
         order_remark_prefix="live-admission-qmt",
         approval_state=SimulationBindingApprovalState.SIM_PASSED,
@@ -343,6 +347,8 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
     ).results[0]
     assert local.run is not None
     assert qmt.run is not None
+    assert qmt.run.account_group_id == "ag_minqmt_qmt_sim_account_sim"
+    assert qmt.run.strategy_slot_id == "slot_live_admission_qmt"
     repo.update_simulation_daily_run(local.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
     repo.update_simulation_daily_run(qmt.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
 
@@ -356,9 +362,13 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
     assert evidence["sim_validation_evidence"]["paper_v2"]["status"] == "VERIFIED"
     assert evidence["sim_validation_evidence"]["paper_v2"]["runtime_release_sha256"] == release.release_hash
     assert evidence["sim_validation_evidence"]["miniqmt_sim"]["binding_id"] == qmt_binding.binding_id
+    assert evidence["sim_validation_evidence"]["miniqmt_sim"]["account_group_id"] == "ag_minqmt_qmt_sim_account_sim"
+    assert evidence["sim_validation_evidence"]["miniqmt_sim"]["strategy_slot_id"] == "slot_live_admission_qmt"
     assert evidence["broker_compatibility"]["status"] == "VERIFIED"
     assert evidence["broker_compatibility"]["target_broker_backend"] == "minqmt_live"
     assert evidence["broker_compatibility"]["simulation_binding_id"] == qmt_binding.binding_id
+    assert evidence["broker_compatibility"]["account_group_id"] == "ag_minqmt_qmt_sim_account_sim"
+    assert evidence["broker_compatibility"]["strategy_slot_id"] == "slot_live_admission_qmt"
 
 
 def test_live_admission_evidence_api_returns_actionable_payload(client: TestClient) -> None:
@@ -408,6 +418,8 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
         capital_allocation=100_000,
         broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_minqmt_qmt_sim_account_sim",
+        strategy_slot_id="slot_ops_api_qmt",
         strategy_name="OpsApiLiveQmt",
         order_remark_prefix="ops-api-live-qmt",
         approval_state=SimulationBindingApprovalState.SIM_PASSED,
@@ -446,6 +458,8 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
     ).results[0]
     assert local.run is not None
     assert qmt.run is not None
+    assert qmt.run.account_group_id == "ag_minqmt_qmt_sim_account_sim"
+    assert qmt.run.strategy_slot_id == "slot_ops_api_qmt"
     repo.update_simulation_daily_run(local.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
     repo.update_simulation_daily_run(qmt.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
 
@@ -470,6 +484,8 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
     payload = response.json()
     assert payload["sim_validation_evidence"]["paper_v2"]["status"] == "VERIFIED"
     assert payload["sim_validation_evidence"]["miniqmt_sim"]["status"] == "VERIFIED"
+    assert payload["sim_validation_evidence"]["miniqmt_sim"]["account_group_id"] == "ag_minqmt_qmt_sim_account_sim"
+    assert payload["sim_validation_evidence"]["miniqmt_sim"]["strategy_slot_id"] == "slot_ops_api_qmt"
     assert payload["broker_compatibility"]["status"] == "VERIFIED"
 
 

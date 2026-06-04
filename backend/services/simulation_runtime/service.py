@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
@@ -19,6 +20,21 @@ from .models import (
     canonical_json_sha256,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
+
+
+def _optional_stripped(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _miniqmt_account_group_id(broker_account_id: str | None) -> str | None:
+    account_id = _optional_stripped(broker_account_id)
+    if account_id is None:
+        return None
+    safe = re.sub(r"[^A-Za-z0-9_]+", "_", account_id).strip("_") or "unassigned"
+    return f"ag_minqmt_{safe}_sim"
 
 
 class StrategyRuntimeReleaseService:
@@ -135,6 +151,8 @@ class StrategyRuntimeReleaseService:
         broker_backend: str | SimulationBrokerBackend,
         capital_allocation: float,
         broker_account_id: str | None = None,
+        account_group_id: str | None = None,
+        strategy_slot_id: str | None = None,
         strategy_name: str | None = None,
         order_remark_prefix: str | None = None,
         approval_state: SimulationBindingApprovalState = SimulationBindingApprovalState.DRAFT,
@@ -146,6 +164,11 @@ class StrategyRuntimeReleaseService:
     ) -> SimulationReleaseBinding:
         metadata = dict(binding_metadata or {})
         backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+        normalized_account_group_id = _optional_stripped(account_group_id)
+        normalized_strategy_slot_id = _optional_stripped(strategy_slot_id)
+        if backend == SimulationBrokerBackend.MINIQMT_SIM:
+            normalized_account_group_id = normalized_account_group_id or _miniqmt_account_group_id(broker_account_id)
+            normalized_strategy_slot_id = normalized_strategy_slot_id or _optional_stripped(strategy_name) or str(strategy_id).strip()
         binding_config = {
             "schema_version": "simulation_release_binding_v1",
             "strategy_id": str(strategy_id).strip(),
@@ -161,6 +184,10 @@ class StrategyRuntimeReleaseService:
             "approval_state": approval_state.value,
             "metadata": metadata,
         }
+        if normalized_account_group_id is not None:
+            binding_config["account_group_id"] = normalized_account_group_id
+        if normalized_strategy_slot_id is not None:
+            binding_config["strategy_slot_id"] = normalized_strategy_slot_id
         assert_binding_payload_boundary(binding_config, context={"strategy_id": strategy_id})
         binding_hash = canonical_json_sha256(binding_config)
         binding = SimulationReleaseBinding(
@@ -172,6 +199,8 @@ class StrategyRuntimeReleaseService:
             manifest_sha256=release.manifest_sha256,
             broker_backend=backend,
             broker_account_id=broker_account_id,
+            account_group_id=normalized_account_group_id,
+            strategy_slot_id=normalized_strategy_slot_id,
             capital_allocation=capital_allocation,
             strategy_name=strategy_name,
             order_remark_prefix=order_remark_prefix,

@@ -618,6 +618,8 @@ class SimulationDailyRun(BaseModel):
     release_hash: str
     binding_id: str
     binding_hash: str
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
     selection_evidence_id: str | None = None
     selection_artifact_hash: str | None = None
     execution_plan_id: str | None = None
@@ -644,7 +646,14 @@ class SimulationDailyRun(BaseModel):
             raise ValueError("field is required")
         return value
 
-    @field_validator("selection_evidence_id", "selection_artifact_hash", "execution_plan_id", "execution_plan_hash")
+    @field_validator(
+        "account_group_id",
+        "strategy_slot_id",
+        "selection_evidence_id",
+        "selection_artifact_hash",
+        "execution_plan_id",
+        "execution_plan_hash",
+    )
     @classmethod
     def _optional_text(cls, value: str | None) -> str | None:
         if value is None:
