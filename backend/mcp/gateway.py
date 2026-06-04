@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import os
+import sys
 from dataclasses import asdict
 from typing import Any
 
@@ -21,6 +24,24 @@ from .tool_manifest import TOOL_MANIFEST, legacy_tool_count, manifest_for_module
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1"
 DEFAULT_SERVER_NAME = "aistock-gateway"
+STARTUP_SUMMARY_SCHEMA_VERSION = "aistock_mcp_gateway_startup_summary_v1"
+
+
+def manifest_version() -> str:
+    """Return a deterministic digest for the exposed gateway manifest."""
+
+    payload = [
+        {
+            "module": entry.module,
+            "tool_name": entry.tool_name,
+            "risk_level": entry.risk_level,
+            "assistant_usable": entry.assistant_usable,
+            "migration_state": entry.migration_state,
+        }
+        for entry in sorted(TOOL_MANIFEST, key=lambda item: (item.module, item.tool_name))
+    ]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def create_gateway(
@@ -71,7 +92,18 @@ def run_gateway(
     modules: str | list[str] | tuple[str, ...] | None = None,
     base_url: str | None = None,
     transport_name: str = "stdio",
+    emit_startup_summary: bool = True,
 ) -> None:
+    summary = startup_summary_payload(
+        profile=profile,
+        modules=modules,
+        base_url=base_url,
+        transport_name=transport_name,
+    )
+    if emit_startup_summary:
+        print(json.dumps({"event": "aistock_mcp_gateway_startup", **summary}, ensure_ascii=False), file=sys.stderr, flush=True)
+    if summary["status"] != "pass":
+        raise RuntimeError(f"MCP gateway startup check failed: {summary['errors']}")
     mcp, _registry = create_gateway(profile=profile, modules=modules, base_url=base_url)
     mcp.run(transport=transport_name)
 
@@ -109,6 +141,49 @@ def list_tools_payload(
         "legacy_tool_count": sum(1 for entry in entries if entry.module != "catalog"),
         "platform_tool_count": sum(1 for entry in entries if entry.module == "catalog"),
         "items": [asdict(entry) for entry in entries],
+    }
+
+
+def startup_summary_payload(
+    *,
+    profile: str | None = "lite",
+    modules: str | list[str] | tuple[str, ...] | None = None,
+    base_url: str | None = None,
+    env_name: str = "AISTOCK_MCP_BASE_URL",
+    transport_name: str = "stdio",
+) -> dict[str, Any]:
+    """Return the structured startup summary emitted before MCP transport starts."""
+
+    errors: list[str] = []
+    base = base_url or os.environ.get(env_name, DEFAULT_BASE_URL)
+    try:
+        normalized_base = assert_loopback_url(base, env_name=env_name)
+    except ValueError as exc:
+        normalized_base = base
+        errors.append(str(exc))
+
+    try:
+        selected_modules = resolve_modules(profile=profile, modules=modules)
+    except ValueError as exc:
+        selected_modules = []
+        errors.append(str(exc))
+
+    manifest_errors = validate_manifest()
+    errors.extend(manifest_errors)
+    entries = manifest_for_modules(selected_modules) if selected_modules else ()
+    return {
+        "schema_version": STARTUP_SUMMARY_SCHEMA_VERSION,
+        "status": "fail" if errors else "pass",
+        "profile": "lite" if profile in {None, ""} and modules is None else profile,
+        "modules": selected_modules,
+        "tool_count": len(entries),
+        "base_url": normalized_base,
+        "transport": transport_name,
+        "manifest_version": manifest_version(),
+        "manifest_tool_count": len(TOOL_MANIFEST),
+        "legacy_tool_count": legacy_tool_count(),
+        "platform_tool_count": platform_tool_count(),
+        "errors": errors,
     }
 
 
@@ -153,10 +228,14 @@ def self_check_payload(
             backend_status = {
                 "checked": True,
                 "status_code": response.status_code,
-                "reachable": response.status_code < 500,
+                "reachable": response.status_code == 200,
+                "dependency_status": "healthy" if response.status_code == 200 else "unhealthy",
             }
+            if response.status_code != 200:
+                errors.append(f"backend dependency unhealthy: GET /health returned HTTP {response.status_code}")
         except Exception as exc:  # pragma: no cover - depends on local runtime
-            backend_status = {"checked": True, "reachable": False, "error": str(exc)}
+            backend_status = {"checked": True, "reachable": False, "dependency_status": "unreachable", "error": str(exc)}
+            errors.append(f"backend dependency unreachable: {exc}")
 
     return {
         "status": "fail" if errors else "pass",
@@ -165,9 +244,17 @@ def self_check_payload(
         "base_url": normalized_base,
         "tool_count": len(manifest_for_modules(selected_modules)),
         "manifest_tool_count": len(TOOL_MANIFEST),
+        "manifest_version": manifest_version(),
         "legacy_tool_count": legacy_tool_count(),
         "platform_tool_count": platform_tool_count(),
         "errors": errors,
         "warnings": warnings,
         "backend": backend_status,
+        "startup_summary": startup_summary_payload(
+            profile=profile,
+            modules=modules,
+            base_url=base_url,
+            env_name=env_name,
+            transport_name="stdio",
+        ),
     }
