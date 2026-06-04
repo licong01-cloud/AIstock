@@ -28,8 +28,8 @@
   "expected": "Advisory replay should iterate only trading days returned by the existing global trading-day service/calendar for the requested window, preserving the current API contract and avoiding weekend/non-trading-day fallback selection runs.",
   "first_seen_at": "2026-06-04T03:25:50.915940Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0343f050d48e92cc2ee4fa3bd5e377419fcfb810",
+  "fixed_at": "2026-06-04T04:16:35.912275Z",
   "github_issue_number": 701,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/701",
   "last_seen_at": "2026-06-04T03:25:50.915940Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/706",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "selection_center"
   ],
@@ -57,5 +58,12 @@
     "fingerprint": "bbf466e47bd06e2aa9d79e75",
     "source_event_id": "FE-20260604-bbf466e47bd0"
   },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/watchlist/test_advisory_program.py -q -p no:cacheprovider -> 11 passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> 599 passed, 1 skipped, 2 xfailed",
+    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed; ownership scan mapped=12 unmapped=0 ambiguous=0",
+    "rtk python -m ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py -> passed"
+  ],
   "verification_run_id": null
 }
