@@ -96,6 +96,22 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["close_sync_metadata_only"] is False
 
 
+def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            ".github/workflows/nightly.yml",
+            "scripts/code_intelligence_adapter.py",
+            "backend/tests/scripts/test_code_intelligence_adapter.py",
+            "docs/standards/aistock_issue_workflow_quickstart.md",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+
+
 def test_workflow_validation_only_allows_same_task_bug_metadata(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260604_BUG-257-workflow-fast-lane.json"
     allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"

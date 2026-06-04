@@ -11,6 +11,7 @@ CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
 WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged"}
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-auto-link.yml",
+    ".github/workflows/nightly.yml",
     ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",
     ".github/workflows/semgrep.yml",
