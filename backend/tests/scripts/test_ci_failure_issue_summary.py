@@ -505,6 +505,77 @@ def test_cli_deferred_summary_skips_github_issue_payload(
     assert not issue_payload_path.exists()
 
 
+def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None:
+    payload = summary.finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "generated_at": "2026-06-02T00:00:00Z",
+            "severity": "P1",
+            "workflow": "AIstock CI",
+            "run_id": "301",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/301",
+            "branch": "main",
+            "commit": "abcdef1234567890",
+            "failed_jobs": [
+                {
+                    "job_name": "Backend tests (paper_v2_backend)",
+                    "nox_session": "paper_v2_backend",
+                    "failed_tests": [],
+                    "error_signature": None,
+                    "key_log_excerpt": [],
+                    "suspected_module": "paper_v2",
+                    "suspected_files": [],
+                }
+            ],
+            "extraction_errors": ["job log was unavailable or incomplete"],
+        }
+    )
+
+    assert payload["diagnostic_status"] == "partial"
+    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["issue_creation_policy"]["reason"] == "diagnostics_not_actionable"
+    assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
+    assert payload["agent_handoff"]["needs_bug_json"] is False
+    assert payload["agent_handoff"]["next_commands"] == [
+        "python scripts/aistock_issue_workflow.py triage-ci-issue --issue <issue-number>"
+    ]
+    assert payload["agent_handoff"]["workflow_entrypoints"]["promote"] == "not_applicable_infra_action_only"
+    with pytest.raises(ValueError, match="not actionable yet"):
+        summary.build_github_issue_payload(payload)
+
+
+def test_manual_summary_issue_is_triage_only_not_bug_promotion(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    issue_payload_path = tmp_path / "github-issue-payload.json"
+
+    assert summary.main(
+        [
+            "--run-id",
+            "302",
+            "--run-url",
+            "https://github.com/licong01-cloud/AIstock/actions/runs/302",
+            "--manual-summary",
+            "manual P1 failure report needs triage",
+            "--branch",
+            "main",
+            "--commit",
+            "abcdef1234567890",
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+
+    assert stdout_payload["issue_creation_policy"]["allowed"] is True
+    assert stdout_payload["issue_creation_policy"]["reason"] == "manual_summary_triage"
+    assert "triage-ci-issue --issue <issue-number>" in issue_payload["body"]
+    assert "promote-ci-issue" not in issue_payload["body"]
+    assert "needs_bug_json: `False`" in issue_payload["body"]
+
+
 def test_parse_job_log_extracts_docker_pull_failure_signature() -> None:
     log = """
 Backend tests (rl_execution_smoke)\tUNKNOWN STEP\t2026-06-02T07:40:00Z nox > Running session rl_execution_smoke
@@ -716,3 +787,18 @@ def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
     assert "triage-ci-issue --issue 257" in markdown
     assert "promote-ci-issue" not in markdown
     assert "needs_bug_json: `False`" in markdown
+
+
+def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
+    script = workflow["jobs"]["file-p0-p1-issue"]["steps"][3]["with"]["script"]
+    build_step = workflow["jobs"]["file-p0-p1-issue"]["steps"][1]["run"]
+
+    assert "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json" in build_step
+    assert "const issuePayloadPath = 'tmp/validation/ci_failure_issue/github-issue-payload.json';" in script
+    assert "if (!fs.existsSync(issuePayloadPath))" in script
+    assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+    assert "const renderBody = (issueNumber) => payload.body.replaceAll" in script
+    assert "body: renderBody(created.data.number)" in script

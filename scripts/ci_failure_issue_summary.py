@@ -115,6 +115,7 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     errors = summary.get("extraction_errors") or []
     failed_jobs = summary.get("failed_jobs") or []
     has_actionable_failure = any(job.get("failed_tests") or job.get("error_signature") for job in failed_jobs)
+    has_manual_summary = bool(str(summary.get("manual_summary") or "").strip())
     run_id = str(summary.get("run_id") or "").strip()
     if diagnostic_status == "deferred":
         next_command = (
@@ -129,6 +130,12 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
             "allowed": False,
             "reason": LOGS_NOT_READY_REASON if any(_logs_not_ready_error(error) for error in errors) else "diagnostics_not_actionable",
             "next_command": next_command,
+        }
+    if diagnostic_status == "partial" and has_manual_summary:
+        return {
+            "allowed": True,
+            "reason": "manual_summary_triage",
+            "next_command": None,
         }
     if diagnostic_status == "partial" and not has_actionable_failure:
         return {
@@ -189,6 +196,13 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
                     "Rerun the failed workflow after infrastructure is healthy.",
                 ],
             },
+        }
+    suspected_files = summary.get("suspected_files") or []
+    if summary.get("diagnostic_status") != "complete" and not suspected_files:
+        return {
+            "mode": "triage_only",
+            "needs_bug_json": False,
+            "reason": "triage_required_before_bug_promotion",
         }
     return {"mode": "bug_promotion", "needs_bug_json": True, "reason": "code_or_test_failure"}
 
@@ -618,7 +632,10 @@ def build_agent_handoff(
     if not suspected_files:
         stop_conditions.append("No suspected files were extracted; run triage before editing code.")
     if not handoff_mode["needs_bug_json"]:
-        stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+        if handoff_mode["mode"] == "infra_action_only":
+            stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+        else:
+            stop_conditions.append("Triage-only CI issue: do not run promote-ci-issue or edit code until triage identifies a concrete code/test failure.")
     workflow_entrypoints = {
         "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
     }
