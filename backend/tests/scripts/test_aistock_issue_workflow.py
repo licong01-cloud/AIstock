@@ -2357,6 +2357,54 @@ def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
     assert "merge_remote_verified_after_local_error" in events
 
 
+def test_generic_merge_helper_recovers_when_remote_merge_succeeds_after_local_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "statusCheckRollup": [
+                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "fatal: 'main' is already used by worktree at 'F:/Dev/AIstock'",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}},
+        },
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["recovered_from_local_merge_error"] is True
+    assert payload["verified"]["merged"] is True
+    assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

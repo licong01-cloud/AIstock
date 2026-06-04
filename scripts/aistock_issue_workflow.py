@@ -6267,8 +6267,23 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         return {"already_merged": True, "view": payload}
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
-    result = _execute_checked(["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"], cwd=REPO_ROOT, timeout=180)
-    verified = _verify_pr_merged(pr_url)
+    result = _run_command(["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"], cwd=REPO_ROOT, timeout=180)
+    try:
+        verified = _verify_pr_merged(pr_url)
+    except WorkflowError as exc:
+        if not result.get("ok"):
+            raise WorkflowError(
+                result.get("stderr") or result.get("stdout") or f"gh pr merge failed before verification: {exc}"
+            ) from exc
+        raise
+    if not result.get("ok"):
+        return {
+            "already_merged": True,
+            "check_summary": check_summary,
+            "merge_result": result,
+            "verified": verified,
+            "recovered_from_local_merge_error": True,
+        }
     return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
 
 
