@@ -800,25 +800,15 @@ class ResearchAssistantExecutionMixin:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         if tool_name == "assistant_list_mcp_tools":
-            tools = [
-                item
-                for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
-                if str(item.get("status") or "") in {"enabled", "ready", "approved"}
-            ]
-            if args.get("server_key"):
-                tools = [item for item in tools if str(item.get("server_key")) == str(args["server_key"])]
-            if args.get("risk_level"):
-                tools = [item for item in tools if str(item.get("risk_level")) == str(args["risk_level"])]
             search = str(args.get("search") or args.get("q") or "").strip().lower()
-            if search:
-                tools = [
-                    item
-                    for item in tools
-                    if search in str(item.get("server_key") or "").lower()
-                    or search in str(item.get("tool_name") or "").lower()
-                    or search in str(item.get("description") or "").lower()
-                ]
-            window = tools[offset : offset + limit]
+            page = self.list_mcp_tools(
+                server_key=str(args["server_key"]) if args.get("server_key") else None,
+                risk_level=str(args["risk_level"]) if args.get("risk_level") else None,
+                search=search or None,
+                limit=limit,
+                offset=offset,
+            )
+            window = list(page["items"])
             return [
                 {
                     "server_key": item.get("server_key"),
@@ -830,7 +820,7 @@ class ResearchAssistantExecutionMixin:
                     "status": item.get("status"),
                 }
                 for item in window
-            ], len(tools)
+            ], int(page["total"])
         if server_key == "aistock-external-research":
             query = str(args.get("query") or args.get("q") or "external research").strip()
             as_of = utc_now().date().isoformat()

@@ -1152,25 +1152,42 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         checks: list[dict[str, Any]] = []
         missing_catalogs: list[str] = []
         for requirement in CATALOG_READINESS_REQUIREMENTS:
-            page = self.repository.list_records(
-                requirement["catalog"],
-                filters=requirement.get("filters") or {},
-                limit=1,
-            )
-            present = int(page.get("total") or 0)
+            catalog = str(requirement["catalog"])
+            filters = requirement.get("filters") or {}
+            manifest_catalogs = {
+                "mcp_servers": self._manifest_mcp_server_records,
+                "mcp_tools": self._manifest_mcp_catalog_records,
+            }
+            if catalog in manifest_catalogs:
+                records = [
+                    item
+                    for item in manifest_catalogs[catalog]()
+                    if all(value in {None, ""} or item.get(key) == value for key, value in filters.items())
+                ]
+                present = len(records)
+                source = "gateway_manifest_derived_catalog"
+            else:
+                page = self.repository.list_records(
+                    catalog,
+                    filters=filters,
+                    limit=1,
+                )
+                present = int(page.get("total") or 0)
+                source = "repository_cache"
             expected_min = int(requirement["expected_min"])
             ready = present >= expected_min
             check = {
-                "catalog": requirement["catalog"],
+                "catalog": catalog,
                 "label": requirement["label"],
                 "expected_min": expected_min,
                 "present": present,
                 "ready": ready,
-                "filters": requirement.get("filters") or {},
+                "filters": filters,
+                "source": source,
             }
             if not ready:
                 check["missing_count"] = max(expected_min - present, 0)
-                missing_catalogs.append(requirement["catalog"])
+                missing_catalogs.append(catalog)
             checks.append(check)
         ready = not missing_catalogs
         return {
@@ -2584,7 +2601,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _mcp_runtime_tool_overlays(self) -> dict[tuple[str, str], dict[str, Any]]:
         overlays: dict[tuple[str, str], dict[str, Any]] = {}
         try:
-            tools = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            tools = self.repository.list_records("mcp_tools", limit=max(len(TOOL_MANIFEST) * 3, 1000))["items"]
         except Exception:
             raise
         for tool in tools:
@@ -2604,7 +2621,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _mcp_runtime_server_overlays(self) -> dict[str, dict[str, Any]]:
         overlays: dict[str, dict[str, Any]] = {}
-        for server in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]:
+        for server in self.repository.list_records("mcp_servers", limit=max(len(default_mcp_servers()) * 3, 100))["items"]:
             server_key = str(server.get("server_key") or "")
             if not server_key:
                 continue
