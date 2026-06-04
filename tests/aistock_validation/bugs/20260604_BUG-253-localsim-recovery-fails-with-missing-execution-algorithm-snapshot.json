@@ -30,8 +30,8 @@
   "expected": "LocalSim production recovery uses the validated execution policy snapshot from Paper v2 portfolio state and fails fast if it is missing; no AttributeError and no silent default algo fallback.",
   "first_seen_at": "2026-06-04T04:47:02.584227Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9af09a79b0c2caca09d6e76b986f0f46cfb6ff45",
+  "fixed_at": "2026-06-04T05:34:34.386100Z",
   "github_issue_number": 712,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/712",
   "last_seen_at": "2026-06-04T04:47:02.584227Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/716",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +60,14 @@
     "fingerprint": "89829276d4c6f8b9104235b9",
     "source_event_id": "FE-20260604-89829276d4c6"
   },
+  "validation_evidence": [
+    "C:\\Users\\lc999\\miniconda3\\Scripts\\ruff.exe check backend/services/paper_trading_v2/broker/localsim.py backend/services/simulation_runtime/scheduler.py backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "PYTHONPATH=. C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 49 passed",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s l0 -> passed",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s paper_v2_l3 -> passed (paper_v2_l3, l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep)",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
