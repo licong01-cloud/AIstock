@@ -457,6 +457,98 @@ def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_code_intelligence_run_manifest(
+    *,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+    artifact_name: str | None = None,
+    run_id: str | None = None,
+    run_url: str | None = None,
+    branch: str | None = None,
+    commit: str | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence"
+    git = _git_snapshot(root)
+    artifact_name = artifact_name or (f"code-intelligence-{run_id}" if run_id else "code-intelligence-local")
+    branch = branch or str(git.get("branch") or "")
+    commit = commit or str(git.get("head") or "")
+    json_path = output_dir / "code-intelligence-run-manifest.json"
+    md_path = output_dir / "code-intelligence-run-manifest.md"
+    freshness_json = output_dir / "codegraph-freshness.json"
+    freshness_md = output_dir / "codegraph-freshness.md"
+    ua_manifest = output_dir / "ua-summary-manifest.json"
+    warnings: list[str] = []
+    if not freshness_json.exists():
+        warnings.append("CodeGraph freshness JSON is missing; this artifact can still be uploaded but latest-freshness will warn.")
+    download_command = None
+    if run_id:
+        download_command = (
+            f"gh run download {run_id} --repo licong01-cloud/AIstock "
+            f"-n {artifact_name} -D tmp/validation/code-intelligence/downloaded/{run_id}"
+        )
+    payload = {
+        "schema_version": "aistock_code_intelligence_run_manifest_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "artifact_name": artifact_name,
+        "artifact_type": "github_actions_artifact",
+        "run_id": run_id,
+        "run_url": run_url,
+        "branch": branch,
+        "commit": commit,
+        "root": str(root),
+        "output_dir": _repo_rel(output_dir, root),
+        "download": {
+            "gh_command": download_command,
+            "local_latest_freshness_command": "python scripts/code_intelligence_adapter.py latest-freshness",
+        },
+        "consumable_refs": {
+            "codegraph_freshness_json": _repo_rel(freshness_json, root) if freshness_json.exists() else None,
+            "codegraph_freshness_md": _repo_rel(freshness_md, root) if freshness_md.exists() else None,
+            "understand_anything_manifest_json": _repo_rel(ua_manifest, root) if ua_manifest.exists() else None,
+        },
+        "warnings": warnings,
+        "artifact_path": _repo_rel(json_path, root),
+        "summary_ref": _repo_rel(md_path, root),
+    }
+    _write_json(json_path, payload)
+    _write_text(md_path, render_code_intelligence_run_manifest_markdown(payload))
+    return payload
+
+
+def render_code_intelligence_run_manifest_markdown(payload: dict[str, Any]) -> str:
+    download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
+    refs = payload.get("consumable_refs") if isinstance(payload.get("consumable_refs"), dict) else {}
+    lines = [
+        "## Code Intelligence Run Manifest",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- artifact_name: `{payload.get('artifact_name') or 'unknown'}`",
+        f"- run_id: `{payload.get('run_id') or 'local'}`",
+        f"- branch: `{payload.get('branch') or 'unknown'}`",
+        f"- commit: `{payload.get('commit') or 'unknown'}`",
+        f"- codegraph_freshness_json: `{refs.get('codegraph_freshness_json') or 'missing'}`",
+        f"- codegraph_freshness_md: `{refs.get('codegraph_freshness_md') or 'missing'}`",
+        f"- understand_anything_manifest_json: `{refs.get('understand_anything_manifest_json') or 'missing'}`",
+        "",
+        "### Agent Consumption",
+        "",
+        f"- Download artifact: `{download.get('gh_command') or 'not_applicable'}`",
+        f"- Read latest freshness: `{download.get('local_latest_freshness_command') or 'python scripts/code_intelligence_adapter.py latest-freshness'}`",
+        "",
+        "This artifact is warning-only. It helps Codex and Claude Code avoid full repository scans, but it does not replace nox, pytest, Validation Center, or production gates.",
+    ]
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    text = ""
+    for line in lines:
+        text += line + "\n"
+    return text.rstrip("\n")
+
+
 def understand_anything_status(root: Path | None = None) -> dict[str, Any]:
     root = root or REPO_ROOT
     graph_path = _understand_graph_path(root)
@@ -1012,6 +1104,20 @@ def cmd_latest_freshness(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_manifest(args: argparse.Namespace) -> int:
+    payload = build_code_intelligence_run_manifest(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        artifact_name=args.artifact_name,
+        run_id=args.run_id,
+        run_url=args.run_url,
+        branch=args.branch,
+        commit=args.commit,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -1104,6 +1210,20 @@ def build_parser() -> argparse.ArgumentParser:
     latest_freshness.add_argument("--root")
     latest_freshness.add_argument("--output")
     latest_freshness.set_defaults(func=cmd_latest_freshness)
+
+    run_manifest = sub.add_parser(
+        "run-manifest",
+        help="Build a compact manifest for uploaded CodeGraph / Understand Anything CI artifacts.",
+    )
+    run_manifest.add_argument("--root")
+    run_manifest.add_argument("--output-dir")
+    run_manifest.add_argument("--artifact-name")
+    run_manifest.add_argument("--run-id")
+    run_manifest.add_argument("--run-url")
+    run_manifest.add_argument("--branch")
+    run_manifest.add_argument("--commit")
+    run_manifest.add_argument("--output")
+    run_manifest.set_defaults(func=cmd_run_manifest)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)
