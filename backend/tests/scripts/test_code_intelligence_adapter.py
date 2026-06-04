@@ -385,7 +385,7 @@ def test_codegraph_freshness_warns_for_missing_index(tmp_path: Path, monkeypatch
     assert payload["warnings"]
 
 
-def test_codegraph_freshness_warns_for_stale_index(tmp_path: Path, monkeypatch) -> None:
+def test_codegraph_freshness_warns_for_stale_index_when_status_unchecked(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".codegraph").mkdir()
     index = tmp_path / ".codegraph" / "codegraph.db"
     index.write_text("db", encoding="utf-8")
@@ -406,11 +406,47 @@ def test_codegraph_freshness_warns_for_stale_index(tmp_path: Path, monkeypatch) 
         lambda args, cwd=None, timeout=30: {"ok": True, "returncode": 0, "stdout": "Index is up to date", "stderr": ""},
     )
 
-    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1)
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1, skip_external=True)
 
     assert payload["workflow_gate"] == "warning"
     assert payload["freshness"] == "stale"
+    assert payload["freshness_basis"] == "mtime"
     assert any("age exceeds" in item for item in payload["warnings"])
+
+
+def test_codegraph_freshness_trusts_up_to_date_status_over_old_mtime(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    index = tmp_path / ".codegraph" / "codegraph.db"
+    index.write_text("db", encoding="utf-8")
+    old_time = index.stat().st_mtime - 10_000
+    import os
+
+    os.utime(index, (old_time, old_time))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+            "stderr": "",
+        },
+    )
+
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1)
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["freshness"] == "fresh"
+    assert payload["freshness_basis"] == "codegraph_status"
+    assert not payload["warnings"]
+    assert any("mtime exceeds" in item for item in payload["notes"])
+    assert "### Notes" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
 
 
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
