@@ -145,6 +145,19 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert preflight_resp["data"]["passed"] is False
     assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
     assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
+    assert preflight_resp["data"]["gateway_manifest"]["module"] == "research_assistant"
+    assert preflight_resp["data"]["manifest_risk_level"] == "production_adjacent"
+    assert preflight_resp["data"]["assistant_usable"] == "preflight_required"
+
+    catalog_preflight = client.post(
+        "/api/v1/research-assistant/mcp/preflight",
+        json={"server_key": "aistock-gateway-lite", "tool_name": "mcp_gateway_health", "payload_json": {}},
+    ).json()["data"]
+    assert catalog_preflight["passed"] is True
+    assert catalog_preflight["approval_required"] is False
+    assert catalog_preflight["gateway_manifest"]["module"] == "catalog"
+    assert catalog_preflight["manifest_risk_level"] == "catalog"
+    assert "lite" in catalog_preflight["recommended_profile_tags"]
 
     approval_resp = client.post(
         "/api/v1/research-assistant/approvals",
@@ -383,6 +396,7 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     assert compact["summary_first"] is True
     assert compact["detail_available"] is True
     assert compact["items"]
+    assert compact["total"] == 209
     assert "input_schema_json" not in compact["items"][0]
     assert "output_schema_json" not in compact["items"][0]
     assert "preflight_schema_json" not in compact["items"][0]
@@ -391,6 +405,11 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     compact_large_limit = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 200}).json()["data"]
     assert compact_large_limit["page_size"] == 50
     assert compact_large_limit["has_more"] is True
+
+    catalog_page = client.get("/api/v1/research-assistant/mcp/tools", params={"server_key": "aistock-gateway-lite", "include_schema": True}).json()["data"]
+    assert catalog_page["total"] == 6
+    assert any(item["tool_name"] == "mcp_gateway_health" for item in catalog_page["items"])
+    assert catalog_page["items"][0]["preflight_schema_json"]["gateway_manifest"]["module"] == "catalog"
 
     detail = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 1, "include_schema": True}).json()["data"]
     assert detail["page_size"] == 1
