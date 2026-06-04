@@ -12,6 +12,8 @@ from backend.services.qmt_strategy_ledger.models import (
     OrderIntentRecord,
     PositionLotRecord,
     PositionLotStatus,
+    UnattributedOrderRecord,
+    UnattributedTradeRecord,
     VirtualAccount,
     VirtualAccountStatus,
 )
@@ -251,6 +253,29 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
 
 def test_sync_service_attributes_truncated_strategy_name_by_managed_order_remark() -> None:
     repo = _repo_with_strategy()
+    repo.upsert_unattributed_order(
+        UnattributedOrderRecord(
+            unattributed_id="uo_stale",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            qmt_order_id="order_truncated",
+            symbol="300604.SZ",
+            reason="UNKNOWN_STRATEGY_NAME",
+            order_remark="remark_a",
+        )
+    )
+    repo.upsert_unattributed_trade(
+        UnattributedTradeRecord(
+            unattributed_id="ut_stale",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            trade_id="trade_truncated",
+            qmt_order_id="order_truncated",
+            symbol="300604.SZ",
+            reason="UNKNOWN_STRATEGY_NAME",
+            order_remark="remark_a",
+        )
+    )
     _apply_buy_freeze(repo, amount=Decimal("10005"))
     client = FakeReadOnlyQmtClient(
         orders=[
@@ -301,6 +326,8 @@ def test_sync_service_attributes_truncated_strategy_name_by_managed_order_remark
     assert summary.unattributed_trades == 0
     lots = repo.list_position_lots("strat_a", symbol="300604.SZ")
     assert [lot.open_trade_id for lot in lots] == ["trade_truncated"]
+    assert repo.list_unattributed_orders(account_id=ACCOUNT_ID, trade_date=TRADE_DATE) == []
+    assert repo.list_unattributed_trades(account_id=ACCOUNT_ID, trade_date=TRADE_DATE) == []
 
 
 def test_sync_service_settles_unmanaged_buy_fill_against_cash_without_freeze() -> None:

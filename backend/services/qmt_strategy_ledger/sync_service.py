@@ -208,6 +208,11 @@ class QmtStrategyLedgerSyncService:
                     raw_json=payload,
                 )
             )
+            self._repository.delete_unattributed_order(
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                qmt_order_id=order.order_id,
+            )
             self._repository.append_order_status_event(
                 OrderStatusEventRecord(
                     event_id=_order_event_id(self._account_id, order.order_id, order.order_status),
@@ -296,6 +301,11 @@ class QmtStrategyLedgerSyncService:
                     order_remark=trade.order_remark,
                     raw_json=payload,
                 )
+            )
+            self._repository.delete_unattributed_trade(
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                trade_id=trade.traded_id,
             )
             if inserted:
                 trades_inserted += 1
