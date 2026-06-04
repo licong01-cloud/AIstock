@@ -139,10 +139,10 @@ python scripts/aistock_issue_workflow.py batch-workflow-smoke
 
 ## CI / Nightly Failure Intake
 
-Auto-filed CI or Nightly P0/P1 GitHub Issues must contain actionable diagnostics plus an agent handoff. A valid issue body includes:
+Auto-filed CI or Nightly P0/P1 GitHub Issues must contain actionable diagnostics plus an agent handoff. If the failure summary is not actionable yet, the summary tool must skip GitHub issue payload creation and leave only ignored artifacts for later review. A valid actionable issue body includes:
 
 - the Actions run, branch, commit, fingerprint, failed job/session/test, and reproduce command
-- an `Agent Handoff` block with `triage-ci-issue`, `promote-ci-issue`, and post-promotion `run --bug-id` commands
+- an `Agent Handoff` block with `triage-ci-issue`; include `promote-ci-issue` and post-promotion `run --bug-id` only when diagnostics identify a concrete code or test regression
 - token policy stating that the issue and Context Pack are the first context source, while full logs and historical design docs are loaded only when triage requires them
 - production gates, defaulting to `noop` unless the failure proves otherwise
 
@@ -166,7 +166,9 @@ python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number>
 ```
 
 After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
-Nightly jobs themselves must only write compact issue context, candidate history, and evidence under ignored `tmp/validation/...` artifact paths plus GitHub Issue comments/updates. They must not commit BUG JSON, mutate source files, or write tracked root files.
+Nightly jobs themselves must only write compact issue context, candidate history, and evidence under ignored `tmp/validation/...` artifact paths plus GitHub Issue comments/updates. If `github-issue-payload.json` is absent because `issue_creation_policy.allowed=false`, the workflow must log the policy reason and skip GitHub issue writes instead of failing. They must not commit BUG JSON, mutate source files, or write tracked root files.
+
+Partial diagnostics without failed tests, error signatures, or suspected files are triage-only. They may be kept as artifacts, but should not present `promote-ci-issue` as a next command and should not consume a repair window until triage identifies a concrete code/test failure. Manual dispatches with only a short summary may create a GitHub Issue for human tracking, but their handoff remains `needs_bug_json=false` and `triage-ci-issue` only until reclassified.
 
 If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 `infra_flaky`, do not promote it into a code BUG. Follow the returned
