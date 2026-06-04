@@ -1674,8 +1674,59 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
     assert ctx.local_broker is not None
+    assert ctx.local_broker.data_source == MinuteDataSource.DB_HISTORICAL
+    assert ctx.market_data_source == MinuteDataSource.DB_HISTORICAL.value
     assert ctx.local_broker.query_account().cash == Decimal("980000")
     assert ctx.local_broker.query_positions()["000001.SZ"].quantity == 1000
+
+
+def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -> None:
+    """Same-day unattended LocalSim must not depend on post-market DB minute sync."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    trade_date = date.today()
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim same-day prod context",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=trade_date,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    positions = {
+        "000001.SZ": PositionLot(
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            quantity=1000,
+            available_quantity=1000,
+            avg_cost=10.0,
+            trade_date=trade_date,
+        )
+    }
+    paper_repo = FakePaperRepository(portfolio, positions=positions, cash=980_000)
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=trade_date)
+
+    assert ctx.local_broker is not None
+    assert ctx.local_broker.data_source == MinuteDataSource.TDX_REALTIME
+    assert ctx.market_data_source == MinuteDataSource.TDX_REALTIME.value
 
 
 def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_core_localsim_recovery():

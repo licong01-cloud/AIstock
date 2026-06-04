@@ -94,6 +94,7 @@ class SimulationRunContext:
     cash: float | None = None
     frozen_cash: float = 0.0
     realized_pnl: float = 0.0
+    market_data_source: str | None = None
 
 
 class SimulationRunContextProvider(Protocol):
@@ -239,6 +240,10 @@ class ProductionSimulationRunContextProvider:
             "localsim_state_source": "paper_v2_portfolio",
             "miniqmt_state_source": "qmt_strategy_virtual_ledger",
             "market_price_source": "market.kline_daily_raw_latest_close",
+            "localsim_market_data_source_policy": {
+                "same_day": MinuteDataSource.TDX_REALTIME.value,
+                "historical": "persisted_portfolio_data_source",
+            },
             "localsim_broker_enabled": self._enable_localsim_broker or self._local_broker_factory is not None,
             "miniqmt_preview_enabled": True,
             "miniqmt_submit_enabled": self._enable_miniqmt_submit,
@@ -328,6 +333,7 @@ class ProductionSimulationRunContextProvider:
             execution_policy=getattr(portfolio, "execution_policy", None),
             cash=cash,
             positions=positions,
+            trade_date=trade_date,
         )
         return SimulationRunContext(
             current_positions=positions,
@@ -336,6 +342,11 @@ class ProductionSimulationRunContextProvider:
             manifest=manifest,
             local_broker=local_broker,
             cash=cash,
+            market_data_source=(
+                getattr(local_broker, "data_source").value
+                if local_broker is not None and getattr(local_broker, "data_source", None) is not None
+                else self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date).value
+            ),
         )
 
     def _load_miniqmt_context(
@@ -414,6 +425,7 @@ class ProductionSimulationRunContextProvider:
             frozen_cash=float(account.frozen_cash),
             realized_pnl=float(account.realized_pnl),
             price_by_symbol=prices,
+            market_data_source=MinuteDataSource.MINIQMT_REALTIME.value,
         )
 
     def _build_managed_order_service(self, qmt_repository: Any) -> QmtManagedOrderService:
@@ -434,6 +446,7 @@ class ProductionSimulationRunContextProvider:
         execution_policy: dict[str, Any] | None,
         cash: float,
         positions: dict[str, PositionLot],
+        trade_date: date,
     ) -> BrokerBackend | None:
         if self._local_broker_factory is not None:
             return self._local_broker_factory(binding.strategy_id)
@@ -447,9 +460,10 @@ class ProductionSimulationRunContextProvider:
         try:
             from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
 
-            data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
-            if not isinstance(data_source, MinuteDataSource):
-                data_source = MinuteDataSource(str(data_source))
+            data_source = self._resolve_local_sim_market_data_source(
+                portfolio=portfolio,
+                trade_date=trade_date,
+            )
             return LocalSimBackend(
                 portfolio_id=portfolio_id,
                 initial_cash=float(getattr(portfolio, "initial_cash", binding.capital_allocation)),
@@ -471,6 +485,19 @@ class ProductionSimulationRunContextProvider:
                     "binding_id": binding.binding_id,
                 },
             ) from exc
+
+    @staticmethod
+    def _resolve_local_sim_market_data_source(
+        *,
+        portfolio: Any,
+        trade_date: date,
+    ) -> MinuteDataSource:
+        data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
+        if not isinstance(data_source, MinuteDataSource):
+            data_source = MinuteDataSource(str(data_source))
+        if trade_date == date.today():
+            return MinuteDataSource.TDX_REALTIME
+        return data_source
 
     def _load_positions_with_injected_loader(self, strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
         if self._position_loader is None:
@@ -1086,6 +1113,7 @@ class SimulationSchedulerBindingResult:
     sync_result: dict[str, Any] | None = None
     reconciliation_result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    data_source: str | None = None
 
     @property
     def is_success(self) -> bool:
@@ -1231,6 +1259,11 @@ class SimulationLifecycleScheduler:
                             "message": str(exc),
                             "context": getattr(exc, "context", None),
                         },
+                        data_source=self._effective_market_data_source_for_binding(
+                            binding=binding,
+                            trade_date=trade_date,
+                            default_data_source=data_source,
+                        ),
                     )
                 )
         return SimulationSchedulerRunOnceResult(
@@ -1266,6 +1299,7 @@ class SimulationLifecycleScheduler:
                 binding=binding,
                 run=existing,
                 trade_date=trade_date,
+                data_source=data_source,
                 submit=submit,
                 mode=mode,
             )
@@ -1308,6 +1342,11 @@ class SimulationLifecycleScheduler:
                 status="PLANNED",
                 run=build_result.run,
                 execution_plan=build_result.execution_plan,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
             )
 
         sync_result = self._sync_before_submit(binding=binding, run=build_result.run, context=context)
@@ -1333,6 +1372,11 @@ class SimulationLifecycleScheduler:
             execution_result=execution,
             sync_result=sync_result,
             reconciliation_result=reconciliation,
+            data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=trade_date,
+                default_data_source=data_source,
+            ),
         )
 
     def _existing_plan_result(
@@ -1341,6 +1385,7 @@ class SimulationLifecycleScheduler:
         binding: SimulationReleaseBinding,
         run: SimulationDailyRun,
         trade_date: date,
+        data_source: str,
         submit: bool,
         mode: str,
     ) -> SimulationSchedulerBindingResult:
@@ -1373,6 +1418,11 @@ class SimulationLifecycleScheduler:
                 execution_plan=plan,
                 sync_result=sync_result,
                 reconciliation_result=reconciliation,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
             )
         if self._should_submit_existing_plan(binding=binding, run=run, plan=plan, submit=submit):
             runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
@@ -1406,6 +1456,11 @@ class SimulationLifecycleScheduler:
                 execution_result=execution,
                 sync_result=sync_result,
                 reconciliation_result=reconciliation,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
             )
         return SimulationSchedulerBindingResult(
             binding_id=binding.binding_id,
@@ -1414,7 +1469,25 @@ class SimulationLifecycleScheduler:
             status=status,
             run=run,
             execution_plan=plan,
+            data_source=self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=trade_date,
+                default_data_source=data_source,
+            ),
         )
+
+    @staticmethod
+    def _effective_market_data_source_for_binding(
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        default_data_source: str,
+    ) -> str:
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            return MinuteDataSource.MINIQMT_REALTIME.value
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM and trade_date == date.today():
+            return MinuteDataSource.TDX_REALTIME.value
+        return default_data_source
 
     def _run_selection_once_per_release(
         self,
@@ -1910,6 +1983,7 @@ class SimulationLifecycleBackgroundScheduler:
             "interval_seconds": self._interval_seconds,
             "default_submit": self._default_submit,
             "data_source": self._data_source,
+            "data_source_policy": self._data_source_policy(),
             "limit": self._limit,
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
@@ -1923,6 +1997,7 @@ class SimulationLifecycleBackgroundScheduler:
             "started_at": now.isoformat(),
             "trade_date": trade_date.isoformat(),
             "data_source": self._data_source,
+            "data_source_policy": self._data_source_policy(),
             "window": decision["window"],
             "should_run": decision["should_run"],
             "submit": decision["submit"],
@@ -1946,6 +2021,7 @@ class SimulationLifecycleBackgroundScheduler:
                         "status": item.status,
                         "run_id": item.run.run_id if item.run else None,
                         "execution_plan_id": item.execution_plan.plan_id if item.execution_plan else None,
+                        "data_source": item.data_source or self._data_source,
                         "error": item.error,
                     }
                     for item in tick.results
@@ -2013,6 +2089,14 @@ class SimulationLifecycleBackgroundScheduler:
         except ValueError:
             return 100
         return min(max(value, 1), 500)
+
+    def _data_source_policy(self) -> dict[str, str]:
+        return {
+            "default": self._data_source,
+            "local_sim_same_day": MinuteDataSource.TDX_REALTIME.value,
+            "local_sim_historical": "persisted_portfolio_data_source",
+            "miniqmt_sim": MinuteDataSource.MINIQMT_REALTIME.value,
+        }
 
     @staticmethod
     def _env_flag(name: str, *, default: bool) -> bool:
