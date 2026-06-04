@@ -25,24 +25,24 @@
       "timestamp": "2026-06-04T05:20:24.040154Z"
     },
     {
-      "timestamp": "2026-06-04T05:23:09.721679Z",
-      "actor": "codex_issue_workflow",
       "action": "expand_allowed_write_scope",
-      "note": "Added workflow CLI, tests, and quickstart docs to implement infra-classified CI issue janitor support."
+      "actor": "codex_issue_workflow",
+      "note": "Added workflow CLI, tests, and quickstart docs to implement infra-classified CI issue janitor support.",
+      "timestamp": "2026-06-04T05:23:09.721679Z"
     },
     {
-      "timestamp": "2026-06-04T05:31:28.031133Z",
-      "actor": "codex_issue_workflow",
       "action": "validation_passed_pending_pr",
-      "note": "Implemented infra-classified CI issue janitor closure path; closed GitHub Issue #683 as infra-only without BUG JSON promotion."
+      "actor": "codex_issue_workflow",
+      "note": "Implemented infra-classified CI issue janitor closure path; closed GitHub Issue #683 as infra-only without BUG JSON promotion.",
+      "timestamp": "2026-06-04T05:31:28.031133Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-04T05:20:24.040158Z",
   "fix_branch": "bug/BUG-255-ci-issue-janitor-cannot-close-infra-classified-a-20260604",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6aaca81231135a335a40c4ec5f7d78a6f0547897",
+  "fixed_at": "2026-06-04T05:40:10.106567Z",
   "github_issue_number": 715,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/715",
   "last_seen_at": "2026-06-04T05:20:24.040158Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/717",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -72,16 +73,9 @@
     "fingerprint": "f0ba41ddbea678d2797c05da",
     "source_event_id": "FE-20260604-f0ba41ddbea6"
   },
-  "verification_run_id": null,
-  "workflow_gate": "validation_passed_pending_pr",
   "validation_evidence": [
-    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k \"ci_issue_janitor or infra\" -p no:cacheprovider -> 7 passed",
-    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
-    "git diff --check -> passed",
-    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation --output-format compact -> workflow_gate=passed",
-    "python scripts/aistock_issue_workflow.py ci-issue-janitor --issue 683 --output-format compact -> infra_count=1, workflow_gate=ready_for_apply",
-    "python scripts/aistock_issue_workflow.py ci-issue-janitor --issue 683 --apply --output-format compact -> closed_count=1, workflow_gate=closed",
-    "gh issue view 683 -> state=CLOSED",
-    "python -m nox -s l0 validation_center_backend validation_module_registry_l0 -> passed"
-  ]
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k ci_issue_janitor_or_infra -> 7 passed; ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed; git diff --check -> passed; workflow-smoke changed-file scripts/aistock_issue_workflow.py module validation -> passed; ci-issue-janitor --issue 683 dry-run/apply -> closed; nox -s l0 validation_center_backend validation_module_registry_l0 -> passed; watch-ci PR #717 -> checks_passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr"
 }
