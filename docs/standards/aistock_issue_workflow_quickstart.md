@@ -170,6 +170,8 @@ Nightly jobs themselves must only write compact issue context, candidate history
 
 Partial diagnostics without failed tests, error signatures, or suspected files are triage-only. They may be kept as artifacts, but should not present `promote-ci-issue` as a next command and should not consume a repair window until triage identifies a concrete code/test failure. Manual dispatches with only a short summary may create a GitHub Issue for human tracking, but their handoff remains `needs_bug_json=false` and `triage-ci-issue` only until reclassified.
 
+Code intelligence is a warning-only accelerator. A Nightly failure where only `code_intelligence` failed must not create an actionable GitHub Issue or BUG repair flow. Keep the freshness/UA artifacts for later inspection and use `latest-freshness` as a read-only hint; create or promote a BUG only when another actionable Nightly stage also failed or manual triage finds a real code/test regression.
+
 If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 `infra_flaky`, do not promote it into a code BUG. Follow the returned
 `infra_action` instead. Typical examples are missing self-hosted Windows
