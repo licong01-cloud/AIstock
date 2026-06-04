@@ -60,6 +60,37 @@ def _seeded_service(*, llm_client: Any | None = None) -> ResearchAssistantServic
     return svc
 
 
+def _add_legacy_alias_cache_rows(svc: ResearchAssistantService) -> None:
+    svc.repository.create_record(
+        "mcp_servers",
+        {
+            "server_id": "mcp_server_aistock_qe_archive_legacy",
+            "server_key": "aistock-qe-archive",
+            "title": "Legacy QE archive MCP",
+            "status": "ready",
+            "health_json": {"legacy_alias": True},
+        },
+    )
+    svc.repository.create_record(
+        "mcp_tools",
+        {
+            "tool_id": "mcp_tool_aistock_qe_archive_qe_archive_query_run_leaderboard_legacy",
+            "server_key": "aistock-qe-archive",
+            "tool_name": "qe_archive_query_run_leaderboard",
+            "title": "legacy qe archive leaderboard",
+            "description": "legacy alias cache row that must not become catalog truth",
+            "risk_level": "low",
+            "side_effect_level": "read_only",
+            "requires_approval": False,
+            "input_schema_json": {"type": "object"},
+            "output_schema_json": {"type": "object"},
+            "preflight_schema_json": {},
+            "required_confirmations": [],
+            "status": "enabled",
+        },
+    )
+
+
 def test_ra_catalog_matches_gateway_manifest_without_legacy_drift() -> None:
     svc = _seeded_service()
     catalog = gateway_catalog()
@@ -115,6 +146,40 @@ def test_server_key_aliases_canonicalize_and_runtime_overlay_cannot_lower_risk()
     assert tool["risk_level"] == "high"
     assert tool["side_effect_level"] == "draft_only"
     assert tool["requires_approval"] is True
+
+
+def test_catalog_readiness_uses_manifest_counts_not_legacy_cache_rows() -> None:
+    svc = _seeded_service()
+    _add_legacy_alias_cache_rows(svc)
+
+    readiness = svc.catalog_readiness()
+    checks = {item["catalog"]: item for item in readiness["checks"]}
+
+    assert readiness["ready"] is True
+    assert checks["mcp_servers"]["source"] == "gateway_manifest_derived_catalog"
+    assert checks["mcp_servers"]["present"] == len(default_mcp_servers()) == 9
+    assert checks["mcp_tools"]["source"] == "gateway_manifest_derived_catalog"
+    assert checks["mcp_tools"]["present"] == len(TOOL_MANIFEST) == 209
+
+
+def test_assistant_list_mcp_tools_summary_adapter_uses_manifest_not_legacy_cache() -> None:
+    svc = _seeded_service()
+    _add_legacy_alias_cache_rows(svc)
+    tool, _server = svc._resolve_mcp_catalog_tool("research-assistant", "assistant_list_mcp_tools")
+
+    all_items, all_total = svc._summary_adapter_items(tool, {}, limit=500, offset=0)
+    assert all_total == len(TOOL_MANIFEST) == 209
+    assert not any(item["server_key"] == "aistock-qe-archive" for item in all_items)
+
+    alias_items, alias_total = svc._summary_adapter_items(
+        tool,
+        {"server_key": "aistock-qe-archive", "search": "leaderboard"},
+        limit=20,
+        offset=0,
+    )
+    assert alias_total == 1
+    assert alias_items[0]["server_key"] == "aistock-qe"
+    assert alias_items[0]["tool_name"] == "qe_archive_query_run_leaderboard"
 
 
 @pytest.mark.parametrize(

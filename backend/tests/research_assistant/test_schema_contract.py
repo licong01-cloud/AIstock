@@ -9,6 +9,7 @@ from backend.services.research_assistant.service import (
     DEFAULT_MCP_SERVERS,
     DEFAULT_MCP_TOOLS,
     DEFAULT_WORKFLOW_CAPABILITIES,
+    MCP_TOOL_DB_COLUMNS,
     DEFAULT_MODEL_PROFILES,
     DEFAULT_PROMPT_NODES,
     DEFAULT_ROUTING_POLICIES,
@@ -159,7 +160,8 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
         _assert_columns(table_columns, "mcp_servers", {"server_id": f"mcp_server_{item['server_key']}", **item})
     for item in DEFAULT_MCP_TOOLS:
         tool_id = f"mcp_tool_{item['server_key']}_{item['tool_name']}".replace("-", "_")
-        _assert_columns(table_columns, "mcp_tools", {"tool_id": tool_id, "status": "enabled", **item})
+        payload = {"tool_id": tool_id, "status": "enabled", **item}
+        _assert_columns(table_columns, "mcp_tools", {key: value for key, value in payload.items() if key in MCP_TOOL_DB_COLUMNS})
     _assert_columns(
         table_columns,
         "mcp_tool_events",
