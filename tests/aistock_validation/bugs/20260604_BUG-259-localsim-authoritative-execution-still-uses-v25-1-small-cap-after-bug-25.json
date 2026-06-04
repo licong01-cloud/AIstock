@@ -56,8 +56,8 @@
   "expected": "AIstock LocalSim unattended simulation should use the configured authoritative minute/vn.py execution policy for same-day execution and complete without V25_1_SMALL_CAP fallback; MiniQMT simulated bindings should remain MINIQMT_REALTIME and not be resubmitted when existing plans are already processed.",
   "first_seen_at": "2026-06-04T07:50:12.080387Z",
   "fix_branch": "bug/BUG-259-localsim-authoritative-execution-still-uses-v25-20260604",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b661af955e81a1f3ffb96896503da847cd5af147",
+  "fixed_at": "2026-06-04T09:45:40.949813Z",
   "github_issue_number": 731,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/731",
   "last_seen_at": "2026-06-04T07:50:12.080387Z",
@@ -65,6 +65,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/739",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -77,7 +78,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -86,16 +87,16 @@
     "fingerprint": "89e5a809a6f01b0d4f7c4143",
     "source_event_id": "FE-20260604-89e5a809a6f0"
   },
-  "verification_run_id": "BUG-259-local-20260604-runtime-policy-snapshot-regression",
-  "workflow_gate": "validation_passed_pending_pr",
   "validation_evidence": [
     "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/bridges.py backend/services/simulation_runtime/service.py backend/services/paper_trading_v2/service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/paper_trading_v2/test_live_approval_candidate.py -> passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/paper_trading_v2/test_live_approval_candidate.py -q -p no:cacheprovider -> passed",
-    "rtk python -m nox -s localsim_unattended_l3 -> passed",
-    "rtk python -m nox -s miniqmt_sim_stub_l3 -> passed",
-    "rtk python -m nox -s simulation_dual_backend_l4 -> passed",
-    "rtk python -m nox -s paper_v2_backend -> passed",
-    "PAPER_V2_L3_SKIP_UI=1 rtk python -m nox -s paper_v2_l3 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed"
-  ]
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/paper_trading_v2/test_live_approval_candidate.py -q -p no:cacheprovider -> 42 passed",
+    "rtk python -m nox -s localsim_unattended_l3 -> 39 passed",
+    "rtk python -m nox -s miniqmt_sim_stub_l3 -> 52 passed",
+    "rtk python -m nox -s simulation_dual_backend_l4 -> 100 passed",
+    "rtk python -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 rtk python -m nox -s paper_v2_l3 -> passed: l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep",
+    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed; ownership mapped=12 unmapped=0 ambiguous=0"
+  ],
+  "verification_run_id": "BUG-259-local-20260604-runtime-policy-snapshot-regression",
+  "workflow_gate": "validation_passed_pending_pr"
 }
