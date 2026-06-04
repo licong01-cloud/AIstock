@@ -1,0 +1,61 @@
+{
+  "actual": "POST /api/v1/advisory/programs/<program_id>/replay over 2026-05-28..2026-06-03 fails on weekend gaps with DATA_UNAVAILABLE strategy package does not exist after successful daily reviews over trading dates.",
+  "allowed_write_scope": [
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20260604_BUG-250-advisory-replay-uses-natural-days-instead-of-global-trading-calendar.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-250",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T03:25:50.915940Z",
+  "description": "POST /api/v1/advisory/programs/<program_id>/replay over 2026-05-28..2026-06-03 fails on weekend gaps with DATA_UNAVAILABLE strategy package does not exist after successful daily reviews over trading dates.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-bbf466e47bd0",
+      "timestamp": "2026-06-04T03:25:50.915936Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Advisory replay should iterate only trading days returned by the existing global trading-day service/calendar for the requested window, preserving the current API contract and avoiding weekend/non-trading-day fallback selection runs.",
+  "first_seen_at": "2026-06-04T03:25:50.915940Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 701,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/701",
+  "last_seen_at": "2026-06-04T03:25:50.915940Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Create codex_smoke_20260604 advisory program, run reviews/run for 2026-05-28, 2026-05-29, 2026-06-01, 2026-06-02, 2026-06-03, then POST /api/v1/advisory/programs/<program_id>/replay for 2026-05-28..2026-06-03 with fixture candidates only for trading dates.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "Advisory replay uses natural days instead of global trading calendar",
+  "trigger_condition": {
+    "fingerprint": "bbf466e47bd06e2aa9d79e75",
+    "source_event_id": "FE-20260604-bbf466e47bd0"
+  },
+  "verification_run_id": null
+}
