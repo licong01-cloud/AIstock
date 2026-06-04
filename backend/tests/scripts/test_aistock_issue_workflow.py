@@ -5046,3 +5046,119 @@ def test_promote_ci_issue_blocks_infra_runner_outage(
 
 
 
+
+
+def test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 253})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Advisory UI pagination sorting still shows raw JSON",
+        module="advisory",
+        severity="P1",
+        description="/paper-v2/advisory page has UI controls that are hard to use.",
+        expected="The UI should show structured controls and focused validation guidance.",
+        actual="Raw JSON and table behavior confuse users.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["frontend/src/app/paper-v2/advisory/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-254",
+        github_issue_number="714",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/714",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=True,
+    )
+
+    record = payload["record"]
+    assert payload["ui_intake_hints"]["ui_route"] == "/paper-v2/advisory"
+    assert payload["ui_intake_hints"]["reproduce_required"] is True
+    assert "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts" in record["allowed_write_scope"]
+    assert "frontend_tsc" in record["required_verification"]
+    assert "paper_v2_ui" in record["required_verification"]
+    assert payload["github_issue_labels"] == ["aistock:bug", "bug", "P1", "severity:p1", "module:paper_v2", "status:open", "paper-v2"]
+    body = workflow._render_github_issue_body(record, {"candidate_id": "IC-test"})
+    assert "## UI Intake Hints" in body
+    assert "reproduce_required" in body
+
+    workflow._emit(payload)
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["ui_intake_hints"]["scope_count"] >= 3
+    assert compact["workflow_efficiency_recommendations"]["compact_success_output"] is True
+    assert "ui_component_scope" not in json.dumps(compact)
+
+
+def test_postmortem_reports_queue_time_from_bug_created_at(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(created_at="2026-06-04T05:17:35Z", first_seen_at="2026-06-04T05:17:35Z"),
+    )
+    _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "validation_passed",
+            "branch": "bug/BUG-199-workflow",
+            "worktree": str(isolated_workflow_root),
+            "source_bug_json": str(issue.relative_to(isolated_workflow_root)),
+        },
+    )
+    events_path = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps({"timestamp": "2026-06-04T07:47:45Z", "event": "state:context_ready", "state": "context_ready"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root), output_markdown=False)
+
+    assert payload["timing_summary"]["queue_seconds"] == 9010.0
+    assert payload["timing_summary"]["issue_created_at"] == "2026-06-04T05:17:35Z"
+    assert payload["h6_summary"]["queue_seconds"] == 9010.0
+
+
+def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    record = _bug(github_issue_number=714)
+    payload = {
+        "workflow_gate": "close_synced",
+        "merged_pr": "https://github.example/pull/730",
+        "merge_commit": "abc123",
+        "validation_evidence": ["python -m nox -s l0 -> passed"],
+        "production_gates": {"production_ddl_gate": "noop"},
+    }
+
+    result = workflow._sync_github_issue_after_close(record, payload, root=isolated_workflow_root)
+
+    assert result["status"] == "synced"
+    comment_path = isolated_workflow_root / result["comment_path"]
+    text = comment_path.read_text(encoding="utf-8")
+    assert "close-sync persisted to the current registry worktree" in text
+    assert "close-sync completed" not in text
+    assert "`origin/main`" in text
+    assert any(args[:3] == ["gh", "issue", "comment"] for args in calls)
