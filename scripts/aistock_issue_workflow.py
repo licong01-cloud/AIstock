@@ -989,11 +989,17 @@ def _load_prior_postmortem(bug_id: str, roots: list[Path]) -> dict[str, Any] | N
     paths = _prior_postmortem_paths(bug_id, roots)
     if not paths:
         return None
-    def sort_key(path: Path) -> tuple[float, str]:
+    def sort_key(path: Path) -> tuple[float, float, str]:
         try:
-            return (path.stat().st_mtime, str(path))
+            payload = _load_json(path)
+            timing = payload.get("timing_summary") if isinstance(payload, dict) else {}
+            event_count = float((timing or {}).get("event_count") or 0)
+            known_duration = float((timing or {}).get("known_duration_seconds") or 0)
+            return (event_count, known_duration, str(path))
         except OSError:
-            return (0.0, str(path))
+            return (0.0, 0.0, str(path))
+        except WorkflowError:
+            return (0.0, 0.0, str(path))
 
     path = sorted(paths, key=sort_key)[-1]
     try:
@@ -2616,10 +2622,21 @@ def _csv_arg(items: Iterable[str]) -> str:
 
 
 def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str], description: str | None = None) -> bool:
-    haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or ""), *changed_files]).lower()
-    return any(token.lower() in haystack for token in UI_KEYWORDS) or any(
-        path.startswith("frontend/") or "/frontend/" in path.replace("\\", "/") for path in changed_files
+    normalized_paths = [path.replace("\\", "/") for path in changed_files]
+    has_frontend_scope = any(path.startswith("frontend/") or "/frontend/" in path for path in normalized_paths)
+    has_ui_catalog_scope = any(
+        path.startswith("frontend/tests/")
+        or path.startswith("tests/aistock_validation/catalog/ui_targets")
+        for path in normalized_paths
     )
+    if has_frontend_scope or has_ui_catalog_scope:
+        return True
+    # UI words in workflow scripts or command text (for example statusCheckRollup)
+    # must not create false visual-acceptance routes.
+    if changed_files and not any(path.startswith(("frontend/", "tests/e2e/", "playwright")) for path in normalized_paths):
+        return False
+    haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or "")]).lower()
+    return any(token.lower() in haystack for token in UI_KEYWORDS)
 
 
 def _ui_intake_hints(
@@ -5247,6 +5264,17 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
     root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events = _read_events(canonical_bug_id, root)
     timing = _augment_timing_with_issue_record(_workflow_timing_summary(canonical_bug_id, root), state, root)
+    if state.get("state") == "complete" and (timing.get("event_count") or 0) <= 1:
+        prior = _load_prior_postmortem(canonical_bug_id, roots)
+        prior_timing = prior.get("timing_summary") if isinstance(prior, dict) else {}
+        if prior and (prior_timing.get("event_count") or 0) > (timing.get("event_count") or 0):
+            prior["workflow_gate"] = "artifact_fallback"
+            prior["artifact_fallback"] = {
+                "reason": "prior_postmortem_has_more_phase_evidence_than_cleanup_state",
+                "current_event_count": timing.get("event_count") or 0,
+                "prior_event_count": prior_timing.get("event_count") or 0,
+            }
+            return prior
     active = _active_workflows_for_bug(canonical_bug_id)
     duplicate_active_count = max(0, len(active) - 1)
     stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
@@ -5977,8 +6005,20 @@ def _remove_reparse_or_empty_tree(path: Path) -> dict[str, Any]:
                     pass
 
     remove_children(path)
-    path.rmdir()
-    removed.append(".")
+    try:
+        path.rmdir()
+        removed.append(".")
+    except PermissionError as exc:
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": str(exc),
+            "profile": profile,
+            "removed": removed,
+            "deferred": True,
+            "deferred_reason": "empty_directory_locked_by_windows_handle",
+        }
     return {
         "ok": True,
         "returncode": 0,
@@ -6133,6 +6173,8 @@ def _pre_pr_gate(
 ) -> dict[str, Any]:
     changed_files = [str(item) for item in finish.get("changed_files") or []]
     scope_check = finish.get("scope_check") or {}
+    fast_path = finish.get("fast_path") if isinstance(finish.get("fast_path"), dict) else {}
+    ownership = fast_path.get("ownership") if isinstance(fast_path.get("ownership"), dict) else {}
     status_rows = _git_status_paths(root)
     artifact_rows = [row for row in status_rows if _path_is_artifact(row["path"])]
     task_dirty_rows = [row for row in status_rows if not _path_is_artifact(row["path"])]
@@ -6148,6 +6190,10 @@ def _pre_pr_gate(
         blocking.append("validation evidence is required before PR creation")
     if scope_check.get("status") not in {None, "passed"}:
         blocking.append(f"scope check failed: {scope_check.get('violations') or scope_check.get('status')}")
+    if ownership.get("unmapped_count"):
+        blocking.append(f"ownership check failed: unmapped={ownership.get('unmapped') or ownership.get('unmapped_count')}")
+    if ownership.get("ambiguous_count"):
+        blocking.append(f"ownership check failed: ambiguous={ownership.get('ambiguous') or ownership.get('ambiguous_count')}")
     if artifact_rows:
         blocking.append(f"temporary/cache artifacts are present in git status: {[row['path'] for row in artifact_rows]}")
     lint = _run_changed_file_lint(changed_files, root=root) if run_lint else {"status": "skipped", "python_files": []}
@@ -6163,6 +6209,7 @@ def _pre_pr_gate(
         "warnings": warnings,
         "changed_files": changed_files,
         "scope_check": scope_check,
+        "ownership_check": ownership,
         "artifact_guard": {
             "status": "passed" if not artifact_rows else "failed",
             "artifact_paths": artifact_rows,
@@ -8431,6 +8478,17 @@ def build_cleanup_after_merge_plan(
                     "result": removed,
                 }
             )
+            if removed.get("deferred"):
+                payload.setdefault("warnings", []).append(
+                    f"deferred empty worktree directory cleanup: {worktree_path}"
+                )
+                payload["deferred_cleanup"] = {
+                    "schema_version": "aistock_issue_workflow_deferred_cleanup_v1",
+                    "worktree": str(worktree_path),
+                    "reason": removed.get("deferred_reason"),
+                    "safe_to_retry": True,
+                    "profile": removed.get("profile"),
+                }
         if branch in local_branches:
             delete_flag = "-d" if merged else "-D"
             applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
@@ -8748,6 +8806,13 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     )
     if payload.get("workflow_gate") == "cleanup_done" and args.bug_id:
         bug_id = args.bug_id.strip().upper()
+        try:
+            pre_cleanup_postmortem = build_postmortem_plan(bug_id=bug_id, output_markdown=False)
+            pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
+            _write_json(pre_cleanup_path, pre_cleanup_postmortem)
+            payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+        except WorkflowError as exc:
+            payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")
         cleanup_evidence = {
             key: payload.get(key)
             for key in (

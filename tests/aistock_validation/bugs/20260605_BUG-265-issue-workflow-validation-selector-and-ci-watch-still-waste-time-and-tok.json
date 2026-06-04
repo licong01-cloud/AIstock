@@ -1,39 +1,41 @@
 {
-  "actual": "After cleanup, postmortem only reported a complete event with zero timing, and an empty source worktree directory locked by Windows caused repeated manual deletion attempts and token-wasting output.",
+  "actual": "Ownership gaps were found late, script changes produced UI route hints, full PR/check JSON was easy to dump into chat, and manual CI polling produced repeated invalid command output.",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "tests/aistock_validation/bugs/20260605_BUG-264-issue-workflow-postmortem-and-cleanup-evidence-loses-timing-and-retries.json",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "tests/aistock_validation/bugs/20260605_BUG-265-issue-workflow-validation-selector-and-ci-watch-still-waste-time-and-tok.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260605_BUG-265-issue-workflow-validation-selector-and-ci-watch-still-waste-time-and-tok.json"
+    "tests/aistock_validation/bugs/20260605_BUG-264-issue-workflow-postmortem-and-cleanup-evidence-loses-timing-and-retries.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-264",
+  "bug_id": "BUG-265",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-06-04T18:28:46.574856Z",
-  "description": "After cleanup, postmortem only reported a complete event with zero timing, and an empty source worktree directory locked by Windows caused repeated manual deletion attempts and token-wasting output.",
+  "created_at": "2026-06-04T18:29:29.999435Z",
+  "description": "Ownership gaps were found late, script changes produced UI route hints, full PR/check JSON was easy to dump into chat, and manual CI polling produced repeated invalid command output.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260605-b1ccf7fbbe75",
-      "timestamp": "2026-06-04T18:28:46.574853Z"
+      "note": "Promoted from IC-20260605-570177d8926d",
+      "timestamp": "2026-06-04T18:29:29.999432Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Issue workflow postmortem should preserve append-only phase evidence across cleanup, and cleanup should mark locked empty directories as deferred without repeated noisy retries.",
-  "first_seen_at": "2026-06-04T18:28:46.574856Z",
+  "expected": "Small issue workflow should run early ownership/scope preflight, keep CI watch compact, avoid false UI-route hints for scripts, and reserve broad validation/full JSON for relevant failures or higher-risk scopes.",
+  "first_seen_at": "2026-06-04T18:29:29.999435Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 764,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/764",
-  "last_seen_at": "2026-06-04T18:28:46.574856Z",
+  "github_issue_number": 765,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/765",
+  "last_seen_at": "2026-06-04T18:29:29.999435Z",
   "module": "validation",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -41,7 +43,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "Run a merged issue through PR -> close-sync PR -> cleanup on Windows, then run postmortem and inspect the source worktree cleanup handling.",
+  "reproduce_command": "Process a workflow CLI change touching scripts and client wrappers; observe validation selection, UI intake hints, and CI watch output behavior.",
   "required_verification": [
     "l0",
     "validation_center_backend",
@@ -57,10 +59,10 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "Issue workflow postmortem and cleanup evidence loses timing and retries empty dir cleanup",
+  "title": "Issue workflow validation selector and CI watch still waste time and tokens on small fixes",
   "trigger_condition": {
-    "fingerprint": "b1ccf7fbbe75654a3115ec5a",
-    "source_event_id": "FE-20260605-b1ccf7fbbe75"
+    "fingerprint": "570177d8926d5a1875878b48",
+    "source_event_id": "FE-20260605-570177d8926d"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -72,6 +74,7 @@
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
       "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
       "Keep validation_center_backend only when the changed files actually affect Validation Center."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
