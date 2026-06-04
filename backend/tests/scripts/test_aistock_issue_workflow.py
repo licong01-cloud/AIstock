@@ -4387,6 +4387,84 @@ def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> Non
     assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
 
 
+def test_ci_issue_janitor_dry_run_does_not_close_superseded_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "classification_recommendation": "superseded_by_later_main_success",
+            "linked_bug": None,
+            "github_issue": {"number": int(issue_number), "state": "OPEN"},
+            "summary": {"workflow": "AIstock CI"},
+            "superseded_action": {
+                "workflow_gate": "superseded_by_latest_main_success",
+                "superseding_run": {"run_id": "26899001365", "run_url": "https://github.example/runs/26899001365"},
+            },
+        }
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", lambda issue_number, *args, **kwargs: closed.append(issue_number))
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[642], apply=False)
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["superseded_count"] == 1
+    assert payload["closed_count"] == 0
+    assert payload["issues"][0]["action"] == "close_superseded"
+    assert closed == []
+
+
+def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        issue = int(issue_number)
+        if issue == 642:
+            return {
+                "classification_recommendation": "superseded_by_later_main_success",
+                "linked_bug": None,
+                "github_issue": {"number": issue, "state": "OPEN"},
+                "summary": {"workflow": "AIstock CI"},
+                "superseded_action": {
+                    "workflow_gate": "superseded_by_latest_main_success",
+                    "superseding_run": {"run_id": "26899001365", "run_url": "https://github.example/runs/26899001365"},
+                },
+            }
+        if issue == 559:
+            return {
+                "classification_recommendation": "real_regression_candidate",
+                "linked_bug": None,
+                "github_issue": {"number": issue, "state": "OPEN"},
+                "summary": {"workflow": "AIstock CI"},
+                "superseded_action": None,
+            }
+        return {
+            "classification_recommendation": "superseded_by_later_main_success",
+            "linked_bug": {"bug_id": "BUG-199"},
+            "github_issue": {"number": issue, "state": "OPEN"},
+            "summary": {"workflow": "AIstock CI"},
+            "superseded_action": {
+                "workflow_gate": "superseded_by_latest_main_success",
+                "superseding_run": {"run_id": "26899001365", "run_url": "https://github.example/runs/26899001365"},
+            },
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[642, 559, 548], apply=True)
+
+    assert payload["workflow_gate"] == "closed"
+    assert payload["superseded_count"] == 1
+    assert payload["closed_issues"] == [642]
+    assert payload["skipped_count"] == 2
+    assert closed == [642]
+
+
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

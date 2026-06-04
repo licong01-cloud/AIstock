@@ -516,6 +516,28 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     return compact
 
 
+def _compact_ci_issue_janitor(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "workflow_gate",
+        "dry_run",
+        "scanned_count",
+        "superseded_count",
+        "closed_count",
+        "skipped_count",
+        "failed_count",
+        "production_gates",
+        "next_command",
+    )
+    if value.get("closed_issues"):
+        compact["closed_issues"] = value.get("closed_issues")
+    if value.get("failed_issues"):
+        compact["failed_issues"] = value.get("failed_issues")
+    return compact
+
+
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     schema = str(payload.get("schema_version") or "")
     if not schema:
@@ -689,6 +711,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_finalizer(payload) or {})
     elif schema.endswith("_triage_ci_issue_v1"):
         compact.update(_compact_triage_ci_issue(payload) or {})
+    elif schema.endswith("_ci_issue_janitor_v1"):
+        compact.update(_compact_ci_issue_janitor(payload) or {})
     elif schema.endswith("_promote_ci_issue_v1"):
         compact.update(_compact_promote_ci_issue(payload) or {})
     else:
@@ -5028,6 +5052,156 @@ def build_triage_ci_issue_plan(
     return payload
 
 
+def _list_open_auto_filed_ci_issues(*, limit: int = 50) -> list[dict[str, Any]]:
+    result = _execute_checked(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "open",
+            "--label",
+            "auto-filed",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,state,url,labels",
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse auto-filed CI issue list: {exc}") from exc
+    if not isinstance(issues, list):
+        raise WorkflowError("auto-filed CI issue list returned non-list JSON")
+    filtered: list[dict[str, Any]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        labels = {
+            str(item.get("name") or "")
+            for item in issue.get("labels") or []
+            if isinstance(item, dict)
+        }
+        if "ci" in labels:
+            filtered.append(issue)
+    return filtered
+
+
+def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[str, Any], workflow: str | None) -> dict[str, Any]:
+    comment = (
+        f"Superseded by later successful main {workflow or 'CI'} run: {superseding_run.get('run_url')}. "
+        "No BUG JSON promotion is required. production_ddl_gate=noop; "
+        "production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop."
+    )
+    return _execute_checked(
+        [
+            "gh",
+            "issue",
+            "close",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--comment",
+            comment,
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+
+
+def build_ci_issue_janitor_plan(
+    *,
+    issue_numbers: list[int | str] | None = None,
+    apply: bool = False,
+    limit: int = 50,
+    skip_github_summary: bool = False,
+) -> dict[str, Any]:
+    if issue_numbers:
+        issues = [{"number": str(item)} for item in issue_numbers]
+        source = "explicit_issues"
+    else:
+        issues = _list_open_auto_filed_ci_issues(limit=limit)
+        source = "open_auto_filed_ci_issues"
+    evaluated: list[dict[str, Any]] = []
+    closed: list[int | str] = []
+    failed: list[dict[str, Any]] = []
+    superseded_count = 0
+    for item in issues:
+        issue_number = item.get("number")
+        if issue_number is None:
+            continue
+        issue_value = int(issue_number) if str(issue_number).isdigit() else issue_number
+        entry: dict[str, Any] = {"issue": issue_value, "action": "skip"}
+        try:
+            triage = build_triage_ci_issue_plan(
+                issue_number=issue_number,
+                skip_github_summary=skip_github_summary,
+            )
+        except WorkflowError as exc:
+            entry.update({"action": "failed", "reason": str(exc)})
+            failed.append(entry)
+            evaluated.append(entry)
+            continue
+        entry["classification"] = triage.get("classification_recommendation")
+        entry["linked_bug"] = triage.get("linked_bug")
+        entry["github_issue"] = triage.get("github_issue")
+        if (
+            triage.get("classification_recommendation") == "superseded_by_later_main_success"
+            and not triage.get("linked_bug")
+            and isinstance(triage.get("superseded_action"), dict)
+        ):
+            superseded_count += 1
+            entry["action"] = "close_superseded"
+            entry["superseding_run"] = triage["superseded_action"].get("superseding_run")
+            if apply:
+                try:
+                    result = _close_superseded_ci_issue(
+                        issue_value,
+                        triage["superseded_action"].get("superseding_run") or {},
+                        (triage.get("summary") or {}).get("workflow"),
+                    )
+                    entry["close_result"] = _pick(result, "ok", "returncode")
+                    closed.append(issue_value)
+                except WorkflowError as exc:
+                    entry.update({"action": "failed", "reason": str(exc)})
+                    failed.append(entry)
+        else:
+            entry["reason"] = "not_superseded_or_requires_bug_workflow"
+        evaluated.append(entry)
+    workflow_gate = "failed" if failed else ("closed" if apply and closed else ("ready_for_apply" if superseded_count else "no_superseded_issues"))
+    payload = {
+        "schema_version": "aistock_issue_workflow_ci_issue_janitor_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": workflow_gate,
+        "dry_run": not apply,
+        "source": source,
+        "limit": limit,
+        "scanned_count": len(evaluated),
+        "superseded_count": superseded_count,
+        "closed_count": len(closed),
+        "skipped_count": len([item for item in evaluated if item.get("action") == "skip"]),
+        "failed_count": len(failed),
+        "closed_issues": closed,
+        "failed_issues": [{"issue": item.get("issue"), "reason": item.get("reason")} for item in failed],
+        "issues": evaluated,
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    }
+    if not apply and superseded_count:
+        payload["next_command"] = "python scripts/aistock_issue_workflow.py ci-issue-janitor --apply"
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / "ci-issue-janitor"
+    _write_json(output_dir / "ci-issue-janitor.json", payload)
+    return payload
+
+
 def build_promote_ci_issue_plan(
     *,
     issue_number: int | str,
@@ -7560,6 +7734,17 @@ def cmd_triage_ci_issue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ci_issue_janitor(args: argparse.Namespace) -> int:
+    payload = build_ci_issue_janitor_plan(
+        issue_numbers=list(args.issue or []),
+        apply=args.apply,
+        limit=args.limit,
+        skip_github_summary=args.skip_github_summary,
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_superseded_issues"} else 2
+
+
 def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
     payload = build_promote_ci_issue_plan(
         issue_number=args.issue,
@@ -7765,6 +7950,17 @@ def build_parser() -> argparse.ArgumentParser:
     triage_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; emit a partial triage summary.")
     add_output_options(triage_ci)
     triage_ci.set_defaults(func=cmd_triage_ci_issue)
+
+    ci_janitor = sub.add_parser(
+        "ci-issue-janitor",
+        help="Dry-run or close auto-filed CI issues already superseded by a later successful main run.",
+    )
+    ci_janitor.add_argument("--issue", action="append", help="Limit janitor to a specific GitHub Issue number; repeatable.")
+    ci_janitor.add_argument("--limit", type=int, default=50, help="Maximum open auto-filed CI issues to scan when --issue is omitted.")
+    ci_janitor.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; useful for tests only.")
+    ci_janitor.add_argument("--apply", action="store_true", help="Close only issues classified as superseded_by_later_main_success.")
+    add_output_options(ci_janitor)
+    ci_janitor.set_defaults(func=cmd_ci_issue_janitor)
 
     promote_ci = sub.add_parser("promote-ci-issue", help="Promote a triaged CI GitHub Issue into the BUG JSON workflow.")
     promote_ci.add_argument("--issue", required=True, help="GitHub Issue number to promote.")
