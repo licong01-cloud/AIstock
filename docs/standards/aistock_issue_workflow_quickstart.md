@@ -205,6 +205,8 @@ python scripts/aistock_issue_workflow.py submit-bug `
 
 `--apply` requires GitHub linkage. Either pass `--create-github` so the command uses `gh issue create`, or supply both `--github-issue-number` and `--github-issue-url`. If GitHub is unavailable, keep the output as a draft and do not commit BUG JSON.
 
+For UI/display BUGs, `submit-bug` enriches the record with `ui_intake_hints`: inferred route, focused component/API scope, reproduce requirement, visual acceptance requirement, and recommended frontend/backend validation. Agents must start from those hints before broad frontend exploration, and should request full JSON only when the compact output is insufficient or a failure needs diagnosis.
+
 `submit-bug --apply` also enforces a registry guard:
 
 - it refuses the canonical root checkout
@@ -393,7 +395,7 @@ After a PR is created, merged, or a workflow feels slow, generate the postmortem
 python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX
 ```
 
-The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. It also includes `phase_cost_table`, `h6_summary`, and `h7_code_intelligence` so agents can report the top time/token cost and CodeGraph readiness without pasting full JSON. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time. `code_repair_seconds` is reported only when explicit repair events exist; do not invent it from wall-clock gaps.
+The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. It also includes `phase_cost_table`, `h6_summary`, and `h7_code_intelligence` so agents can report the top time/token cost and CodeGraph readiness without pasting full JSON. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time. Prefer the derived fields `queue_seconds`, `active_fix_seconds`, `local_validation_seconds`, `pr_ci_seconds`, and `merge_aftercare_seconds` when explaining slow cases. `code_repair_seconds` is explicit or active-fix derived; do not inflate it with queue, review, or CI wait.
 
 ## Triage Current P0
 

@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
@@ -74,6 +74,39 @@ FAST_PATH_DEPENDENCY_FILES = {
     "requirements.lock.txt",
     "pyproject.toml",
 }
+
+UI_ROUTE_HINTS = {
+    "advisory": {
+        "routes": ["/paper-v2/advisory"],
+        "scope": [
+            "frontend/src/app/paper-v2/advisory/page.tsx",
+            "frontend/src/lib/api/advisory.ts",
+            "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+            "backend/routers/advisory.py",
+            "backend/services/advisory_program.py",
+            "backend/tests/watchlist/test_advisory_api.py",
+            "backend/tests/watchlist/test_advisory_program.py",
+        ],
+        "verification": [
+            "frontend_tsc",
+            "paper_v2_ui",
+            "backend/tests/watchlist/test_advisory_api.py",
+            "backend/tests/watchlist/test_advisory_program.py",
+        ],
+    },
+    "paper_v2": {
+        "routes": ["/paper-v2"],
+        "scope": [
+            "frontend/src/app/paper-v2",
+            "frontend/src/lib/api",
+            "frontend/tests/paper-v2",
+            "backend/routers/paper_trading_v2.py",
+            "backend/services/paper_trading_v2",
+        ],
+        "verification": ["frontend_tsc", "paper_v2_ui", "paper_v2_backend"],
+    },
+}
+UI_KEYWORDS = ("ui", "页面", "前端", "显示", "按钮", "弹窗", "表格", "分页", "排序", "json", "route", "page")
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
@@ -290,6 +323,11 @@ def _compact_timing_summary(value: Any) -> dict[str, Any] | None:
         "event_count",
         "known_duration_seconds",
         "inferred_elapsed_seconds",
+        "queue_seconds",
+        "active_fix_seconds",
+        "local_validation_seconds",
+        "pr_ci_seconds",
+        "merge_aftercare_seconds",
         "code_repair_seconds",
         "started_at",
         "ended_at",
@@ -550,6 +588,25 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact["blocking"] = payload.get("blocking")
     if payload.get("warnings"):
         compact["warnings_count"] = len(payload.get("warnings") or [])
+    if "ui_intake_hints" in payload and isinstance(payload.get("ui_intake_hints"), dict):
+        compact["ui_intake_hints"] = _pick(
+            payload["ui_intake_hints"],
+            "ui_issue",
+            "ui_route",
+            "scope_source",
+            "reproduce_required",
+            "visual_acceptance_required",
+        )
+        compact["ui_intake_hints"]["scope_count"] = len(payload["ui_intake_hints"].get("ui_component_scope") or [])
+        compact["ui_intake_hints"]["recommended_verification_count"] = len(payload["ui_intake_hints"].get("recommended_verification") or [])
+    if "workflow_efficiency_recommendations" in payload and isinstance(payload.get("workflow_efficiency_recommendations"), dict):
+        compact["workflow_efficiency_recommendations"] = _pick(
+            payload["workflow_efficiency_recommendations"],
+            "batch_candidate",
+            "docs_only_merge_with_related_code",
+            "compact_success_output",
+            "full_json_on_failure_only",
+        )
 
     if schema.endswith("_run_v1"):
         compact.update(_pick(payload, "mode"))
@@ -950,6 +1007,13 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         if ts:
             previous_ts = ts
 
+    queue_seconds = _phase_seconds(phases, "discovered")
+    context_seconds = _phase_seconds(phases, "context_ready")
+    active_fix_seconds = _phase_seconds(phases, "fix_in_progress") + _phase_seconds(phases, "fix_applied") + context_seconds
+    local_validation_seconds = _phase_seconds(phases, "validation_planned") + _phase_seconds(phases, "validation_running") + _phase_seconds(phases, "validation_passed")
+    pr_ci_seconds = _phase_seconds(phases, "pr_opened") + _phase_seconds(phases, "ci_running") + _phase_seconds(phases, "ci_green") + _phase_seconds(phases, "gh_pr_create")
+    merge_aftercare_seconds = sum(_phase_seconds(phases, phase) for phase in ("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted"))
+
     return {
         "schema_version": "aistock_issue_workflow_timing_summary_v1",
         "bug_id": bug_id,
@@ -959,13 +1023,50 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "known_duration_seconds": round(known_duration, 3),
         "inferred_elapsed_seconds": round(inferred_duration, 3),
         "phases": phases,
-        "code_repair_seconds": None,
+        "queue_seconds": round(queue_seconds, 3) if queue_seconds else None,
+        "active_fix_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "local_validation_seconds": round(local_validation_seconds, 3) if local_validation_seconds else None,
+        "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
+        "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
+        "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
             "code_repair_seconds is intentionally not guessed unless the agent records explicit repair events",
         ],
     }
+
+
+
+
+def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, Any], root: Path) -> dict[str, Any]:
+    source_path = _state_issue_json_path(root, state)
+    if not source_path or not source_path.exists():
+        return timing
+    try:
+        record = _load_json(source_path)
+    except WorkflowError:
+        return timing
+    created_at = _parse_utc_timestamp(str(record.get("created_at") or record.get("first_seen_at") or ""))
+    started_at = _parse_utc_timestamp(str(timing.get("started_at") or ""))
+    if created_at and started_at and started_at > created_at:
+        timing = dict(timing)
+        queue_seconds = round((started_at - created_at).total_seconds(), 3)
+        existing = float(timing.get("queue_seconds") or 0)
+        timing["queue_seconds"] = max(existing, queue_seconds)
+        timing["issue_created_at"] = record.get("created_at") or record.get("first_seen_at")
+        timing["active_work_started_at"] = timing.get("started_at")
+        timing.setdefault("notes", []).append(
+            "queue_seconds uses BUG created_at to first workflow event when available, so queue time is not hidden."
+        )
+    return timing
+
+
+def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
+    item = phases.get(phase)
+    if not isinstance(item, dict):
+        return 0.0
+    return max(float(item.get("known_duration_seconds") or 0), float(item.get("inferred_since_previous_seconds") or 0))
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1012,8 +1113,13 @@ def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifac
         "context_estimated_tokens": context_tokens,
         "artifact_estimated_tokens": artifact_tokens,
         "total_estimated_tokens": context_tokens + artifact_tokens,
+        "queue_seconds": timing.get("queue_seconds"),
+        "active_fix_seconds": timing.get("active_fix_seconds"),
+        "local_validation_seconds": timing.get("local_validation_seconds"),
+        "pr_ci_seconds": timing.get("pr_ci_seconds"),
+        "merge_aftercare_seconds": timing.get("merge_aftercare_seconds"),
         "code_repair_seconds": timing.get("code_repair_seconds"),
-        "code_repair_note": "explicit repair timing is reported only when events record it; workflow does not guess",
+        "code_repair_note": "active_fix_seconds is derived from workflow state events; exact editor time is recorded only when clients emit explicit repair events",
     }
 
 
@@ -2329,10 +2435,121 @@ def _find_bug_record_from_active_registry(bug_id: str) -> tuple[dict[str, Any], 
     return None
 
 
+
+def _normalize_module_label(module: str | None) -> str:
+    module_label = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(module or "unknown").strip().lower()).strip("_")
+    return module_label or "unknown"
+
+
+def _small_text_blob(parts: Iterable[str | None]) -> str:
+    text = ""
+    for part in parts:
+        if part is None:
+            continue
+        text += f"\n{part}"
+    return text
+
+
+def _csv_arg(items: Iterable[str]) -> str:
+    result = ""
+    for item in items:
+        if not item:
+            continue
+        result = item if not result else f"{result},{item}"
+    return result
+
+
+def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str], description: str | None = None) -> bool:
+    haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or ""), *changed_files]).lower()
+    return any(token.lower() in haystack for token in UI_KEYWORDS) or any(
+        path.startswith("frontend/") or "/frontend/" in path.replace("\\", "/") for path in changed_files
+    )
+
+
+def _ui_intake_hints(
+    *,
+    title: str,
+    module: str,
+    description: str | None,
+    changed_files: list[str],
+    reproduce_command: str | None,
+) -> dict[str, Any] | None:
+    if not _is_ui_issue(title, module, changed_files, description):
+        return None
+    normalized_module = _normalize_module_label(module)
+    hint = UI_ROUTE_HINTS.get(normalized_module) or next(
+        (value for key, value in UI_ROUTE_HINTS.items() if key in normalized_module),
+        None,
+    )
+    route = None
+    search_text = _small_text_blob([title, description or "", *changed_files])
+    route_match = re.search(r"(/[a-zA-Z0-9_.~:/?#\[\]@!$&'()*+,;=-]+)", search_text)
+    if route_match:
+        route = route_match.group(1).rstrip(".,;。；")
+    routes = list((hint or {}).get("routes") or [])
+    if route and route not in routes:
+        routes.insert(0, route)
+    scope = flow._unique_strings(list((hint or {}).get("scope") or []) + changed_files)
+    verification = flow._unique_strings(list((hint or {}).get("verification") or []) + ["l0"])
+    reproduce_missing = not reproduce_command or reproduce_command.strip().lower() in {"n/a", "na", "none"}
+    return {
+        "schema_version": "aistock_ui_issue_intake_hints_v1",
+        "ui_issue": True,
+        "scope_source": "inferred_from_module_route_and_changed_files",
+        "ui_route": routes[0] if routes else None,
+        "ui_routes": routes,
+        "ui_component_scope": scope,
+        "recommended_verification": verification,
+        "reproduce_required": reproduce_missing,
+        "reproduce_template": [
+            "Open the affected AIstock page/route.",
+            "Perform the visible user action that currently fails or looks wrong.",
+            "Verify the expected visible state, table, dialog, or form behavior.",
+        ],
+        "visual_acceptance_required": True,
+        "labels": ["bug", "ui", f"module:{normalized_module}", "type:bug"],
+    }
+
+
+def _issue_labels_for_bug(*, module: str, severity: str, ui_hints: dict[str, Any] | None = None) -> list[str]:
+    normalized_module = _normalize_module_label(module)
+    module_label = f"module:{normalized_module}"
+    if normalized_module in {"advisory", "paper_v2_advisory"}:
+        module_label = "module:paper_v2"
+    labels = ["aistock:bug", "bug", severity.upper(), f"severity:{severity.lower()}", module_label, "status:open"]
+    if ui_hints and module_label == "module:paper_v2":
+        labels.append("paper-v2")
+    return flow._unique_strings(labels)
+
+
+def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[str, Any] | None = None) -> dict[str, Any]:
+    module = _normalize_module_label(record.get("module"))
+    required = record.get("required_verification") or []
+    recs = [
+        "Use compact success output; request full JSON only for failures or diagnostics.",
+        "Run targeted validation first, then final gates once the patch is stable.",
+    ]
+    batch_candidate = module in {"validation", "validation.guardrails", "validation_center"} or str(record.get("risk_area") or "") in {"ci_failure_intake", "workflow"}
+    if batch_candidate:
+        recs.append("Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.")
+    if ui_hints:
+        recs.append("Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.")
+    if any(str(item).startswith("validation_center_backend") for item in required):
+        recs.append("Keep validation_center_backend only when the changed files actually affect Validation Center.")
+    return {
+        "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+        "batch_candidate": batch_candidate,
+        "docs_only_merge_with_related_code": True,
+        "compact_success_output": True,
+        "full_json_on_failure_only": True,
+        "recommendations": recs,
+    }
+
 def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any]) -> str:
     evidence = record.get("evidence_uris") or []
     scope = record.get("allowed_write_scope") or []
     verification = record.get("required_verification") or []
+    ui_hints = record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None
     lines = [
         f"<!-- aistock-bug:{record.get('bug_id')} -->",
         f"<!-- aistock-candidate:{candidate.get('candidate_id')} -->",
@@ -2349,6 +2566,20 @@ def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any])
         "## Reproduce",
         f"`{record.get('reproduce_command') or 'n/a'}`",
         "",
+    ]
+    if ui_hints:
+        lines.extend([
+            "## UI Intake Hints",
+            f"- route: `{ui_hints.get('ui_route') or 'unknown'}`",
+            f"- reproduce_required: `{ui_hints.get('reproduce_required')}`",
+            "- visual_acceptance_required: `true`",
+            "- inferred_scope:",
+            *[f"  - `{item}`" for item in ui_hints.get('ui_component_scope') or []],
+            "- recommended_verification:",
+            *[f"  - `{item}`" for item in ui_hints.get('recommended_verification') or []],
+            "",
+        ])
+    lines.extend([
         "## Scope",
         *[f"- `{item}`" for item in scope or ["triage required"]],
         "",
@@ -2362,7 +2593,7 @@ def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any])
         "- production_ddl_gate: `noop`",
         "- production_frontend_dependency_gate: `noop`",
         "- production_backend_dependency_gate: `noop`",
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -2485,6 +2716,20 @@ def build_submit_bug_plan(
         record.setdefault("production_ddl_gate", "noop")
         record.setdefault("production_frontend_dependency_gate", "noop")
         record.setdefault("production_backend_dependency_gate", "noop")
+        ui_hints = _ui_intake_hints(
+            title=title,
+            module=module,
+            description=description,
+            changed_files=changed_files,
+            reproduce_command=reproduce_command,
+        )
+        if ui_hints:
+            record["ui_intake_hints"] = ui_hints
+            _add_record_allowed_scope(record, *(ui_hints.get("ui_component_scope") or []))
+            record["required_verification"] = flow._unique_strings(
+                flow._as_list(record.get("required_verification")) + list(ui_hints.get("recommended_verification") or [])
+            )
+        record["workflow_efficiency_recommendations"] = _workflow_efficiency_recommendations(record, ui_hints)
 
         output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
         candidate_path = output_dir / "candidate.json"
@@ -2514,6 +2759,8 @@ def build_submit_bug_plan(
                     github_title,
                     "--body-file",
                     str(github_body_path),
+                    "--label",
+                    _csv_arg(_issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)),
                 ],
                 cwd=registry_root,
                 timeout=120,
@@ -2561,6 +2808,9 @@ def build_submit_bug_plan(
             "url": record.get("github_issue_url"),
         },
         "record": record,
+        "ui_intake_hints": ui_hints,
+        "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
+        "github_issue_labels": _issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints),
         "registry_pr_only": registry_pr_only,
         "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
         "bug_id_allocation": {
@@ -3851,10 +4101,13 @@ def build_start_plan(
         "fast_path": fast_path,
         "active_decision": active_decision,
         "context_metrics": context_metrics,
+        "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations") or _workflow_efficiency_recommendations(record, record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None),
+        "ui_intake_hints": record.get("ui_intake_hints"),
         "next_agent_steps": [
             "switch_to_worktree_if_created",
             "read_context_pack_md",
             "fix_only_within_allowed_write_scope_or_stop_for_scope_expansion",
+            "use_compact_success_output_and_full_json_only_on_failure",
             "run_finish_plan_before_reporting_done",
         ],
     }
@@ -4762,7 +5015,7 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
         raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
     root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events = _read_events(canonical_bug_id, root)
-    timing = _workflow_timing_summary(canonical_bug_id, root)
+    timing = _augment_timing_with_issue_record(_workflow_timing_summary(canonical_bug_id, root), state, root)
     active = _active_workflows_for_bug(canonical_bug_id)
     duplicate_active_count = max(0, len(active) - 1)
     stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
@@ -4841,6 +5094,11 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
                 f"- Top phase: `{(h6_summary.get('top_phase') or {}).get('phase') or 'none'}`",
                 f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens')}`",
                 f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens')}`",
+                f"- Queue seconds: `{h6_summary.get('queue_seconds') or 'not_recorded'}`",
+                f"- Active fix seconds: `{h6_summary.get('active_fix_seconds') or 'not_recorded'}`",
+                f"- Local validation seconds: `{h6_summary.get('local_validation_seconds') or 'not_recorded'}`",
+                f"- PR/CI seconds: `{h6_summary.get('pr_ci_seconds') or 'not_recorded'}`",
+                f"- Merge aftercare seconds: `{h6_summary.get('merge_aftercare_seconds') or 'not_recorded'}`",
                 f"- Code repair seconds: `{h6_summary.get('code_repair_seconds') or 'not_recorded'}`",
                 "",
                 "## H7 Code Intelligence",
@@ -6214,11 +6472,12 @@ def _sync_github_issue_after_close(
     if not issue_number:
         return {"status": "skipped_missing_issue_number"}
     lines = [
-        f"AIstock workflow close-sync completed for `{record.get('bug_id')}`.",
+        f"AIstock workflow close-sync persisted to the current registry worktree for `{record.get('bug_id')}`.",
         "",
         f"- PR: {evidence_payload.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
         "- BUG JSON status: `fixed`",
+        "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
         "",
         "Validation evidence:",
         *[f"- {item}" for item in evidence_payload.get("validation_evidence") or ["n/a"]],
@@ -6454,6 +6713,7 @@ def _maybe_commit_and_pr_close_sync(
         f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
         "- BUG JSON status: `fixed`",
+        "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
         "",
         "## Validation",
         *[f"- {item}" for item in validation_evidence or close_sync.get("validation_evidence") or ["n/a"]],

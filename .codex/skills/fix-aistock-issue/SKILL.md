@@ -23,6 +23,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Preserve per-issue evidence even when batching same-module issues.
 - Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, lacks validation evidence, or `doctor` returns `workflow_gate=blocked`.
 - Read the returned Context Pack and `allowed_write_scope` before searching code. Default to `rg` only against scoped files/directories; use broad repo search only after a scoped search fails and record the reason in the final report.
+- For UI BUG intake, use `submit-bug` returned `ui_intake_hints` as the first route/scope/reproduce checklist; do not broad-scan frontend until those hints fail or prove stale.
 - Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
 
 ## Workflow
@@ -75,7 +76,7 @@ After the shared fix, run:
 
 ## Completion Report
 
-Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary, and whether production runtime or DB was untouched.
+Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary (`queue_seconds`, `active_fix_seconds`, validation, PR/CI, and aftercare), and whether production runtime or DB was untouched.
 
 ## Post-Merge Sync And Cleanup
 
