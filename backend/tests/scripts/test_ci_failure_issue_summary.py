@@ -802,3 +802,15 @@ def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
     assert "const renderBody = (issueNumber) => payload.body.replaceAll" in script
     assert "body: renderBody(created.data.number)" in script
+
+
+def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    script = workflow["jobs"]["full-summary"]["steps"][4]["with"]["script"]
+
+    assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
+    assert "if (!fs.existsSync(issuePayloadPath))" in script
+    assert "No actionable Nightly issue created." in script
+    assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script

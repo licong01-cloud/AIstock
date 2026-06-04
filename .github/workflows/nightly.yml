@@ -458,7 +458,14 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const payload = JSON.parse(fs.readFileSync('tmp/validation/nightly_failure_issue/github-issue-payload.json', 'utf8'));
+            const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';
+            if (!fs.existsSync(issuePayloadPath)) {
+              const summary = JSON.parse(fs.readFileSync('tmp/validation/nightly_failure_issue/summary.json', 'utf8'));
+              const policy = summary.issue_creation_policy || {};
+              core.info(`No actionable Nightly issue created. policy.allowed=${policy.allowed} reason=${policy.reason || 'unknown'}`);
+              return;
+            }
+            const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner,
