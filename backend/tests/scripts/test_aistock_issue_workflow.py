@@ -2227,6 +2227,35 @@ def test_run_pr_mode_drafts_pr_automation_without_side_effects(
     assert "gh pr create" in payload["pr_automation"]["next_commands"][1]
 
 
+def test_pre_pr_gate_blocks_unmapped_ownership_before_heavy_pr_flow(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    finish = {
+        "changed_files": [".claude/commands/fix-aistock-issue.md"],
+        "scope_check": {"status": "passed"},
+        "fast_path": {
+            "ownership": {
+                "unmapped_count": 1,
+                "unmapped": [".claude/commands/fix-aistock-issue.md"],
+                "ambiguous_count": 0,
+            }
+        },
+    }
+
+    payload = workflow._pre_pr_gate(
+        finish=finish,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        root=isolated_workflow_root,
+        run_lint=False,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert "ownership check failed" in payload["blocking"][0]
+    assert payload["ownership_check"]["unmapped_count"] == 1
+
+
 def test_pr_check_watch_treats_missing_checks_as_pending(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4284,6 +4313,82 @@ def test_cleanup_after_merge_removes_empty_unregistered_worktree_dir(
     assert not any(item["command"].startswith("git worktree remove") for item in payload["applied"])
 
 
+def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    orphan = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    orphan.mkdir(parents=True)
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return ""
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: set())
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": "feature123",
+                "mergeCommit": {"oid": "merge123"},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_ref",
+        lambda *args, **kwargs: {"verified": True, "reason": "changed_paths_equivalent", "changed_files": ["scripts/aistock_issue_workflow.py"]},
+    )
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
+    monkeypatch.setattr(
+        workflow,
+        "_remove_reparse_or_empty_tree",
+        lambda path: {
+            "ok": True,
+            "returncode": 0,
+            "stderr": "locked",
+            "removed": [],
+            "deferred": True,
+            "deferred_reason": "empty_directory_locked_by_windows_handle",
+            "profile": {"safe_reparse_or_empty_only": True},
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        worktree=str(orphan),
+        pr_url="https://github.example/pull/199",
+        sync_root=False,
+        apply=True,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["deferred_cleanup"]["reason"] == "empty_directory_locked_by_windows_handle"
+    assert payload["deferred_cleanup"]["safe_to_retry"] is True
+    assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
+
+
 def test_cleanup_after_merge_removes_orphan_reparse_only_worktree_dir(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5388,6 +5493,41 @@ def test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output(
     assert "ui_component_scope" not in json.dumps(compact)
 
 
+def test_submit_bug_does_not_infer_ui_hints_from_workflow_script_text(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 264})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Issue workflow CI watch mentions statusCheckRollup",
+        module="validation",
+        severity="P1",
+        description="statusCheckRollup output should stay compact for workflow scripts.",
+        expected="No visual UI intake is created for non-frontend workflow files.",
+        actual="Script text was previously inferred as a UI route.",
+        reproduce_command="python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-1 --pr-url <url>",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py", ".claude/commands/fix-aistock-issue.md"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-265",
+        github_issue_number="765",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/765",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=True,
+    )
+
+    assert payload["ui_intake_hints"] is None
+    assert "ui_intake_hints" not in payload["record"]
+
+
 def test_postmortem_reports_queue_time_from_bug_created_at(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5441,6 +5581,46 @@ def test_postmortem_falls_back_to_prior_artifact_after_state_cleanup(
     assert payload["workflow_gate"] == "artifact_fallback"
     assert payload["artifact_fallback"]["reason"] == "workflow_state_missing_or_cleaned"
     assert payload["timing_summary"]["known_duration_seconds"] == 12.0
+
+
+def test_postmortem_prefers_prior_phase_evidence_after_cleanup_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_dir = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        workflow_dir / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "complete",
+            "worktree": str(isolated_workflow_root),
+        },
+    )
+    events_path = workflow_dir / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps({"timestamp": "2026-06-04T18:00:00Z", "event": "state:complete", "state": "complete"}) + "\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        workflow_dir / "postmortem-pre-cleanup.json",
+        {
+            "schema_version": "aistock_issue_workflow_postmortem_v1",
+            "bug_id": "BUG-199",
+            "workflow_root": str(isolated_workflow_root),
+            "timing_summary": {"event_count": 5, "known_duration_seconds": 42.0},
+        },
+    )
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root), output_markdown=False)
+
+    assert payload["workflow_gate"] == "artifact_fallback"
+    assert payload["artifact_fallback"]["reason"] == "prior_postmortem_has_more_phase_evidence_than_cleanup_state"
+    assert payload["timing_summary"]["event_count"] == 5
+    assert payload["timing_summary"]["known_duration_seconds"] == 42.0
 
 
 def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
