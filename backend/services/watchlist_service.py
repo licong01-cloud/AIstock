@@ -538,7 +538,8 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     remaining_base_codes = []
 
     for c in ts_codes:
-        if not c: continue
+        if not c:
+            continue
         base = c
         if "." in c:
             try:
