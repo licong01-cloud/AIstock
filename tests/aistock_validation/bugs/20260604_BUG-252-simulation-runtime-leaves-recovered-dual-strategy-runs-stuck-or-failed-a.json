@@ -32,8 +32,8 @@
   "expected": "Restart recovery must safely terminalize or reconcile existing simulation runs without duplicate broker calls: LocalSim SUBMITTING runs with no broker_called and persisted plans should be either safely submitted once or marked with actionable terminal evidence; MiniQMT runs with broker_called=true must never resubmit and should run idempotent sync/reconciliation to move to SUCCEEDED when ledger reconciliation succeeds.",
   "first_seen_at": "2026-06-04T04:13:49.545354Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c7271218f8899dfa4c0878b011db0d5da80c4d2c",
+  "fixed_at": "2026-06-04T04:34:32.149461Z",
   "github_issue_number": 708,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/708",
   "last_seen_at": "2026-06-04T04:13:49.545354Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/710",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -60,5 +61,12 @@
     "fingerprint": "7ed47a32d658def95519b483",
     "source_event_id": "FE-20260604-7ed47a32d658"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only -q -> 2 passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py -q -> 36 passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null
 }
