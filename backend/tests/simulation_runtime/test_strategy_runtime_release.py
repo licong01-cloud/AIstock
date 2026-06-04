@@ -47,6 +47,20 @@ def test_strategy_runtime_release_hash_is_canonical_and_idempotent() -> None:
     assert "broker_account_id" not in first.release_config_json
 
 
+def test_strategy_runtime_release_can_persist_full_execution_policy_snapshot() -> None:
+    service = _service()
+    policy_json = {
+        "algo_code": "SNIPER_MINIQMT",
+        "algo_config": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+    }
+
+    release = service.create_release(**_release_kwargs(execution_policy_json=policy_json))
+
+    assert release.release_config_json["execution_policy"]["policy_json"] == policy_json
+    assert release.release_config_json["execution_policy"]["policy_version_id"] == "exec_policy_unit"
+    assert release.release_config_json["execution_policy"]["policy_sha256"] == "exec_policy_hash_unit"
+
+
 def test_strategy_runtime_release_requires_all_policy_versions() -> None:
     service = _service()
 
