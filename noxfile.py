@@ -862,8 +862,8 @@ def mcp_gateway_manifest_quality(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
-    """Run Phase 5a RA manifest-catalog backend consumption gates."""
-    phase5a_paths = [
+    """Run full Phase 5 RA manifest catalog, audit, and UI acceptance gates."""
+    phase5_paths = [
         "backend/mcp/tool_manifest.py",
         "backend/routers/research_assistant.py",
         "backend/services/research_assistant/domain_ontology.py",
@@ -873,16 +873,34 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         "backend/tests/research_assistant/test_api.py",
         "backend/tests/research_assistant/test_execution_closure.py",
         "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_phase5_mcp_audit.py",
         "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
         "backend/tests/research_assistant/test_service.py",
+        "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/lib/research-assistant/api.ts",
+        "frontend/tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
         "tests/mcp/test_mcp_tool_manifest.py",
         "tests/aistock_validation/catalog/test_plans.yaml",
         "tests/aistock_validation/catalog/module_registry.yaml",
         "backend/services/validation/plan_catalog.py",
         "docs/architecture/aistock_mcp_unified_gateway_assistant_design_20260604.md",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
         "tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_design.md",
+        "tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_completion_report.md",
         "noxfile.py",
     ]
+    frontend_env = _env(
+        {
+            "FRONTEND_PORT": "3011",
+            "BACKEND_PORT": "8012",
+            "API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_TDX_BACKEND_BASE": "http://127.0.0.1:8012",
+            "PAPER_V2_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "PAPER_V2_API_PROXY_TARGET": "http://127.0.0.1:8012/api/v1",
+        }
+    )
     session.run("git", "diff", "--check", external=True)
     session.run(
         "python",
@@ -902,6 +920,7 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         "tests/mcp",
         "backend/tests/research_assistant/test_mcp_catalog_sync.py",
         "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+        "backend/tests/research_assistant/test_phase5_mcp_audit.py",
         "backend/tests/research_assistant/test_tool_catalog_gate.py",
         "backend/tests/research_assistant/test_external_research_react_consumption.py",
         "backend/tests/research_assistant/test_worker_tool_isolation.py",
@@ -932,9 +951,23 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         "tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.md",
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
-        *phase5a_paths,
+        *phase5_paths,
         external=True,
     )
+    session.chdir("frontend")
+    session.run("npm", "run", "lint", env=frontend_env, external=True)
+    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
+        "--project",
+        "chromium",
+        env=frontend_env,
+        external=True,
+    )
+    session.chdir(str(ROOT))
 
 
 @nox.session(venv_backend="none")
