@@ -287,32 +287,54 @@ def build_codegraph_freshness_artifact(
     index_path = Path(str(status.get("graph_root") or root)) / ".codegraph" / "codegraph.db"
     age = _index_age(index_path)
     warnings: list[str] = []
+    notes: list[str] = []
     freshness = "fresh"
+    freshness_basis = "codegraph_status"
     if not status.get("available"):
         freshness = "unavailable"
+        freshness_basis = "availability"
         warnings.append("CodeGraph CLI is unavailable; Nightly should keep this as warning-only.")
     elif not status.get("index_exists"):
         freshness = "missing_index"
+        freshness_basis = "index_presence"
         warnings.append(f"CodeGraph index is missing; bootstrap command: {status.get('bootstrap_command')}.")
     elif skip_external:
         freshness = "unverified"
+        freshness_basis = "mtime_only"
         warnings.append("CodeGraph external status check was skipped; freshness is based on index mtime only.")
     elif not (status.get("status_check") or {}).get("ok"):
         freshness = "status_check_failed"
+        freshness_basis = "status_check"
         warnings.append("CodeGraph status command failed; inspect compact status_check output in the JSON artifact.")
     elif not (status.get("index_summary") or {}).get("up_to_date"):
         freshness = "stale"
+        freshness_basis = "codegraph_status"
         warnings.append("CodeGraph status did not report the index as up to date.")
     age_seconds = age.get("age_seconds")
     if isinstance(age_seconds, (int, float)) and age_seconds > max_age_hours * 3600:
-        freshness = "stale"
-        warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
+        status_reports_fresh = (
+            status.get("available")
+            and status.get("index_exists")
+            and not skip_external
+            and (status.get("status_check") or {}).get("ok")
+            and (status.get("index_summary") or {}).get("up_to_date")
+        )
+        if status_reports_fresh:
+            notes.append(
+                f"CodeGraph index mtime exceeds {max_age_hours:g} hours, "
+                "but codegraph status reports the index is up to date."
+            )
+        else:
+            freshness = "stale"
+            freshness_basis = "mtime"
+            warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
     payload = {
         "schema_version": "aistock_codegraph_freshness_v1",
         "generated_at": _utc_now(),
         "provider": "codegraph",
         "workflow_gate": "warning" if warnings else "ready",
         "freshness": freshness,
+        "freshness_basis": freshness_basis,
         "blocking_for_issue_workflow": False,
         "root": str(root),
         "graph_root": status.get("graph_root"),
@@ -326,6 +348,7 @@ def build_codegraph_freshness_artifact(
         "status": status.get("status"),
         "status_check": status.get("status_check"),
         "warnings": warnings,
+        "notes": notes,
         "artifact_path": _repo_rel(json_path, root),
         "summary_ref": _repo_rel(md_path, root),
     }
@@ -355,6 +378,9 @@ def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
     warnings = payload.get("warnings") or []
     if warnings:
         lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    notes = payload.get("notes") or []
+    if notes:
+        lines.extend(["", "### Notes", *[f"- {item}" for item in notes]])
     return "\n".join(lines)
 
 
