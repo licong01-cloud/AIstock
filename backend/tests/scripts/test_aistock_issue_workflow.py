@@ -1033,6 +1033,60 @@ def test_doctor_compact_reports_codegraph_bootstrap_next_command(
     assert compact["h7_code_intelligence"]["readiness_next_command"] == "codegraph init -i"
 
 
+def test_doctor_omits_codegraph_bootstrap_when_ready(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {
+                "status": "ok",
+                "index_exists": True,
+                "bootstrap_command": "codegraph init -i",
+            },
+            "understand_anything": {"status": "not_required_missing"},
+            "bootstrap_commands": {"codegraph": "codegraph init -i"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=True)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
+    assert payload["h7_code_intelligence"]["fallback_used"] is False
+    assert payload["h7_code_intelligence"]["readiness_next_command"] is None
+    assert compact["h7_code_intelligence"]["readiness_next_command"] is None
+
+
 
 def test_doctor_reports_stale_global_skill_manifest(
     isolated_workflow_root: Path,
