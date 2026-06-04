@@ -67,7 +67,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.QE_EXPERIMENT: DomainSpec(
         domain=McpDomain.QE_EXPERIMENT,
         intent_value="experiment_draft_request",
-        server_key="aistock-qe-experiment",
+        server_key="aistock-qe",
         default_tool="qe_experiment_list",
         risk_policy="draft_validate_confirmed_run",
         summary_zh="QE experiment, custom_evo loop, template materialization and run management",
@@ -80,7 +80,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.QE_WAREHOUSE: DomainSpec(
         domain=McpDomain.QE_WAREHOUSE,
         intent_value="qe_warehouse_request",
-        server_key="aistock-qe-archive",
+        server_key="aistock-qe",
         default_tool="qe_archive_health",
         risk_policy="read_preview_confirmed_backfill",
         summary_zh="QE archive warehouse, ingestion, outbox, backfill and analytics views",
@@ -119,7 +119,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_LIBRARY: DomainSpec(
         domain=McpDomain.FACTOR_LIBRARY,
         intent_value="factor_library_request",
-        server_key="aistock-factor-library",
+        server_key="aistock-factor",
         default_tool="factor_library_list",
         risk_policy="summary_list_detail_on_demand_confirmed_registration",
         summary_zh="Factor catalog, metadata, coverage, quality labels and usage summaries",
@@ -132,7 +132,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_METRICS: DomainSpec(
         domain=McpDomain.FACTOR_METRICS,
         intent_value="factor_metrics_request",
-        server_key="aistock-factor-metrics",
+        server_key="aistock-factor",
         default_tool="factor_metrics_plan",
         risk_policy="async_job_preflight_confirmed_submit",
         summary_zh="Independent factor metric calculation, IC, RankIC, group return and stability jobs",
@@ -145,7 +145,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_CORRELATION: DomainSpec(
         domain=McpDomain.FACTOR_CORRELATION,
         intent_value="factor_correlation_request",
-        server_key="aistock-factor-correlation",
+        server_key="aistock-factor",
         default_tool="factor_corr_plan",
         risk_policy="async_matrix_job_artifact_ref_only",
         summary_zh="Factor correlation, redundant pairs, clusters, replacement suggestions and matrix refs",
@@ -158,7 +158,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.MODEL_REGISTRY: DomainSpec(
         domain=McpDomain.MODEL_REGISTRY,
         intent_value="model_registry_request",
-        server_key="aistock-model-registry",
+        server_key="aistock-qe",
         default_tool="model_registry_list",
         risk_policy="summary_detail_artifact_refs_confirmed_lifecycle",
         summary_zh="Model registry, model trials, seed stability, hyperparameter history and artifact refs",
@@ -171,7 +171,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.STRATEGY_GOVERNANCE: DomainSpec(
         domain=McpDomain.STRATEGY_GOVERNANCE,
         intent_value="strategy_governance_request",
-        server_key="aistock-strategy-governance",
+        server_key="aistock-trading-ops",
         default_tool="strategy_governance_list_packages",
         risk_policy="readiness_plan_confirmed_promotion_retirement",
         summary_zh="StrategyPackage governance, health, Selection/Paper readiness, promotion and retirement",
@@ -184,7 +184,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.EXECUTION_POLICY: DomainSpec(
         domain=McpDomain.EXECUTION_POLICY,
         intent_value="execution_policy_request",
-        server_key="aistock-execution-policy",
+        server_key="aistock-trading-ops",
         default_tool="execution_policy_list_algos",
         risk_policy="read_validate_plan_confirmed_binding_no_real_trade",
         summary_zh="Execution policy library, minute algos, market-state constraints and strategy binding validation",

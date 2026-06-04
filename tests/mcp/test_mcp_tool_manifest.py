@@ -55,12 +55,12 @@ def test_high_risk_tools_have_preflight_metadata() -> None:
 
 
 def test_manifest_risk_no_write_as_readonly() -> None:
-    plan_only_exemptions = {
+    read_only_exemptions = {
         name
         for name, override in TOOL_METADATA_OVERRIDES.items()
         if override.risk_level == "read_only"
         and override.assistant_usable == "direct_or_catalog"
-        and "plan-only preview" in override.reason
+        and ("plan-only preview" in override.reason or "read-only" in override.reason.lower() or "GET " in override.reason)
     }
     assert {
         "factor_library_plan_register",
@@ -73,16 +73,48 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "execution_policy_plan_binding",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
-    } <= plan_only_exemptions
+        "local_data_list_sync_targets",
+        "local_data_get_sync_target",
+        "local_data_list_sync_attempts",
+        "local_data_list_schedules",
+        "local_data_get_schedule_defaults",
+        "local_data_list_source_test_runs",
+        "local_data_list_source_test_schedules",
+        "local_data_get_repair_status",
+        "qe_archive_list_runs",
+        "qe_archive_get_run_quality",
+        "qe_archive_list_backfill_runs",
+        "qe_archive_get_backfill_run",
+        "qe_archive_query_run_leaderboard",
+        "list_validation_runs",
+        "get_validation_run",
+    } <= read_only_exemptions
     for entry in TOOL_MANIFEST:
         if any(token in entry.tool_name for token in SIDE_EFFECT_NAME_TOKENS):
-            if entry.tool_name in plan_only_exemptions:
+            if entry.tool_name in read_only_exemptions:
                 assert entry.risk_level == "read_only"
                 assert entry.assistant_usable == "direct_or_catalog"
                 assert TOOL_METADATA_OVERRIDES[entry.tool_name].reason
                 continue
             assert entry.risk_level in NON_DIRECT_RISK_LEVELS
             assert entry.assistant_usable == "preflight_required"
+
+
+def test_external_research_l25_read_only_retrieval_stays_direct() -> None:
+    for name in [
+        "external_research_search_web",
+        "external_research_search_papers",
+        "external_research_fetch_extract",
+    ]:
+        entry = TOOL_MANIFEST_BY_NAME[name]
+        assert entry.risk_level == "read_only"
+        assert entry.assistant_usable == "direct_or_catalog"
+        assert entry.requires_confirmation is False
+        assert "L2.5 evidence-first read-only retrieval" in TOOL_METADATA_OVERRIDES[name].reason
+
+    save_evidence = TOOL_MANIFEST_BY_NAME["external_research_save_evidence"]
+    assert save_evidence.risk_level in NON_DIRECT_RISK_LEVELS
+    assert save_evidence.assistant_usable == "preflight_required"
 
 
 def test_manifest_metadata_override_reasons_are_required() -> None:
