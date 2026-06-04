@@ -25,6 +25,7 @@ LEGACY_STANDALONE_SCRIPTS = {
     "scripts/aistock_qe_experiment_mcp_server.py",
     "scripts/aistock_qe_archive_mcp_server.py",
 }
+DEFAULT_GATEWAY_SERVER = "aistock-gateway-lite"
 BANNED_LLM_PATTERNS = (
     re.compile(r"subprocess\.(?:run|Popen|call|check_call|check_output)\([^\n]*(?:claude|codex|bun)", re.I),
     re.compile(r"Start-Process[^\n]*(?:claude|codex|bun)", re.I),
@@ -51,8 +52,8 @@ def _check_project_mcp() -> tuple[list[dict[str, Any]], list[str], list[str]]:
     details: list[dict[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
-    if "aistock-gateway-lite" not in servers:
-        errors.append(".mcp.json must register aistock-gateway-lite")
+    if DEFAULT_GATEWAY_SERVER not in servers:
+        errors.append(f".mcp.json must register {DEFAULT_GATEWAY_SERVER}")
     for name, spec in sorted(servers.items()):
         args = [_normalize_arg_path(str(arg)) for arg in spec.get("args") or []]
         env = spec.get("env") or {}
@@ -74,7 +75,36 @@ def _check_project_mcp() -> tuple[list[dict[str, Any]], list[str], list[str]]:
     return details, errors, warnings
 
 
-def _check_static_no_llm() -> tuple[list[dict[str, str]], list[str]]:
+def _project_mcp_guardrail(details: list[dict[str, Any]]) -> dict[str, Any]:
+    legacy_servers = [
+        item["server"]
+        for item in details
+        if any(arg in LEGACY_STANDALONE_SCRIPTS for arg in item.get("args") or [])
+    ]
+    full_profile_servers = [item["server"] for item in details if item.get("profile") == "full"]
+    gateway_servers = [
+        item["server"]
+        for item in details
+        if any(str(arg).endswith("scripts/aistock_mcp_gateway.py") for arg in item.get("args") or [])
+    ]
+    default_detail = next((item for item in details if item["server"] == DEFAULT_GATEWAY_SERVER), {})
+    default_profile = default_detail.get("profile")
+    return {
+        "status": "pass" if default_profile == "lite" and not legacy_servers and not full_profile_servers else "fail",
+        "default_server": DEFAULT_GATEWAY_SERVER,
+        "default_profile": default_profile,
+        "registered_server_count": len(details),
+        "gateway_server_count": len(gateway_servers),
+        "task_profile_servers": [item["server"] for item in details if item["server"] != DEFAULT_GATEWAY_SERVER],
+        "legacy_standalone_servers": legacy_servers,
+        "legacy_standalone_scripts": sorted(LEGACY_STANDALONE_SCRIPTS),
+        "full_profile_servers": full_profile_servers,
+        "new_client_session_required_for_tool_injection": True,
+        "evidence_ref": ".mcp.json",
+    }
+
+
+def _check_static_no_llm() -> tuple[list[dict[str, str]], list[str], dict[str, Any]]:
     scanned_roots = [REPO_ROOT / "backend" / "mcp", REPO_ROOT / "scripts" / "aistock_mcp_gateway.py"]
     findings: list[dict[str, str]] = []
     errors: list[str] = []
@@ -93,7 +123,15 @@ def _check_static_no_llm() -> tuple[list[dict[str, str]], list[str]]:
                 finding = {"path": rel, "pattern": pattern.pattern, "match": match.group(0)[:160]}
                 findings.append(finding)
                 errors.append(f"banned LLM/daemon launch pattern in {rel}: {pattern.pattern}")
-    return findings, errors
+    evidence = {
+        "status": "pass" if not findings else "fail",
+        "scanned_roots": [root.relative_to(REPO_ROOT).as_posix() if root.is_relative_to(REPO_ROOT) else str(root) for root in scanned_roots],
+        "scanned_file_count": len(files),
+        "banned_pattern_count": len(BANNED_LLM_PATTERNS),
+        "finding_count": len(findings),
+        "forbidden_process_families": ["claude", "codex", "bun", "stream-json", "worker-service.cjs"],
+    }
+    return findings, errors, evidence
 
 
 def run_doctor(*, check_backend: bool = False) -> dict[str, Any]:
@@ -110,9 +148,10 @@ def run_doctor(*, check_backend: bool = False) -> dict[str, Any]:
         errors.append(f"git metadata unavailable: {exc}")
 
     project_servers, project_errors, project_warnings = _check_project_mcp()
-    static_findings, static_errors = _check_static_no_llm()
+    static_findings, static_errors, static_guardrail = _check_static_no_llm()
     gateway = self_check_payload(profile="lite", check_backend=check_backend)
     profiles = list_profiles_payload()
+    project_guardrail = _project_mcp_guardrail(project_servers)
 
     errors.extend(project_errors)
     errors.extend(static_errors)
@@ -129,7 +168,11 @@ def run_doctor(*, check_backend: bool = False) -> dict[str, Any]:
         "project_mcp": {"path": PROJECT_MCP.relative_to(REPO_ROOT).as_posix(), "servers": project_servers},
         "gateway_lite": gateway,
         "profiles": profiles,
-        "static_no_llm": {"findings": static_findings},
+        "static_no_llm": {"findings": static_findings, **static_guardrail},
+        "guardrails": {
+            "standalone_default_retirement": project_guardrail,
+            "no_background_llm_daemon": static_guardrail,
+        },
         "errors": errors,
         "warnings": warnings,
     }

@@ -360,8 +360,8 @@ FastAPI backend 127.0.0.1:8001 /api/v1
 | 高风险工具 preflight/approval | `backend/mcp/tool_manifest.py`、`backend/services/research_assistant/mcp_catalog_sync.py`、`backend/services/research_assistant/service.py` | `test_manifest_risk_no_write_as_readonly`；RA preflight 保留 high/write/confirmed approval gate，并返回 manifest_risk_level、assistant_usable、recommended_profile_tags | PASS_R2 | RA side-effect/risk 用 manifest 派生，少量 RA 语义 override 有测试覆盖 |
 | migration_state 诚实推导 | `backend/mcp/tool_manifest.py` | `_migration_state_for` 从 `GATEWAY_MODULES` / `SCRIPT_BACKED_SERVERS` 推导；wrapper/deprecated override 测试 PASS | PASS_R1 (`85ca5104`) | 当前 209 工具均为 gateway；保留 wrapper/deprecated 表达能力 |
 | manifest quality runner 接入 | `tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py`、`backend/services/validation/plan_catalog.py` | Validation Center job `valjob_20260604_064748_c3861e05` return_code=0；run_id `platform-mcp-gateway_20260604_064759_l2_mcp-gateway-manifest-quality_c3861e05_runner-validation__1ab0750fee` | PASS_R1 (`85ca5104`) | no backend/frontend/db writes；仅 8011 临时验证 |
-| 禁止后台 LLM/daemon | static grep gate | grep gate PASS | pending | 无 |
-| standalone 默认退役 | `.mcp.json` | 新会话进程和 tool list evidence | pending | 等用户确认退役窗口 |
+| no background LLM/daemon | `scripts/aistock_mcp_gateway_doctor.py`, `tests/mcp/test_mcp_gateway_cli.py` | doctor reports `guardrails.no_background_llm_daemon.status=pass`, `finding_count=0`; covered by `python -m pytest tests/mcp/test_mcp_gateway_cli.py -q -p no:cacheprovider` | PASS_R3 | Scan scope is `backend/mcp` plus gateway entry script; gateway does not launch Claude/Codex/LLM CLI |
+| standalone default retirement | `.mcp.json`, `scripts/aistock_mcp_gateway_doctor.py`, `tests/mcp/test_mcp_gateway_cli.py` | doctor reports `standalone_default_retirement.status=pass`, `default_profile=lite`, `legacy_standalone_servers=[]`, `full_profile_servers=[]` | PASS_R3 | New Codex/Claude sessions still need client restart or MCP tool reinjection |
 
 ## 11. 合入与实施边界
 
