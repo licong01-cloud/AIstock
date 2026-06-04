@@ -31,8 +31,8 @@
   "expected": "自选股票池列表和相关统计中的加入以来涨幅使用本地数据库 market.adj_factor / 日线原始行情计算前复权加入价和当前前复权价；发生送转分红后涨幅仍准确，并在缺少复权因子时返回明确的可诊断状态而不是静默错误。",
   "first_seen_at": "2026-06-04T14:14:44.785083Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ba714d155a372af7f51e1a7509206924c65f35e2",
+  "fixed_at": "2026-06-04T15:22:59.830159Z",
   "github_issue_number": 754,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/754",
   "last_seen_at": "2026-06-04T14:14:44.785083Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/757",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "watchlist"
   ],
@@ -90,6 +91,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "ruff check backend/services/watchlist_service.py backend/tests/watchlist/test_realtime_amount_units.py -> passed",
+    "python -m pytest backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> passed (6 passed)",
+    "python -m nox -s l0 -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "npx playwright test tests/watchlist/watchlist-return-height.spec.ts -> passed (1 passed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
