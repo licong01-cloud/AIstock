@@ -30,8 +30,8 @@
   "expected": "A workflow command can safely dry-run and apply closure for open auto-filed CI issues classified as superseded_by_later_main_success, leaving real regressions and module-specific issues open.",
   "first_seen_at": "2026-06-04T00:49:46.506907Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c1f7350c8e46d8701d3a557209e47617d14f6a05",
+  "fixed_at": "2026-06-04T02:18:17.116817Z",
   "github_issue_number": 685,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/685",
   "last_seen_at": "2026-06-04T00:49:46.506907Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/687",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,5 +61,8 @@
     "fingerprint": "22563f7a70a2e11c968ffefa",
     "source_event_id": "FE-20260604-22563f7a70a2"
   },
+  "validation_evidence": [
+    "pytest targeted ci_issue_janitor/triage_ci_issue -> passed; ruff changed files -> passed; workflow-smoke validation -> passed; nox l0 guardrail_changed_files validation_center_backend validation_module_registry_l0 -> passed; nox validation_catalog_integrity -> passed; PR #687 GitHub checks -> passed"
+  ],
   "verification_run_id": null
 }
