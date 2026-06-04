@@ -1030,9 +1030,9 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
     fallback_reason = fallback.get("reason") or code_intel.get("fallback_reason")
     if not fallback_reason and fallback_used:
         fallback_reason = "codegraph_" + codegraph_status
-    next_command = codegraph.get("bootstrap_command") or bootstrap.get("codegraph")
-    if not next_command and fallback_used:
-        next_command = "codegraph init -i"
+    next_command = None
+    if fallback_used:
+        next_command = codegraph.get("bootstrap_command") or bootstrap.get("codegraph") or "codegraph init -i"
     return {
         "schema_version": "aistock_issue_workflow_h7_code_intelligence_readiness_v1",
         "workflow_gate": "warning" if fallback_used else "ready",
