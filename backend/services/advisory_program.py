@@ -220,7 +220,8 @@ class AdvisoryProgramRepository(Protocol):
     def all_latest_episodes(self, program_id: str) -> list[AdvisoryEpisode]: ...
     def insert_episode_snapshot(self, episode: AdvisoryEpisode) -> AdvisoryEpisode: ...
     def insert_review_decision_once(self, decision: AdvisoryReviewDecision) -> AdvisoryReviewDecision: ...
-    def list_review_decisions(self, program_id: str, *, limit: int = 100) -> list[AdvisoryReviewDecision]: ...
+    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]: ...
+    def count_review_decisions(self, program_id: str) -> int: ...
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]: ...
     def latest_metric_snapshot(self, program_id: str) -> dict[str, Any] | None: ...
     def create_replay_run(self, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -287,9 +288,12 @@ class InMemoryAdvisoryProgramRepository:
         self.review_decisions[key] = decision
         return decision
 
-    def list_review_decisions(self, program_id: str, *, limit: int = 100) -> list[AdvisoryReviewDecision]:
+    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]:
         rows = [row for row in self.review_decisions.values() if row.program_id == program_id]
-        return sorted(rows, key=lambda row: (row.trade_date, row.symbol), reverse=True)[:limit]
+        return sorted(rows, key=lambda row: (row.trade_date, row.symbol), reverse=True)[offset:offset + limit]
+
+    def count_review_decisions(self, program_id: str) -> int:
+        return sum(1 for row in self.review_decisions.values() if row.program_id == program_id)
 
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]:
         snapshot = {"program_id": program_id, "snapshot_id": f"advm_{uuid4().hex}", "created_at": _utcnow(), **deepcopy(metrics)}
@@ -474,7 +478,7 @@ class AdvisoryProgramPGRepository:
                 )
         return decision
 
-    def list_review_decisions(self, program_id: str, *, limit: int = 100) -> list[AdvisoryReviewDecision]:
+    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -484,11 +488,22 @@ class AdvisoryProgramPGRepository:
                     WHERE program_id = %s
                     ORDER BY trade_date DESC, code ASC
                     LIMIT %s
+                    OFFSET %s
                     """,
-                    (program_id, limit),
+                    (program_id, limit, offset),
                 )
                 rows = cur.fetchall()
         return [_decision_from_row(row) for row in rows]
+
+    def count_review_decisions(self, program_id: str) -> int:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM app.advisory_daily_review WHERE program_id = %s",
+                    (program_id,),
+                )
+                row = cur.fetchone()
+        return int(row[0]) if row else 0
 
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]:
         payload = deepcopy(metrics)
@@ -719,9 +734,19 @@ class AdvisoryProgramService:
         self.repository.get_program(program_id)
         return [episode_to_dict(row) for row in self.repository.active_episodes(program_id)]
 
-    def review_history(self, program_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    def review_history(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return [decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit)]
+        return [decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)]
+
+    def review_history_page(self, program_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        self.repository.get_program(program_id)
+        reviews = [decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)]
+        return {
+            "reviews": reviews,
+            "total_count": self.repository.count_review_decisions(program_id),
+            "limit": limit,
+            "offset": offset,
+        }
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)

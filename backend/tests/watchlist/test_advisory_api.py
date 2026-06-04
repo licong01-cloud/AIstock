@@ -58,6 +58,35 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     assert payload["review_status"] == "SUCCEEDED"
     assert payload["active_pool"][0]["symbol"] == "000001.SZ"
 
+    second_review = client.post(
+        f"/api/v1/advisory/programs/{program['program_id']}/reviews/run",
+        json={
+            "trade_date": "2026-06-02",
+            "candidates": [
+                {
+                    "symbol": "000001.SZ",
+                    "rank": 1,
+                    "score": 0.8,
+                    "next_open_executable": 11,
+                    "component_scores": {
+                        "fusion_method": "weighted_rank_fusion",
+                        "package_ranks": {"pkg_a": 1, "pkg_b": 2},
+                    },
+                }
+            ],
+            "market_by_symbol": {"000001.SZ": {"next_open_executable": 11, "mark_price": 11}},
+        },
+    )
+    assert second_review.status_code == 200
+
+    review_page = client.get(f"/api/v1/advisory/programs/{program['program_id']}/reviews?limit=1&offset=1")
+    assert review_page.status_code == 200
+    review_page_payload = review_page.json()
+    assert review_page_payload["total_count"] == 2
+    assert review_page_payload["limit"] == 1
+    assert review_page_payload["offset"] == 1
+    assert [row["trade_date"] for row in review_page_payload["reviews"]] == ["2026-06-01"]
+
     board = client.get("/api/v1/advisory/leaderboard")
     assert board.status_code == 200
     row = board.json()["leaderboard"][0]

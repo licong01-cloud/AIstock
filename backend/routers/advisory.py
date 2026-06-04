@@ -212,10 +212,11 @@ def active_pool(program_id: str, service: AdvisoryProgramService = Depends(get_a
 def reviews(
     program_id: str,
     limit: int = Query(default=100, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "reviews": service.review_history(program_id, limit=limit)}
+        return {"ok": True, **service.review_history_page(program_id, limit=limit, offset=offset)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
