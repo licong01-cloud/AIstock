@@ -1,71 +1,79 @@
-﻿{
-    "actual":  "Enable action runs directly from the row action; review records render a fixed list without paging; active recommendation table lacks all-column sortable headers; advanced candidate JSON and advanced market JSON textareas are visible to users.",
-    "allowed_write_scope":  [
-                                "frontend/src/lib/api/advisory.ts",
-                                "tests/aistock_validation/bugs/20260604_BUG-254-advisory-ui-requires-enable-confirmation-pagination-sorting-and-no-json.json",
-                                "tests/aistock_validation/bugs/.bug_id_allocator.json",
-                                "frontend/src/app/paper-v2/advisory/page.tsx",
-                                "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
-                                "backend/routers/advisory.py",
-                                "backend/services/advisory_program.py",
-                                "backend/tests/watchlist/test_advisory_api.py",
-                                "backend/tests/watchlist/test_advisory_program.py"
-                            ],
-    "assigned_agent":  null,
-    "bug_id":  "BUG-254",
-    "closed_at":  null,
-    "closure_requirements":  [
-                                 "Fix the observed behavior.",
-                                 "Run required verification plans.",
-                                 "Keep BUG JSON and GitHub Issue synchronized."
-                             ],
-    "created_at":  "2026-06-04T05:17:35.643909Z",
-    "description":  "Enable action runs directly from the row action; review records render a fixed list without paging; active recommendation table lacks all-column sortable headers; advanced candidate JSON and advanced market JSON textareas are visible to users.",
-    "events":  [
-                   {
-                       "action":  "promote_candidate_to_bug",
-                       "actor":  "issue_flow",
-                       "note":  "Promoted from IC-20260604-261f75b78ce0",
-                       "timestamp":  "2026-06-04T05:17:35.643905Z"
-                   }
-               ],
-    "evidence_uris":  [
-
-                      ],
-    "expected":  "Enable action must show a confirmation dialog before changing status; review records default to 20 rows and support 20/50/100 page sizes with pagination; active recommendation table supports click-to-sort all displayed fields cycling asc/desc/none; Advisory UI has no raw JSON display or JSON input controls, replacing them with structured controls or removing unsupported advanced manual payload entry.",
-    "first_seen_at":  "2026-06-04T05:17:35.643909Z",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "fixed_at":  null,
-    "github_issue_number":  714,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/714",
-    "last_seen_at":  "2026-06-04T05:17:35.643909Z",
-    "module":  "advisory",
-    "non_goals":  [
-                      "Do not restart production runtime services without explicit approval."
-                  ],
-    "production_backend_dependency_gate":  "noop",
-    "production_ddl_gate":  "noop",
-    "production_frontend_dependency_gate":  "noop",
-    "reproduce_command":  "n/a",
-    "required_verification":  [
-                                  "l0",
-                                  "validation_center_backend",
-                                  "validation_module_registry_l0",
-                                  "validation_center_ui",
-                                  "paper_v2_ui"
-                              ],
-    "risk_area":  "bug",
-    "schema_version":  "aistock_validation_bug_v1",
-    "severity":  "P1",
-    "status":  "open",
-    "suspected_modules":  [
-                              "advisory"
-                          ],
-    "title":  "Advisory UI requires enable confirmation pagination sorting and no JSON editors",
-    "trigger_condition":  {
-                              "fingerprint":  "261f75b78ce0744f0590c9c5",
-                              "source_event_id":  "FE-20260604-261f75b78ce0"
-                          },
-    "verification_run_id":  null
+{
+  "actual": "Enable action runs directly from the row action; review records render a fixed list without paging; active recommendation table lacks all-column sortable headers; advanced candidate JSON and advanced market JSON textareas are visible to users.",
+  "allowed_write_scope": [
+    "frontend/src/lib/api/advisory.ts",
+    "tests/aistock_validation/bugs/20260604_BUG-254-advisory-ui-requires-enable-confirmation-pagination-sorting-and-no-json.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "backend/routers/advisory.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-254",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T05:17:35.643909Z",
+  "description": "Enable action runs directly from the row action; review records render a fixed list without paging; active recommendation table lacks all-column sortable headers; advanced candidate JSON and advanced market JSON textareas are visible to users.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-261f75b78ce0",
+      "timestamp": "2026-06-04T05:17:35.643905Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Enable action must show a confirmation dialog before changing status; review records default to 20 rows and support 20/50/100 page sizes with pagination; active recommendation table supports click-to-sort all displayed fields cycling asc/desc/none; Advisory UI has no raw JSON display or JSON input controls, replacing them with structured controls or removing unsupported advanced manual payload entry.",
+  "first_seen_at": "2026-06-04T05:17:35.643909Z",
+  "fix_branch": null,
+  "fix_commit": "4fc19987352e8e23b061bce84d202f381865d71f",
+  "fixed_at": "2026-06-04T07:57:37.689712Z",
+  "github_issue_number": 714,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/714",
+  "last_seen_at": "2026-06-04T05:17:35.643909Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/730",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0",
+    "validation_center_ui",
+    "paper_v2_ui"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "Advisory UI requires enable confirmation pagination sorting and no JSON editors",
+  "trigger_condition": {
+    "fingerprint": "261f75b78ce0744f0590c9c5",
+    "source_event_id": "FE-20260604-261f75b78ce0"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_advisory_api.py backend/tests/watchlist/test_advisory_program.py -q -p no:cacheprovider -> passed (13 passed)",
+    "python -m nox -s l0 -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership scan mapped=12)",
+    "python -m nox -s validation_center_backend -> passed (362 passed; coverage line=80.07 branch=62.3)",
+    "python -m nox -s paper_v2_backend -> passed (602 passed, 1 skipped, 2 xfailed)",
+    "cd frontend && npm exec tsc -- --noEmit --incremental false -> passed",
+    "cd frontend && npm run test:e2e -- tests/paper-v2/paper-v2-advisory-ui.spec.ts -> passed (1 passed)"
+  ],
+  "verification_run_id": null
 }
