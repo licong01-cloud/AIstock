@@ -345,24 +345,24 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor]
   - plan_key: mcp_gateway_phase5_assistant
-    title: MCP Gateway Phase 5a Research Assistant manifest catalog backend slice
+    title: MCP Gateway Phase 5 Research Assistant manifest catalog UI and audit gate
     module: research_assistant
     level: L4
     command_key: nox_mcp_gateway_phase5_assistant
     nox_session: mcp_gateway_phase5_assistant
     enabled: true
     requires_backend: false
-    requires_frontend: false
-    allowed_backend_ports: []
-    allowed_frontend_ports: []
+    requires_frontend: true
+    allowed_backend_ports: [8011, 8012]
+    allowed_frontend_ports: [3011, 3012]
     forbidden_ports: [8001, 3000, 19080]
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
     runner_enabled: true
     runner_enabled_l3_exception: workspace_scoped_design_gate
-    max_duration_seconds: 1500
-    evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor, catalog_integrity, ownership]
+    max_duration_seconds: 2400
+    evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor, playwright, frontend_lint, frontend_build, catalog_integrity, ownership]
     manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate, live_smoke_boundary]
     runtime_policy:
       default_trigger: manual
@@ -370,10 +370,10 @@ plans:
       allow_github_actions: false
       allow_local_manual: true
       allow_parallel: false
-      timeout_seconds: 1500
+      timeout_seconds: 2400
     evidence_policy:
-      required_files: [tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_5a_completion_report.md]
-      required_fields: [run_id, g1, g2_design_compliance, g3_gateway_doc, production_gates]
+      required_files: [tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_completion_report.md]
+      required_fields: [run_id, g1, g2_design_compliance, g3_gateway_doc, production_gates, playwright_b08]
       artifact_retention_days: 180
       max_log_excerpt_chars: 8000
     resource_policy:

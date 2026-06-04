@@ -4440,6 +4440,34 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "migration_state": gateway_manifest.get("migration_state"),
                 }
             )
+        audit_payload = {
+            "catalog_source": result["catalog_source"],
+            "profile": result.get("profile"),
+            "module": result.get("module"),
+            "server_key": canonical_server_key,
+            "tool_name": data.tool_name,
+            "preflight": {
+                "passed": passed,
+                "status": status,
+                "checks": result.get("preflight_checks", []),
+                "failed_checks": failures,
+            },
+            "approval": {
+                "required": requires_approval,
+                "missing_confirmations": missing_confirmations,
+            },
+            "evidence_refs": result["evidence_refs"],
+        }
+        result["audit"] = audit_payload
+        result_card = {
+            "title": f"MCP preflight: {canonical_server_key}/{data.tool_name}",
+            "summary": "Approval pending; execution was not called." if requires_approval else "Read-only tool passed preflight.",
+            "status": status,
+            "profile": result.get("profile"),
+            "approval_required": requires_approval,
+            "evidence_refs": result["evidence_refs"],
+            "next_step": "Collect confirmations and approval before execution." if requires_approval else "Eligible for read-only automatic execution.",
+        }
         event = self.repository.create_record(
             "mcp_tool_events",
             {
@@ -4452,6 +4480,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "idempotency_key": data.idempotency_key,
                 "request_json": data.payload_json,
                 "response_json": result,
+                "result_card_json": result_card,
+                "artifact_refs": result["evidence_refs"],
             },
         )
         result["tool_event_id"] = event["tool_event_id"]
@@ -4463,7 +4493,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     event_type=event_type,
                     severity="error" if failures else "warning" if requires_approval else "info",
                     message=f"MCP preflight {status}: {canonical_server_key}/{data.tool_name}",
-                    payload_json=result,
+                    payload_json={"mcp_preflight_audit": audit_payload, "preflight": result},
                 ),
             )
         return result
