@@ -47,6 +47,12 @@
       "actor": "codex",
       "action": "validation_refreshed_pending_live_sim",
       "note": "Refreshed targeted frontend tsc, paper-v2 mock UI, simulation_runtime pytest, and qe_archive_l3 read-only gates; BUG remains open pending 2026-06-05 live simulation confirmation."
+    },
+    {
+      "timestamp": "2026-06-04T15:30:24.771655Z",
+      "actor": "codex",
+      "action": "fix_commit_recorded_pending_live_sim",
+      "note": "Recorded code fix commit 4620510098edd9f12f36d63717636d38f15299d6; BUG remains open until 2026-06-05 live simulation validation."
     }
   ],
   "evidence_uris": [
@@ -57,11 +63,11 @@
   "expected": "MiniQMT SIM single and multi strategy bindings persist account_group_id and strategy_slot_id, daily runs carry the same attribution, simulation-runtime and Paper v2 status/bootstrap APIs expose account-group/slot/unified status, and tests/validation prove no silent fallback or duplicate-submit risk.",
   "first_seen_at": "2026-06-04T14:51:10.640527Z",
   "fix_branch": "bug/BUG-262-paper-v2-miniqmt-unified-account-group-strategy-20260604",
-  "fix_commit": null,
+  "fix_commit": "4620510098edd9f12f36d63717636d38f15299d6",
   "fixed_at": null,
   "github_issue_number": 756,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/756",
-  "last_seen_at": "2026-06-04T15:28:14.299599Z",
+  "last_seen_at": "2026-06-04T15:30:24.771655Z",
   "module": "paper_v2",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
