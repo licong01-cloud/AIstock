@@ -303,6 +303,19 @@ class _NoopConnection:
         return _NoopCursor()
 
 
+class _ExistingCashCursor:
+    def __init__(self) -> None:
+        self.executed_sql: list[str] = []
+
+    def execute(self, sql: str, params: object = ()) -> None:
+        self.executed_sql.append(sql)
+        if "INSERT INTO qmt_strategy.cash_ledger" in sql:
+            raise AssertionError("duplicate cash_id path must not reach INSERT")
+
+    def fetchone(self) -> object:
+        return {"exists": 1}
+
+
 def test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = QmtStrategyLedgerRepository(conn_factory=lambda: _NoopConnection())
     entry = CashLedgerEntry(
@@ -325,6 +338,26 @@ def test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exi
     assert returned == entry
     assert inserted is False
     assert updates == []
+
+
+def test_postgres_cash_entry_insert_once_short_circuits_existing_cash_id() -> None:
+    repo = QmtStrategyLedgerRepository(conn_factory=lambda: _NoopConnection())
+    cursor = _ExistingCashCursor()
+    entry = CashLedgerEntry(
+        cash_id="cash_existing",
+        strategy_id="strat_a",
+        entry_type=CashEntryType.BUY_FILL,
+        cash_delta=Decimal("-60480"),
+        cash_after=Decimal("-45841"),
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+    )
+
+    inserted = repo._insert_cash_entry_with_cursor(cursor, entry, ignore_conflict=True)
+
+    assert inserted is False
+    assert len(cursor.executed_sql) == 1
+    assert "SELECT 1 FROM qmt_strategy.cash_ledger" in cursor.executed_sql[0]
 
 
 def test_in_memory_repository_lists_open_sell_intents_by_strategy_symbol_and_date() -> None:

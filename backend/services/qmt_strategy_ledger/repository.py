@@ -931,6 +931,10 @@ class QmtStrategyLedgerRepository:
                 return self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=ignore_conflict)
 
     def _insert_cash_entry_with_cursor(self, cur: Any, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
+        if ignore_conflict:
+            cur.execute("SELECT 1 FROM qmt_strategy.cash_ledger WHERE cash_id = %s", (entry.cash_id,))
+            if cur.fetchone() is not None:
+                return False
         conflict_clause = "ON CONFLICT (cash_id) DO NOTHING RETURNING cash_id" if ignore_conflict else "RETURNING cash_id"
         cur.execute(
             f"""
