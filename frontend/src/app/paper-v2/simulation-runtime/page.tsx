@@ -188,6 +188,7 @@ export default function SimulationRuntimeOpsPage() {
             { key: "strategy", header: "策略实例", render: (row) => <span className="pv2-mono">{row.strategy_id}</span> },
             { key: "release", header: "运行版本", render: (row) => <span title={`${row.release_id} / ${row.release_hash}`}>{hashLabel(row.release_id)} / {hashLabel(row.release_hash)}</span> },
             { key: "binding", header: "绑定版本", render: (row) => <span title={`${row.binding_id} / ${row.binding_hash}`}>{hashLabel(row.binding_id)} / {hashLabel(row.binding_hash)}</span> },
+            { key: "slot", header: "Account Slot", render: (row) => <span className="pv2-mono" data-testid={`sim-runtime-slot-${row.run_id}`}>{textValue(row.account_group_id)} / {textValue(row.strategy_slot_id)}</span> },
             { key: "signal", header: "选股证据", render: (row) => <span title={textValue(row.selection_artifact_hash)}>{hashLabel(row.selection_evidence_id)} / {hashLabel(row.selection_artifact_hash)}</span> },
             { key: "plan", header: "执行计划", render: (row) => <span title={textValue(row.execution_plan_hash)}>{hashLabel(row.execution_plan_id)} / {hashLabel(row.execution_plan_hash)}</span> },
             { key: "counts", header: "阶段计数", render: (row) => stageSummary(row) },
@@ -248,6 +249,7 @@ export default function SimulationRuntimeOpsPage() {
                   <div className="pv2-readable-row"><div className="pv2-readable-key">backend</div><div className="pv2-readable-value">{selectedRun.run.broker_backend === "minqmt_sim" ? "MiniQMT SIM" : "LocalSim"}</div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">status</div><div className="pv2-readable-value"><StatusBadge status={selectedRun.run.status} /></div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">last stage</div><div className="pv2-readable-value">{selectedRun.run.last_stage || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">account group / slot</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-account-slot">{textValue(selectedRun.run.account_group_id)} / {textValue(selectedRun.run.strategy_slot_id)}</div></div>
                 </div>
               </div>
             </div>

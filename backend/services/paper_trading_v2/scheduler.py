@@ -15,7 +15,7 @@ from typing import Any
 
 from backend.services.trading_core.errors import TradingCoreError
 
-from .auto_run import AutoRunCoordinator
+from .auto_run import AutoRunCoordinator, MINIQMT_ACCOUNT_GROUP_BINDING_MODE, MINIQMT_LEGACY_BINDING_MODES
 from .models import PaperSessionStatus, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .session import TICKABLE_SESSION_STATUSES, PaperTradingSessionRunner
@@ -98,6 +98,13 @@ class PaperTradingV2SessionScheduler:
             "scheduler_env_raw": env_scheduler or None,
             "scheduler": self.status(),
             "auto_run": self.auto_run_coordinator.status(),
+            "miniqmt_account_group_slots": {
+                "enabled": True,
+                "account_binding_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+                "legacy_modes_normalized": sorted(MINIQMT_LEGACY_BINDING_MODES),
+                "status_api_exposes_slots": True,
+                "unified_path_active": True,
+            },
             "production_note": "backend process restart only auto-runs when ENABLE_PAPER_TRADING_V2_SCHEDULER is true-like",
         }
 
