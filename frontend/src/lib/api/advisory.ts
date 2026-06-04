@@ -43,14 +43,21 @@ export type AdvisoryEpisode = {
   entry_price: number;
   entry_price_basis: string;
   entry_rank: number;
+  entry_score?: number | null;
   current_rank?: number | null;
+  current_score?: number | null;
   exit_signal_date?: string | null;
+  effective_exit_date?: string | null;
   exit_price?: number | null;
+  exit_price_basis?: string | null;
   exit_reason?: string | null;
+  holding_trading_days?: number | null;
   return_bps?: number | null;
   is_win?: boolean | null;
   max_drawdown_bps?: number | null;
   max_runup_bps?: number | null;
+  still_active_mark_price?: number | null;
+  price_quality_status?: string | null;
 };
 
 export type AdvisoryReviewDecision = {
@@ -152,9 +159,17 @@ export const advisoryApi = {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);
     return data.active_pool || [];
   },
-  async reviews(programId: string): Promise<AdvisoryReviewDecision[]> {
-    const data = await apiFetch<{ reviews: AdvisoryReviewDecision[] }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews`);
-    return data.reviews || [];
+  async reviews(programId: string, limit = 20, offset = 0): Promise<{ reviews: AdvisoryReviewDecision[]; total_count: number; limit: number; offset: number }> {
+    const data = await apiFetch<{ reviews: AdvisoryReviewDecision[]; total_count?: number; limit?: number; offset?: number }>(
+      `/advisory/programs/${encodeURIComponent(programId)}/reviews?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+    );
+    const reviews = data.reviews || [];
+    return {
+      reviews,
+      total_count: data.total_count ?? reviews.length,
+      limit: data.limit ?? limit,
+      offset: data.offset ?? offset,
+    };
   },
   async returns(programId: string): Promise<{ returns: AdvisoryEpisode[]; metrics: JsonObject }> {
     return apiFetch<{ returns: AdvisoryEpisode[]; metrics: JsonObject }>(`/advisory/programs/${encodeURIComponent(programId)}/returns`);
