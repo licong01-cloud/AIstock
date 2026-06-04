@@ -1,0 +1,82 @@
+{
+  "actual": "Production MiniQMT sync-snapshot still returns HTTP 500 on repeated sync after BUG-249 because PostgreSQL evaluates qmt_strategy.cash_ledger balance CHECK constraints before ON CONFLICT DO NOTHING. A previously settled buy fill can be replayed with a now-invalid hypothetical cash_after/frozen_after payload, so the duplicate cash_id path raises CheckViolation instead of returning inserted=false. Reproduce: POST /api/v1/qmt/virtual-strategies/sync-snapshot for account 62266303 trade_date 2026-06-04 after settlement; cash_id cash_62266303_2026-06-04_buy_fill_1010000032580354 already exists but insert fails ck_qmt_strategy_cash_ledger_balances.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-251-miniqmt-cash-ledger-conflict-path-hits-check-before-idempotent-skip.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/qmt_strategy_ledger/test_repository.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-251",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T03:44:52.663591Z",
+  "description": "Production MiniQMT sync-snapshot still returns HTTP 500 on repeated sync after BUG-249 because PostgreSQL evaluates qmt_strategy.cash_ledger balance CHECK constraints before ON CONFLICT DO NOTHING. A previously settled buy fill can be replayed with a now-invalid hypothetical cash_after/frozen_after payload, so the duplicate cash_id path raises CheckViolation instead of returning inserted=false. Reproduce: POST /api/v1/qmt/virtual-strategies/sync-snapshot for account 62266303 trade_date 2026-06-04 after settlement; cash_id cash_62266303_2026-06-04_buy_fill_1010000032580354 already exists but insert fails ck_qmt_strategy_cash_ledger_balances.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-38b2110ddf29",
+      "timestamp": "2026-06-04T03:44:52.663586Z"
+    },
+    {
+      "timestamp": "2026-06-04T03:46:42.148633+00:00",
+      "actor": "codex",
+      "action": "scope_expand",
+      "note": "Expanded scope to repository and qmt_strategy_ledger regression test after fast-path classified the code path."
+    },
+    {
+      "timestamp": "2026-06-04T03:49:28.508380+00:00",
+      "actor": "codex",
+      "action": "fix_validated",
+      "note": "Repository now pre-checks cash_id in ignore_conflict mode so duplicate cash entries short-circuit before PostgreSQL balance CHECK evaluation."
+    }
+  ],
+  "evidence_uris": [
+    "tmp/runtime_logs/backend_8001_stderr.log CheckViolation ck_qmt_strategy_cash_ledger_balances for duplicate cash_id cash_62266303_2026-06-04_buy_fill_1010000032580354"
+  ],
+  "expected": "Repeated MiniQMT sync-snapshot calls must be idempotent even when a previously settled cash_id would now violate balance CHECK constraints: repository conflict mode must detect existing cash_id before INSERT and return inserted=false without mutating balances.",
+  "first_seen_at": "2026-06-04T03:44:52.663591Z",
+  "fix_branch": "bug/BUG-251-miniqmt-cash-ledger-conflict-path-hits-check-bef-20260604",
+  "fix_commit": null,
+  "fixed_at": "2026-06-04T03:49:28.508380+00:00",
+  "github_issue_number": 704,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/704",
+  "last_seen_at": "2026-06-04T03:44:52.663591Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/qmt/virtual-strategies/sync-snapshot with account_id=62266303 trade_date=2026-06-04 after cash settlement; existing cash_id cash_62266303_2026-06-04_buy_fill_1010000032580354 hits ck_qmt_strategy_cash_ledger_balances before ON CONFLICT DO NOTHING.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT cash ledger conflict path hits CHECK before idempotent skip",
+  "trigger_condition": {
+    "fingerprint": "38b2110ddf297cde32ca4b51",
+    "source_event_id": "FE-20260604-38b2110ddf29"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_repository.py::test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exists backend/tests/qmt_strategy_ledger/test_repository.py::test_postgres_cash_entry_insert_once_short_circuits_existing_cash_id -q -> 2 passed",
+    "python -m ruff check backend/services/qmt_strategy_ledger/repository.py backend/tests/qmt_strategy_ledger/test_repository.py -> passed",
+    "python -m pytest backend/tests/qmt_strategy_ledger -q -> 108 passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ]
+}
