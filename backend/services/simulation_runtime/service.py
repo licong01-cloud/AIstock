@@ -38,6 +38,7 @@ class StrategyRuntimeReleaseService:
         execution_policy_sha256: str,
         tail_policy_version_id: str,
         tail_policy_sha256: str,
+        execution_policy_json: dict[str, Any] | None = None,
         base_release_id: str | None = None,
         validation_state: RuntimeReleaseValidationState = RuntimeReleaseValidationState.DRAFT,
         validation_evidence: dict[str, Any] | None = None,
@@ -93,6 +94,13 @@ class StrategyRuntimeReleaseService:
             "validation_evidence": evidence,
             "metadata": metadata,
         }
+        if execution_policy_json is not None:
+            if not isinstance(execution_policy_json, dict) or not execution_policy_json:
+                raise RuntimeConfigInvalidError(
+                    "StrategyRuntimeRelease execution_policy_json must be a non-empty object when provided",
+                    context={"package_id": package_id, "execution_policy_version_id": execution_policy_version_id},
+                )
+            release_config["execution_policy"]["policy_json"] = dict(execution_policy_json)
         assert_release_payload_boundary(release_config, context={"package_id": package_id})
         release_hash = canonical_json_sha256(release_config)
         release = StrategyRuntimeRelease(

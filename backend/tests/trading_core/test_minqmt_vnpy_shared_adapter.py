@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, timezone
 from decimal import Decimal
@@ -11,6 +11,7 @@ from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderSe
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.simulation_runtime import (
     ExecutionPlanCompiler,
+    LocalSimExecutionBridge,
     MiniQMTExecutionBridge,
     RebalanceIntentService,
     SimulationBrokerBackend,
@@ -24,8 +25,10 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
     MiniQMTOrderStatus,
     UnifiedMiniQMTVnpyExecutionAdapter,
 )
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 from backend.tests.simulation_runtime.test_target_rebalance_shared import (
+    FakeLocalSimBroker,
     _current_positions,
     _evidence,
     _release_binding_repo,
@@ -205,6 +208,113 @@ def test_miniqmt_bridge_uses_shared_vnpy_adapter_for_child_requests() -> None:
     assert requests[0].metadata["execution_policy_sha256"] == plan.execution_policy_sha256
     assert requests[0].metadata["source_attribution"]["upstream_source_file"].endswith("sniper_algo.py")
     assert requests[0].metadata["vnpy_execution_diagnostic"]["adapter"] == "UnifiedMiniQMTVnpyExecutionAdapter"
+
+
+def test_miniqmt_bridge_rejects_vnpy_id_only_plan_without_policy_snapshot() -> None:
+    release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
+    release = release.model_copy(
+        update={
+            "execution_policy_version_id": policy_id,
+            "execution_policy_sha256": "sha_vnpy_id_only",
+            "release_config_json": {
+                **release.release_config_json,
+                "execution_policy": {
+                    "policy_version_id": policy_id,
+                    "policy_sha256": "sha_vnpy_id_only",
+                },
+            },
+        }
+    )
+    evidence = _evidence(release)
+    runtime_repo.save_daily_selection_evidence(evidence)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions=_current_positions("portfolio_shared"),
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=TRADE_DATE,
+        current_positions=_current_positions("portfolio_shared"),
+        target_positions=targets,
+    )
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+    )
+    bridge = MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="full policy_json snapshot") as exc_info:
+        bridge.build_managed_order_requests(
+            plan=plan,
+            binding=binding,
+            price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
+        )
+
+    assert exc_info.value.context["payload_has_policy_json"] is False
+    assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"
+
+
+def test_localsim_bridge_rejects_vnpy_plan_before_broker_submit() -> None:
+    release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.LOCAL_SIM)
+    release = release.model_copy(
+        update={
+            "execution_policy_version_id": "vnpy_asset:SNIPER_MINIQMT",
+            "execution_policy_sha256": "sha_vnpy_local",
+            "release_config_json": {
+                **release.release_config_json,
+                "execution_policy": {
+                    "policy_version_id": "vnpy_asset:SNIPER_MINIQMT",
+                    "policy_sha256": "sha_vnpy_local",
+                    "policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}},
+                },
+            },
+        }
+    )
+    evidence = _evidence(release)
+    runtime_repo.save_daily_selection_evidence(evidence)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions=_current_positions("portfolio_shared"),
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=TRADE_DATE,
+        current_positions=_current_positions("portfolio_shared"),
+        target_positions=targets,
+    )
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+    )
+    broker = FakeLocalSimBroker()
+
+    with pytest.raises(RuntimeConfigInvalidError, match="LocalSim cannot execute MiniQMT vn.py-style") as exc_info:
+        LocalSimExecutionBridge().submit_plan(plan=plan, broker=broker)  # type: ignore[arg-type]
+
+    assert broker.submitted == []
+    assert exc_info.value.context["broker_backend"] == "local_sim"
+    assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"
 
 
 def test_miniqmt_bridge_vnpy_invalid_config_fails_fast_without_direct_order_fallback() -> None:

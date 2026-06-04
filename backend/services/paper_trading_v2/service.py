@@ -1349,6 +1349,7 @@ class PaperTradingV2PortfolioService:
             daily_strategy_profile_version_id=daily_strategy_profile_version_id,
             execution_policy_version_id=execution_activation.policy_id,
             execution_policy_sha256=execution_activation.policy_sha256,
+            execution_policy_json=execution_activation.policy_json,
             tail_policy_version_id=tail_policy["tail_policy_id"],
             tail_policy_sha256=tail_policy_sha256,
             validation_evidence={

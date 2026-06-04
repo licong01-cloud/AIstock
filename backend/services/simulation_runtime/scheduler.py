@@ -325,12 +325,24 @@ class ProductionSimulationRunContextProvider:
             runtime_release=runtime_release,
             binding=binding,
         )
+        release_execution_policy_payload = self._release_execution_policy_payload(runtime_release)
+        effective_execution_policy_payload = self._resolve_local_sim_execution_policy(
+            runtime_release=runtime_release,
+            binding=binding,
+            portfolio=portfolio,
+        )
+        broker_execution_policy = (
+            effective_execution_policy_payload
+            if self._local_broker_factory is None and self._enable_localsim_broker
+            else None
+        )
         local_broker = self._build_local_sim_broker(
             portfolio_id=portfolio_id,
             portfolio=portfolio,
             binding=binding,
+            runtime_release=runtime_release,
             manifest=manifest,
-            execution_policy=getattr(portfolio, "execution_policy", None),
+            execution_policy=broker_execution_policy,
             cash=cash,
             positions=positions,
             trade_date=trade_date,
@@ -340,6 +352,7 @@ class ProductionSimulationRunContextProvider:
             current_prices=prices,
             portfolio_id=portfolio_id,
             manifest=manifest,
+            execution_policy_payload=effective_execution_policy_payload or release_execution_policy_payload,
             local_broker=local_broker,
             cash=cash,
             market_data_source=(
@@ -442,6 +455,7 @@ class ProductionSimulationRunContextProvider:
         portfolio_id: str,
         portfolio: Any,
         binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
         manifest: StrategyPackageManifest | None,
         execution_policy: dict[str, Any] | None,
         cash: float,
@@ -483,6 +497,9 @@ class ProductionSimulationRunContextProvider:
                     "portfolio_id": portfolio_id,
                     "strategy_id": binding.strategy_id,
                     "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "execution_policy_version_id": runtime_release.execution_policy_version_id,
+                    "execution_policy_sha256": runtime_release.execution_policy_sha256,
                 },
             ) from exc
 
@@ -498,6 +515,106 @@ class ProductionSimulationRunContextProvider:
         if trade_date == date.today():
             return MinuteDataSource.TDX_REALTIME
         return data_source
+
+    @staticmethod
+    def _release_execution_policy_payload(runtime_release: StrategyRuntimeRelease) -> dict[str, Any] | None:
+        release_config = runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        payload = release_config.get("execution_policy")
+        if not isinstance(payload, dict):
+            return None
+        return dict(payload)
+
+    def _resolve_local_sim_execution_policy(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        portfolio: Any,
+    ) -> dict[str, Any] | None:
+        release_policy = self._release_execution_policy_payload(runtime_release)
+        if self._has_execution_policy_snapshot(release_policy):
+            return release_policy
+
+        portfolio_policy = getattr(portfolio, "execution_policy", None)
+        if not isinstance(portfolio_policy, dict) or not portfolio_policy:
+            return None
+
+        if not isinstance(release_policy, dict) or not release_policy:
+            return dict(portfolio_policy)
+
+        release_policy_id = self._policy_id_from_payload(
+            release_policy,
+            fallback=runtime_release.execution_policy_version_id,
+        )
+        release_policy_sha = self._policy_sha_from_payload(
+            release_policy,
+            fallback=runtime_release.execution_policy_sha256,
+        )
+        portfolio_policy_id = self._policy_id_from_payload(portfolio_policy)
+        portfolio_policy_sha = self._policy_sha_from_payload(portfolio_policy)
+        if (
+            self._policy_ids_differ(release_policy_id, portfolio_policy_id)
+            or self._policy_shas_differ(release_policy_sha, portfolio_policy_sha)
+            or self._policy_id_indicates_vnpy_style(release_policy_id)
+        ):
+            portfolio_json = portfolio_policy.get("policy_json") if isinstance(portfolio_policy.get("policy_json"), dict) else {}
+            raise RuntimeConfigInvalidError(
+                "LocalSim runtime release execution policy snapshot is missing full policy_json",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "portfolio_id": getattr(portfolio, "portfolio_id", None),
+                    "release_execution_policy_version_id": runtime_release.execution_policy_version_id,
+                    "release_execution_policy_sha256": runtime_release.execution_policy_sha256,
+                    "release_policy_payload": release_policy,
+                    "portfolio_policy_id": portfolio_policy_id,
+                    "portfolio_policy_sha256": portfolio_policy_sha,
+                    "portfolio_policy_algo_code": portfolio_json.get("algo_code"),
+                    "required_action": (
+                        "store a full LocalSim-compatible execution policy snapshot in the runtime release "
+                        "or bind the vn.py-style release only to MiniQMT"
+                    ),
+                },
+            )
+        return dict(portfolio_policy)
+
+    @staticmethod
+    def _has_execution_policy_snapshot(payload: dict[str, Any] | None) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        return isinstance(payload.get("policy_json"), dict) or bool(str(payload.get("algo_code") or "").strip())
+
+    @staticmethod
+    def _policy_id_from_payload(payload: dict[str, Any], *, fallback: str | None = None) -> str | None:
+        for key in ("validated_execution_policy_id", "policy_id", "policy_version_id"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        value = str(fallback or "").strip()
+        return value or None
+
+    @staticmethod
+    def _policy_sha_from_payload(payload: dict[str, Any], *, fallback: str | None = None) -> str | None:
+        for key in ("policy_sha256", "sha256"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        value = str(fallback or "").strip()
+        return value or None
+
+    @staticmethod
+    def _policy_ids_differ(left: str | None, right: str | None) -> bool:
+        return bool(left and right and left != right)
+
+    @staticmethod
+    def _policy_shas_differ(left: str | None, right: str | None) -> bool:
+        return bool(left and right and left != right)
+
+    @staticmethod
+    def _policy_id_indicates_vnpy_style(policy_id: str | None) -> bool:
+        text = str(policy_id or "").strip().upper()
+        return any(algo_code in text for algo_code in ("SNIPER_MINIQMT", "BEST_LIMIT_MINIQMT", "TWAP_LITE_MINIQMT"))
 
     def _load_positions_with_injected_loader(self, strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
         if self._position_loader is None:

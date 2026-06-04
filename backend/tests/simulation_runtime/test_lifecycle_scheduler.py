@@ -49,7 +49,7 @@ from backend.services.strategy_package.models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 
 
@@ -1729,6 +1729,110 @@ def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -
     assert ctx.market_data_source == MinuteDataSource.TDX_REALTIME.value
 
 
+def test_production_context_provider_rejects_stale_portfolio_policy_when_release_policy_is_vnpy_id_only() -> None:
+    """LocalSim must not fall back to stale portfolio V25 when the runtime release points to vn.py."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
+    release = _make_test_release(
+        execution_policy_version_id=policy_id,
+        execution_policy_sha256="sha_vnpy_release",
+        execution_policy={"policy_version_id": policy_id, "policy_sha256": "sha_vnpy_release"},
+    )
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim stale V25 guard",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_v25_1_small_cap",
+            "policy_sha256": "sha_portfolio_v25",
+            "policy_json": {
+                "algo_code": "V25_1_SMALL_CAP",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    with pytest.raises(RuntimeConfigInvalidError, match="snapshot is missing full policy_json") as exc_info:
+        provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    assert exc_info.value.context["release_execution_policy_version_id"] == policy_id
+    assert exc_info.value.context["portfolio_policy_algo_code"] == "V25_1_SMALL_CAP"
+    assert "LocalSim-compatible execution policy" in exc_info.value.context["required_action"]
+
+
+def test_production_context_provider_uses_runtime_release_policy_snapshot_over_portfolio_default() -> None:
+    """Runtime release policy_json is authoritative when present."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release(
+        execution_policy_version_id="exec_policy_runtime_close",
+        execution_policy_sha256="sha_runtime_close",
+        execution_policy={
+            "policy_version_id": "exec_policy_runtime_close",
+            "policy_sha256": "sha_runtime_close",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim release policy authority",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_v25_1_small_cap",
+            "policy_sha256": "sha_portfolio_v25",
+            "policy_json": {
+                "algo_code": "V25_1_SMALL_CAP",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    market_data = FakeLocalSimMarketDataProvider()
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.execution_policy_payload == release.release_config_json["execution_policy"]
+    assert ctx.local_broker is not None
+    ctx.local_broker._market_data_provider = market_data
+    handle = ctx.local_broker.submit_order_intent(
+        OrderIntent(
+            package_id=release.package_id,
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            order_type=OrderType.MARKET,
+            target_trade_date=TRADE_DATE,
+        )
+    )
+
+    assert ctx.local_broker.query_status(handle).state == "filled"
+    assert market_data.calls[-1]["require_day_features"] is False
+
+
 def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_core_localsim_recovery():
     """Alpha-core LocalSim recovery must use the Paper v2 validated policy snapshot, not manifest.minute_execution_policy."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
@@ -1843,20 +1947,29 @@ def test_fail_fast_provider_still_rejects():
         assert 'requires an explicit run context provider' in str(exc)
 
 
-def _make_test_release():
+def _make_test_release(
+    *,
+    execution_policy_version_id: str = "exec_policy_close_price",
+    execution_policy_sha256: str = "policy_sha256",
+    execution_policy: dict[str, Any] | None = None,
+):
     from backend.services.simulation_runtime.models import StrategyRuntimeRelease
+    policy_payload = execution_policy or {
+        "policy_version_id": execution_policy_version_id,
+        "policy_sha256": execution_policy_sha256,
+    }
     return StrategyRuntimeRelease(
         package_id="pkg", manifest_sha256="aa",
         runtime_profile_id="rp", runtime_profile_version_id="rpv", runtime_profile_sha256="rps",
-        daily_strategy_profile_version_id="dsp", execution_policy_version_id="epv",
-        execution_policy_sha256="eps", tail_policy_version_id="tpv", tail_policy_sha256="tps",
+        daily_strategy_profile_version_id="dsp", execution_policy_version_id=execution_policy_version_id,
+        execution_policy_sha256=execution_policy_sha256, tail_policy_version_id="tpv", tail_policy_sha256="tps",
         release_config_json={
             "schema_version": "strategy_runtime_release_v1",
             "package_id": "pkg",
             "manifest_sha256": "aa",
             "runtime_profile": {"profile_id": "rp", "profile_version_id": "rpv", "config_sha256": "rps"},
             "daily_strategy": {"profile_version_id": "dsp"},
-            "execution_policy": {"policy_version_id": "epv", "policy_sha256": "eps"},
+            "execution_policy": policy_payload,
             "tail_policy": {"policy_version_id": "tpv", "policy_sha256": "tps"},
             "validation_state": "DRAFT",
             "validation_evidence": {},
