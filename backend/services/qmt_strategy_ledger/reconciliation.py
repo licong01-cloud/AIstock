@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -147,9 +147,14 @@ class QmtStrategyLedgerReconciliationService:
         }
         if sync_summary is not None:
             summary_json["sync_summary"] = sync_summary.to_dict()
-        object.__setattr__(run, "status", status)
-        object.__setattr__(run, "completed_at", datetime.now(UTC))
-        object.__setattr__(run, "summary_json", summary_json)
+        completed_run = replace(
+            run,
+            status=status,
+            completed_at=datetime.now(UTC),
+            summary_json=summary_json,
+        )
+        complete_run = getattr(self._repository, "complete_reconciliation_run", None)
+        run = complete_run(completed_run) if callable(complete_run) else completed_run
 
         return ReconciliationReport(
             run=run,

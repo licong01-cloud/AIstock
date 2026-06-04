@@ -451,6 +451,11 @@ class FakeLocalSimBroker:
         )
 
 
+class FailingLocalSimBroker:
+    def submit_order_intent(self, intent):  # noqa: ANN001
+        raise RuntimeError(f"local submit failed for {intent.intent_id}")
+
+
 class FakeManagedOrderBroker:
     def __init__(self) -> None:
         self.calls = []
@@ -639,3 +644,26 @@ def test_lifecycle_no_rebalance_does_not_call_broker_and_marks_success() -> None
     assert result.intent_count == 0
     assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
     assert result.run.run_payload_json["no_rebalance_required"] is True
+
+
+def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
+    release, binding, repo = _release_binding_repo()
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    build = orchestrator.build_execution_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=_evidence(release),
+        signal_snapshot=_snapshot(),
+        current_positions={},
+        portfolio_id="portfolio_shared",
+    )
+
+    with pytest.raises(RuntimeError, match="local submit failed"):
+        orchestrator.submit_execution_plan(
+            build_result=build,
+            local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+        )
+
+    latest = repo.get_simulation_daily_run(build.run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest.run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_SUBMIT_FAILED"

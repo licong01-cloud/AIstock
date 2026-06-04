@@ -1033,6 +1033,26 @@ class QmtStrategyLedgerRepository:
                 )
         return run
 
+    def complete_reconciliation_run(self, run: ReconciliationRunRecord) -> ReconciliationRunRecord:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qmt_strategy.reconciliation_run
+                    SET status = %s,
+                        completed_at = %s,
+                        summary_json = %s
+                    WHERE run_id = %s
+                    """,
+                    (
+                        run.status,
+                        run.completed_at,
+                        _json(run.summary_json),
+                        run.run_id,
+                    ),
+                )
+        return run
+
     def append_reconciliation_issue(self, issue: ReconciliationIssueRecord) -> ReconciliationIssueRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1605,6 +1625,12 @@ class InMemoryQmtStrategyLedgerRepository:
     def create_reconciliation_run(self, run: ReconciliationRunRecord) -> ReconciliationRunRecord:
         if run.run_id in self._reconciliation_runs:
             raise ValueError(f"reconciliation run already exists: {run.run_id}")
+        self._reconciliation_runs[run.run_id] = run
+        return run
+
+    def complete_reconciliation_run(self, run: ReconciliationRunRecord) -> ReconciliationRunRecord:
+        if run.run_id not in self._reconciliation_runs:
+            raise ValueError(f"reconciliation run does not exist: {run.run_id}")
         self._reconciliation_runs[run.run_id] = run
         return run
 

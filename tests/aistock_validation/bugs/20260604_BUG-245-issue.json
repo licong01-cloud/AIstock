@@ -1,0 +1,70 @@
+{
+  "actual": "2026-06-04 09:45 只读核查发现 LocalSim 2 条 SUBMITTING，MiniQMT 2 条 FAILED_RETRYABLE；reconciliation_issue 存在 UNKNOWN_STRATEGY_NAME。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/qmt_strategy_ledger",
+    "backend/tests/qmt_strategy_ledger",
+    "backend/tests/simulation_runtime",
+    "tests/aistock_validation/bugs/20260604_BUG-245-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-245",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T01:57:53.134778Z",
+  "description": "2026-06-04 09:45 只读核查发现 LocalSim 2 条 SUBMITTING，MiniQMT 2 条 FAILED_RETRYABLE；reconciliation_issue 存在 UNKNOWN_STRATEGY_NAME。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-0db8c152130c",
+      "timestamp": "2026-06-04T01:57:53.134774Z"
+    },
+    {
+      "timestamp": "2026-06-04T02:05:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Corrected non-existent backend/services/qmt_strategy path to qmt_strategy_ledger and added regression test directories for BUG-245 fix."
+    }
+  ],
+  "evidence_uris": [
+    "runtime DB/API evidence 2026-06-04 09:45 Asia/Shanghai"
+  ],
+  "expected": "双策略包无值守模拟盘应进入可审计终态；MiniQMT 已接受订单应按策略归因并完成对账；LocalSim 提交异常应落到失败终态。",
+  "first_seen_at": "2026-06-04T01:57:53.134778Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 688,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/688",
+  "last_seen_at": "2026-06-04T01:57:53.134778Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "只读核查 /api/v1/simulation-runtime/scheduler/status, qmt_strategy.order_intent, qmt_strategy.reconciliation_issue; 或交易窗口运行双策略包模拟盘调度。",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "双策略包无值守模拟盘启动后对账和状态终态阻断",
+  "trigger_condition": {
+    "fingerprint": "0db8c152130cd5a49c24f9ef",
+    "source_event_id": "FE-20260604-0db8c152130c"
+  },
+  "verification_run_id": null
+}
