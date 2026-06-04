@@ -507,7 +507,6 @@ def test_ops_service_scheduler_tick_with_lifecycle_scheduler():
     from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
     from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
     from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler
-    from backend.services.simulation_runtime.models import SimulationBindingApprovalState
 
     repo = InMemorySimulationRuntimeRepository()
     # Use an approval state that won't match any bindings, so the tick completes cleanly
