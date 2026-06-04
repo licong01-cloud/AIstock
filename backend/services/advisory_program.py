@@ -23,6 +23,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.advisory_quality import generate_quality_report
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     InvalidStateTransitionError,
@@ -223,6 +224,10 @@ class AdvisoryProgramRepository(Protocol):
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]: ...
     def latest_metric_snapshot(self, program_id: str) -> dict[str, Any] | None: ...
     def create_replay_run(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class AdvisoryTradingCalendarProvider(Protocol):
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]: ...
 
 
 class InMemoryAdvisoryProgramRepository:
@@ -592,9 +597,11 @@ class AdvisoryProgramService:
         *,
         repository: AdvisoryProgramRepository | None = None,
         selection_service: SelectionCenterService | Any | None = None,
+        calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryProgramPGRepository()
         self.selection_service = selection_service or SelectionCenterService()
+        self.calendar_provider = calendar_provider or TradingCalendarStatusService()
 
     def create_program(
         self,
@@ -832,7 +839,7 @@ class AdvisoryProgramService:
         )
         active: list[AdvisoryEpisode] = []
         daily: list[AdvisoryReviewResult] = []
-        for current in _date_range(start_date, end_date):
+        for current in self.calendar_provider.list_trading_days(start_date, end_date):
             raw_candidates = candidates_by_date.get(current) or candidates_by_date.get(current.isoformat())
             raw_market = market_by_date.get(current) or market_by_date.get(current.isoformat())
             if raw_candidates is None:
@@ -1414,13 +1421,6 @@ def _latest_by_episode_id(rows: Iterable[AdvisoryEpisode]) -> list[AdvisoryEpiso
         if current is None or row.updated_at >= current.updated_at:
             latest[row.episode_id] = row
     return sorted(latest.values(), key=lambda row: (row.status != EPISODE_STATUS_ACTIVE, row.entry_rank, row.symbol, row.episode_id))
-
-
-def _date_range(start_date: date, end_date: date) -> Iterable[date]:
-    current = start_date
-    while current <= end_date:
-        yield current
-        current += timedelta(days=1)
 
 
 def _program_sql_params(program: AdvisoryProgram) -> tuple[Any, ...]:

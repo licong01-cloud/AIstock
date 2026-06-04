@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import inspect
 
 import pytest
@@ -23,9 +23,28 @@ from backend.services.selection_center.models import SelectionCandidate, Selecti
 from backend.services.trading_core.errors import RuntimeConfigInvalidError, UnsupportedFeatureError
 
 
+class FakeTradingCalendar:
+    def __init__(self, trading_days: list[date]) -> None:
+        self.trading_days = trading_days
+        self.requests: list[tuple[date, date]] = []
+
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+        self.requests.append((start_date, end_date))
+        return [day for day in self.trading_days if start_date <= day <= end_date]
+
+
+def _calendar_days(start_date: date, end_date: date) -> list[date]:
+    current = start_date
+    days: list[date] = []
+    while current <= end_date:
+        days.append(current)
+        current += timedelta(days=1)
+    return days
+
+
 def _service() -> tuple[AdvisoryProgramService, InMemoryAdvisoryProgramRepository]:
     repo = InMemoryAdvisoryProgramRepository()
-    return AdvisoryProgramService(repository=repo, selection_service=None), repo
+    return AdvisoryProgramService(repository=repo, selection_service=None, calendar_provider=FakeTradingCalendar([])), repo
 
 
 def _program(service: AdvisoryProgramService, *, target_count: int = 2, **policy_overrides):
@@ -247,7 +266,12 @@ def test_multi_program_isolation_leaderboard_and_no_sample_fields() -> None:
 
 
 def test_replay_uses_default_next_open_entry_basis_and_records_win_rate() -> None:
-    service, _repo = _service()
+    repo = InMemoryAdvisoryProgramRepository()
+    service = AdvisoryProgramService(
+        repository=repo,
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar(_calendar_days(date(2026, 6, 1), date(2026, 6, 2))),
+    )
     program = _program(service, target_count=1)
 
     replay = service.run_replay(
@@ -296,7 +320,11 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
             )
 
     repo = InMemoryAdvisoryProgramRepository()
-    service = AdvisoryProgramService(repository=repo, selection_service=FakeSelectionService())
+    service = AdvisoryProgramService(
+        repository=repo,
+        selection_service=FakeSelectionService(),
+        calendar_provider=FakeTradingCalendar(_calendar_days(date(2026, 6, 1), date(2026, 6, 2))),
+    )
     program = _program(service, target_count=1)
 
     replay = service.run_replay(
@@ -309,6 +337,41 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
 
     assert len(replay["daily_reviews"]) == 2
     assert replay["summary"]["win_rate"] == 1.0
+
+
+def test_replay_uses_trading_calendar_and_skips_weekend_fixture_gaps() -> None:
+    class RejectWeekendSelectionService:
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            raise AssertionError(f"selection service should not run for replay fixture gap on {trade_date}")
+
+    trading_days = [
+        date(2026, 5, 28),
+        date(2026, 5, 29),
+        date(2026, 6, 1),
+        date(2026, 6, 2),
+        date(2026, 6, 3),
+    ]
+    calendar = FakeTradingCalendar(trading_days)
+    repo = InMemoryAdvisoryProgramRepository()
+    service = AdvisoryProgramService(
+        repository=repo,
+        selection_service=RejectWeekendSelectionService(),
+        calendar_provider=calendar,
+    )
+    program = _program(service, target_count=1)
+
+    replay = service.run_replay(
+        program.program_id,
+        start_date=date(2026, 5, 28),
+        end_date=date(2026, 6, 3),
+        candidates_by_date={day.isoformat(): [_candidate("000001.SZ", 1, 10.0)] for day in trading_days},
+        market_by_date={day.isoformat(): {"000001.SZ": {"next_open_executable": 10.0, "mark_price": 10.0}} for day in trading_days},
+    )
+
+    assert calendar.requests == [(date(2026, 5, 28), date(2026, 6, 3))]
+    assert [row["trade_date"] for row in replay["daily_reviews"]] == [day.isoformat() for day in trading_days]
+    assert "2026-05-30" not in {row["trade_date"] for row in replay["daily_reviews"]}
+    assert "2026-05-31" not in {row["trade_date"] for row in replay["daily_reviews"]}
 
 
 def test_advisory_program_has_no_order_broker_or_ledger_writes() -> None:
