@@ -1755,6 +1755,16 @@ def test_selection_center_weighted_fusion_uses_rank_normalized_scores() -> None:
         manifest_a.package_id: 0.25,
         manifest_b.package_id: 0.75,
     }
+    assert top.component_scores["package_presence"] == {
+        manifest_a.package_id: "selected_topK",
+        manifest_b.package_id: "selected_topK",
+    }
+    assert top.component_scores["support_count"] == 2
+    assert top.component_scores["rank_dispersion"] == 1
+    assert top.component_scores["fusion_policy_sha256"]
+    single_support = next(item for item in run.aggregate_results if item.symbol == "000001.SZ")
+    assert single_support.component_scores["package_rank_scores"][manifest_b.package_id] == 0.0
+    assert single_support.component_scores["package_presence"][manifest_b.package_id] == "not_selected_in_full_evidence"
 
 
 def test_selection_center_aggregates_existing_single_package_runs() -> None:

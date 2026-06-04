@@ -9,15 +9,18 @@ from backend.services.advisory_lifecycle import (
     AdvisoryMarketSnapshot,
     AdvisoryWatchlistItem,
     DailySelectionEvidenceSnapshot,
+    FusionPolicy,
     InMemoryAdvisoryReviewRepository,
     LIFECYCLE_CANDIDATE,
     LIFECYCLE_ENTERED,
     LIFECYCLE_EXITED,
     LIFECYCLE_HOLDING,
+    PackageSelectionEvidence,
     adjust_price_for_factor,
     adjusted_stop_take,
+    build_fusion_evidence_by_code,
 )
-from backend.services.trading_core.errors import InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 from backend.services.trading_core.exit_guard import ExitGuardPolicy
 from backend.services.trading_core.price_guard import (
     ALPHA_RANK_DROP_EXIT,
@@ -164,3 +167,193 @@ def test_s1_10_advisory_lifecycle_has_no_oms_broker_or_paper_ledger_writes() -> 
     assert "submit_order" not in source
     assert "position_ledger" not in source
     assert "paper_v2." not in source
+
+
+def test_s1_11_multi_package_fusion_uses_canonical_rank_and_preserves_package_evidence() -> None:
+    trade_date = date(2026, 6, 3)
+    policy = FusionPolicy(package_weights={"pkg_a": 0.25, "pkg_b": 0.75}, candidate_top_k=40)
+    evidence = build_fusion_evidence_by_code(
+        package_evidence_by_code={
+            "000001.SZ": {
+                "pkg_a": PackageSelectionEvidence(
+                    package_id="pkg_a",
+                    evidence_id="ev_a_1",
+                    code="000001.SZ",
+                    trade_date=trade_date,
+                    score=100.0,
+                    rank=1,
+                    candidate_count=2,
+                )
+            },
+            "000002.SZ": {
+                "pkg_a": PackageSelectionEvidence(
+                    package_id="pkg_a",
+                    evidence_id="ev_a_2",
+                    code="000002.SZ",
+                    trade_date=trade_date,
+                    score=90.0,
+                    rank=2,
+                    candidate_count=2,
+                ),
+                "pkg_b": PackageSelectionEvidence(
+                    package_id="pkg_b",
+                    evidence_id="ev_b_1",
+                    code="000002.SZ",
+                    trade_date=trade_date,
+                    score=0.1,
+                    rank=1,
+                    candidate_count=2,
+                ),
+            },
+        },
+        trade_date=trade_date,
+        fusion_policy=policy,
+    )
+
+    assert evidence["000002.SZ"].rank == 1
+    assert evidence["000002.SZ"].fusion_rank == 1
+    assert evidence["000002.SZ"].fusion_score == pytest.approx(0.75)
+    assert evidence["000002.SZ"].package_raw_scores == {"pkg_a": 90.0, "pkg_b": 0.1}
+    assert evidence["000002.SZ"].package_raw_ranks == {"pkg_a": 2, "pkg_b": 1}
+    assert evidence["000002.SZ"].package_rank_scores == {"pkg_a": 0.0, "pkg_b": 1.0}
+    assert evidence["000002.SZ"].support_count == 2
+    assert evidence["000002.SZ"].rank_dispersion == 1
+    assert evidence["000002.SZ"].fusion_policy_sha256
+    assert evidence["000002.SZ"].latest_rank_pct == pytest.approx(1 / 40)
+    assert evidence["000002.SZ"].evidence_id is None
+    assert evidence["000001.SZ"].package_presence["pkg_b"] == "not_selected_in_full_evidence"
+
+
+def test_s1_12_multi_package_daily_review_consumes_fusion_rank_for_alpha_decay() -> None:
+    service, repo = _service()
+    trade_date = date(2026, 6, 3)
+    item = AdvisoryWatchlistItem(
+        watchlist_item_id=7,
+        code="000007.SZ",
+        lifecycle_status=LIFECYCLE_HOLDING,
+        actual_entry_price=10.0,
+        actual_entry_date=date(2026, 6, 1),
+    )
+    package_evidence = {
+        "000001.SZ": {
+            "pkg_a": PackageSelectionEvidence(
+                package_id="pkg_a",
+                evidence_id="ev_a_1",
+                code="000001.SZ",
+                trade_date=trade_date,
+                score=2.0,
+                rank=1,
+                candidate_count=100,
+            ),
+            "pkg_b": PackageSelectionEvidence(
+                package_id="pkg_b",
+                evidence_id="ev_b_1",
+                code="000001.SZ",
+                trade_date=trade_date,
+                score=2.0,
+                rank=1,
+                candidate_count=100,
+            ),
+        },
+        item.code: {
+            "pkg_a": PackageSelectionEvidence(
+                package_id="pkg_a",
+                evidence_id="ev_a_7",
+                code=item.code,
+                trade_date=trade_date,
+                score=1.0,
+                rank=80,
+                candidate_count=100,
+            ),
+            "pkg_b": PackageSelectionEvidence(
+                package_id="pkg_b",
+                evidence_id="ev_b_7",
+                code=item.code,
+                trade_date=trade_date,
+                score=0.2,
+                rank=70,
+                candidate_count=100,
+            ),
+        }
+    }
+    market = {item.code: AdvisoryMarketSnapshot(code=item.code, trade_date=trade_date, current_price=10.0)}
+
+    records = service.run_multi_package_daily_review(
+        items=[item],
+        package_evidence_by_code=package_evidence,
+        market_by_code=market,
+        trade_date=trade_date,
+        policy=ExitGuardPolicy(
+            policy_sha256="exit-sha",
+            alpha_decay_exit={"enabled": True, "rank_drop_below": "top1", "confirm_days": 0},
+        ),
+        fusion_policy=FusionPolicy(package_weights={"pkg_a": 0.5, "pkg_b": 0.5}, candidate_top_k=2),
+    )
+
+    assert records[0].rank == 2
+    assert records[0].score == pytest.approx((20 / 99 + 30 / 99) / 2)
+    assert records[0].evidence_id is None
+    assert records[0].reason_code == ALPHA_RANK_DROP_EXIT
+    assert repo.lifecycle_updates[-1]["status"] == LIFECYCLE_EXITED
+
+
+def test_s1_13_multi_package_fusion_fails_fast_on_missing_data_presence() -> None:
+    trade_date = date(2026, 6, 3)
+
+    with pytest.raises(DataUnavailableError, match="data_missing"):
+        build_fusion_evidence_by_code(
+            package_evidence_by_code={
+                "000001.SZ": {
+                    "pkg_a": PackageSelectionEvidence(
+                        package_id="pkg_a",
+                        evidence_id="ev_a",
+                        code="000001.SZ",
+                        trade_date=trade_date,
+                        rank=1,
+                        candidate_count=10,
+                    ),
+                    "pkg_b": PackageSelectionEvidence(
+                        package_id="pkg_b",
+                        evidence_id=None,
+                        code="000001.SZ",
+                        trade_date=trade_date,
+                        presence="data_missing",
+                    ),
+                }
+            },
+            trade_date=trade_date,
+            fusion_policy=FusionPolicy(package_weights={"pkg_a": 1.0, "pkg_b": 1.0}),
+        )
+
+
+def test_s1_14_multi_package_daily_review_requires_active_item_coverage() -> None:
+    service, _ = _service()
+    trade_date = date(2026, 6, 3)
+    item = AdvisoryWatchlistItem(
+        watchlist_item_id=8,
+        code="000008.SZ",
+        lifecycle_status=LIFECYCLE_HOLDING,
+        actual_entry_price=10.0,
+        actual_entry_date=date(2026, 6, 1),
+    )
+
+    with pytest.raises(DataUnavailableError, match="requires fusion evidence coverage"):
+        service.run_multi_package_daily_review(
+            items=[item],
+            package_evidence_by_code={
+                "000001.SZ": {
+                    "pkg_a": PackageSelectionEvidence(
+                        package_id="pkg_a",
+                        evidence_id="ev_a_1",
+                        code="000001.SZ",
+                        trade_date=trade_date,
+                        rank=1,
+                        candidate_count=10,
+                    )
+                }
+            },
+            market_by_code={item.code: AdvisoryMarketSnapshot(code=item.code, trade_date=trade_date, current_price=10.0)},
+            trade_date=trade_date,
+            policy=_policy(),
+            fusion_policy=FusionPolicy(package_weights={"pkg_a": 1.0}),
+        )

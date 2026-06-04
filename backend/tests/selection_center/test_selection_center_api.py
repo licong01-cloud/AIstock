@@ -101,7 +101,14 @@ def _weighted_run() -> SelectionRun:
                     "fusion_method": "weighted_rank_fusion",
                     "source_package_ids": ["pkg_a", "pkg_b"],
                     "package_ranks": {"pkg_a": 1, "pkg_b": 2},
+                    "package_raw_scores": {"pkg_a": 0.8, "pkg_b": 0.7},
+                    "package_rank_scores": {"pkg_a": 1.0, "pkg_b": 0.0},
+                    "package_presence": {"pkg_a": "selected_topK", "pkg_b": "selected_topK"},
                     "package_weights": {"pkg_a": 0.6, "pkg_b": 0.4},
+                    "support_count": 2,
+                    "rank_dispersion": 1,
+                    "fusion_policy_sha256": "fusion-sha",
+                    "fusion_score": 0.8,
                 },
                 reason="weighted_fusion_aggregate",
             )
@@ -158,6 +165,21 @@ def test_selection_center_api_exposes_aggregate_results() -> None:
     assert payload["ok"] is True
     assert payload["run_id"] == "sel_weighted_api"
     assert payload["aggregate_results"][0]["component_scores"]["source_package_ids"] == ["pkg_a", "pkg_b"]
+
+
+def test_selection_center_api_exposes_fusion_diagnostics() -> None:
+    service = FakeSelectionCenterService(_weighted_run())
+    client = _client(service)
+
+    response = client.get("/api/v1/selection-center/runs/sel_weighted_api/fusion-diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["fusion_method"] == "weighted_rank_fusion"
+    assert payload["fusion_policy_sha256"] == "fusion-sha"
+    assert payload["diagnostics"][0]["package_ranks"] == {"pkg_a": 1, "pkg_b": 2}
+    assert payload["diagnostics"][0]["package_presence"]["pkg_a"] == "selected_topK"
 
 
 def test_selection_center_api_exposes_excluded_results() -> None:
@@ -253,3 +275,105 @@ def test_selection_center_api_rejects_multi_package_paper_creation_fail_fast() -
     payload = response.json()
     assert payload["detail"]["error_code"] == "UNSUPPORTED_FEATURE"
     assert payload["detail"]["context"]["package_ids"] == ["pkg_a", "pkg_b"]
+
+
+def test_selection_center_api_previews_multi_package_advisory_review() -> None:
+    client = _client(FakeSelectionCenterService(_weighted_run()))
+    payload = {
+        "items": [
+            {
+                "watchlist_item_id": 7,
+                "code": "000007.SZ",
+                "lifecycle_status": "HOLDING",
+                "actual_entry_price": 10.0,
+                "actual_entry_date": "2026-06-01",
+            }
+        ],
+        "package_evidence_by_code": {
+            "000001.SZ": {
+                "pkg_a": {
+                    "package_id": "pkg_a",
+                    "evidence_id": "ev_a_1",
+                    "code": "000001.SZ",
+                    "trade_date": "2026-06-03",
+                    "score": 2.0,
+                    "rank": 1,
+                    "candidate_count": 100,
+                },
+                "pkg_b": {
+                    "package_id": "pkg_b",
+                    "evidence_id": "ev_b_1",
+                    "code": "000001.SZ",
+                    "trade_date": "2026-06-03",
+                    "score": 2.0,
+                    "rank": 1,
+                    "candidate_count": 100,
+                },
+            },
+            "000007.SZ": {
+                "pkg_a": {
+                    "package_id": "pkg_a",
+                    "evidence_id": "ev_a_7",
+                    "code": "000007.SZ",
+                    "trade_date": "2026-06-03",
+                    "score": 1.0,
+                    "rank": 80,
+                    "candidate_count": 100,
+                },
+                "pkg_b": {
+                    "package_id": "pkg_b",
+                    "evidence_id": "ev_b_7",
+                    "code": "000007.SZ",
+                    "trade_date": "2026-06-03",
+                    "score": 0.2,
+                    "rank": 70,
+                    "candidate_count": 100,
+                },
+            },
+        },
+        "market_by_code": {"000007.SZ": {"code": "000007.SZ", "trade_date": "2026-06-03", "current_price": 10.0}},
+        "trade_date": "2026-06-03",
+        "exit_guard_policy": {
+            "policy_sha256": "exit-sha",
+            "alpha_decay_exit": {"enabled": True, "rank_drop_below": "top1", "confirm_days": 0},
+        },
+        "fusion_policy": {"package_weights": {"pkg_a": 0.5, "pkg_b": 0.5}, "candidate_top_k": 2},
+    }
+
+    response = client.post("/api/v1/selection-center/advisory/multi-package-review/preview", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["records"][0]["rank"] == 2
+    assert body["records"][0]["evidence_id"] is None
+    assert body["records"][0]["reason_code"] == "ALPHA_RANK_DROP_EXIT"
+
+
+def test_selection_center_api_builds_advisory_quality_report() -> None:
+    client = _client(FakeSelectionCenterService(_weighted_run()))
+
+    response = client.post(
+        "/api/v1/selection-center/advisory/quality-report",
+        json={
+            "min_bucket_size": 1,
+            "records": [
+                {
+                    "code": "000001.SZ",
+                    "trade_date": "2026-06-03",
+                    "current_price": 10.0,
+                    "entry_band_json": {"max_buy_price": 10.2},
+                    "action": "HOLD",
+                    "reason_code": "HOLD",
+                    "decision_input_json": {"rank": 1},
+                    "day_low": 9.9,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["report"]["report_type"] == "post_decision_diagnostics"
+    assert payload["report"]["metrics"]["sample_count"] == 1

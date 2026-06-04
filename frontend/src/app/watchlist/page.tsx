@@ -2265,6 +2265,7 @@ function WatchlistPage() {
                 >
                   分类 {sortBy === "category" && (sortDir === "asc" ? "↑" : "↓")}
                 </th>
+                <th style={{ padding: 6, textAlign: "left" }}>来源</th>
                 <th
                   style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
                   onClick={() => toggleSort("entry_rank")}
@@ -2435,6 +2436,7 @@ function WatchlistPage() {
                     </td>
                     <td style={{ padding: 6 }}>{row.name}</td>
                     <td style={{ padding: 6 }}>{row.category_names || "-"}</td>
+                    <td style={{ padding: 6 }}>{row.entry_source || "-"}</td>
                     <td data-testid={`watchlist-cell-rank-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       {row.entry_rank != null ? String(row.entry_rank) : "-"}
                     </td>
