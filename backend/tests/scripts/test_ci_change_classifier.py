@@ -6,10 +6,24 @@ from pathlib import Path
 from scripts import ci_change_classifier as classifier
 
 
-def _write_bug(path: Path, *, status: str = "fixed") -> None:
+def _write_bug(
+    path: Path,
+    *,
+    status: str = "fixed",
+    module: str = "validation",
+    allowed_write_scope: list[str] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"bug_id": "BUG-191", "status": status}, ensure_ascii=False),
+        json.dumps(
+            {
+                "bug_id": "BUG-191",
+                "status": status,
+                "module": module,
+                "allowed_write_scope": allowed_write_scope or [],
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 
@@ -80,6 +94,67 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
     assert payload["close_sync_metadata_only"] is False
+
+
+def test_workflow_validation_only_allows_same_task_bug_metadata(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260604_BUG-257-workflow-fast-lane.json"
+    allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    bug = tmp_path / bug_rel
+    allocator = tmp_path / allocator_rel
+    _write_bug(
+        bug,
+        status="in_progress",
+        module="validation",
+        allowed_write_scope=[
+            "scripts/ci_change_classifier.py",
+            "backend/tests/scripts/test_ci_change_classifier.py",
+            bug_rel,
+            allocator_rel,
+        ],
+    )
+    allocator.write_text(json.dumps({"last_allocated": 257}), encoding="utf-8")
+
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/ci_change_classifier.py",
+            "backend/tests/scripts/test_ci_change_classifier.py",
+            bug_rel,
+            allocator_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_bug_metadata_files"] == [bug_rel]
+
+
+def test_workflow_bug_metadata_with_business_scope_keeps_backend_matrix(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260604_BUG-258-business-scope.json"
+    bug = tmp_path / bug_rel
+    _write_bug(
+        bug,
+        status="in_progress",
+        module="validation",
+        allowed_write_scope=[
+            "scripts/ci_change_classifier.py",
+            "backend/routers/validation.py",
+            bug_rel,
+        ],
+    )
+
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/ci_change_classifier.py",
+            bug_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "full_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["workflow_validation_required"] is False
 
 
 def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) -> None:

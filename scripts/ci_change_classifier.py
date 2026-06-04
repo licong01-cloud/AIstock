@@ -8,6 +8,7 @@ from typing import Any
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
+WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged"}
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-auto-link.yml",
     ".github/workflows/dependency-update-validate.yml",
@@ -56,10 +57,17 @@ def _load_changed_files(args: argparse.Namespace) -> list[str]:
     return result
 
 
-def _bug_status(path: Path) -> str | None:
+def _read_bug_payload(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _bug_status(path: Path) -> str | None:
+    payload = _read_bug_payload(path)
+    if payload is None:
         return None
     status = payload.get("status")
     return str(status).strip().lower() if status is not None else None
@@ -67,6 +75,34 @@ def _bug_status(path: Path) -> str | None:
 
 def _workflow_validation_fast_lane(path: str) -> bool:
     return path in WORKFLOW_VALIDATION_FAST_LANE_FILES
+
+
+def _is_bug_registry_metadata_path(path: str) -> bool:
+    return path.startswith(BUG_REGISTRY_PREFIX)
+
+
+def _workflow_bug_metadata_file(rel_path: str, *, repo_root: Path) -> bool:
+    if Path(rel_path).name.startswith(".") or not rel_path.endswith(".json"):
+        return False
+    payload = _read_bug_payload(repo_root / rel_path)
+    if not payload:
+        return False
+    status = str(payload.get("status") or "").strip().lower()
+    module = str(payload.get("module") or payload.get("affected_module") or "").strip().lower()
+    if status not in WORKFLOW_BUG_METADATA_STATUSES or module != "validation":
+        return False
+    allowed_scope = payload.get("allowed_write_scope") or payload.get("suggested_scope") or []
+    if not isinstance(allowed_scope, list) or not allowed_scope:
+        return False
+    for raw_path in allowed_scope:
+        scope_path = _normalize_path(str(raw_path))
+        if not scope_path:
+            continue
+        if _is_bug_registry_metadata_path(scope_path):
+            continue
+        if not _workflow_validation_fast_lane(scope_path):
+            return False
+    return True
 
 
 def classify_changed_files(changed_files: list[str], *, repo_root: Path | None = None) -> dict[str, Any]:
@@ -80,16 +116,19 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     if not normalized:
         reasons.append("no changed files detected; keep full backend CI")
     if non_bug_registry_files:
-        reasons.append("non-registry files changed; backend matrix remains required")
+        reasons.append("non-registry files changed; check fast-lane allowlist before skipping backend matrix")
     if not bug_registry_files:
         reasons.append("no BUG registry metadata file changed")
 
     metadata_statuses: dict[str, str | None] = {}
+    workflow_bug_metadata_files: list[str] = []
+    allocator_files: list[str] = []
     metadata_only = bool(normalized) and not non_bug_registry_files and bool(bug_registry_files)
     close_sync_metadata_only = metadata_only
     for rel_path in bug_registry_files:
         path = repo_root / rel_path
         if Path(rel_path).name.startswith("."):
+            allocator_files.append(rel_path)
             close_sync_metadata_only = False
             reasons.append(f"allocator or hidden registry metadata changed: {rel_path}")
             continue
@@ -102,14 +141,27 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
         if status not in CLOSE_SYNC_STATUSES:
             close_sync_metadata_only = False
             reasons.append(f"BUG registry status is not close-sync metadata: {rel_path} status={status or 'unknown'}")
+        if _workflow_bug_metadata_file(rel_path, repo_root=repo_root):
+            workflow_bug_metadata_files.append(rel_path)
 
     if close_sync_metadata_only:
         reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
 
+    workflow_non_registry_only = (
+        bool(non_bug_registry_files)
+        and all(_workflow_validation_fast_lane(path) for path in non_bug_registry_files)
+    )
+    workflow_registry_metadata_only = (
+        not bug_registry_files
+        or (
+            bool(workflow_bug_metadata_files)
+            and all(path in workflow_bug_metadata_files or path in allocator_files for path in bug_registry_files)
+        )
+    )
     workflow_validation_only = (
         bool(normalized)
-        and not bug_registry_files
-        and all(_workflow_validation_fast_lane(path) for path in non_bug_registry_files)
+        and workflow_non_registry_only
+        and workflow_registry_metadata_only
     )
     if workflow_validation_only:
         reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
@@ -129,6 +181,7 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
         "metadata_statuses": metadata_statuses,
         "metadata_only": metadata_only,
         "close_sync_metadata_only": close_sync_metadata_only,
+        "workflow_bug_metadata_files": workflow_bug_metadata_files,
         "workflow_validation_only": workflow_validation_only,
         "workflow_validation_required": workflow_validation_only,
         "backend_required": backend_required,
