@@ -4607,6 +4607,7 @@ def test_ci_issue_janitor_dry_run_does_not_close_superseded_issue(monkeypatch: p
     assert payload["superseded_count"] == 1
     assert payload["closed_count"] == 0
     assert payload["issues"][0]["action"] == "close_superseded"
+    assert payload["next_command"] == "python scripts/aistock_issue_workflow.py ci-issue-janitor --issue 642 --apply"
     assert closed == []
 
 
@@ -4694,6 +4695,7 @@ def test_ci_issue_janitor_dry_run_marks_infra_issue_without_closing(monkeypatch:
     assert payload["closed_count"] == 0
     assert payload["issues"][0]["action"] == "close_infra"
     assert payload["issues"][0]["infra_action"]["workflow_gate"] == "infra_action_required"
+    assert payload["next_command"] == "python scripts/aistock_issue_workflow.py ci-issue-janitor --issue 683 --apply"
     assert closed == []
 
 

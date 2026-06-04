@@ -5265,7 +5265,13 @@ def build_ci_issue_janitor_plan(
         },
     }
     if not apply and actionable_count:
-        payload["next_command"] = "python scripts/aistock_issue_workflow.py ci-issue-janitor --apply"
+        issue_args = " ".join(f"--issue {item.get('issue')}" for item in evaluated if item.get("action") in {"close_superseded", "close_infra"})
+        limit_arg = "" if issue_args else f" --limit {limit}"
+        payload["next_command"] = (
+            f"python scripts/aistock_issue_workflow.py ci-issue-janitor {issue_args} --apply"
+            if issue_args
+            else f"python scripts/aistock_issue_workflow.py ci-issue-janitor{limit_arg} --apply"
+        )
     output_dir = REPO_ROOT / WORKFLOW_ROOT / "ci-issue-janitor"
     _write_json(output_dir / "ci-issue-janitor.json", payload)
     return payload
@@ -8041,12 +8047,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     ci_janitor = sub.add_parser(
         "ci-issue-janitor",
-        help="Dry-run or close auto-filed CI issues already superseded by a later successful main run.",
+        help="Dry-run or close auto-filed CI issues already superseded by a later successful main run or classified as infra-only.",
     )
     ci_janitor.add_argument("--issue", action="append", help="Limit janitor to a specific GitHub Issue number; repeatable.")
     ci_janitor.add_argument("--limit", type=int, default=50, help="Maximum open auto-filed CI issues to scan when --issue is omitted.")
     ci_janitor.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; useful for tests only.")
-    ci_janitor.add_argument("--apply", action="store_true", help="Close only issues classified as superseded_by_later_main_success.")
+    ci_janitor.add_argument(
+        "--apply",
+        action="store_true",
+        help="Close only unlinked issues classified as superseded_by_later_main_success or infra-only.",
+    )
     add_output_options(ci_janitor)
     ci_janitor.set_defaults(func=cmd_ci_issue_janitor)
 
