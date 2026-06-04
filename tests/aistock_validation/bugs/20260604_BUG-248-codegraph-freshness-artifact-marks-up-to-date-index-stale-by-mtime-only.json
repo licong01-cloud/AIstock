@@ -30,8 +30,8 @@
   "expected": "When CodeGraph status confirms the repo index is up to date for the current checkout, the freshness artifact should remain usable/fresh (or clearly distinguish mtime age from graph staleness) while still warning on missing CLI/index or status failures.",
   "first_seen_at": "2026-06-04T03:15:32.013130Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e2637f434dc20b6e768d2958ad3252934fa7a1db",
+  "fixed_at": "2026-06-04T05:10:08.632651Z",
   "github_issue_number": 698,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/698",
   "last_seen_at": "2026-06-04T03:15:32.013130Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/703",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,5 +63,12 @@
     "fingerprint": "47eb34b91d8b142ae3ebf1e1",
     "source_event_id": "FE-20260604-47eb34b91d8b"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -k codegraph_freshness -> 4 passed",
+    "ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "workflow-smoke changed-file scripts/code_intelligence_adapter.py module validation -> passed",
+    "nox -s l0 validation_center_backend validation_catalog_integrity validation_module_registry_l0 -> passed",
+    "GitHub PR checks -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null
 }
