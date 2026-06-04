@@ -4550,6 +4550,90 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
     assert closed == [642]
 
 
+def test_ci_issue_janitor_dry_run_marks_infra_issue_without_closing(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        issue = int(issue_number)
+        return {
+            "classification_recommendation": "infra_flaky",
+            "needs_bug_json": False,
+            "linked_bug": None,
+            "github_issue": {"number": issue, "state": "OPEN"},
+            "summary": {"workflow": "AIstock Nightly L3 + DR"},
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "reason": "CI/Nightly failure is infrastructure, not a code regression.",
+                "next_actions": ["restore runner", "rerun nightly"],
+                "production_gates": {
+                    "production_backend_dependency_gate": "noop",
+                    "production_ddl_gate": "noop",
+                    "production_frontend_dependency_gate": "noop",
+                },
+            },
+        }
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_infra_ci_issue", lambda issue_number, *args, **kwargs: closed.append(issue_number))
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[683], apply=False)
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["infra_count"] == 1
+    assert payload["closed_count"] == 0
+    assert payload["issues"][0]["action"] == "close_infra"
+    assert payload["issues"][0]["infra_action"]["workflow_gate"] == "infra_action_required"
+    assert closed == []
+
+
+def test_ci_issue_janitor_apply_closes_infra_issue_without_bug_promotion(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        issue = int(issue_number)
+        if issue == 683:
+            return {
+                "classification_recommendation": "infra_blocker",
+                "needs_bug_json": False,
+                "linked_bug": None,
+                "github_issue": {"number": issue, "state": "OPEN"},
+                "summary": {"workflow": "AIstock Nightly L3 + DR"},
+                "infra_action": {
+                    "workflow_gate": "infra_action_required",
+                    "reason": "Self-hosted runner is unavailable.",
+                    "next_actions": ["restore or register the self-hosted Windows GitHub Actions runner"],
+                    "production_gates": {
+                        "production_backend_dependency_gate": "noop",
+                        "production_ddl_gate": "noop",
+                        "production_frontend_dependency_gate": "noop",
+                    },
+                },
+            }
+        return {
+            "classification_recommendation": "infra_flaky",
+            "needs_bug_json": False,
+            "linked_bug": {"bug_id": "BUG-199"},
+            "github_issue": {"number": issue, "state": "OPEN"},
+            "summary": {"workflow": "AIstock Nightly L3 + DR"},
+            "infra_action": {"workflow_gate": "infra_action_required"},
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_infra_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[683, 684], apply=True)
+
+    assert payload["workflow_gate"] == "closed"
+    assert payload["infra_count"] == 1
+    assert payload["closed_issues"] == [683]
+    assert payload["skipped_count"] == 1
+    assert closed == [683]
+
+
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

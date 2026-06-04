@@ -178,6 +178,10 @@ Auto-filed infra-only CI/Nightly issues should therefore expose only the
 `triage-ci-issue` entrypoint, `needs_bug_json=false`, and an infra action card.
 They must not present `promote-ci-issue` or `run --bug-id` as the next command
 unless triage later reclassifies the failure as a real code or test regression.
+Use `ci-issue-janitor --issue <issue-number>` to dry-run closure for infra-only
+or superseded auto-filed issues; add `--apply` only after the compact output
+shows `action=close_infra` or `action=close_superseded`. The janitor must not
+create BUG JSON for infra-only issues.
 
 ## Submit Or Register A New BUG
 

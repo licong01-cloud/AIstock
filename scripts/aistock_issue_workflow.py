@@ -525,6 +525,7 @@ def _compact_ci_issue_janitor(value: Any) -> dict[str, Any] | None:
         "dry_run",
         "scanned_count",
         "superseded_count",
+        "infra_count",
         "closed_count",
         "skipped_count",
         "failed_count",
@@ -5114,6 +5115,32 @@ def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[st
     )
 
 
+def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any], workflow: str | None) -> dict[str, Any]:
+    next_actions = infra_action.get("next_actions") if isinstance(infra_action.get("next_actions"), list) else []
+    next_action_text = "; ".join(str(item) for item in next_actions[:4])
+    comment = (
+        f"Closed as infrastructure-only {workflow or 'CI'} failure. "
+        f"{infra_action.get('reason') or 'No code BUG JSON promotion is required.'} "
+        f"Next actions: {next_action_text or 'restore infrastructure and rerun CI/Nightly'}. "
+        "production_ddl_gate=noop; production_frontend_dependency_gate=noop; "
+        "production_backend_dependency_gate=noop."
+    )
+    return _execute_checked(
+        [
+            "gh",
+            "issue",
+            "close",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--comment",
+            comment,
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+
+
 def build_ci_issue_janitor_plan(
     *,
     issue_numbers: list[int | str] | None = None,
@@ -5131,6 +5158,7 @@ def build_ci_issue_janitor_plan(
     closed: list[int | str] = []
     failed: list[dict[str, Any]] = []
     superseded_count = 0
+    infra_count = 0
     for item in issues:
         issue_number = item.get("number")
         if issue_number is None:
@@ -5170,10 +5198,40 @@ def build_ci_issue_janitor_plan(
                 except WorkflowError as exc:
                     entry.update({"action": "failed", "reason": str(exc)})
                     failed.append(entry)
+        elif (
+            triage.get("classification_recommendation") in {"infra_flaky", "infra_blocker"}
+            and not triage.get("linked_bug")
+            and triage.get("needs_bug_json") is False
+            and isinstance(triage.get("infra_action"), dict)
+        ):
+            infra_count += 1
+            entry["action"] = "close_infra"
+            entry["infra_action"] = _pick(
+                triage["infra_action"],
+                "workflow_gate",
+                "reason",
+                "production_gates",
+            )
+            actions = triage["infra_action"].get("next_actions")
+            if isinstance(actions, list):
+                entry["infra_action"]["next_actions"] = actions[:4]
+            if apply:
+                try:
+                    result = _close_infra_ci_issue(
+                        issue_value,
+                        triage["infra_action"],
+                        (triage.get("summary") or {}).get("workflow"),
+                    )
+                    entry["close_result"] = _pick(result, "ok", "returncode")
+                    closed.append(issue_value)
+                except WorkflowError as exc:
+                    entry.update({"action": "failed", "reason": str(exc)})
+                    failed.append(entry)
         else:
-            entry["reason"] = "not_superseded_or_requires_bug_workflow"
+            entry["reason"] = "not_superseded_or_infra_or_requires_bug_workflow"
         evaluated.append(entry)
-    workflow_gate = "failed" if failed else ("closed" if apply and closed else ("ready_for_apply" if superseded_count else "no_superseded_issues"))
+    actionable_count = superseded_count + infra_count
+    workflow_gate = "failed" if failed else ("closed" if apply and closed else ("ready_for_apply" if actionable_count else "no_actionable_ci_issues"))
     payload = {
         "schema_version": "aistock_issue_workflow_ci_issue_janitor_v1",
         "generated_at": _utc_now(),
@@ -5183,6 +5241,7 @@ def build_ci_issue_janitor_plan(
         "limit": limit,
         "scanned_count": len(evaluated),
         "superseded_count": superseded_count,
+        "infra_count": infra_count,
         "closed_count": len(closed),
         "skipped_count": len([item for item in evaluated if item.get("action") == "skip"]),
         "failed_count": len(failed),
@@ -5195,7 +5254,7 @@ def build_ci_issue_janitor_plan(
             "production_backend_dependency_gate": "noop",
         },
     }
-    if not apply and superseded_count:
+    if not apply and actionable_count:
         payload["next_command"] = "python scripts/aistock_issue_workflow.py ci-issue-janitor --apply"
     output_dir = REPO_ROOT / WORKFLOW_ROOT / "ci-issue-janitor"
     _write_json(output_dir / "ci-issue-janitor.json", payload)
@@ -7746,7 +7805,7 @@ def cmd_ci_issue_janitor(args: argparse.Namespace) -> int:
         skip_github_summary=args.skip_github_summary,
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_superseded_issues"} else 2
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_actionable_ci_issues"} else 2
 
 
 def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
