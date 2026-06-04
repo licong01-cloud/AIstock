@@ -1,0 +1,67 @@
+{
+  "actual": "merge-finalizer returned already_merged using stale PR #297 and did not merge open PR #689; manual gh pr merge was required.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260604_BUG-246-merge-finalizer-misidentifies-bug-close-sync-pr-as-already-merged.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-246",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T02:26:27.399305Z",
+  "description": "merge-finalizer returned already_merged using stale PR #297 and did not merge open PR #689; manual gh pr merge was required.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-21116e07f032",
+      "timestamp": "2026-06-04T02:26:27.399301Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-244 finalizer output on 2026-06-04 returned close_sync_commit.pr_url=https://github.com/licong01-cloud/AIstock/pull/297 while PR #689 remained OPEN until manual merge."
+  ],
+  "expected": "merge-finalizer should select the close-sync PR whose branch/BUG JSON/evidence matches the current bug_id, then merge it only after green checks and cleanup the correct worktrees/branches.",
+  "first_seen_at": "2026-06-04T02:26:27.399305Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 692,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/692",
+  "last_seen_at": "2026-06-04T02:26:27.399305Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py merge-finalizer --bug-id BUG-244 --source-pr-url https://github.com/licong01-cloud/AIstock/pull/687 --merge-close-sync-pr --cleanup --apply",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Merge-finalizer misidentifies BUG close-sync PR as already merged",
+  "trigger_condition": {
+    "fingerprint": "21116e07f03212da2df2e9eb",
+    "source_event_id": "FE-20260604-21116e07f032"
+  },
+  "verification_run_id": null
+}

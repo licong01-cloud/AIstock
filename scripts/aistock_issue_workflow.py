@@ -2213,7 +2213,7 @@ def _stale_pr_check_for_bug(bug_id: str) -> dict[str, Any]:
             "--search",
             f"{bug_id} in:title,body",
             "--json",
-            "number,title,url,headRefName",
+            "number,title,url,headRefName,body",
             "--limit",
             "20",
         ],
@@ -2232,7 +2232,7 @@ def _stale_pr_check_for_bug(bug_id: str) -> dict[str, Any]:
             "--search",
             f"{bug_id} in:title,body",
             "--json",
-            "number,title,url,headRefName,mergedAt",
+            "number,title,url,headRefName,mergedAt,body",
             "--limit",
             "20",
         ],
@@ -6630,14 +6630,18 @@ def _close_sync_is_complete(
     merged_close_sync_prs = []
     open_close_sync_prs = []
     for item in stale.get("merged_prs") or []:
-        number = int(item.get("number") or 0)
-        title = str(item.get("title") or "").lower()
-        if number != source_pr_number and ("close-sync" in title or "close sync" in title):
+        if _looks_like_close_sync_pr_for_source(
+            item,
+            source_pr_number=source_pr_number,
+            source_pr_url=source_pr_url,
+        ):
             merged_close_sync_prs.append(item)
     for item in stale.get("open_prs") or []:
-        number = int(item.get("number") or 0)
-        title = str(item.get("title") or "").lower()
-        if number != source_pr_number and ("close-sync" in title or "close sync" in title):
+        if _looks_like_close_sync_pr_for_source(
+            item,
+            source_pr_number=source_pr_number,
+            source_pr_url=source_pr_url,
+        ):
             open_close_sync_prs.append(item)
     marker["stale_pr_check"] = stale
     marker["merged_close_sync_prs"] = merged_close_sync_prs
