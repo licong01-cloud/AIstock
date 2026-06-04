@@ -861,6 +861,31 @@ def mcp_gateway_manifest_quality(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def mcp_gateway_phase6_resource_monitor(session: nox.Session) -> None:
+    """Run MCP gateway Phase 6 resource monitor and no-background-token gates."""
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/mcp",
+        "scripts/aistock_mcp_gateway.py",
+        "scripts/aistock_mcp_gateway_doctor.py",
+        external=True,
+    )
+    session.run("python", "scripts/aistock_mcp_gateway.py", "--startup-summary", "--profile=lite", external=True)
+    session.run("python", "scripts/aistock_mcp_gateway.py", "--self-check", "--profile=lite", external=True)
+    session.run("python", "scripts/aistock_mcp_gateway_doctor.py", "--json", external=True)
+    _run_pytest(
+        session,
+        "tests/mcp/test_mcp_gateway_cli.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     """Run full Phase 5 RA manifest catalog, audit, and UI acceptance gates."""
     phase5_paths = [

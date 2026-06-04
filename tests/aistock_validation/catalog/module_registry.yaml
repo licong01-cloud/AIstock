@@ -532,7 +532,7 @@ modules:
     description_zh: 覆盖统一 MCP gateway、profile 注册表、工具清单和客户端侧 MCP 配置。
     test_plans:
       required_on_change: [l0]
-      recommended: [mcp_gateway_manifest_quality, mcp_gateway_phase5_assistant, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
+      recommended: [mcp_gateway_manifest_quality, mcp_gateway_phase5_assistant, mcp_gateway_phase6_resource_monitor, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
   - module_id: platform.api
     display_name: Platform API
     parent_module: platform
