@@ -53,6 +53,12 @@
       "actor": "codex",
       "action": "fix_commit_recorded_pending_live_sim",
       "note": "Recorded code fix commit 4620510098edd9f12f36d63717636d38f15299d6; BUG remains open until 2026-06-05 live simulation validation."
+    },
+    {
+      "timestamp": "2026-06-04T15:34:47.723361Z",
+      "actor": "codex",
+      "action": "post_rebase_validation_refreshed_pending_live_sim",
+      "note": "Rebased onto origin/main and reran diff-check, simulation_runtime pytest, l0, targeted frontend tsc, and paper-v2 UI E2E. BUG remains open pending live simulation."
     }
   ],
   "evidence_uris": [
@@ -67,7 +73,7 @@
   "fixed_at": null,
   "github_issue_number": 756,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/756",
-  "last_seen_at": "2026-06-04T15:30:24.771655Z",
+  "last_seen_at": "2026-06-04T15:34:47.723361Z",
   "module": "paper_v2",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -173,6 +179,11 @@
     "frontend targeted tsc tmp/tsconfig-bug262.json after scope cleanup -> passed",
     "SIMULATION_RUNTIME_UI_MOCK_API=1 npx playwright test frontend/tests/paper-v2/simulation-runtime-ops.spec.ts -> 1 passed",
     "QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 with root .env loaded -> passed; qe_archive_backend 121 passed, qe_archive_data_quality failures=[], data_quality_deep 10 passed/21 skipped; qe_archive_ui intentionally skipped because BUG-262 UI is paper-v2 scoped and paper-v2 UI E2E passed",
-    "full frontend npx tsc --noEmit -> blocked by pre-existing tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 Type null not assignable to string outside BUG-262 scope"
+    "full frontend npx tsc --noEmit -> blocked by pre-existing tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 Type null not assignable to string outside BUG-262 scope",
+    "post-rebase git diff --check origin/main..HEAD -> passed",
+    "post-rebase python -m pytest backend/tests/simulation_runtime -q -> 77 passed",
+    "post-rebase python -m nox -s l0 -> passed",
+    "post-rebase node node_modules/typescript/bin/tsc --project tmp/tsconfig-bug262.json --pretty false -> passed",
+    "post-rebase SIMULATION_RUNTIME_UI_MOCK_API=1 node node_modules/playwright/cli.js test tests/paper-v2/simulation-runtime-ops.spec.ts -> 1 passed"
   ]
 }
