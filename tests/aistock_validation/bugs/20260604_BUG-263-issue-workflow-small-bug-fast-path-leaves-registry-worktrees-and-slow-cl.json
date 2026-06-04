@@ -31,8 +31,8 @@
   "expected": "For same-session small BUG or compatible batch BUG handling, the workflow should avoid unnecessary registry-only worktrees, persist compact timing evidence, close-sync multiple BUGs in one atomic aftercare step, and clean merged worktrees with junction/reparse-point safety.",
   "first_seen_at": "2026-06-04T15:58:01.606738Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c82f5b365a0744697bdeb17ffdc5877fa440265c",
+  "fixed_at": "2026-06-04T17:49:05.678887Z",
   "github_issue_number": 761,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/761",
   "last_seen_at": "2026-06-04T15:58:01.606738Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/762",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -91,6 +92,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "local validation passed: py_compile, ruff, pytest 127, workflow-smoke, nox l0 changed-only, guardrail_changed_files, validation_catalog_integrity, validation_module_registry_l0, validation_center_backend 377"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
