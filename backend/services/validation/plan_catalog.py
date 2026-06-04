@@ -28,6 +28,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_qe_read_l3": "qe_read_l3",
     "nox_research_pipeline_backend": "research_pipeline_backend",
     "nox_research_mcp_contract": "research_mcp_contract",
+    "nox_mcp_gateway_manifest_quality": "mcp_gateway_manifest_quality",
     "nox_ra_phase0_baseline": "ra_phase0_baseline",
     "nox_ra_phase1_memory_tree": "ra_phase1_memory_tree",
     "nox_ra_phase2_graph_context": "ra_phase2_graph_context",

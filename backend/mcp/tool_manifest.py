@@ -8,7 +8,9 @@ MCP module or starting the backend runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Mapping
+
+from .profiles import GATEWAY_MODULES, SCRIPT_BACKED_SERVERS
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,18 @@ class ToolManifestEntry:
     assistant_usable: str
     migration_state: str
     acceptance_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolMetadataOverride:
+    risk_level: str | None = None
+    assistant_usable: str | None = None
+    requires_confirmation: bool | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.reason:
+            raise ValueError("ToolMetadataOverride requires a one-line reason")
 
 
 MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'catalog': ('mcp_gateway_health',
@@ -276,6 +290,7 @@ RISK_LEVELS = {
     "external_network",
     "catalog",
 }
+ASSISTANT_USABLE_VALUES = {"direct_or_catalog", "preflight_required"}
 MIGRATION_STATES = {"gateway", "script_backed", "wrapper_compat", "deprecated_pending_approval"}
 CONFIRM_TOKENS = (
     "_confirmed",
@@ -308,9 +323,122 @@ WRITE_TOKENS = (
 )
 LONG_RUNNING_TOKENS = ("run", "execution", "backfill", "sync", "job", "worker", "custom_evo")
 EXTERNAL_NETWORK_PREFIXES = ("external_research_", "mcp_github_issue_")
+SIDE_EFFECT_NAME_TOKENS = (
+    "_confirmed",
+    "register",
+    "deprecate",
+    "promote",
+    "retire",
+    "bind",
+    "apply",
+    "toggle",
+    "sync",
+    "repair",
+    "schedule",
+    "report_bug",
+    "assign",
+    "update_bug",
+    "start_validation_execution",
+    "github_issue_create",
+)
+NON_DIRECT_RISK_LEVELS = {"write_confirmed", "long_running", "production_adjacent", "external_network"}
+
+TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
+    "factor_library_plan_register": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /factor-library/register-plan reads duplicate state and defers writes to factor_library_register_confirmed",
+    ),
+    "factor_library_plan_deprecate": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /factor-library/deprecate-plan reads target state and defers writes to factor_library_deprecate_confirmed",
+    ),
+    "factor_metrics_plan": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /factor-metrics/plan only reads factor eligibility and defers async job creation to factor_metrics_submit_confirmed",
+    ),
+    "factor_corr_plan": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /factor-correlation/plan only reads factor eligibility and defers async job creation to factor_corr_submit_confirmed",
+    ),
+    "model_registry_plan_register": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /model-registry/register-plan returns payload summary and defers registry writes to model_registry_register_confirmed",
+    ),
+    "strategy_governance_plan_promotion": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend promotion-plan reads package health and marks status_transition_only before promote_confirmed writes",
+    ),
+    "strategy_governance_plan_retirement": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend retirement-plan reads package detail and defers status transition to retire_confirmed",
+    ),
+    "execution_policy_plan_binding": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: backend /execution-policy/binding-plan validates and reports will_create/will_enable without persisting a policy binding",
+    ),
+    "local_data_plan_schedule_reset": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: LocalDataManagementService.plan_schedule_reset returns reset actions and summary says not written",
+    ),
+    "local_data_plan_repair": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: LocalDataManagementService.plan_repair inspects overview/status and defers execution to local_data_apply_repair_confirmed",
+    ),
+    "assistant_add_task_event": ToolMetadataOverride(
+        risk_level="production_adjacent",
+        assistant_usable="preflight_required",
+        requires_confirmation=False,
+        reason="writes Research Assistant task_events and may update task status through the backend API",
+    ),
+    "assistant_chat_turn": ToolMetadataOverride(
+        risk_level="external_network",
+        assistant_usable="preflight_required",
+        requires_confirmation=False,
+        reason="creates task/conversation records and can invoke model-provider network calls through the Research Assistant backend",
+    ),
+    "assistant_build_prompt_bundle": ToolMetadataOverride(
+        risk_level="production_adjacent",
+        assistant_usable="preflight_required",
+        requires_confirmation=False,
+        reason="writes prompt_bundles and optional task_events instead of returning a pure preview",
+    ),
+    "assistant_build_context_pack": ToolMetadataOverride(
+        risk_level="production_adjacent",
+        assistant_usable="preflight_required",
+        requires_confirmation=False,
+        reason="writes context_packs and memory_access_log rows while assembling context",
+    ),
+    "assistant_preflight_mcp_tool": ToolMetadataOverride(
+        risk_level="production_adjacent",
+        assistant_usable="preflight_required",
+        requires_confirmation=False,
+        reason="records mcp_tool_events and optional task_events even though it performs preflight checks",
+    ),
+}
+MIGRATION_STATE_OVERRIDES: dict[str, str] = {}
 
 
-def _risk_for(tool_name: str, module: str) -> str:
+def _base_risk_for(tool_name: str, module: str) -> str:
     if module == "catalog":
         return "catalog"
     if tool_name.startswith(EXTERNAL_NETWORK_PREFIXES):
@@ -329,7 +457,17 @@ def _risk_for(tool_name: str, module: str) -> str:
     return "read_only"
 
 
+def _risk_for(tool_name: str, module: str) -> str:
+    override = TOOL_METADATA_OVERRIDES.get(tool_name)
+    if override and override.risk_level is not None:
+        return override.risk_level
+    return _base_risk_for(tool_name, module)
+
+
 def _requires_confirmation(tool_name: str) -> bool:
+    override = TOOL_METADATA_OVERRIDES.get(tool_name)
+    if override and override.requires_confirmation is not None:
+        return override.requires_confirmation
     return any(token in tool_name for token in CONFIRM_TOKENS)
 
 
@@ -341,7 +479,10 @@ def _response_budget_for(tool_name: str) -> str:
     return "bounded_json"
 
 
-def _assistant_usable_for(risk_level: str) -> str:
+def _assistant_usable_for(tool_name: str, risk_level: str) -> str:
+    override = TOOL_METADATA_OVERRIDES.get(tool_name)
+    if override and override.assistant_usable is not None:
+        return override.assistant_usable
     if risk_level in {"read_only", "catalog"}:
         return "direct_or_catalog"
     return "preflight_required"
@@ -359,12 +500,36 @@ def _backend_endpoint_for(tool_name: str, module: str) -> str:
     return f"{module.replace('_', '-')}/*"
 
 
+def _migration_state_for(
+    tool_name: str,
+    module: str,
+    *,
+    gateway_modules: Iterable[str] | None = None,
+    script_backed_servers: Iterable[str] | None = None,
+    overrides: Mapping[str, str] | None = None,
+) -> str:
+    selected_overrides = MIGRATION_STATE_OVERRIDES if overrides is None else overrides
+    if tool_name in selected_overrides:
+        return selected_overrides[tool_name]
+    gateway = set(GATEWAY_MODULES if gateway_modules is None else gateway_modules)
+    script_backed = set(SCRIPT_BACKED_SERVERS if script_backed_servers is None else script_backed_servers)
+    if module in gateway:
+        return "gateway"
+    if module in script_backed:
+        return "script_backed"
+    raise ValueError(
+        f"cannot derive migration_state for {tool_name!r}: "
+        f"module={module!r} is neither gateway-backed nor script-backed"
+    )
+
+
 def build_tool_manifest() -> tuple[ToolManifestEntry, ...]:
     entries: list[ToolManifestEntry] = []
     for module, tool_names in MODULE_TOOL_NAMES.items():
         profile_tags = MODULE_PROFILE_TAGS[module]
         for tool_name in tool_names:
             risk_level = _risk_for(tool_name, module)
+            migration_state = _migration_state_for(tool_name, module)
             entries.append(
                 ToolManifestEntry(
                     tool_name=tool_name,
@@ -374,8 +539,8 @@ def build_tool_manifest() -> tuple[ToolManifestEntry, ...]:
                     backend_endpoint=_backend_endpoint_for(tool_name, module),
                     requires_confirmation=_requires_confirmation(tool_name),
                     response_budget=_response_budget_for(tool_name),
-                    assistant_usable=_assistant_usable_for(risk_level),
-                    migration_state="gateway",
+                    assistant_usable=_assistant_usable_for(tool_name, risk_level),
+                    migration_state=migration_state,
                     acceptance_refs=("tests/mcp",),
                 )
             )
@@ -394,10 +559,40 @@ def platform_tool_count() -> int:
     return len(MODULE_TOOL_NAMES["catalog"])
 
 
+def _has_plan_only_read_exemption(tool_name: str) -> bool:
+    override = TOOL_METADATA_OVERRIDES.get(tool_name)
+    return bool(
+        override
+        and override.risk_level == "read_only"
+        and override.assistant_usable == "direct_or_catalog"
+        and "plan-only preview" in override.reason
+    )
+
+
+def _has_side_effect_name_token(tool_name: str) -> bool:
+    return any(token in tool_name for token in SIDE_EFFECT_NAME_TOKENS)
+
+
 def validate_manifest(entries: Iterable[ToolManifestEntry] = TOOL_MANIFEST) -> list[str]:
     errors: list[str] = []
     seen: set[str] = set()
-    for entry in entries:
+    entry_list = list(entries)
+    entry_names = {entry.tool_name for entry in entry_list}
+    for tool_name, override in sorted(TOOL_METADATA_OVERRIDES.items()):
+        if tool_name not in MODULE_TOOL_NAMES.get("catalog", ()) and tool_name not in entry_names and entries is TOOL_MANIFEST:
+            errors.append(f"metadata override references unknown tool: {tool_name}")
+        if override.risk_level is not None and override.risk_level not in RISK_LEVELS:
+            errors.append(f"metadata override invalid risk_level for {tool_name}: {override.risk_level}")
+        if override.assistant_usable is not None and override.assistant_usable not in ASSISTANT_USABLE_VALUES:
+            errors.append(f"metadata override invalid assistant_usable for {tool_name}: {override.assistant_usable}")
+        if not override.reason.strip():
+            errors.append(f"metadata override missing reason for {tool_name}")
+    for tool_name, migration_state in sorted(MIGRATION_STATE_OVERRIDES.items()):
+        if tool_name not in entry_names and entries is TOOL_MANIFEST:
+            errors.append(f"migration_state override references unknown tool: {tool_name}")
+        if migration_state not in MIGRATION_STATES:
+            errors.append(f"migration_state override invalid state for {tool_name}: {migration_state}")
+    for entry in entry_list:
         if entry.tool_name in seen:
             errors.append(f"duplicate tool_name: {entry.tool_name}")
         seen.add(entry.tool_name)
@@ -415,6 +610,14 @@ def validate_manifest(entries: Iterable[ToolManifestEntry] = TOOL_MANIFEST) -> l
             errors.append(f"missing response_budget for {entry.tool_name}")
         if not entry.assistant_usable:
             errors.append(f"missing assistant_usable for {entry.tool_name}")
+        if entry.assistant_usable not in ASSISTANT_USABLE_VALUES:
+            errors.append(f"invalid assistant_usable for {entry.tool_name}: {entry.assistant_usable}")
+        if entry.risk_level in NON_DIRECT_RISK_LEVELS and entry.assistant_usable != "preflight_required":
+            errors.append(f"high-risk tool must require preflight: {entry.tool_name}")
+        if entry.risk_level == "read_only" and entry.assistant_usable != "direct_or_catalog":
+            errors.append(f"read_only tool should be direct_or_catalog unless reclassified: {entry.tool_name}")
+        if _has_side_effect_name_token(entry.tool_name) and entry.risk_level == "read_only" and not _has_plan_only_read_exemption(entry.tool_name):
+            errors.append(f"side-effect-looking tool is read_only without plan-only override: {entry.tool_name}")
     return errors
 
 

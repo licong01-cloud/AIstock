@@ -327,6 +327,23 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: mcp_gateway_manifest_quality
+    title: MCP Gateway manifest quality and import-boundary validation
+    module: platform.mcp_gateway
+    level: L2
+    command_key: nox_mcp_gateway_manifest_quality
+    nox_session: mcp_gateway_manifest_quality
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor]
   - plan_key: ra_phase0_baseline
     title: Research Assistant Phase 0 baseline lock and scaffold gate
     module: research_assistant

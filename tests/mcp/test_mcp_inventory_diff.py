@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import re
+import sys
 from pathlib import Path
 
 from backend.mcp.tool_manifest import MODULE_TOOL_NAMES
@@ -47,3 +49,29 @@ def test_mcp_modules_do_not_import_backend_services_directly() -> None:
         if "backend.services" in text or "backend.db" in text:
             offenders.append(path.as_posix())
     assert offenders == []
+
+
+def test_mcp_modules_do_not_import_scripts_or_transitive_business_code() -> None:
+    offenders: list[str] = []
+    module_names: list[str] = []
+    for path in Path("backend/mcp/modules").glob("*.py"):
+        if path.name == "__init__.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                if any(alias.name == "scripts" or alias.name.startswith("scripts.") for alias in node.names):
+                    offenders.append(path.as_posix())
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "scripts" or module.startswith("scripts."):
+                    offenders.append(path.as_posix())
+        module_names.append(path.stem)
+
+    before = set(sys.modules)
+    for module_name in sorted(module_names):
+        importlib.import_module(f"backend.mcp.modules.{module_name}")
+    added = set(sys.modules) - before
+
+    assert sorted(set(offenders)) == []
+    assert "scripts.aistock_mcp_server" not in added
