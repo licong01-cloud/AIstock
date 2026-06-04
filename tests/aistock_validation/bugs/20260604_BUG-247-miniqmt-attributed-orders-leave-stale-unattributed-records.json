@@ -31,8 +31,8 @@
   "expected": "When a later read-only MiniQMT sync safely attributes an order or trade to an authoritative intent/strategy, any prior unattributed record for the same account/date/order or trade must be removed idempotently before reconciliation.",
   "first_seen_at": "2026-06-04T02:38:04.572769Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1aaa923595edeae8c87d0509fda8ae874a39641d",
+  "fixed_at": "2026-06-04T02:48:10.083811Z",
   "github_issue_number": 693,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/693",
   "last_seen_at": "2026-06-04T02:38:04.572769Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/695",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -59,5 +60,8 @@
     "fingerprint": "375a1b3e195aa15d691612c2",
     "source_event_id": "FE-20260604-375a1b3e195a"
   },
+  "validation_evidence": [
+    "local validation passed; gh pr checks 695 passed 16 checks failed=0; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
   "verification_run_id": null
 }
