@@ -1151,6 +1151,17 @@ class QmtStrategyLedgerRepository:
                 rows = cur.fetchall()
         return [_row_to_unattributed_order(row) for row in rows]
 
+    def delete_unattributed_order(self, *, account_id: str, trade_date: date, qmt_order_id: str) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qmt_strategy.unattributed_order
+                    WHERE account_id = %s AND trade_date = %s AND qmt_order_id = %s
+                    """,
+                    (account_id, trade_date, qmt_order_id),
+                )
+
     def upsert_unattributed_trade(self, record: UnattributedTradeRecord) -> UnattributedTradeRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1209,6 +1220,17 @@ class QmtStrategyLedgerRepository:
                 )
                 rows = cur.fetchall()
         return [_row_to_unattributed_trade(row) for row in rows]
+
+    def delete_unattributed_trade(self, *, account_id: str, trade_date: date, trade_id: str) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qmt_strategy.unattributed_trade
+                    WHERE account_id = %s AND trade_date = %s AND trade_id = %s
+                    """,
+                    (account_id, trade_date, trade_id),
+                )
 
 
 class InMemoryQmtStrategyLedgerRepository:
@@ -1661,6 +1683,9 @@ class InMemoryQmtStrategyLedgerRepository:
             records = [record for record in records if record.trade_date == trade_date]
         return sorted(records, key=lambda record: (record.trade_date, record.qmt_order_id))
 
+    def delete_unattributed_order(self, *, account_id: str, trade_date: date, qmt_order_id: str) -> None:
+        self._unattributed_orders.pop((account_id, trade_date, qmt_order_id), None)
+
     def upsert_unattributed_trade(self, record: UnattributedTradeRecord) -> UnattributedTradeRecord:
         key = (record.account_id, record.trade_date, record.trade_id)
         self._unattributed_trades[key] = record
@@ -1677,6 +1702,9 @@ class InMemoryQmtStrategyLedgerRepository:
         if trade_date is not None:
             records = [record for record in records if record.trade_date == trade_date]
         return sorted(records, key=lambda record: (record.trade_date, record.trade_id))
+
+    def delete_unattributed_trade(self, *, account_id: str, trade_date: date, trade_id: str) -> None:
+        self._unattributed_trades.pop((account_id, trade_date, trade_id), None)
 
 
 def _validate_virtual_account(account: VirtualAccount) -> None:
