@@ -42,6 +42,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from backend.mcp.validation_issue_items import compact_issue_item
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 try:  # FastMCP is the canonical stdio MCP server. Imported lazily-friendly.
@@ -972,27 +974,7 @@ def _normalize_registry_issue(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_issue_item(item: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        "source": item.get("source"),
-        "registry_is_source_of_truth": item.get("registry_is_source_of_truth"),
-        "bug_id": item.get("bug_id"),
-        "number": item.get("number"),
-        "title": item.get("title") or "",
-        "state": item.get("state"),
-        "status": item.get("status"),
-        "severity": item.get("severity"),
-        "module": item.get("module"),
-        "labels": item.get("labels") or [],
-        "html_url": item.get("html_url"),
-        "source_path": item.get("source_path"),
-    }
-    if isinstance(item.get("github_issue"), dict):
-        compact["github_issue"] = {
-            key: item["github_issue"].get(key)
-            for key in ("number", "state", "title", "html_url")
-            if item["github_issue"].get(key) is not None
-        }
-    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+    return compact_issue_item(item)
 
 
 def _maybe_compact_issue_items(items: list[dict[str, Any]], *, compact: bool) -> list[dict[str, Any]]:

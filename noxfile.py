@@ -838,6 +838,29 @@ def research_mcp_contract(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def mcp_gateway_manifest_quality(session: nox.Session) -> None:
+    """Run MCP gateway manifest quality and import-boundary gates."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/mcp",
+        "scripts/aistock_mcp_gateway.py",
+        "scripts/aistock_mcp_gateway_doctor.py",
+        external=True,
+    )
+    session.run("python", "scripts/aistock_mcp_gateway.py", "--self-check", "--profile=lite", external=True)
+    session.run("python", "scripts/aistock_mcp_gateway_doctor.py", "--json", external=True)
+    _run_pytest(
+        session,
+        "tests/mcp",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def ra_phase0_baseline(session: nox.Session) -> None:
     """Run Phase 0 baseline, scaffold, catalog, and ownership gates."""
     phase0_paths = [

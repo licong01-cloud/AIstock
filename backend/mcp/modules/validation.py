@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from scripts import aistock_mcp_server as legacy_validation
+from backend.mcp import legacy_validation_adapter
+from backend.mcp.validation_issue_items import compact_issue_item
 
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
@@ -118,7 +119,7 @@ def register(registry: "ModuleRegistry") -> None:
             return payload
         result = dict(payload)
         result["items"] = [
-            legacy_validation._compact_issue_item({"source": "bug_json", **item})
+            compact_issue_item({"source": "bug_json", **item})
             for item in payload["items"]
             if isinstance(item, dict)
         ]
@@ -197,7 +198,7 @@ def register(registry: "ModuleRegistry") -> None:
         related_drawer: str | None = None,
         comments: list[str] | None = None,
     ) -> Any:
-        return legacy_validation.report_bug(
+        return legacy_validation_adapter.report_bug(
             title=title,
             severity=severity,
             module=module,
@@ -222,7 +223,7 @@ def register(registry: "ModuleRegistry") -> None:
         page_size: int = 20,
         compact: bool = True,
     ) -> Any:
-        return legacy_validation.mcp_github_issue_list(
+        return legacy_validation_adapter.mcp_github_issue_list(
             state=state,
             module=module,
             severity=severity,
@@ -247,7 +248,7 @@ def register(registry: "ModuleRegistry") -> None:
         page_size: int = 20,
         compact: bool = True,
     ) -> Any:
-        return legacy_validation.mcp_github_issue_search(
+        return legacy_validation_adapter.mcp_github_issue_search(
             query=query,
             state=state,
             module=module,
@@ -271,7 +272,7 @@ def register(registry: "ModuleRegistry") -> None:
         fix_owner: str | None = None,
         create_github: bool = False,
     ) -> Any:
-        return legacy_validation.mcp_github_issue_create(
+        return legacy_validation_adapter.mcp_github_issue_create(
             title=title,
             body=body,
             severity=severity,
@@ -291,7 +292,7 @@ def register(registry: "ModuleRegistry") -> None:
         note: str | None = None,
         sync_github: bool = False,
     ) -> Any:
-        return legacy_validation.assign_bug(
+        return legacy_validation_adapter.assign_bug(
             bug_id=bug_id,
             assigned_agent=assigned_agent,
             fix_branch=fix_branch,
@@ -311,7 +312,7 @@ def register(registry: "ModuleRegistry") -> None:
         verification_run_id: str | None = None,
         sync_github: bool = False,
     ) -> Any:
-        return legacy_validation.update_bug_status(
+        return legacy_validation_adapter.update_bug_status(
             bug_id=bug_id,
             status=status,
             actor=actor,
@@ -329,7 +330,7 @@ def register(registry: "ModuleRegistry") -> None:
         apply: bool = False,
         actor: str = "mcp_agent",
     ) -> Any:
-        return legacy_validation.mcp_github_issue_sync_bug(
+        return legacy_validation_adapter.mcp_github_issue_sync_bug(
             bug_id=bug_id,
             direction=direction,
             apply=apply,
