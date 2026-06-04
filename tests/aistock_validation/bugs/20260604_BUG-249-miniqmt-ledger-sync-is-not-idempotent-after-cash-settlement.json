@@ -4,7 +4,8 @@
     "tests/aistock_validation/bugs/20260604_BUG-249-miniqmt-ledger-sync-is-not-idempotent-after-cash-settlement.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "backend/services/qmt_strategy_ledger/repository.py",
-    "backend/tests/qmt_strategy_ledger/test_sync_service.py"
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_repository.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-249",
@@ -34,6 +35,12 @@
       "actor": "codex",
       "action": "fix_validated",
       "note": "Moved Postgres cash-entry account validation behind ON CONFLICT insert success and added regression coverage for duplicate cash_id idempotency."
+    },
+    {
+      "timestamp": "2026-06-04T03:24:54.500608+00:00",
+      "actor": "codex",
+      "action": "scope_expand",
+      "note": "Added actual regression test file backend/tests/qmt_strategy_ledger/test_repository.py after implementation used repository-level unit coverage."
     }
   ],
   "evidence_uris": [
