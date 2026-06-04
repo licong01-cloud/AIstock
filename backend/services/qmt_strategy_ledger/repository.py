@@ -884,11 +884,11 @@ class QmtStrategyLedgerRepository:
         return entry, inserted
 
     def apply_cash_entry_once(self, entry: CashLedgerEntry, account: VirtualAccount) -> tuple[CashLedgerEntry, bool]:
-        _validate_virtual_account(account)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
                 if inserted:
+                    _validate_virtual_account(account)
                     self._update_virtual_account_with_cursor(cur, account)
         return entry, inserted
 
@@ -900,7 +900,6 @@ class QmtStrategyLedgerRepository:
     ) -> tuple[CashLedgerEntry, bool]:
         """Apply a cash event, account update, and lot updates as one DB transaction."""
 
-        _validate_virtual_account(account)
         with self._conn_factory() as conn:
             previous_autocommit = getattr(conn, "autocommit", None)
             if previous_autocommit is not None:
@@ -909,6 +908,7 @@ class QmtStrategyLedgerRepository:
                 with conn.cursor() as cur:
                     inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
                     if inserted:
+                        _validate_virtual_account(account)
                         self._update_virtual_account_with_cursor(cur, account)
                         for lot in lots:
                             if lot.available_quantity > lot.remaining_quantity:

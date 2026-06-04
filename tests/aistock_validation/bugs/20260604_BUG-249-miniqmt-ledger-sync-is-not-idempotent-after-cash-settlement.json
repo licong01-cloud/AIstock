@@ -1,0 +1,90 @@
+{
+  "actual": "Production MiniQMT sync-snapshot fails on rerun after BUG-247 cleanup because apply_cash_entry_once validates the hypothetical account update before detecting an existing cash_id conflict. A duplicate buy fill can make cash/frozen balances negative before ON CONFLICT DO NOTHING runs, causing HTTP 500 and blocking unattended MiniQMT reconciliation. Reproduce: POST /api/v1/qmt/virtual-strategies/sync-snapshot for account 62266303 trade_date 2026-06-04 after successful initial sync.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-249-miniqmt-ledger-sync-is-not-idempotent-after-cash-settlement.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_repository.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-249",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T03:17:32.201373Z",
+  "description": "Production MiniQMT sync-snapshot fails on rerun after BUG-247 cleanup because apply_cash_entry_once validates the hypothetical account update before detecting an existing cash_id conflict. A duplicate buy fill can make cash/frozen balances negative before ON CONFLICT DO NOTHING runs, causing HTTP 500 and blocking unattended MiniQMT reconciliation. Reproduce: POST /api/v1/qmt/virtual-strategies/sync-snapshot for account 62266303 trade_date 2026-06-04 after successful initial sync.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-28c3db3db2f9",
+      "timestamp": "2026-06-04T03:17:32.201368Z"
+    },
+    {
+      "timestamp": "2026-06-04T03:19:10Z",
+      "actor": "codex",
+      "action": "scope_expand",
+      "note": "Expanded allowed_write_scope to repository idempotency fix and qmt_strategy_ledger regression test after fast-path classification."
+    },
+    {
+      "timestamp": "2026-06-04T03:23:37.522875+00:00",
+      "actor": "codex",
+      "action": "fix_validated",
+      "note": "Moved Postgres cash-entry account validation behind ON CONFLICT insert success and added regression coverage for duplicate cash_id idempotency."
+    },
+    {
+      "timestamp": "2026-06-04T03:24:54.500608+00:00",
+      "actor": "codex",
+      "action": "scope_expand",
+      "note": "Added actual regression test file backend/tests/qmt_strategy_ledger/test_repository.py after implementation used repository-level unit coverage."
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/production_minqmt_baseline_20260604_110534/db_snapshot_after_sync.json"
+  ],
+  "expected": "Repeated MiniQMT sync-snapshot calls must be idempotent: when cash_id already exists, repository once-semantics must skip hypothetical account validation/update and return inserted=false instead of raising or mutating balances.",
+  "first_seen_at": "2026-06-04T03:17:32.201373Z",
+  "fix_branch": "bug/BUG-249-miniqmt-ledger-sync-is-not-idempotent-after-cash-20260604",
+  "fix_commit": null,
+  "fixed_at": "2026-06-04T03:23:37.522875+00:00",
+  "github_issue_number": 699,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/699",
+  "last_seen_at": "2026-06-04T03:17:32.201373Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/qmt/virtual-strategies/sync-snapshot with account_id=62266303 trade_date=2026-06-04 after a successful sync; duplicate BUY_FILL cash_id path validates a negative hypothetical account before ON CONFLICT DO NOTHING.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT ledger sync is not idempotent after cash settlement",
+  "trigger_condition": {
+    "fingerprint": "28c3db3db2f91353397e27c2",
+    "source_event_id": "FE-20260604-28c3db3db2f9"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_repository.py::test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exists backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 14 passed",
+    "python -m pytest backend/tests/qmt_strategy_ledger -q -> 107 passed",
+    "python -m ruff check backend/services/qmt_strategy_ledger/repository.py backend/tests/qmt_strategy_ledger/test_repository.py -> passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ]
+}

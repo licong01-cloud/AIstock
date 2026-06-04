@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -20,7 +21,7 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccount,
     VirtualAccountStatus,
 )
-from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository, QmtStrategyLedgerRepository
 
 
 ACCOUNT_ID = "62266303"
@@ -281,6 +282,49 @@ def test_in_memory_repository_keeps_cash_entries_append_only_and_lots_filterable
     )
     assert updated_lot.available_quantity == 800
     assert repo.list_position_lots("strat_a", symbol="300604.SZ")[0].available_quantity == 800
+
+
+class _NoopCursor:
+    def __enter__(self) -> "_NoopCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+class _NoopConnection:
+    def __enter__(self) -> "_NoopConnection":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def cursor(self) -> _NoopCursor:
+        return _NoopCursor()
+
+
+def test_postgres_cash_entry_once_skips_account_update_validation_when_entry_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = QmtStrategyLedgerRepository(conn_factory=lambda: _NoopConnection())
+    entry = CashLedgerEntry(
+        cash_id="cash_existing",
+        strategy_id="strat_a",
+        entry_type=CashEntryType.BUY_FILL,
+        cash_delta=Decimal("-10"),
+        cash_after=Decimal("-10"),
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+    )
+    invalid_hypothetical_account = replace(_account(), cash=Decimal("-1"))
+    updates: list[str] = []
+
+    monkeypatch.setattr(repo, "_insert_cash_entry_with_cursor", lambda cur, cash_entry, *, ignore_conflict: False)
+    monkeypatch.setattr(repo, "_update_virtual_account_with_cursor", lambda cur, account: updates.append(account.strategy_id))
+
+    returned, inserted = repo.apply_cash_entry_once(entry, invalid_hypothetical_account)
+
+    assert returned == entry
+    assert inserted is False
+    assert updates == []
 
 
 def test_in_memory_repository_lists_open_sell_intents_by_strategy_symbol_and_date() -> None:
