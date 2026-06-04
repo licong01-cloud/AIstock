@@ -29,8 +29,8 @@
   "expected": "Issue workflow postmortem should preserve append-only phase evidence across cleanup, and cleanup should mark locked empty directories as deferred without repeated noisy retries.",
   "first_seen_at": "2026-06-04T18:28:46.574856Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "07838062db352e5dd51c7b2236e07ae6dcac0e9e",
+  "fixed_at": "2026-06-04T19:01:20.478591Z",
   "github_issue_number": 764,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/764",
   "last_seen_at": "2026-06-04T18:28:46.574856Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/766",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "b1ccf7fbbe75654a3115ec5a",
     "source_event_id": "FE-20260605-b1ccf7fbbe75"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_center_backend -> 381 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
