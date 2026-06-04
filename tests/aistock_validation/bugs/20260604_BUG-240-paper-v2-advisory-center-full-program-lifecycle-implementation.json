@@ -49,8 +49,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-03T16:57:30.079139Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d68aca989792454b918d464dc1c6936fdf7fffee",
+  "fixed_at": "2026-06-04T00:40:07.729957Z",
   "github_issue_number": 671,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/671",
   "last_seen_at": "2026-06-03T16:57:30.079139Z",
@@ -58,8 +58,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/682",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -73,7 +74,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "selection_center"
   ],
@@ -82,6 +83,10 @@
     "fingerprint": "3fa82ff17cdee9c942a9c1e8",
     "source_event_id": "FE-20260604-3fa82ff17cde"
   },
+  "validation_evidence": [
+    "PR #682 GitHub checks all completed: required checks SUCCESS, fast lane SKIPPED only",
+    "Local final gates passed: targeted pytest 86 passed, paper_v2_l3 passed, validation_center_backend 356 passed, qe_archive_l3 passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "fix_ready"
 }
