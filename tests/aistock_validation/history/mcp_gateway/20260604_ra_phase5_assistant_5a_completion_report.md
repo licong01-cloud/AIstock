@@ -127,7 +127,7 @@ nox > Session mcp_gateway_phase5_assistant was successful in a minute.
 job_id=valjob_20260604_095658_90d35390
 status=passed
 return_code=0
-workspace_commit=24021029
+workspace_commit=171883e6
 run_id=research-assistant_20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-validation__8c711daee1
 runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-runner-log.txt
 ```
@@ -140,7 +140,7 @@ runner_log=tmp/validation/runner/jobs/history/research-assistant/20260604_095802
 |---|---|
 | plan_key | `mcp_gateway_phase5_assistant` |
 | expected_branch | `codex/ra-phase5-assistant-integration-20260604` |
-| expected_commit | `24021029` |
+| expected_commit | `171883e6` |
 | job_id | `valjob_20260604_095658_90d35390` |
 | exit_code | 0 |
 | run_id | `research-assistant_20260604_095802_l4_mcp-gateway-phase5-assistant_90d35390_runner-validation__8c711daee1` |
