@@ -21,12 +21,12 @@ If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or
 For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:
 
 ```powershell
-python F:\Dev\AIstock\scripts\aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-registry-worktree --apply
+python F:\Dev\AIstock\scripts\aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply
 ```
 
 If GitHub linkage cannot be created or supplied with `--github-issue-number` plus `--github-issue-url`, stop before committing BUG JSON.
 
-`submit-bug --apply` must run from a clean task/registry worktree and branch, not from the canonical root checkout or `main`. If the registry guard blocks the command, create or switch to an isolated registry worktree and retry there; do not bypass this in normal Claude Code workflows.
+For BUGs that will be fixed immediately, `--create-fix-worktree` is the default fast-chain path: it creates one fix branch/worktree, commits the BUG registration there, and expects the fix PR to persist the BUG JSON. Use `--create-registry-worktree` only for intake-only tracking or CI/Nightly promotion lanes.
 
 After successful submit, follow the returned `fix_chain.run_next_command` in the same workflow instead of opening a separate registry-only PR. Create a registry-only PR only when the user explicitly asks for intake-only tracking.
 
@@ -92,7 +92,7 @@ Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, dup
 ## Guardrails
 
 - Do not merge to `main` unless the user explicitly asked for merge.
-- Do not write BUG JSON or allocator changes in canonical root/main; use a clean issue or registry worktree.
+- Do not write BUG JSON or allocator changes in canonical root/main; use `--create-fix-worktree` for immediate fixes or a clean registry worktree for intake-only/CI lanes.
 - Do not touch production backend `8001`, frontend `3000`, production DB, or DDL without explicit approval.
 - Keep BUG JSON and GitHub Issue linkage intact.
 - Preserve per-issue evidence when batching; use `start-batch` and `finish-batch` only for same-module, same-risk, same-validation BUG groups.
@@ -101,6 +101,19 @@ Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, dup
 ## Post-Merge Sync And Cleanup
 
 After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
+
+For a compatible multi-BUG PR, close-sync once instead of serial per-BUG aftercare:
+
+```powershell
+python scripts\aistock_issue_workflow.py close-sync-batch `
+  --bug-id BUG-XXX `
+  --bug-id BUG-YYY `
+  --pr-url <PR_URL> `
+  --validation-evidence "<command> -> passed" `
+  --create-registry-worktree `
+  --create-pr `
+  --apply
+```
 
 If the user explicitly requests full merge automation, use `run --mode merge --pr-url <PR_URL> --merge --validation-evidence "<command> -> passed"` so the same state machine verifies green checks, merge, close-sync, and cleanup planning. Without `--merge`, stop before merging.
 
@@ -118,6 +131,8 @@ python scripts\aistock_issue_workflow.py merge-finalizer `
 ```
 
 Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green.
+
+Cleanup may remove safe orphaned task worktree directories containing only empty folders or reparse/junction links under `AIstock_worktrees`; it must refuse regular files and must not use `reset --hard` or `git clean`.
 
 ## Client Install
 
