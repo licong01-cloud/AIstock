@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.broker.base import OrderHandle
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
@@ -50,7 +50,7 @@ from backend.services.strategy_package.models import (
     StrategyPackageSource,
 )
 from backend.services.trading_core.errors import DataUnavailableError
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 
 
 TRADE_DATE = date(2026, 5, 21)
@@ -335,6 +335,63 @@ class FakePaperRepository:
     def load_latest_cash(self, portfolio: PaperPortfolio, before_or_on: date) -> float:
         self.calls.append(("load_latest_cash", portfolio.portfolio_id, before_or_on))
         return self.cash
+
+
+class FakeLocalSimMarketDataProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def load_symbol_input(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        min_bars: int,
+        require_suspend_status: bool = False,
+        require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "source": source,
+                "min_bars": min_bars,
+                "require_suspend_status": require_suspend_status,
+                "require_day_features": require_day_features,
+            }
+        )
+        start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
+        minute_bars = [
+            MinuteBar(
+                symbol=symbol,
+                bar_time=start + timedelta(minutes=offset),
+                open=10.0,
+                high=10.2,
+                low=9.9,
+                close=10.1,
+                volume=100_000,
+                amount=1_000_000.0,
+                limit_up=11.0,
+                limit_down=9.0,
+            )
+            for offset in range(max(1, min_bars))
+        ]
+        return MinuteExecutionMarketInput(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=minute_bars,
+            market_context={
+                "stock_id": symbol,
+                "trade_date": trade_date.isoformat(),
+                "data_source": source.value,
+                "prev_close": 10.0,
+                "limit_up": 11.0,
+                "limit_down": 9.0,
+                "suspend_status": {"is_suspended": False},
+            },
+        )
 
 
 def _frozen_manifest(package_id: str = "pkg_scheduler", manifest_sha256: str | None = None) -> StrategyPackageManifest:
@@ -1242,6 +1299,14 @@ def test_production_context_provider_loads_positions():
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     paper_repo = FakePaperRepository(portfolio, positions=positions, cash=999_000)
 
@@ -1281,6 +1346,14 @@ def test_production_context_provider_fails_fast_on_position_failure():
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
     provider = ProductionSimulationRunContextProvider(
@@ -1572,6 +1645,14 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     positions = {
         "000001.SZ": PositionLot(
@@ -1595,6 +1676,57 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     assert ctx.local_broker is not None
     assert ctx.local_broker.query_account().cash == Decimal("980000")
     assert ctx.local_broker.query_positions()["000001.SZ"].quantity == 1000
+
+
+def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_core_localsim_recovery():
+    """Alpha-core LocalSim recovery must use the Paper v2 validated policy snapshot, not manifest.minute_execution_policy."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim alpha-core recovery",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
+    market_data = FakeLocalSimMarketDataProvider()
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.local_broker is not None
+    ctx.local_broker._market_data_provider = market_data
+    handle = ctx.local_broker.submit_order_intent(
+        OrderIntent(
+            package_id=release.package_id,
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            order_type=OrderType.MARKET,
+            target_trade_date=TRADE_DATE,
+        )
+    )
+
+    assert ctx.local_broker.query_status(handle).state == "filled"
+    assert market_data.calls[-1]["require_day_features"] is False
 
 
 def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():

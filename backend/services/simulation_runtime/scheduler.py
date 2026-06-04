@@ -35,7 +35,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import PositionLot
 
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
@@ -296,7 +296,7 @@ class ProductionSimulationRunContextProvider:
                 else paper_repository.load_latest_positions(portfolio_id, trade_date)
             )
             cash = float(paper_repository.load_latest_cash(portfolio, trade_date))
-        except DataUnavailableError:
+        except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
         except Exception as exc:  # noqa: BLE001
             raise DataUnavailableError(
@@ -325,6 +325,7 @@ class ProductionSimulationRunContextProvider:
             portfolio=portfolio,
             binding=binding,
             manifest=manifest,
+            execution_policy=getattr(portfolio, "execution_policy", None),
             cash=cash,
             positions=positions,
         )
@@ -360,7 +361,7 @@ class ProductionSimulationRunContextProvider:
                     strategy_id=binding.strategy_id,
                 )
             )
-        except DataUnavailableError:
+        except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
         except Exception as exc:  # noqa: BLE001
             raise DataUnavailableError(
@@ -430,6 +431,7 @@ class ProductionSimulationRunContextProvider:
         portfolio: Any,
         binding: SimulationReleaseBinding,
         manifest: StrategyPackageManifest | None,
+        execution_policy: dict[str, Any] | None,
         cash: float,
         positions: dict[str, PositionLot],
     ) -> BrokerBackend | None:
@@ -455,9 +457,10 @@ class ProductionSimulationRunContextProvider:
                 initial_positions=positions,
                 data_source=data_source,
                 manifest=manifest,
+                execution_policy=execution_policy,
                 package_id=binding.package_id,
             )
-        except DataUnavailableError:
+        except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
         except Exception as exc:  # noqa: BLE001
             raise DataUnavailableError(

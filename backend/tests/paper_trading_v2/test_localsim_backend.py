@@ -36,12 +36,14 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
     MinuteExecutionMarketInput,
 )
+from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerMarketSourceMismatchError,
     BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
+    RuntimeConfigInvalidError,
 )
 from backend.services.trading_core.models import (
     MinuteBar,
@@ -144,7 +146,7 @@ def _build_backend(
     initial_cash: float = 1_000_000.0,
     data_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL,
     provider: FakeMarketDataProvider | None = None,
-) -> tuple[LocalSimBackend, FakeMarketDataProvider, "Manifest"]:  # type: ignore[name-defined]
+) -> tuple[LocalSimBackend, FakeMarketDataProvider, StrategyPackageManifest]:
     manifest = make_paper_enabled_manifest()
     market_data_provider = provider or FakeMarketDataProvider()
     backend = LocalSimBackend(
@@ -227,6 +229,51 @@ def test_submit_order_intent_returns_terminal_status_synchronously() -> None:
     assert status.avg_fill_price is not None
     assert status.rejection_reason is None
     backend.unsubscribe_fill_callback(sub)
+
+
+def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
+    manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
+    provider = FakeMarketDataProvider()
+    backend = LocalSimBackend(
+        portfolio_id="paper_local_validated_policy",
+        initial_cash=100_000,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        manifest=manifest,
+        market_data_provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+
+    handle = backend.submit_order_intent(_buy_intent(backend, quantity=100))
+
+    assert backend.query_status(handle).state == "filled"
+    assert provider.calls[-1]["require_day_features"] is False
+
+
+def test_localsim_fails_fast_without_execution_policy_snapshot() -> None:
+    manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
+
+    with pytest.raises(RuntimeConfigInvalidError, match="validated execution policy snapshot"):
+        LocalSimBackend(
+            portfolio_id="paper_local_missing_policy",
+            initial_cash=100_000,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            manifest=manifest,
+            market_data_provider=FakeMarketDataProvider(),
+        )
+
+
+def test_localsim_empty_portfolio_policy_falls_back_to_legacy_manifest_policy() -> None:
+    backend, provider, _ = _build_backend()
+
+    assert backend.submit_order_intent(_buy_intent(backend))
+    assert provider.calls[-1]["require_day_features"] is False
 
 
 def test_submit_order_intent_rejects_cross_portfolio_intent() -> None:
