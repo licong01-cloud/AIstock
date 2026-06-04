@@ -62,6 +62,8 @@ class SimulationRuntimeOpsService:
             "manual_tick_endpoint_enabled": bool(status.get("manual_tick_endpoint_enabled", False)),
             "context_provider": status.get("context_provider") or {},
             "context_provider_mode": status.get("context_provider_mode"),
+            "data_source": status.get("data_source"),
+            "data_source_policy": status.get("data_source_policy") or {},
             "summary": {
                 "label": "simulation lifecycle scheduler",
                 "next_action": "monitor scheduler windows, or use the controlled start/stop/tick APIs",
@@ -551,6 +553,7 @@ class SimulationRuntimeOpsService:
                     "broker_backend": item.broker_backend.value,
                     "status": item.status,
                     "run_id": item.run.run_id if item.run else None,
+                    "data_source": item.data_source or tick.data_source,
                     "error": item.error,
                 }
                 for item in tick.results
