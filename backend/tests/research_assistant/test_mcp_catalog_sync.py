@@ -45,9 +45,10 @@ def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
 
 def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
     catalog = load_catalog()
-    assert catalog["server_count"] == 13
-    assert catalog["tool_count"] == 203
+    assert catalog["server_count"] == 14
+    assert catalog["tool_count"] == 209
     assert {item["server_key"] for item in default_mcp_servers()} == {
+        "aistock-gateway-lite",
         "research-assistant",
         "aistock-research",
         "aistock-local-data",
@@ -73,6 +74,18 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
     assert servers["aistock-execution-policy"]["health_json"]["display_name_zh"] == "执行策略库"
     assert servers["aistock-external-research"]["health_json"]["display_name_zh"] == "External Research"
 
+    catalog_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-gateway-lite"]
+    assert len(catalog_tools) == 6
+    assert {tool["tool_name"] for tool in catalog_tools} == {
+        "mcp_gateway_health",
+        "mcp_gateway_list_profiles",
+        "mcp_gateway_list_modules",
+        "mcp_gateway_list_tools",
+        "mcp_gateway_search_tools",
+        "mcp_gateway_preflight_tool",
+    }
+    assert all(tool["risk_level"] == "low" and tool["side_effect_level"] == "read_only" for tool in catalog_tools)
+
     local_data_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-local-data"]
     assert len(local_data_tools) == 47
     qe_archive_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-qe-archive"]
@@ -88,26 +101,40 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
         "external_research_save_evidence",
     }
     assert next(tool for tool in external_tools if tool["tool_name"] == "external_research_save_evidence")["side_effect_level"] == "draft_only"
+    assert all("gateway_manifest" in tool["preflight_schema_json"] for tool in default_mcp_tools())
+    assert next(tool for tool in catalog_tools if tool["tool_name"] == "mcp_gateway_health")["preflight_schema_json"]["gateway_manifest"]["risk_level"] == "catalog"
 
 
 def test_seed_catalogs_registers_all_mcp_tools_and_capability_reply_is_humanized() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
-    assert result["seeded"]["mcp_servers"] == 13
-    assert result["seeded"]["mcp_tools"] == 203
+    assert result["seeded"]["mcp_servers"] == 14
+    assert result["seeded"]["mcp_tools"] == 209
 
     tools = svc.repository.list_records("mcp_tools", limit=300)["items"]
-    assert len(tools) == 203
+    assert len(tools) == 209
+    assert any(tool["server_key"] == "aistock-gateway-lite" and tool["tool_name"] == "mcp_gateway_health" for tool in tools)
     assert any(tool["server_key"] == "aistock-factor-library" and tool["tool_name"] == "factor_library_list" for tool in tools)
     assert any(tool["server_key"] == "aistock-qe-archive" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-execution-policy" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
     assert any(tool["server_key"] == "aistock-external-research" and tool["tool_name"] == "external_research_search_web" for tool in tools)
+    mcp_capability = svc.repository.find_one("capabilities", {"capability_key": "mcp_capability.mcp_orchestration"})
+    assert mcp_capability is not None
+    assert {ref["tool_name"] for ref in mcp_capability["mcp_tool_refs"] if ref["server_key"] == "aistock-gateway-lite"} == {
+        "mcp_gateway_health",
+        "mcp_gateway_list_profiles",
+        "mcp_gateway_list_modules",
+        "mcp_gateway_list_tools",
+        "mcp_gateway_search_tools",
+        "mcp_gateway_preflight_tool",
+    }
 
     catalog = svc._mcp_tool_catalog_snapshot()
     reply = svc._render_mcp_tool_catalog_reply(catalog)
     for phrase in ["\u53ea\u80fd", "\u4e0d\u5177\u5907", "\u672a\u767b\u8bb0"]:
         assert phrase not in reply
     assert "summary-first" in reply
+    assert "aistock-gateway-lite" in reply
     assert "aistock-qe-archive" in reply
     assert "aistock-factor-library" in reply
     assert "模型库" in reply

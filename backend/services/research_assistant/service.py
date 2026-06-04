@@ -1313,7 +1313,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         seeded["capabilities"] += int(capability_sync["applied_count"])
         self._seed_default_memory_graph(seeded)
         self._ensure_default_reports_and_notifications(seeded)
-        return {"seeded": seeded, "catalog_version": "research_assistant_unified_mcp_full_20260528"}
+        return {"seeded": seeded, "catalog_version": "research_assistant_gateway_manifest_20260604"}
 
     def _seed_default_memory_graph(self, seeded: dict[str, int]) -> None:
         for item in DEFAULT_MEMORY_SEEDS:
@@ -4201,6 +4201,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "payload_digest": sha256_json(data.payload_json),
             "idempotency_key": data.idempotency_key,
         }
+        preflight_schema = tool.get("preflight_schema_json") if isinstance(tool.get("preflight_schema_json"), dict) else {}
+        gateway_manifest = preflight_schema.get("gateway_manifest") if isinstance(preflight_schema.get("gateway_manifest"), dict) else {}
+        if gateway_manifest:
+            result.update(
+                {
+                    "gateway_manifest": gateway_manifest,
+                    "manifest_risk_level": gateway_manifest.get("risk_level"),
+                    "assistant_usable": gateway_manifest.get("assistant_usable"),
+                    "recommended_profile_tags": gateway_manifest.get("profile_tags") or preflight_schema.get("recommended_profile_tags") or [],
+                    "backend_endpoint": gateway_manifest.get("backend_endpoint"),
+                    "response_budget": gateway_manifest.get("response_budget"),
+                    "migration_state": gateway_manifest.get("migration_state"),
+                }
+            )
         event = self.repository.create_record(
             "mcp_tool_events",
             {

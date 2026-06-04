@@ -68,8 +68,8 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
 
 def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
-    assert resolve_modules(profile="research_assistant") == ["research_assistant"]
-    assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
+    assert resolve_modules(profile="research_assistant") == ["catalog", "research_assistant"]
+    assert resolve_modules(profile="research_with_assistant") == ["catalog", "research", "research_assistant"]
 
 
 @pytest.mark.parametrize(
@@ -84,8 +84,8 @@ def test_research_profile_is_only_current_module() -> None:
         ("external_research", ["external_research"]),
         ("factor_research", ["factor_library", "factor_metrics", "factor_correlation"]),
         ("strategy_ops", ["strategy_governance", "execution_policy"]),
-        ("research_full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
-        ("full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
+        ("research_full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
+        ("full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research", "validation", "qe_experiment", "qe_archive"]),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -210,8 +210,9 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
+    assert registry.tool_count("catalog") == 6
     assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
-    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT + 6
 
 
 
@@ -252,6 +253,7 @@ def test_gateway_loads_research_full_profile() -> None:
         env_name="test",
     )
 
+    assert registry.tool_count("catalog") == 6
     assert registry.tool_count("research") == 16
     assert registry.tool_count("research_assistant") == 13
     assert registry.tool_count("local_data") == 47
@@ -262,4 +264,4 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("strategy_governance") == 9
     assert registry.tool_count("execution_policy") == 7
     assert registry.tool_count("external_research") == 4
-    assert registry.total_tool_count() == 130
+    assert registry.total_tool_count() == 136
