@@ -194,7 +194,7 @@ FastAPI backend 127.0.0.1:8001 /api/v1
 **验收标准**
 
 - `python scripts/aistock_mcp_gateway.py --profile=lite --list-tools` 能列出 lite 工具，且工具数控制在 10 个以内。
-- `python scripts/aistock_mcp_gateway.py --profile=full --list-tools` 能列出 203 个工具或明确列出“已迁移 + script-backed 待迁移”全集。
+- `python scripts/aistock_mcp_gateway.py --profile=full --list-tools` 能列出 203 个既有业务工具以及新增 catalog 平台工具；输出必须分别报告 legacy/platform tool count。
 - `pytest tests/mcp/test_gateway_profiles.py -q` 覆盖 profile 解析、重复工具名、未知 profile、full 非默认。
 - `pytest tests/mcp/test_mcp_tool_manifest.py -q` 验证 manifest 中没有缺失 `risk_level`、`assistant_usable`、`migration_state`。
 - inventory diff 证明当前旧脚本 73 个工具均已在 manifest 中登记。
@@ -352,7 +352,7 @@ FastAPI backend 127.0.0.1:8001 /api/v1
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| 全部 203 个工具进入 manifest | `backend/mcp/tool_manifest.*` | inventory diff PASS | pending | 无 |
+| 全部 203 个工具进入 manifest | `backend/mcp/tool_manifest.*` | inventory diff + catalog count PASS | pending | 无 |
 | 默认 profile 为 lite | `.mcp.json`、`backend/mcp/profiles.py` | config doctor PASS | pending | 无 |
 | validation 19 工具迁移 | `backend/mcp/modules/validation.py` | profile list + targeted tests | pending | 无 |
 | QE 54 工具迁移 | `backend/mcp/modules/qe_*.py` | profile list + targeted tests | pending | 无 |
@@ -362,6 +362,11 @@ FastAPI backend 127.0.0.1:8001 /api/v1
 | standalone 默认退役 | `.mcp.json` | 新会话进程和 tool list evidence | pending | 等用户确认退役窗口 |
 
 ## 11. 合入与实施边界
+
+### 11.1 非智能助手优先实现边界
+
+如果用户要求先跳过智能助手相关功能，可以先完成 Phase 1、Phase 2、Phase 3、Phase 4、Phase 6、Phase 7 的非智能助手范围。该范围的完成口径为 `non_assistant_unified_gateway_complete`，但不得宣称 Phase 5 或智能助手集成完成。Phase 5 条目必须在验收矩阵中标记为 `PENDING_ASSISTANT_INTEGRATION`。
+
 
 1. 本文档合入 main 后，后续代码实现必须继续使用独立 worktree 和任务分支。
 2. 每个阶段可以独立 PR，但不得把“部分迁移”描述为“统一 gateway 完整完成”。
