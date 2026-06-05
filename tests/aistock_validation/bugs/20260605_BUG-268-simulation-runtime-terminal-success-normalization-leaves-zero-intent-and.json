@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/lifecycle.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
     "tests/aistock_validation/bugs/20260605_BUG-268-simulation-runtime-terminal-success-normalization-leaves-zero-intent-and.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260605-009d6fb90f51",
       "timestamp": "2026-06-05T01:54:01.514984Z"
+    },
+    {
+      "action": "scope_expanded_for_regression_tests",
+      "actor": "codex",
+      "note": "Added simulation_runtime regression tests covering zero-intent existing plans and stale submit_failure cleanup.",
+      "timestamp": "2026-06-05T02:00:00Z"
     }
   ],
   "evidence_uris": [

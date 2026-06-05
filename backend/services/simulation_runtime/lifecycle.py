@@ -209,7 +209,12 @@ class SimulationLifecycleOrchestrator:
             succeeded = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=SimulationDailyRunStatus.SUCCEEDED,
-                payload_patch={"no_rebalance_required": True, "broker_called": False, "last_stage": "SUCCEEDED"},
+                payload_patch={
+                    "no_rebalance_required": True,
+                    "broker_called": False,
+                    "last_stage": "SUCCEEDED",
+                    "submit_failure": None,
+                },
             )
             return SimulationExecutionResult(
                 run=succeeded,
@@ -250,6 +255,7 @@ class SimulationLifecycleOrchestrator:
                     ],
                     "local_sim_synchronous_terminal": True,
                     "last_stage": "SUCCEEDED",
+                    "submit_failure": None,
                 },
             )
             return SimulationExecutionResult(
@@ -288,19 +294,22 @@ class SimulationLifecycleOrchestrator:
                 raise
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
             broker_called = any(result.broker_called for result in qmt_result.results)
+            payload_patch = {
+                "broker_called": broker_called,
+                "submitted_intents": qmt_result.succeeded,
+                "failed_intents": qmt_result.failed,
+                "qmt_batch_id": qmt_result.batch_id,
+                "qmt_batch_status": qmt_result.batch_status,
+                "qmt_retry_of_batch_id": qmt_result.retry_of_batch_id,
+                "qmt_batch_result": qmt_result.to_dict(),
+                "last_stage": next_status.value,
+            }
+            if qmt_result.success:
+                payload_patch["submit_failure"] = None
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=next_status,
-                payload_patch={
-                    "broker_called": broker_called,
-                    "submitted_intents": qmt_result.succeeded,
-                    "failed_intents": qmt_result.failed,
-                    "qmt_batch_id": qmt_result.batch_id,
-                    "qmt_batch_status": qmt_result.batch_status,
-                    "qmt_retry_of_batch_id": qmt_result.retry_of_batch_id,
-                    "qmt_batch_result": qmt_result.to_dict(),
-                    "last_stage": next_status.value,
-                },
+                payload_patch=payload_patch,
             )
             return SimulationExecutionResult(
                 run=updated,
