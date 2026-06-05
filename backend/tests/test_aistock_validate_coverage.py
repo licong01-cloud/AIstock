@@ -66,6 +66,30 @@ def test_coverage_xml_writes_snapshot_and_passes_gates(tmp_path) -> None:
     assert snapshot["files"][0]["missing_lines"] == [2]
 
 
+def test_coverage_xml_can_run_without_snapshot_output(tmp_path, capsys) -> None:
+    xml_path = tmp_path / "coverage.xml"
+    _write_xml(xml_path)
+
+    rc = _run_cli([
+        "coverage",
+        "--module",
+        "validation_center",
+        "--level",
+        "L2",
+        "--coverage-xml",
+        str(xml_path),
+        "--line-threshold",
+        "75",
+        "--branch-threshold",
+        "50",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "coverage: line=75.0 branch=50.0" in captured.out
+    assert not list(tmp_path.glob("*snapshot*.json"))
+
+
 def test_coverage_gate_failure_returns_nonzero_and_preserves_evidence(tmp_path) -> None:
     xml_path = tmp_path / "coverage.xml"
     output = tmp_path / "coverage_snapshot.json"

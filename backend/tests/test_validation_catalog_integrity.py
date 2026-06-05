@@ -348,8 +348,25 @@ def test_catalog_integrity_cli_writes_json_report(tmp_path: Path, capsys) -> Non
     )
 
     captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "catalog_integrity state=passed" in captured.out
+    assert output_json.exists()
+    assert json.loads(output_json.read_text(encoding="utf-8"))["state"] == "passed"
+
+
+def test_catalog_integrity_cli_can_emit_json_stdout(tmp_path: Path, capsys) -> None:
+    _write_pass_repo(tmp_path)
+
+    exit_code = catalog_integrity_main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--output-format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["schema_version"] == CATALOG_INTEGRITY_SCHEMA
-    assert output_json.exists()
-    assert json.loads(output_json.read_text(encoding="utf-8"))["state"] == "passed"
