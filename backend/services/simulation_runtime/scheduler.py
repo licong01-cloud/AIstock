@@ -204,6 +204,7 @@ class ProductionSimulationRunContextProvider:
         qmt_sync_service_factory: Callable[[], QmtStrategyLedgerSyncService] | None = None,
         qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
         qmt_ledger_repository: Any | None = None,
+        package_manifest_loader: Callable[[str], StrategyPackageManifest | dict[str, Any] | None] | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
@@ -218,6 +219,7 @@ class ProductionSimulationRunContextProvider:
         self._qmt_sync_service_factory = qmt_sync_service_factory
         self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
         self._qmt_ledger_repository = qmt_ledger_repository
+        self._package_manifest_loader = package_manifest_loader or _default_strategy_package_manifest_loader
         self._enable_localsim_broker = (
             _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
             if enable_localsim_broker is None
@@ -403,6 +405,10 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
+        manifest = self._load_strategy_package_manifest(
+            runtime_release=runtime_release,
+            binding=binding,
+        )
         managed_order_service = (
             self._managed_order_service_factory()
             if self._managed_order_service_factory is not None
@@ -430,6 +436,7 @@ class ProductionSimulationRunContextProvider:
             current_positions=positions,
             current_prices=prices,
             portfolio_id=binding.strategy_id,
+            manifest=manifest,
             managed_order_service=managed_order_service,
             qmt_sync_service=qmt_sync_service,
             qmt_reconciliation_service=qmt_reconciliation_service,
@@ -707,6 +714,51 @@ class ProductionSimulationRunContextProvider:
         if binding.broker_account_id:
             return binding.broker_account_id
         return binding.strategy_id
+
+    def _load_strategy_package_manifest(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+    ) -> StrategyPackageManifest:
+        try:
+            raw_manifest = self._package_manifest_loader(binding.package_id)
+        except (DataUnavailableError, RuntimeConfigInvalidError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to load StrategyPackage manifest for MiniQMT simulation context",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "manifest_sha256": binding.manifest_sha256,
+                },
+            ) from exc
+
+        if raw_manifest is None:
+            raise DataUnavailableError(
+                "MiniQMT simulation context requires a frozen StrategyPackage manifest",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "manifest_sha256": binding.manifest_sha256,
+                },
+            )
+        manifest = (
+            raw_manifest
+            if isinstance(raw_manifest, StrategyPackageManifest)
+            else StrategyPackageManifest.model_validate(raw_manifest)
+        )
+        self._validate_manifest_identity(
+            manifest=manifest,
+            runtime_release=runtime_release,
+            binding=binding,
+        )
+        return manifest
 
     @staticmethod
     def _validate_manifest_identity(
@@ -1175,6 +1227,12 @@ def _default_qmt_calendar_provider() -> Any:
     return DbTradingCalendarProvider()
 
 
+def _default_strategy_package_manifest_loader(package_id: str) -> StrategyPackageManifest:
+    from backend.services.strategy_package.repository import StrategyPackageRepository
+
+    return StrategyPackageRepository().get(package_id).current_manifest()
+
+
 def _env_flag(name: str, *, default: bool) -> bool:
     raw = (os.getenv(name) or "").strip().lower()
     if not raw:
@@ -1449,6 +1507,10 @@ class SimulationLifecycleScheduler:
             selection=selection,
             context=context,
             created_by=created_by,
+        )
+        build_result = self._persist_no_rebalance_evidence(
+            build_result=build_result,
+            current_positions=context.current_positions,
         )
         if not submit:
             self._persist_strategy_performance(binding=binding, run=build_result.run, context=context)
@@ -1945,6 +2007,82 @@ class SimulationLifecycleScheduler:
             tail_policy_payload=context.tail_policy_payload,
             created_by=created_by,
         )
+
+    def _persist_no_rebalance_evidence(
+        self,
+        *,
+        build_result: SimulationPlanBuildResult,
+        current_positions: dict[str, PositionLot],
+    ) -> SimulationPlanBuildResult:
+        if build_result.rebalance.order_intents:
+            return build_result
+
+        target_by_symbol = {target.symbol: target for target in build_result.target_positions}
+        decision_by_symbol = {decision.symbol: decision for decision in build_result.rebalance.trading_rule_decisions}
+        rows: list[dict[str, Any]] = []
+        for symbol in sorted(set(target_by_symbol) | set(current_positions)):
+            target = target_by_symbol.get(symbol)
+            position = current_positions.get(symbol)
+            current_quantity = int(position.quantity) if position is not None else 0
+            target_quantity = int(target.target_quantity) if target is not None else 0
+            decision = decision_by_symbol.get(symbol)
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "target_quantity": target_quantity,
+                    "current_quantity": current_quantity,
+                    "delta_quantity": target_quantity - current_quantity,
+                    "current_available_quantity": int(position.available_quantity) if position is not None else None,
+                    "current_position_trade_date": position.trade_date.isoformat() if position is not None else None,
+                    "target_weight": float(target.target_weight) if target is not None and target.target_weight is not None else None,
+                    "reference_price": float(target.reference_price) if target is not None and target.reference_price is not None else None,
+                    "target_reason": target.reason if target is not None else "DROPPED_FROM_SELECTION",
+                    "trading_rule_decision": {
+                        "decision_id": decision.decision_id,
+                        "decision": decision.decision,
+                        "reason_code": decision.reason_code,
+                        "requested_quantity": int(decision.requested_quantity),
+                        "legal_quantity": int(decision.legal_quantity),
+                    }
+                    if decision is not None
+                    else None,
+                }
+            )
+
+        reason_code = (
+            "TOP_LIST_AND_QUANTITY_MATCH"
+            if rows and all(row["delta_quantity"] == 0 for row in rows)
+            else "NO_EMITTABLE_REBALANCE_INTENTS"
+        )
+        evidence_payload = {
+            "schema_version": "no_rebalance_evidence_v1",
+            "source": "simulation_lifecycle_scheduler",
+            "reason_code": reason_code,
+            "target_trade_date": build_result.selection_evidence.target_trade_date.isoformat(),
+            "package_id": build_result.runtime_release.package_id,
+            "manifest_sha256": build_result.runtime_release.manifest_sha256,
+            "release_id": build_result.runtime_release.release_id,
+            "binding_id": build_result.binding.binding_id,
+            "strategy_id": build_result.binding.strategy_id,
+            "broker_backend": build_result.binding.broker_backend.value,
+            "selection_evidence_id": build_result.selection_evidence.evidence_id,
+            "execution_plan_id": build_result.execution_plan.plan_id,
+            "selected_symbols": [
+                candidate.symbol
+                for candidate in sorted(build_result.signal_snapshot.candidates, key=lambda item: item.rank)
+            ],
+            "target_symbols": sorted(target_by_symbol),
+            "current_symbols": sorted(current_positions),
+            "target_count": len(build_result.target_positions),
+            "current_position_count": len(current_positions),
+            "trading_rule_decision_count": len(build_result.rebalance.trading_rule_decisions),
+            "rows": rows,
+        }
+        updated_run = self.repository.update_simulation_daily_run(
+            build_result.run.run_id,
+            payload_patch={"no_rebalance_evidence": evidence_payload},
+        )
+        return replace(build_result, run=updated_run)
 
     def _handle_tail_after_submit(
         self,
