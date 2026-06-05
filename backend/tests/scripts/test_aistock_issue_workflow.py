@@ -2898,6 +2898,93 @@ def test_merge_finalizer_persists_close_sync_and_reports_postmortem(
     assert "merge_close_sync_pr_after_checks_are_green" in payload["next_actions"]
 
 
+def test_merge_finalizer_uses_batch_close_sync_for_multiple_bug_ids(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_close_sync_is_complete", lambda **kwargs: None)
+    monkeypatch.setattr(workflow, "_close_sync_pr_in_progress_marker", lambda **kwargs: None)
+    monkeypatch.setattr(workflow, "build_close_sync_plan", lambda **kwargs: pytest.fail("single BUG close-sync should not run"))
+
+    def fake_batch_close_sync(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "schema_version": "aistock_issue_workflow_close_sync_batch_v1",
+            "workflow_gate": "close_synced",
+            "batch_id": "BUG-266-BUG-267",
+            "bug_ids": kwargs["bug_ids"],
+            "registry_root": str(isolated_workflow_root / "registry"),
+            "registry_worktree_plan": {"branch": "chore/BUG-266-BUG-267-close-sync"},
+            "merged_pr": kwargs["pr_url"],
+            "merge_commit": kwargs["merge_commit"],
+            "updated_bug_jsons": [
+                "tests/aistock_validation/bugs/bug266.json",
+                "tests/aistock_validation/bugs/bug267.json",
+            ],
+        }
+
+    monkeypatch.setattr(workflow, "build_close_sync_batch_plan", fake_batch_close_sync)
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(isolated_workflow_root / "registry"),
+            "branch": "chore/BUG-266-BUG-267-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id=["BUG-266", "BUG-267"],
+        source_pr_url="https://github.example/pull/266",
+        source_branch="bug/BUG-266-workflow-fast-lane",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=False,
+        cleanup=False,
+        apply=True,
+    )
+
+    assert payload["batch_mode"] is True
+    assert payload["bug_ids"] == ["BUG-266", "BUG-267"]
+    assert payload["close_sync"]["schema_version"] == "aistock_issue_workflow_close_sync_batch_v1"
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+    assert captured["bug_ids"] == ["BUG-266", "BUG-267"]
+    assert captured["create_registry_worktree"] is True
+    assert captured["merge_commit"] == "merge123"
+
+
+def test_merge_finalizer_parser_accepts_repeated_bug_ids() -> None:
+    args = workflow.build_parser().parse_args(
+        [
+            "merge-finalizer",
+            "--bug-id",
+            "BUG-266",
+            "--bug-id",
+            "BUG-267",
+            "--source-pr-url",
+            "https://github.example/pull/266",
+        ]
+    )
+
+    assert args.bug_id == ["BUG-266", "BUG-267"]
+
+
 def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

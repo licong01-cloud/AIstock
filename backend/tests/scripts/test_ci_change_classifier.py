@@ -161,6 +161,44 @@ def test_workflow_validation_only_allows_same_task_bug_metadata(tmp_path: Path) 
     assert payload["workflow_bug_metadata_files"] == [bug_rel]
 
 
+def test_workflow_validation_only_allows_fixed_same_task_bug_metadata_and_client_wrappers(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260605_BUG-266-workflow-fast-lane.json"
+    allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    bug = tmp_path / bug_rel
+    allocator = tmp_path / allocator_rel
+    _write_bug(
+        bug,
+        status="fixed",
+        module="validation",
+        allowed_write_scope=[
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/fix-aistock-issue.md",
+            bug_rel,
+            allocator_rel,
+        ],
+    )
+    allocator.write_text(json.dumps({"last_allocated": 266}), encoding="utf-8")
+
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/fix-aistock-issue.md",
+            bug_rel,
+            allocator_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_bug_metadata_files"] == [bug_rel]
+
+
 def test_workflow_bug_metadata_with_business_scope_keeps_backend_matrix(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260604_BUG-258-business-scope.json"
     bug = tmp_path / bug_rel
