@@ -64,6 +64,12 @@
       "actor": "codex",
       "action": "post_rebase_validation_refreshed",
       "note": "After rebase onto origin/main, reran targeted pytest, ruff, compileall, explicit changed-file guardrail, l0, and validation_module_registry_l0; all blocking gates passed."
+    },
+    {
+      "timestamp": "2026-06-05T18:42:36Z",
+      "actor": "codex",
+      "action": "required_validation_center_backend_passed",
+      "note": "Workflow finish required validation_center_backend after post-rebase code-intelligence refresh; nox session passed with 389 tests and coverage gate passed."
     }
   ],
   "evidence_uris": [
@@ -89,7 +95,8 @@
   "reproduce_command": "Read-only SQL: compare selection.daily_selection_evidence for pkg_a2f53f3f2f3e4095a910b939464c35e6 on target_trade_date 2026-06-04/2026-06-05 and inspect paper_v2.simulation_daily_run simrun_eb5e3458eaff1870 plus qmt_strategy.position_lot for codex_final_ms_l2_20260603.",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0"
+    "validation_module_registry_l0",
+    "validation_center_backend"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -151,6 +158,7 @@
     "python -m nox -s l0 -> successful; guardrail blocking=0",
     "read-only DB similar false-success scan -> stale PIT terminal success rows=6; SUCCEEDED with submit_failure rows=2; other checked false-success patterns=0; code fix covers future runs without DB writes",
     "validation history: tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md",
-    "post-rebase python scripts/aistock_guardrail_scan.py <origin/main...HEAD changed files> --fail-on-severity P1 -> files=10 findings=4 P2-only blocking=0"
+    "post-rebase python scripts/aistock_guardrail_scan.py <origin/main...HEAD changed files> --fail-on-severity P1 -> files=10 findings=4 P2-only blocking=0",
+    "python -m nox -s validation_center_backend -> 389 passed; coverage line=80.07 branch=62.3 status=passed"
   ]
 }
