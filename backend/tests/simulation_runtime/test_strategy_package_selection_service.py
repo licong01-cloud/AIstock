@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 
 import pytest
@@ -47,7 +48,11 @@ class FakeCalendar:
         return None
 
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
-        return [date(2024, 1, 2)]
+        return [
+            item
+            for item in (date(2024, 1, 2), date(2024, 1, 3))
+            if start_date <= item <= end_date
+        ]
 
 
 def _runtime_config(*, top_k: int = 2) -> dict:
@@ -251,6 +256,74 @@ def test_strategy_package_selection_service_uses_release_selection_artifact_conf
     evidence = result.evidence_by_package[manifest.package_id]
     assert evidence.release_id == release.release_id
     assert evidence.evidence_payload_json["selection_artifact_config"]["artifact_reuse"] == "same_trade_date_config_hash"
+
+
+def test_strategy_package_selection_service_rolls_stale_release_cutoff_for_daily_pit() -> None:
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    package_repo = InMemoryStrategyPackageRepository()
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_release_rolling_cutoff"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    stale_release_config = {
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "signal_data_source": "DB_HISTORICAL",
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2024-01-02",
+            "include_reference_price": True,
+            "artifact_reuse": "same_trade_date_config_hash",
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    expected_daily_config = deepcopy(stale_release_config)
+    expected_daily_config["selection_artifact_config"]["cutoff_date"] = "2024-01-03"
+    _seed_artifact(
+        artifact_repo,
+        manifest,
+        rows,
+        trade_date=date(2024, 1, 4),
+        runtime_config=expected_daily_config,
+    )
+    runtime = StrategyPackageRuntime(artifact_repository=artifact_repo)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    release = _release_for(
+        manifest,
+        stale_release_config,
+        runtime_repo,
+        release_metadata={"selection_runtime_config": stale_release_config},
+    )
+
+    result = _selection_service(package_repo, runtime, runtime_repo).run_selection(
+        package_ids=[manifest.package_id],
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 4),
+        data_source="DB_HISTORICAL",
+        runtime_config={},
+        runtime_release=release,
+        created_by="unit_test",
+    )
+
+    pit_context = result.runtime_config["point_in_time_context"]
+    assert result.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
+    assert pit_context["cutoff_date"] == "2024-01-03"
+    assert pit_context["requested_cutoff_date"] == "2024-01-02"
+    assert pit_context["cutoff_override_reason"] == "daily_previous_trading_day_resolution"
+    evidence = result.evidence_by_package[manifest.package_id]
+    assert evidence.cutoff_date == date(2024, 1, 3)
+    assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
 
 
 @pytest.mark.parametrize(

@@ -33,6 +33,7 @@ from backend.services.simulation_runtime import (
     SimulationRunContext,
     StaticSimulationRunContextProvider,
     StrategyPackageSelectionResult,
+    StrategyPackageSelectionService,
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
@@ -147,11 +148,18 @@ def _candidate_rows() -> list[SelectionCandidate]:
     ]
 
 
-def _evidence(release, *, candidates: list[SelectionCandidate], valid_no_candidate: bool = False) -> DailySelectionEvidence:
+def _evidence(
+    release,
+    *,
+    candidates: list[SelectionCandidate],
+    valid_no_candidate: bool = False,
+    target_trade_date: date = TRADE_DATE,
+    cutoff_date: date = date(2026, 5, 20),
+) -> DailySelectionEvidence:
     payload = {
         "schema_version": "daily_selection_evidence_v1",
-        "target_trade_date": TRADE_DATE.isoformat(),
-        "cutoff_date": "2026-05-20",
+        "target_trade_date": target_trade_date.isoformat(),
+        "cutoff_date": cutoff_date.isoformat(),
         "package_id": release.package_id,
         "manifest_sha256": release.manifest_sha256,
         "release_id": release.release_id,
@@ -168,8 +176,8 @@ def _evidence(release, *, candidates: list[SelectionCandidate], valid_no_candida
     digest = canonical_json_sha256(payload)
     return DailySelectionEvidence(
         evidence_id=f"dse_{digest[:16]}",
-        target_trade_date=TRADE_DATE,
-        cutoff_date=date(2026, 5, 20),
+        target_trade_date=target_trade_date,
+        cutoff_date=cutoff_date,
         package_id=release.package_id,
         manifest_sha256=release.manifest_sha256,
         release_id=release.release_id,
@@ -2130,6 +2138,86 @@ def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
     assert result.results[0].status == "FAILED"
     assert result.results[0].error["type"] == "DataUnavailableError"
     assert "stale daily selection evidence" in result.results[0].error["message"]
+
+
+def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
+    stale_runtime_config = {
+        "selection_artifact_config": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2026-05-19",
+        },
+        "point_in_time_context": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "trade_date": TRADE_DATE.isoformat(),
+            "requested_trade_date": TRADE_DATE.isoformat(),
+            "effective_trade_date": TRADE_DATE.isoformat(),
+            "cutoff_date": "2026-05-19",
+            "score_trade_date": "2026-05-19",
+            "reference_price_trade_date": "2026-05-19",
+        },
+    }
+    release, local_binding, _, repo = _release_and_bindings(
+        qmt_only=False,
+        release_metadata={"selection_runtime_config": stale_runtime_config},
+    )
+    stale_evidence = _evidence(
+        release,
+        candidates=_candidate_rows(),
+        cutoff_date=date(2026, 5, 19),
+    )
+    stale_selection = StrategyPackageSelectionResult(
+        runtime_config=stale_runtime_config,
+        package_results={release.package_id: _candidate_rows()},
+        aggregate_results=_candidate_rows(),
+        excluded_results={release.package_id: []},
+        manifest_sha256_by_package={release.package_id: release.manifest_sha256},
+        evidence_by_package={release.package_id: stale_evidence},
+    )
+
+    class RollingCalendar:
+        def ensure_trading_day(self, trade_date: date) -> None:
+            if trade_date != TRADE_DATE:
+                raise DataUnavailableError("not a trading day", context={"trade_date": trade_date.isoformat()})
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            return [
+                item
+                for item in (date(2026, 5, 19), date(2026, 5, 20), TRADE_DATE)
+                if start_date <= item <= end_date
+            ]
+
+    class StaleCutoffSelectionService:
+        def __init__(self) -> None:
+            self.resolver = StrategyPackageSelectionService(calendar_provider=RollingCalendar())
+
+        def run_selection(self, **kwargs):
+            return stale_selection
+
+        def resolve_point_in_time_context(self, **kwargs):
+            return self.resolver.resolve_point_in_time_context(**kwargs)
+
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=StaleCutoffSelectionService(),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id=local_binding.strategy_id)}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+
+    context = result.results[0].error["context"]
+    assert result.failed_count == 1
+    assert result.results[0].status == "FAILED"
+    assert result.results[0].error["type"] == "DataUnavailableError"
+    assert "cutoff_date" in context["reasons"]
+    assert context["cutoff_date"] == "2026-05-19"
+    assert context["expected_cutoff_date"] == "2026-05-20"
 
 
 def test_scheduler_status_reports_provider_and_controlled_tick_capability():

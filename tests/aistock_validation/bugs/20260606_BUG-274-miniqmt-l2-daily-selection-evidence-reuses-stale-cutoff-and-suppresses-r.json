@@ -1,0 +1,172 @@
+{
+  "actual": "dse_2eeb7b60dda279b5 target_trade_date=2026-06-05 kept cutoff_date=2026-06-02; simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6 had 0 intents and SUCCEEDED/no_rebalance_required even though strategy should rotate daily.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260606_BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-cutoff-and-suppresses-r.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-274",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T17:46:26.246042Z",
+  "description": "dse_2eeb7b60dda279b5 target_trade_date=2026-06-05 kept cutoff_date=2026-06-02; simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6 had 0 intents and SUCCEEDED/no_rebalance_required even though strategy should rotate daily.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-1487cebaef1a",
+      "timestamp": "2026-06-05T17:46:26.246042Z"
+    },
+    {
+      "timestamp": "2026-06-05T17:56:15.6282113Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "RCA confirmed fix requires simulation runtime PIT selection freshness validation and regression tests."
+    },
+    {
+      "timestamp": "2026-06-05T18:17:31.096971Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Similar-issue scan found SUCCEEDED runs retaining submit_failure, requiring lifecycle/repository payload cleanup regression coverage."
+    },
+    {
+      "timestamp": "2026-06-05T18:34:16Z",
+      "actor": "codex",
+      "action": "validation_passed",
+      "note": "Implemented PIT cutoff freshness validation, stale plan reuse rejection, and submit_failure cleanup; targeted pytest, ruff, compileall, changed-only guardrail, l0, and validation_module_registry_l0 passed."
+    },
+    {
+      "timestamp": "2026-06-05T18:34:16Z",
+      "actor": "codex",
+      "action": "similar_false_success_scan_completed",
+      "note": "Read-only DB scan found historical stale PIT terminal success rows and stale submit_failure payload rows; no additional intent-plan-without-broker or no-rebalance-with-intents false-success pattern found."
+    },
+    {
+      "timestamp": "2026-06-05T18:36:56Z",
+      "actor": "codex",
+      "action": "fix_commit_recorded",
+      "note": "Recorded rebased fix commit 555c045b959f632e4cac04b4adfbb90f24c2e978 after syncing branch onto latest origin/main."
+    },
+    {
+      "timestamp": "2026-06-05T18:38:21Z",
+      "actor": "codex",
+      "action": "post_rebase_validation_refreshed",
+      "note": "After rebase onto origin/main, reran targeted pytest, ruff, compileall, explicit changed-file guardrail, l0, and validation_module_registry_l0; all blocking gates passed."
+    },
+    {
+      "timestamp": "2026-06-05T18:42:36Z",
+      "actor": "codex",
+      "action": "required_validation_center_backend_passed",
+      "note": "Workflow finish required validation_center_backend after post-rebase code-intelligence refresh; nox session passed with 389 tests and coverage gate passed."
+    },
+    {
+      "timestamp": "2026-06-05T18:46:41Z",
+      "actor": "codex",
+      "action": "github_issue_synced_fixed_pending_review",
+      "note": "GitHub issue #788 relabeled status:fixed-pending-review and commented with PR/validation evidence: https://github.com/licong01-cloud/AIstock/issues/788#issuecomment-4634491896"
+    }
+  ],
+  "evidence_uris": [
+    "dse_2eeb7b60dda279b5 simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6; prior run dse_702675c6305e32d4 simrun_e22704ae4492c70a; qmt orders 1090519120-1090519127",
+    "https://github.com/licong01-cloud/AIstock/issues/788#issuecomment-4634491896",
+    "https://github.com/licong01-cloud/AIstock/pull/791",
+    "read-only DB scan 2026-05-01+: stale PIT terminal success=6, SUCCEEDED submit_failure=2, intent-plan-without-broker=0, no-rebalance-with-intents=0",
+    "tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md"
+  ],
+  "expected": "Each target_trade_date must resolve a fresh PIT cutoff consistent with the previous trading day unless an explicitly versioned fixed historical replay is configured; stale cutoff reuse must fail fast and a run with submit_failure or unexecuted required intents must not be marked SUCCEEDED.",
+  "first_seen_at": "2026-06-05T17:46:26.246042Z",
+  "fix_branch": "bug/BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-20260606",
+  "fix_commit": "555c045b959f632e4cac04b4adfbb90f24c2e978",
+  "fixed_at": "2026-06-05T18:34:16Z",
+  "github_issue_number": 788,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/788",
+  "last_seen_at": "2026-06-05T17:46:26.246042Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only SQL: compare selection.daily_selection_evidence for pkg_a2f53f3f2f3e4095a910b939464c35e6 on target_trade_date 2026-06-04/2026-06-05 and inspect paper_v2.simulation_daily_run simrun_eb5e3458eaff1870 plus qmt_strategy.position_lot for codex_final_ms_l2_20260603.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT L2 daily selection evidence reuses stale cutoff and suppresses rebalance intents",
+  "trigger_condition": {
+    "fingerprint": "1487cebaef1a29f67e581c28",
+    "source_event_id": "FE-20260606-1487cebaef1a"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": "20260606_l2_bug-274-miniqmt-stale-cutoff-false-success",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "validation_passed_pending_pr",
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_target_rebalance_shared.py::test_lifecycle_successful_localsim_retry_clears_submit_failure -q -> 1 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -q -> 56 passed",
+    "ruff check changed simulation_runtime code/tests -> All checks passed",
+    "python -m compileall changed simulation_runtime service files -> passed",
+    "python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1 -> files=8 findings=0 blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; mapped=12 unmapped=0 ambiguous=0",
+    "python -m nox -s l0 -> successful; guardrail blocking=0",
+    "read-only DB similar false-success scan -> stale PIT terminal success rows=6; SUCCEEDED with submit_failure rows=2; other checked false-success patterns=0; code fix covers future runs without DB writes",
+    "validation history: tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md",
+    "post-rebase python scripts/aistock_guardrail_scan.py <origin/main...HEAD changed files> --fail-on-severity P1 -> files=10 findings=4 P2-only blocking=0",
+    "python -m nox -s validation_center_backend -> 389 passed; coverage line=80.07 branch=62.3 status=passed"
+  ]
+}

@@ -40,6 +40,7 @@ from backend.services.trading_core.models import PositionLot
 
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
+    DailySelectionEvidence,
     ExecutionPlan,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -1569,11 +1570,19 @@ class SimulationLifecycleScheduler:
         mode: str,
     ) -> SimulationSchedulerBindingResult:
         plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+        runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
+        existing_evidence = self.repository.get_daily_selection_evidence(plan.selection_evidence_id)
+        self._validate_fresh_daily_selection_evidence(
+            binding=binding,
+            runtime_release=runtime_release,
+            evidence=existing_evidence,
+            trade_date=trade_date,
+            runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(runtime_release),
+        )
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
             status = "NO_REBALANCE"
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
-            runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
             context = self.context_provider.load_context(
                 runtime_release=runtime_release,
                 binding=binding,
@@ -1956,6 +1965,7 @@ class SimulationLifecycleScheduler:
                 "last_stage": next_status.value,
                 "reconcile_after_submit": payload,
             },
+            payload_unset=("submit_failure",) if next_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return payload
 
@@ -1977,6 +1987,23 @@ class SimulationLifecycleScheduler:
                     "trade_date": trade_date.isoformat(),
                 },
             )
+        self._validate_fresh_daily_selection_evidence(
+            binding=binding,
+            runtime_release=runtime_release,
+            evidence=evidence,
+            trade_date=trade_date,
+            runtime_config=selection.runtime_config,
+        )
+
+    def _validate_fresh_daily_selection_evidence(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        evidence: DailySelectionEvidence,
+        trade_date: date,
+        runtime_config: dict[str, Any] | None,
+    ) -> None:
         stale_reasons: list[str] = []
         if evidence.target_trade_date != trade_date:
             stale_reasons.append("target_trade_date")
@@ -1986,6 +2013,12 @@ class SimulationLifecycleScheduler:
             stale_reasons.append("manifest_sha256")
         if evidence.release_id != runtime_release.release_id or evidence.release_hash != runtime_release.release_hash:
             stale_reasons.append("runtime_release")
+        expected_cutoff = self._expected_rolling_pit_cutoff_date(
+            runtime_config=runtime_config,
+            trade_date=trade_date,
+        )
+        if expected_cutoff is not None and evidence.cutoff_date != expected_cutoff:
+            stale_reasons.append("cutoff_date")
         if stale_reasons:
             raise DataUnavailableError(
                 "simulation scheduler rejected stale daily selection evidence",
@@ -1994,10 +2027,41 @@ class SimulationLifecycleScheduler:
                     "evidence_id": evidence.evidence_id,
                     "target_trade_date": evidence.target_trade_date.isoformat(),
                     "expected_trade_date": trade_date.isoformat(),
+                    "cutoff_date": evidence.cutoff_date.isoformat() if evidence.cutoff_date else None,
+                    "expected_cutoff_date": expected_cutoff.isoformat() if expected_cutoff else None,
                     "binding_id": binding.binding_id,
                     "release_id": runtime_release.release_id,
                 },
             )
+
+    def _expected_rolling_pit_cutoff_date(
+        self,
+        *,
+        runtime_config: dict[str, Any] | None,
+        trade_date: date,
+    ) -> date | None:
+        config = runtime_config if isinstance(runtime_config, dict) else {}
+        artifact_config = StrategyPackageSelectionService.selection_artifact_config(config)
+        pit_mode = StrategyPackageSelectionService.selection_pit_mode(config, artifact_config=artifact_config)
+        if pit_mode == "NONE" or StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+            config,
+            artifact_config=artifact_config,
+        ):
+            return None
+        resolver = getattr(self.selection_service, "resolve_point_in_time_context", None)
+        if not callable(resolver):
+            return None
+        context = resolver(trade_date=trade_date, pit_mode=pit_mode, explicit_cutoff_date=None)
+        raw_cutoff = context.get("cutoff_date") if isinstance(context, dict) else None
+        if raw_cutoff is None:
+            return None
+        try:
+            return date.fromisoformat(str(raw_cutoff))
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "point-in-time selection cutoff_date must be YYYY-MM-DD",
+                context={"cutoff_date": raw_cutoff, "trade_date": trade_date.isoformat()},
+            ) from exc
 
     def _build_plan_from_selection(
         self,
@@ -2153,6 +2217,7 @@ class SimulationLifecycleScheduler:
                 "tail_handling": payload,
                 "last_stage": next_status.value,
             },
+            payload_unset=("submit_failure",) if next_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return payload
 
