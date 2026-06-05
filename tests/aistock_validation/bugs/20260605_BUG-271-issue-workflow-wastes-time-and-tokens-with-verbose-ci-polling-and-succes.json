@@ -51,8 +51,8 @@
   "expected": "Successful issue workflows use compact CI polling through workflow commands, do not recommend gh pr checks --watch, avoid statusCheckRollup dumps, and successful local validation/postmortem paths only print PASS-style compact output unless artifacts are explicitly requested or failures need diagnostics.",
   "first_seen_at": "2026-06-05T03:44:09.647603Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "12c35edb71c8f7d6be13bd4c70cbe5893f0eb1bb",
+  "fixed_at": "2026-06-05T04:25:51.582582Z",
   "github_issue_number": 779,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/779",
   "last_seen_at": "2026-06-05T03:44:09.647603Z",
@@ -60,6 +60,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/782",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -74,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -83,6 +84,9 @@
     "fingerprint": "c1dcbec77080edb99d4623b9",
     "source_event_id": "FE-20260605-c1dcbec77080"
   },
+  "validation_evidence": [
+    "PR #782 checks passed via watch-ci; local validation passed; tmp/validation success artifacts disabled/no files"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
