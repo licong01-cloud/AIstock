@@ -667,3 +667,40 @@ def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
     latest = repo.get_simulation_daily_run(build.run.run_id)
     assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert latest.run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_SUBMIT_FAILED"
+
+
+def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
+    release, binding, repo = _release_binding_repo()
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    build = orchestrator.build_execution_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=_evidence(release),
+        signal_snapshot=_snapshot(),
+        current_positions={},
+        portfolio_id="portfolio_shared",
+    )
+
+    with pytest.raises(RuntimeError, match="local submit failed"):
+        orchestrator.submit_execution_plan(
+            build_result=build,
+            local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+        )
+
+    failed = repo.get_simulation_daily_run(build.run.run_id)
+    assert failed.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "submit_failure" in failed.run_payload_json
+
+    result = orchestrator.submit_persisted_execution_plan(
+        run=failed,
+        binding=binding,
+        execution_plan=build.execution_plan,
+        local_broker=FakeLocalSimBroker(),  # type: ignore[arg-type]
+    )
+
+    latest = repo.get_simulation_daily_run(build.run.run_id)
+    assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert result.run.run_payload_json["submitted_intents"] == len(build.execution_plan.intents)
+    assert "submit_failure" not in result.run.run_payload_json
+    assert "submit_failure" not in latest.run_payload_json
