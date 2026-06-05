@@ -27,6 +27,34 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _validation_artifacts_enabled() -> bool:
+    value = os.environ.get("AISTOCK_VALIDATION_ARTIFACTS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _validation_artifact_args(*, output_json: str, summary_md: str | None = None) -> list[str]:
+    if not _validation_artifacts_enabled():
+        return []
+    args = ["--output-json", output_json]
+    if summary_md:
+        args.extend(["--summary-md", summary_md])
+    return args
+
+
+def _coverage_snapshot_args(path: Path) -> list[str]:
+    return ["--output", str(path)] if _validation_artifacts_enabled() else []
+
+
+def _cleanup_validation_artifact_paths(*paths: Path) -> None:
+    if _validation_artifacts_enabled():
+        return
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _run_pytest(session: nox.Session, *args: str) -> None:
     session.run(
         "python",
@@ -177,10 +205,10 @@ def l0(session: nox.Session) -> None:
         "--fail-new-only",
         "--fail-on-severity",
         "P1",
-        "--output-json",
-        "tmp/validation/guardrails/l0_paths.json",
-        "--summary-md",
-        "tmp/validation/guardrails/l0_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/guardrails/l0_paths.json",
+            summary_md="tmp/validation/guardrails/l0_paths.md",
+        ),
         external=True,
     )
 
@@ -200,10 +228,10 @@ def guardrail_changed_files(session: nox.Session) -> None:
         "--fail-new-only",
         "--fail-on-severity",
         "P1",
-        "--output-json",
-        "tmp/validation/guardrails/changed_files.json",
-        "--summary-md",
-        "tmp/validation/guardrails/changed_files.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/guardrails/changed_files.json",
+            summary_md="tmp/validation/guardrails/changed_files.md",
+        ),
         external=True,
     )
     session.run(
@@ -212,10 +240,10 @@ def guardrail_changed_files(session: nox.Session) -> None:
         mode_flag,
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
-        "--output-json",
-        "tmp/validation/module_ownership/changed_files.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/changed_files.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/changed_files.json",
+            summary_md="tmp/validation/module_ownership/changed_files.md",
+        ),
         external=True,
     )
 
@@ -962,18 +990,19 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/mcp_gateway_phase5_assistant_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/mcp_gateway_phase5_assistant_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.json",
+            summary_md="tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase5_paths,
@@ -1030,18 +1059,19 @@ def ra_phase0_baseline(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase0_baseline_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase0_baseline_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase0_baseline_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase0_baseline_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase0_baseline_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase0_baseline_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase0_paths,
@@ -1103,18 +1133,19 @@ def ra_phase1_memory_tree(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase1_memory_tree_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase1_memory_tree_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase1_memory_tree_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase1_memory_tree_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase1_paths,
@@ -1163,18 +1194,19 @@ def ra_phase2_graph_context(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase2_graph_context_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase2_graph_context_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase2_graph_context_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase2_graph_context_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase2_graph_context_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase2_graph_context_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase2_paths,
@@ -1237,18 +1269,19 @@ def ra_phase3_react_grounding(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase3_react_grounding_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase3_react_grounding_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase3_react_grounding_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase3_react_grounding_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase3_paths,
@@ -1338,18 +1371,19 @@ def ra_phase4_external_research(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase4_external_research_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase4_external_research_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase4_external_research_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase4_external_research_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase4_external_research_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase4_external_research_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase4_paths,
@@ -1421,18 +1455,19 @@ def ra_phase5_agent_teams(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase5_agent_teams_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase5_agent_teams_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase5_agent_teams_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase5_agent_teams_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase5_paths,
@@ -1516,18 +1551,19 @@ def ra_phase6_qe_autonomy(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.json",
+            summary_md="tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase6_paths,
@@ -1542,10 +1578,10 @@ def ra_phase6_qe_autonomy(session: nox.Session) -> None:
         "--fail-new-only",
         "--fail-on-severity",
         "P1",
-        "--output-json",
-        "tmp/validation/guardrails/ra_phase6_qe_autonomy.json",
-        "--summary-md",
-        "tmp/validation/guardrails/ra_phase6_qe_autonomy.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/guardrails/ra_phase6_qe_autonomy.json",
+            summary_md="tmp/validation/guardrails/ra_phase6_qe_autonomy.md",
+        ),
         external=True,
     )
 
@@ -1650,25 +1686,27 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "--expected",
         "tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml",
         "--fail-on-drift",
-        "--output-json",
-        "tmp/validation/research_assistant/phase7/crosscheck.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/research_assistant/phase7/crosscheck.json",
+        ),
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/research_assistant/phase7/catalog_integrity.json",
+        *_validation_artifact_args(
+            output_json="tmp/validation/research_assistant/phase7/catalog_integrity.json",
+        ),
         "--fail-on-warning",
         external=True,
     )
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/research_assistant/phase7/ownership.json",
-        "--summary-md",
-        "tmp/validation/research_assistant/phase7/ownership.md",
+        *_validation_artifact_args(
+            output_json="tmp/validation/research_assistant/phase7/ownership.json",
+            summary_md="tmp/validation/research_assistant/phase7/ownership.md",
+        ),
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase7_paths,
@@ -1861,7 +1899,6 @@ def validation_coverage_backend(session: nox.Session) -> None:
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
     coverage_dir.mkdir(parents=True, exist_ok=True)
     coverage_xml = coverage_dir / "validation_coverage_backend.xml"
-    coverage_json = coverage_dir / "validation_coverage_backend.json"
     coverage_snapshot = coverage_dir / "validation_coverage_backend_snapshot.json"
     coverage_data = coverage_dir / ".coverage.validation_coverage_backend"
     session.run(
@@ -1880,7 +1917,6 @@ def validation_coverage_backend(session: nox.Session) -> None:
         "--cov=scripts.aistock_validate",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
-        f"--cov-report=json:{coverage_json}",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1897,14 +1933,14 @@ def validation_coverage_backend(session: nox.Session) -> None:
         "L2",
         "--coverage-xml",
         str(coverage_xml),
-        "--output",
-        str(coverage_snapshot),
+        *_coverage_snapshot_args(coverage_snapshot),
         "--line-threshold",
         "70",
         "--branch-threshold",
         "55",
         external=True,
     )
+    _cleanup_validation_artifact_paths(coverage_xml, coverage_snapshot, coverage_data)
 
 
 @nox.session(venv_backend="none")
@@ -1944,12 +1980,12 @@ def validation_module_registry_l0(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_module_ownership_scan.py",
-        "--output-json",
-        "tmp/validation/module_ownership/l0_paths.json",
-        "--summary-md",
-        "tmp/validation/module_ownership/l0_paths.md",
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
+        *_validation_artifact_args(
+            output_json="tmp/validation/module_ownership/l0_paths.json",
+            summary_md="tmp/validation/module_ownership/l0_paths.md",
+        ),
         *scan_paths,
         external=True,
     )
@@ -1976,8 +2012,7 @@ def validation_catalog_integrity(session: nox.Session) -> None:
     session.run(
         sys.executable,
         "scripts/aistock_validation_catalog_integrity.py",
-        "--output-json",
-        "tmp/validation/catalog/integrity_report.json",
+        *_validation_artifact_args(output_json="tmp/validation/catalog/integrity_report.json"),
         external=True,
     )
 
@@ -1988,7 +2023,6 @@ def validation_center_backend(session: nox.Session) -> None:
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
     coverage_dir.mkdir(parents=True, exist_ok=True)
     coverage_xml = coverage_dir / "validation_center_backend.xml"
-    coverage_json = coverage_dir / "validation_center_backend.json"
     coverage_snapshot = coverage_dir / "validation_center_backend_snapshot.json"
     coverage_data = coverage_dir / ".coverage.validation_center_backend"
     session.run(
@@ -2039,7 +2073,6 @@ def validation_center_backend(session: nox.Session) -> None:
         "--cov=scripts.validation_center_runner_smoke",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
-        f"--cov-report=json:{coverage_json}",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -2058,14 +2091,14 @@ def validation_center_backend(session: nox.Session) -> None:
         "Validation Center read-only API",
         "--coverage-xml",
         str(coverage_xml),
-        "--output",
-        str(coverage_snapshot),
+        *_coverage_snapshot_args(coverage_snapshot),
         "--line-threshold",
         "75",
         "--branch-threshold",
         "55",
         external=True,
     )
+    _cleanup_validation_artifact_paths(coverage_xml, coverage_snapshot, coverage_data)
 
 
 @nox.session(venv_backend="none")

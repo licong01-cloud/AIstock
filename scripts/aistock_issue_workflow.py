@@ -5251,7 +5251,20 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     }
 
 
-def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_markdown: bool = True) -> dict[str, Any]:
+def _workflow_artifacts_enabled() -> bool:
+    value = os.environ.get("AISTOCK_WORKFLOW_ARTIFACTS", "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    return os.environ.get("AISTOCK_VALIDATION_ARTIFACTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def build_postmortem_plan(
+    *,
+    bug_id: str,
+    worktree: str | None = None,
+    output_markdown: bool = True,
+    persist_artifacts: bool | None = None,
+) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
     candidates = [(root, _load_state(canonical_bug_id, root)) for root in roots]
@@ -5323,8 +5336,11 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
         "production_gates": state.get("production_gates") or {},
         "recent_events": events[-20:],
     }
+    if persist_artifacts is None:
+        persist_artifacts = _workflow_artifacts_enabled() or str(state.get("state") or "") == "blocked"
+    payload["artifact_policy"] = "persisted" if persist_artifacts else "compact_success_no_artifact"
     output_dir = root / WORKFLOW_ROOT / canonical_bug_id
-    if output_markdown:
+    if output_markdown and persist_artifacts:
         lines = [
             f"# {canonical_bug_id} Workflow Postmortem",
             "",
@@ -5376,8 +5392,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
         )
         _write_text(output_dir / "postmortem.md", "\n".join(lines))
         payload["postmortem_md_path"] = _repo_rel(output_dir / "postmortem.md", root)
-    payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
-    _write_json(output_dir / "postmortem.json", payload)
+    if persist_artifacts:
+        payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
+        _write_json(output_dir / "postmortem.json", payload)
     return payload
 
 
@@ -7525,7 +7542,10 @@ def _merge_close_sync_pr_if_ready(
             "auto_merge": True,
             "pr_url": pr_url,
             "blocking": [str(exc)],
-            "next_command": f"gh pr checks {pr_url} --watch",
+            "next_command": (
+                f"python scripts/aistock_issue_workflow.py watch-ci --bug-id {bug_id} "
+                f"--pr-url {pr_url} --attempts 6 --delay-seconds 30"
+            ),
         }
     return {
         "workflow_gate": "merged",
@@ -8809,6 +8829,7 @@ def cmd_postmortem(args: argparse.Namespace) -> int:
         bug_id=args.bug_id,
         worktree=args.worktree,
         output_markdown=not args.no_markdown,
+        persist_artifacts=args.persist_artifacts,
     )
     _emit_args(payload, args)
     return 0
@@ -8880,9 +8901,16 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         bug_id = args.bug_id.strip().upper()
         try:
             pre_cleanup_postmortem = build_postmortem_plan(bug_id=bug_id, output_markdown=False)
-            pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
-            _write_json(pre_cleanup_path, pre_cleanup_postmortem)
-            payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+            if _workflow_artifacts_enabled():
+                pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
+                _write_json(pre_cleanup_path, pre_cleanup_postmortem)
+                payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+            else:
+                payload["pre_cleanup_postmortem"] = {
+                    "artifact_policy": "compact_success_no_artifact",
+                    "timing_summary": pre_cleanup_postmortem.get("timing_summary"),
+                    "h6_summary": pre_cleanup_postmortem.get("h6_summary"),
+                }
         except WorkflowError as exc:
             payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")
         cleanup_evidence = {
@@ -9061,6 +9089,11 @@ def build_parser() -> argparse.ArgumentParser:
     postmortem.add_argument("--bug-id", required=True)
     postmortem.add_argument("--worktree")
     postmortem.add_argument("--no-markdown", action="store_true")
+    postmortem.add_argument(
+        "--persist-artifacts",
+        action="store_true",
+        help="Write postmortem JSON/Markdown artifacts. Defaults to compact stdout only on successful workflows.",
+    )
     add_output_options(postmortem)
     postmortem.set_defaults(func=cmd_postmortem)
 

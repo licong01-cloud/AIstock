@@ -2132,7 +2132,11 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     )
     monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
 
-    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+    payload = workflow.build_postmortem_plan(
+        bug_id="BUG-199",
+        worktree=str(isolated_workflow_root),
+        persist_artifacts=True,
+    )
 
     assert payload["schema_version"] == "aistock_issue_workflow_postmortem_v1"
     assert payload["timing_summary"]["event_count"] == 2
@@ -2148,6 +2152,47 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     md_text = postmortem_md.read_text(encoding="utf-8")
     assert "## H6 Cost Summary" in md_text
     assert "## H7 Code Intelligence" in md_text
+
+
+def test_postmortem_defaults_to_compact_success_without_artifacts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_root = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        workflow_root / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "validation_passed",
+            "branch": "bug/BUG-199-workflow",
+            "worktree": str(isolated_workflow_root),
+        },
+    )
+    events_path = workflow_root / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-05-26T00:00:05Z",
+                "event": "command:validation",
+                "state": "validation_passed",
+                "duration_seconds": 1.5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda _bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda _bug_id: {"status": "checked"})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+
+    assert payload["artifact_policy"] == "compact_success_no_artifact"
+    assert "postmortem_json_path" not in payload
+    assert "postmortem_md_path" not in payload
+    assert not (workflow_root / "postmortem.json").exists()
+    assert not (workflow_root / "postmortem.md").exists()
 
 
 def test_postmortem_prefers_fix_workflow_over_registry_intake(
