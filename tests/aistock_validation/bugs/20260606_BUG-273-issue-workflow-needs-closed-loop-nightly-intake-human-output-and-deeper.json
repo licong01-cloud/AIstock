@@ -38,8 +38,8 @@
   "expected": "Codex/Claude can use one standard workflow to triage Nightly/CI failures, receive concise human-readable success summaries, and consume CodeGraph/Understand Anything refs without broad repo scans or merge-blocking on graph availability.",
   "first_seen_at": "2026-06-05T17:37:38.553653Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e858e24a525950dc19832a6c272d81c2d02dd3fb",
+  "fixed_at": "2026-06-05T18:22:06.240501Z",
   "github_issue_number": 787,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/787",
   "last_seen_at": "2026-06-05T17:37:38.553653Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/789",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -70,6 +71,16 @@
     "fingerprint": "afcaca4e499fff7b3fd92b2e",
     "source_event_id": "FE-20260606-afcaca4e499f"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_code_intelligence_adapter.py -q -p no:cacheprovider -> 159 passed",
+    "python -m ruff check scripts/aistock_issue_workflow.py scripts/code_intelligence_adapter.py backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s l0 -- scripts/aistock_issue_workflow.py scripts/code_intelligence_adapter.py backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed",
+    "workflow-smoke/nightly-intake-smoke/batch-workflow-smoke --output-format summary -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
