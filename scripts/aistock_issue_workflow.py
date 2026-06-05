@@ -51,6 +51,7 @@ ARTIFACT_PATH_PATTERNS = (
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
+ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
@@ -386,7 +387,15 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
     if "scope_check" in value:
         compact["scope_check"] = _pick(value["scope_check"], "status", "violations", "status_source")
     if "code_intelligence" in value:
-        compact["code_intelligence"] = _pick(value["code_intelligence"], "status", "context_ref", "affected_tests_ref", "fallback_used")
+        compact["code_intelligence"] = _pick(
+            value["code_intelligence"],
+            "status",
+            "context_ref",
+            "affected_tests_ref",
+            "affected_tests_count",
+            "understand_anything_summary_ref",
+            "fallback_used",
+        )
     if "pre_pr_gate" in value:
         compact["pre_pr_gate"] = _pick(value["pre_pr_gate"], "workflow_gate", "blocking")
     return compact
@@ -487,6 +496,7 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
         "needs_bug_json",
         "failure_event_path",
         "context_pack_md_path",
+        "triage_action",
     )
     issue = value.get("github_issue")
     if isinstance(issue, dict):
@@ -545,6 +555,8 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
         compact["infra_action"] = _pick(value["infra_action"], "workflow_gate", "reason")
     if isinstance(value.get("superseded_action"), dict):
         compact["superseded_action"] = _pick(value["superseded_action"], "workflow_gate", "reason", "next_command")
+    if "triage_action" in value:
+        compact["triage_action"] = value.get("triage_action")
     if isinstance(value.get("submit_bug"), dict):
         submit_bug = value["submit_bug"]
         compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
@@ -781,6 +793,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_ci_issue_janitor(payload) or {})
     elif schema.endswith("_promote_ci_issue_v1"):
         compact.update(_compact_promote_ci_issue(payload) or {})
+    elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
+        compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
     else:
         for key in (
             "module",
@@ -797,17 +811,126 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             if key in payload:
                 compact[key] = payload[key]
+        if "code_intelligence_hint" in payload and isinstance(payload["code_intelligence_hint"], dict):
+            compact["code_intelligence_hint"] = _pick(
+                payload["code_intelligence_hint"],
+                "workflow_gate",
+                "latest_freshness",
+                "artifact_path",
+                "consume_command",
+                "readiness_next_command",
+                "blocking_for_issue_workflow",
+            )
 
     compact["full_payload"] = "use --output-format full-json or --output <tmp/issue_workflow/...json> for details"
     return compact
+
+
+def _short_status_word(gate: str | None) -> str:
+    value = (gate or "").lower()
+    if value in {"passed", "ready", "ready_for_pr", "ready_for_apply", "checks_passed", "planned", "promoted", "complete", "merged", "merged_close_synced"}:
+        return "PASS"
+    if "blocked" in value or value in {"failed", "checks_failed", "validation_evidence_missing"}:
+        return "BLOCKED"
+    if "warning" in value or "pending" in value:
+        return "WAIT"
+    return "INFO"
+
+
+def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> list[str]:
+    schema = str(payload.get("schema_version") or compact.get("schema_version") or "")
+    gate = str(compact.get("workflow_gate") or payload.get("workflow_gate") or "unknown")
+    bug_id = str(compact.get("bug_id") or payload.get("bug_id") or "").strip()
+    prefix = f"{_short_status_word(gate)} {bug_id}".strip()
+    if schema == "aistock_issue_workflow_watch_ci_v1":
+        checks = compact.get("check_summary") if isinstance(compact.get("check_summary"), dict) else payload.get("check_summary") or {}
+        return [
+            (
+                f"{prefix} workflow_gate={gate} pr={compact.get('pr_url') or 'unknown'} "
+                f"passed={checks.get('passed_count', 0)} pending={checks.get('pending_count', 0)} "
+                f"failed={checks.get('failed_count', 0)} next={';'.join(payload.get('next_actions') or compact.get('next_actions') or []) or 'none'}"
+            )
+        ]
+    if schema == "aistock_nightly_intake_smoke_v1":
+        return [
+            (
+                f"{prefix} nightly-intake-smoke workflow_gate={gate} github_writes={str(compact.get('github_writes')).lower()} "
+                f"unexpected_dirty_paths={len(compact.get('unexpected_dirty_paths') or [])} "
+                f"next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_triage_ci_issue_v1"):
+        return [
+            (
+                f"{prefix} triage-ci-issue workflow_gate={gate} classification={compact.get('classification_recommendation') or 'unknown'} "
+                f"needs_bug_json={str(bool(compact.get('needs_bug_json'))).lower()} next={compact.get('next_command') or compact.get('triage_action') or 'none'}"
+            )
+        ]
+    if schema.endswith("_promote_ci_issue_v1"):
+        triage = compact.get("triage") if isinstance(compact.get("triage"), dict) else {}
+        return [
+            (
+                f"{prefix} promote-ci-issue workflow_gate={gate} classification={triage.get('classification_recommendation') or 'unknown'} "
+                f"next={compact.get('next_command') or compact.get('triage_action') or 'none'}"
+            )
+        ]
+    if schema.endswith("_start_v1"):
+        worktree_plan = compact.get("worktree_plan") if isinstance(compact.get("worktree_plan"), dict) else {}
+        return [
+            (
+                f"{prefix} workflow_gate={gate} module={compact.get('module') or 'unknown'} "
+                f"worktree_created={str(bool(worktree_plan.get('created'))).lower()} "
+                f"context={compact.get('context_pack_md') or 'not_generated'}"
+            )
+        ]
+    if schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
+        return [
+            (
+                f"{prefix} workflow_gate={gate} closure_ready={str(bool(compact.get('closure_ready'))).lower()} "
+                f"validation_evidence={compact.get('validation_evidence_count', 0)} pr_body={compact.get('pr_body_path') or 'not_generated'}"
+            )
+        ]
+    if schema.endswith("_doctor_v1"):
+        return [
+            (
+                f"{prefix} doctor workflow_gate={gate} restart_recommended={str(bool(compact.get('restart_recommended'))).lower()} "
+                f"warnings={compact.get('warnings_count', 0)} next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_smoke_v1") or schema == "aistock_batch_workflow_smoke_v1":
+        return [
+            (
+                f"{prefix} workflow_gate={gate} dry_run={str(bool(compact.get('dry_run'))).lower()} "
+                f"unexpected_dirty_paths={len(compact.get('unexpected_dirty_paths') or [])} next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_run_v1"):
+        return [
+            (
+                f"{prefix} workflow_gate={gate} mode={compact.get('mode') or payload.get('mode') or 'unknown'} "
+                f"next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    return [
+        (
+            f"{prefix} workflow_gate={gate} "
+            f"next={compact.get('next_command') or 'none'}"
+        )
+    ]
 
 
 def _emit(payload: dict[str, Any], output: str | None = None, output_format: str = "compact") -> None:
     output_path = _resolve_output_path(output)
     if output_path:
         _write_json(output_path, payload)
-    stdout_payload = payload if output_format == "full-json" else _compact_payload(payload)
-    sys.stdout.write(json.dumps(stdout_payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    if output_format == "full-json":
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+        return
+    compact = _compact_payload(payload)
+    if output_format == "summary":
+        sys.stdout.write("\n".join(_format_summary_lines(payload, compact)) + "\n")
+        return
+    sys.stdout.write(json.dumps(compact, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
 def _emit_args(payload: dict[str, Any], args: argparse.Namespace) -> None:
@@ -1208,6 +1331,24 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
         "fallback_reason": fallback_reason,
         "readiness_next_command": next_command,
         "blocking_for_issue_workflow": False,
+    }
+
+
+def _code_intelligence_hint(root: Path | None = None) -> dict[str, Any]:
+    freshness = code_intelligence.latest_codegraph_freshness(root or REPO_ROOT)
+    latest = freshness.get("latest") if isinstance(freshness.get("latest"), dict) else {}
+    freshness_value = latest.get("freshness") if latest else None
+    return {
+        "schema_version": "aistock_issue_workflow_code_intelligence_hint_v1",
+        "workflow_gate": freshness.get("workflow_gate") or "warning",
+        "blocking_for_issue_workflow": False,
+        "latest_freshness": freshness_value,
+        "artifact_path": latest.get("artifact_path") if latest else None,
+        "summary_ref": latest.get("summary_ref") if latest else None,
+        "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness",
+        "readiness_next_command": None
+        if freshness_value == "fresh"
+        else "python scripts/code_intelligence_adapter.py freshness --skip-external",
     }
 
 
@@ -3255,6 +3396,7 @@ def _build_code_intelligence_summary(
         item_id=item_id,
         query=_issue_query(record, changed_files),
         changed_files=changed_files or [],
+        module=str(record.get("module") or "").strip() or None,
         root=root,
         skip_external=False,
     )
@@ -3262,15 +3404,21 @@ def _build_code_intelligence_summary(
 
 def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str, Any]) -> dict[str, Any]:
     ua = code_intelligence_summary.get("understand_anything")
+    ua_summary = code_intelligence_summary.get("understand_anything_summary")
     return {
         "provider": code_intelligence_summary.get("provider"),
         "status": code_intelligence_summary.get("status"),
         "context_ref": code_intelligence_summary.get("context_ref"),
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_nodes_used": (ua_summary or {}).get("nodes_used") if isinstance(ua_summary, dict) else None,
+        "understand_anything_graph_exists": (ua_summary or {}).get("graph_exists") if isinstance(ua_summary, dict) else None,
         "blocking_for_issue_workflow": False,
     }
 
@@ -3388,6 +3536,9 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- status: `{code_intel.get('status') or 'unknown'}`",
         f"- context_ref: `{code_intel.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
+        f"- affected_tests_count: `{code_intel.get('affected_tests_count', 0)}`",
+        f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
+        f"- understand_anything_nodes_used: `{code_intel.get('understand_anything_nodes_used', 0)}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- blocking_for_issue_workflow: `{str(bool(code_intel.get('blocking_for_issue_workflow'))).lower()}`",
         "",
@@ -3530,6 +3681,7 @@ def _build_batch_code_intelligence_summary(
         item_id=batch_id,
         query=_batch_code_intelligence_query(records, changed_files),
         changed_files=changed_files or [],
+        module=str(records[0].get("module") or "").strip() if records else None,
         root=root,
         skip_external=False,
     )
@@ -3736,6 +3888,7 @@ def build_fast_path_plan(
         "tier_reasons": reasons,
         "context_strategy": context_strategy,
         "validation": validation,
+        "code_intelligence_hint": _code_intelligence_hint(REPO_ROOT),
         "required_validation": required,
         "recommended_validation": recommended,
         "required_commands": _plans_to_commands(required),
@@ -4143,6 +4296,16 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
     handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
     entrypoints = handoff.get("workflow_entrypoints") if isinstance(handoff.get("workflow_entrypoints"), dict) else {}
     body = str(issue_payload.get("body") or "")
+    closed_loop_checks = {
+        "agent_handoff_section": "## Agent Handoff" in body,
+        "triage_entrypoint": "triage-ci-issue" in str(entrypoints.get("triage") or ""),
+        "promotion_requires_registry_worktree": "--create-registry-worktree --apply" in str(entrypoints.get("promote") or ""),
+        "needs_bug_json_recorded": handoff.get("needs_bug_json") is True,
+        "candidate_history_tmp_only": bool(candidate_history_path and _path_under_repo_tmp_validation(candidate_history_path)),
+    }
+    for label, ok in closed_loop_checks.items():
+        if not ok:
+            blocking.append(f"Nightly intake closed-loop check failed: {label}")
     if "triage-ci-issue --issue <issue-number>" not in body:
         blocking.append("GitHub Issue payload is missing triage-ci-issue handoff")
     if "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" not in body:
@@ -4177,6 +4340,7 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
         "issue_title": issue_payload.get("title"),
         "nightly_failed_stages": stdout_payload.get("nightly_failed_stages") if isinstance(stdout_payload, dict) else [],
+        "closed_loop_checks": closed_loop_checks,
         "handoff_entrypoints": entrypoints,
         "dirty_paths_before": dirty_before,
         "dirty_paths_after": dirty_after,
@@ -4241,6 +4405,10 @@ def build_start_plan(
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_summary": code_intelligence_summary.get("understand_anything_summary"),
         "understand_anything": code_intelligence_summary.get("understand_anything"),
     }
     fix_ready["code_intelligence"] = context_pack["code_intelligence"]
@@ -4413,6 +4581,8 @@ def build_finish_plan(
             "context_ref": code_intelligence_summary.get("context_ref"),
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
+            "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+            "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
             "readiness_next_command": h7_code_intelligence.get("readiness_next_command"),
             "fallback_reason": h7_code_intelligence.get("fallback_reason"),
         },
@@ -4448,6 +4618,9 @@ def build_finish_plan(
             "manifest_ref": code_intelligence_summary.get("manifest_ref"),
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
+            "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+            "affected_quality": code_intelligence_summary.get("affected_quality"),
+            "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
         },
         "codegraph_suggested_tests": codegraph_tests,
         "h7_code_intelligence": h7_code_intelligence,
@@ -4680,6 +4853,10 @@ def build_start_batch_plan(
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_summary": code_intelligence_summary.get("understand_anything_summary"),
         "understand_anything": code_intelligence_summary.get("understand_anything"),
     }
     batch_plan["code_intelligence"] = batch_code_intelligence
@@ -5506,6 +5683,25 @@ def build_triage_ci_issue_plan(
         github_issue_number=issue.get("number"),
         github_issue_url=github_issue_url,
     )
+    actionable = classification in ACTIONABLE_CI_CLASSIFICATIONS
+    triage_action: str | None = None
+    if not actionable and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"}:
+        triage_action = "triage_incomplete_collect_failure_diagnostics_before_bug_promotion"
+        failure_event["candidate_status"] = "triage_incomplete"
+        context_pack["failure_event"] = failure_event
+        handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+        handoff["needs_bug_json"] = False
+        handoff["handoff_mode"] = "triage_only"
+        handoff["workflow_entrypoints"] = {
+            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
+            "promote": "blocked_until_diagnostic_status_complete",
+        }
+        handoff["next_commands"] = [f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}"]
+        handoff["stop_conditions"] = [
+            "Do not promote BUG JSON until CI/Nightly diagnostics identify a concrete code or test failure.",
+            "Do not edit source files from this triage-only issue.",
+        ]
+        context_pack["agent_handoff"] = handoff
     if superseded_action:
         failure_event["candidate_status"] = "superseded_by_later_main_success"
         failure_event["superseded_action"] = superseded_action
@@ -5545,8 +5741,8 @@ def build_triage_ci_issue_plan(
         "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
-        "needs_bug_json": linked is None
-        and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"},
+        "needs_bug_json": linked is None and actionable,
+        "triage_action": triage_action,
         "suggested_bug": {
             "module": module,
             "severity": summary.get("severity") or "P1",
@@ -5584,6 +5780,8 @@ def build_triage_ci_issue_plan(
                 else (
                     f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
                     "--create-registry-worktree --apply"
+                    if linked is None and actionable
+                    else triage_action
                     if linked is None
                     else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
                 )
@@ -5854,6 +6052,18 @@ def build_promote_ci_issue_plan(
             "triage": triage,
             "superseded_action": action,
             "next_command": action.get("next_command") or "close_ci_issue_as_superseded_after_review",
+        }
+    if triage.get("classification_recommendation") not in ACTIONABLE_CI_CLASSIFICATIONS:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_triage_incomplete_not_code_bug",
+            "dry_run": not apply,
+            "triage": triage,
+            "triage_action": triage.get("triage_action")
+            or "triage_incomplete_collect_failure_diagnostics_before_bug_promotion",
+            "next_command": triage.get("next_command")
+            or "rerun_triage_ci_issue_after_failure_diagnostics_are_available",
         }
     if apply and not create_registry_worktree:
         return {
