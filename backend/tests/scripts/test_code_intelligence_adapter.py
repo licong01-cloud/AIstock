@@ -33,6 +33,7 @@ def test_code_intelligence_doctor_falls_back_without_codegraph(
     assert payload["workflow_gate"] == "warning"
     assert payload["codegraph"]["status"] == "unavailable"
     assert payload["understand_anything"]["blocking_for_issue_workflow"] is False
+    assert payload["understand_anything"]["status"] in {"not_configured", "configured_missing_graph"}
 
 
 def test_context_and_affected_artifacts_use_fallback_when_index_missing(
@@ -204,6 +205,23 @@ def test_build_summary_includes_ua_module_ref_without_inlining_graph(tmp_path: P
     assert payload["understand_anything_summary"]["nodes_used"] == 1
     assert "selected_nodes" not in payload["understand_anything_summary"]
     assert (tmp_path / payload["understand_anything_summary"]["artifact_path"]).exists()
+
+
+def test_understand_anything_status_reports_configured_missing_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    skill = home / ".agents" / "skills" / "understand"
+    skill.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True)
+
+    assert payload["status"] == "configured_missing_graph"
+    assert payload["codex_skill_exists"] is True
+    assert payload["graph_exists"] is False
+    assert payload["generate_graph_command"].startswith("/understand")
 
 
 def test_affected_tests_supplements_codegraph_with_repo_import_scan(
@@ -641,6 +659,22 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
     assert payload["nodes_used"] == 1
     assert (tmp_path / payload["artifact_path"]).exists()
     assert "Understand Anything Summary" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+
+
+def test_configure_understand_anything_writes_config_and_ignore(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    payload = adapter.configure_understand_anything(root=tmp_path, language="zh", auto_update=False)
+
+    assert payload["workflow_gate"] == "configured"
+    config = json.loads((tmp_path / payload["config_path"]).read_text(encoding="utf-8"))
+    assert config["outputLanguage"] == "zh"
+    assert config["autoUpdate"] is False
+    assert (tmp_path / payload["understandignore_path"]).exists()
 
 
 def test_understand_anything_summary_manifest_uses_standard_modules(tmp_path: Path, monkeypatch) -> None:

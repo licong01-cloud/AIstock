@@ -658,6 +658,9 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "codegraph_status",
                 "codegraph_freshness",
                 "codegraph_freshness_ref",
+                "understand_anything_status",
+                "understand_anything_graph_exists",
+                "understand_anything_next_command",
                 "fallback_used",
                 "readiness_next_command",
                 "fallback_reason",
@@ -1319,6 +1322,12 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
     next_command = None
     if fallback_used:
         next_command = codegraph.get("bootstrap_command") or bootstrap.get("codegraph") or "codegraph init -i"
+    ua_status = str(ua.get("status") or "unknown")
+    ua_next_command = None
+    if ua_status == "not_configured":
+        ua_next_command = ua.get("configure_command") or bootstrap.get("understand_anything_configure")
+    elif not ua.get("graph_exists"):
+        ua_next_command = ua.get("generate_graph_command") or bootstrap.get("understand_anything_generate_graph")
     return {
         "schema_version": "aistock_issue_workflow_h7_code_intelligence_readiness_v1",
         "workflow_gate": "warning" if fallback_used else "ready",
@@ -1326,7 +1335,9 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
         "codegraph_status": codegraph_status,
         "codegraph_freshness": latest_freshness.get("freshness"),
         "codegraph_freshness_ref": latest_freshness.get("artifact_path"),
-        "understand_anything_status": ua.get("status"),
+        "understand_anything_status": ua_status,
+        "understand_anything_graph_exists": ua.get("graph_exists"),
+        "understand_anything_next_command": ua_next_command,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
         "readiness_next_command": next_command,
@@ -3419,6 +3430,7 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
         "understand_anything_nodes_used": (ua_summary or {}).get("nodes_used") if isinstance(ua_summary, dict) else None,
         "understand_anything_graph_exists": (ua_summary or {}).get("graph_exists") if isinstance(ua_summary, dict) else None,
+        "understand_anything_generate_graph_command": (ua or {}).get("generate_graph_command") if isinstance(ua, dict) else None,
         "blocking_for_issue_workflow": False,
     }
 
@@ -3489,6 +3501,7 @@ def build_task_card(
         "next_client_steps": [
             "switch_to_worktree_if_created",
             "read task-card.md first, then context-pack.md only when needed",
+            "read Code Intelligence refs before rg; broad scans require a scoped miss reason",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -3538,9 +3551,12 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
         f"- affected_tests_count: `{code_intel.get('affected_tests_count', 0)}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
+        f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
+        f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
         f"- understand_anything_nodes_used: `{code_intel.get('understand_anything_nodes_used', 0)}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- blocking_for_issue_workflow: `{str(bool(code_intel.get('blocking_for_issue_workflow'))).lower()}`",
+        f"- ua_generate_graph_command: `{code_intel.get('understand_anything_generate_graph_command') or 'not_required'}`",
         "",
         "## Production Gates",
         *[f"- {key}: `{value}`" for key, value in sorted((task_card.get("production_gates") or {}).items())],
@@ -5162,6 +5178,10 @@ def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
+def _claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_HOME") or Path.home() / ".claude")
+
+
 def _mcp_config_snapshot() -> dict[str, Any]:
     candidates = [
         _codex_home() / "config.toml",
@@ -5183,16 +5203,19 @@ def _mcp_config_snapshot() -> dict[str, Any]:
     return {"files": files, "stale_worktree_config_files": stale_paths}
 
 
-def _client_manifest(codex_home: Path | None = None) -> dict[str, Any]:
+def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
+    claude_home = claude_home or _claude_home()
     repo_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
     global_skill = codex_home / "skills" / "fix-aistock-issue"
     repo_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    global_claude = claude_home / "commands" / "fix-aistock-issue.md"
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
     repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
     repo_skill_sha = _sha256_tree(repo_skill)
     global_skill_sha = _sha256_tree(global_skill)
     claude_sha = _sha256_file(repo_claude)
+    global_claude_sha = _sha256_file(global_claude)
     cli_sha = _sha256_file(cli)
     codex_status = "missing_global"
     if repo_skill_sha and global_skill_sha:
@@ -5208,15 +5231,19 @@ def _client_manifest(codex_home: Path | None = None) -> dict[str, Any]:
         "codex_skill_sha256": repo_skill_sha,
         "global_codex_skill_sha256": global_skill_sha,
         "claude_command_sha256": claude_sha,
+        "global_claude_command_sha256": global_claude_sha,
         "codex_skill_status": codex_status,
-        "claude_command_status": "present" if claude_sha else "missing",
+        "claude_command_status": "current"
+        if claude_sha and global_claude_sha == claude_sha
+        else ("stale_global" if claude_sha and global_claude_sha else ("missing_global" if claude_sha else "missing_repo")),
         "paths": {
             "repo_codex_skill": str(repo_skill),
             "global_codex_skill": str(global_skill),
             "claude_command": str(repo_claude),
+            "global_claude_command": str(global_claude),
             "workflow_cli": str(cli),
         },
-        "restart_recommended": codex_status != "current",
+        "restart_recommended": codex_status != "current" or (claude_sha and global_claude_sha != claude_sha),
         "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
     }
 
@@ -5283,8 +5310,10 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append("global Codex issue skill is missing or stale; run install-client --apply and restart old client windows")
     elif client_manifest["codex_skill_status"] == "missing_repo_skill":
         blocking.append("repo Codex issue skill is missing")
-    if client_manifest["claude_command_status"] == "missing":
-        warnings.append("Claude Code issue command is missing; Claude can still call the repo CLI directly")
+    if client_manifest["claude_command_status"] == "missing_repo":
+        warnings.append("repo Claude Code issue command is missing; Claude can still call the repo CLI directly")
+    elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
+        warnings.append("global Claude Code issue command is missing or stale; run install-client --apply")
 
     code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
     for warning in code_intel.get("warnings") or []:
@@ -5317,11 +5346,18 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     }
 
 
-def build_client_install_plan(*, apply: bool = False, codex_home: str | None = None) -> dict[str, Any]:
+def build_client_install_plan(
+    *,
+    apply: bool = False,
+    codex_home: str | None = None,
+    claude_home: str | None = None,
+) -> dict[str, Any]:
     source_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
     source_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_skill = target_home / "skills" / "fix-aistock-issue"
+    target_claude_home = Path(claude_home) if claude_home else _claude_home()
+    target_claude = target_claude_home / "commands" / "fix-aistock-issue.md"
     blocking: list[str] = []
     if not source_skill.exists():
         blocking.append(f"missing repo Codex skill: {source_skill}")
@@ -5337,7 +5373,7 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         {
             "action": "verify_claude_code_command",
             "source": str(source_claude),
-            "target": "repo-local .claude/commands/fix-aistock-issue.md",
+            "target": str(target_claude),
             "safe": source_claude.exists(),
         },
     ]
@@ -5349,7 +5385,8 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         "blocking": blocking,
         "actions": actions,
         "codex_home": str(target_home),
-        "client_manifest_before": _client_manifest(target_home),
+        "claude_home": str(target_claude_home),
+        "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
         if blocking:
@@ -5358,12 +5395,19 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
             shutil.rmtree(target_skill)
         target_skill.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_skill, target_skill)
+        target_claude.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_claude, target_claude)
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
-        payload["installed"] = [{"target": str(target_skill)}]
-        payload["client_manifest_after"] = _client_manifest(target_home)
+        payload["installed"] = [{"target": str(target_skill)}, {"target": str(target_claude)}]
+        payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
     manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
-    _write_json(manifest_path, payload.get("client_manifest_after") or payload.get("client_manifest_before") or _client_manifest(target_home))
+    _write_json(
+        manifest_path,
+        payload.get("client_manifest_after")
+        or payload.get("client_manifest_before")
+        or _client_manifest(target_home, target_claude_home),
+    )
     payload["client_manifest_path"] = _repo_rel(manifest_path)
     return payload
 
@@ -5559,6 +5603,9 @@ def build_postmortem_plan(
                 f"- codegraph_status: `{h7_code_intelligence.get('codegraph_status') or 'unknown'}`",
                 f"- codegraph_freshness: `{h7_code_intelligence.get('codegraph_freshness') or 'not_available'}`",
                 f"- codegraph_freshness_ref: `{h7_code_intelligence.get('codegraph_freshness_ref') or 'not_available'}`",
+                f"- understand_anything_status: `{h7_code_intelligence.get('understand_anything_status') or 'unknown'}`",
+                f"- understand_anything_graph_exists: `{str(bool(h7_code_intelligence.get('understand_anything_graph_exists'))).lower()}`",
+                f"- understand_anything_next_command: `{h7_code_intelligence.get('understand_anything_next_command') or 'not_required'}`",
                 f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
                 f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
                 "",
@@ -8957,7 +9004,11 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
 
 
 def cmd_install_client(args: argparse.Namespace) -> int:
-    payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
+    payload = build_client_install_plan(
+        apply=args.apply,
+        codex_home=args.codex_home,
+        claude_home=args.claude_home,
+    )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
@@ -9218,6 +9269,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_client = sub.add_parser("install-client", help="Install or dry-run developer-client entry wrappers.")
     install_client.add_argument("--apply", action="store_true")
     install_client.add_argument("--codex-home")
+    install_client.add_argument("--claude-home")
     add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
 

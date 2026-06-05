@@ -23,6 +23,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Preserve per-issue evidence even when batching same-module issues.
 - Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, lacks validation evidence, or `doctor` returns `workflow_gate=blocked`.
 - Read the returned Context Pack and `allowed_write_scope` before searching code. Default to `rg` only against scoped files/directories; use broad repo search only after a scoped search fails and record the reason in the final report.
+- Use graph-first context for every issue: read `task-card.md` Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg`/file reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise keep UA missing as warning-only.
 - For UI BUG intake, use `submit-bug` returned `ui_intake_hints` as the first route/scope/reproduce checklist; do not broad-scan frontend until those hints fail or prove stale.
 - Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
 
@@ -41,7 +42,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
    Compatibility fallback:
    `python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktree`
 4. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
-5. Fix only within `allowed_write_scope`; run targeted `rg`/reads inside that scope first. If more files are needed, stop and ask for scope expansion.
+5. Read graph-first refs from the task card, then fix only within `allowed_write_scope`; run targeted `rg`/reads inside that scope only when graph refs are insufficient. If more files are needed, stop and ask for scope expansion.
 6. If the window restarts, run:
    `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`
 7. After code changes, run:
@@ -97,4 +98,4 @@ Cleanup can remove safe orphaned task worktree directories that contain only emp
 
 ## Client Install
 
-After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill. Before merge, use `install-client` without `--apply` as a dry-run.
+After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill and user-level Claude Code command. Before merge, use `install-client` without `--apply` as a dry-run.
