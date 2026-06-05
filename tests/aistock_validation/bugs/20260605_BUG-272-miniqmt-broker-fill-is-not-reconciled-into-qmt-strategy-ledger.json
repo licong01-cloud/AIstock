@@ -1,0 +1,74 @@
+{
+  "actual": "QMT /api/v1/qmt/orders and /api/v1/qmt/trades show filled order 1082130454 and trade 1010000032502320, while DB qmt_strategy.order_ledger remains traded_volume=0 and qmt_strategy.trade_ledger count is 0 for qmt_order_id=1082130454.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/qmt_strategy_ledger",
+    "tests/aistock_validation/bugs/20260605_BUG-272-miniqmt-broker-fill-is-not-reconciled-into-qmt-strategy-ledger.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-272",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T05:14:16.171544Z",
+  "description": "QMT /api/v1/qmt/orders and /api/v1/qmt/trades show filled order 1082130454 and trade 1010000032502320, while DB qmt_strategy.order_ledger remains traded_volume=0 and qmt_strategy.trade_ledger count is 0 for qmt_order_id=1082130454.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260605-19d1a59b9397",
+      "timestamp": "2026-06-05T05:14:16.171544Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-05 12:32+08 read-only pre-afternoon-open check: QMT order 1082130454 traded_volume=200 traded_price=186.2 order_status=56; qmt_strategy.order_ledger traded_volume=0; trade_ledger count=0"
+  ],
+  "expected": "Broker-authoritative MiniQMT fills must be reconciled idempotently into qmt_strategy.order_ledger and qmt_strategy.trade_ledger during scheduler/reconcile sync, including traded_volume, traded_price, order_status, trade_id, price, quantity, amount, strategy attribution, and raw diagnostics.",
+  "first_seen_at": "2026-06-05T05:14:16.171544Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 784,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/784",
+  "last_seen_at": "2026-06-05T05:14:16.171544Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/qmt/orders?cancelable_only=false and GET /api/v1/qmt/trades; then SELECT qmt_order_id,traded_volume,traded_price,order_status FROM qmt_strategy.order_ledger WHERE qmt_order_id='1082130454' and SELECT count(*) FROM qmt_strategy.trade_ledger WHERE qmt_order_id='1082130454'.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT broker fill is not reconciled into qmt_strategy ledger",
+  "trigger_condition": {
+    "fingerprint": "19d1a59b9397f5c23b0b011b",
+    "source_event_id": "FE-20260605-19d1a59b9397"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
