@@ -84,6 +84,7 @@
 - `ruff check backend/services/simulation_runtime/selection.py backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/lifecycle.py backend/services/simulation_runtime/repository.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py` -> All checks passed
 - `python -m compileall backend/services/simulation_runtime/selection.py backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/lifecycle.py backend/services/simulation_runtime/repository.py` -> passed
 - `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1` -> files=8, findings=0, blocking=0
+- post-rebase `python scripts/aistock_guardrail_scan.py <origin/main...HEAD changed files> --fail-on-severity P1` -> files=10, findings=4 P2-only, blocking=0
 - `python -m nox -s validation_module_registry_l0` -> 8 passed; ownership files=12 mapped=12 unmapped=0 ambiguous=0
 - `python -m nox -s l0` -> successful; guardrail blocking=0
 - `python scripts/aistock_issue_workflow.py finish --bug-id BUG-274 --plan-only` -> workflow_gate=ready_for_pr; required_verification=`l0`,`validation_module_registry_l0`; production gates noop

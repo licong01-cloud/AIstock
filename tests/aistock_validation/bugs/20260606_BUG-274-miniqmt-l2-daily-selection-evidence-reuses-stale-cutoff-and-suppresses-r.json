@@ -58,6 +58,12 @@
       "actor": "codex",
       "action": "fix_commit_recorded",
       "note": "Recorded rebased fix commit 555c045b959f632e4cac04b4adfbb90f24c2e978 after syncing branch onto latest origin/main."
+    },
+    {
+      "timestamp": "2026-06-05T18:38:21Z",
+      "actor": "codex",
+      "action": "post_rebase_validation_refreshed",
+      "note": "After rebase onto origin/main, reran targeted pytest, ruff, compileall, explicit changed-file guardrail, l0, and validation_module_registry_l0; all blocking gates passed."
     }
   ],
   "evidence_uris": [
@@ -144,6 +150,7 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed; mapped=12 unmapped=0 ambiguous=0",
     "python -m nox -s l0 -> successful; guardrail blocking=0",
     "read-only DB similar false-success scan -> stale PIT terminal success rows=6; SUCCEEDED with submit_failure rows=2; other checked false-success patterns=0; code fix covers future runs without DB writes",
-    "validation history: tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md"
+    "validation history: tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md",
+    "post-rebase python scripts/aistock_guardrail_scan.py <origin/main...HEAD changed files> --fail-on-severity P1 -> files=10 findings=4 P2-only blocking=0"
   ]
 }
