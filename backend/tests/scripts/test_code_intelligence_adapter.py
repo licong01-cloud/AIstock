@@ -172,6 +172,40 @@ def test_build_summary_links_context_and_affected_refs(tmp_path: Path, monkeypat
     assert payload["affected_tests_ref"].endswith("affected-tests.json")
 
 
+def test_build_summary_includes_ua_module_ref_without_inlining_graph(tmp_path: Path, monkeypatch) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [{"source": "validation.workflow", "target": "scripts/aistock_issue_workflow.py"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_summary(
+        item_id="BUG-273",
+        query="workflow validation",
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation",
+        root=tmp_path,
+        skip_external=True,
+    )
+
+    assert payload["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert payload["understand_anything_summary"]["nodes_used"] == 1
+    assert "selected_nodes" not in payload["understand_anything_summary"]
+    assert (tmp_path / payload["understand_anything_summary"]["artifact_path"]).exists()
+
+
 def test_affected_tests_supplements_codegraph_with_repo_import_scan(
     tmp_path: Path,
     monkeypatch,

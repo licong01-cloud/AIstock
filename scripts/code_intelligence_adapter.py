@@ -219,7 +219,7 @@ def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -1003,9 +1003,11 @@ def build_summary(
     item_id: str,
     query: str,
     changed_files: list[str] | None = None,
+    module: str | None = None,
     root: Path | None = None,
     skip_external: bool = False,
 ) -> dict[str, Any]:
+    root = root or REPO_ROOT
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
@@ -1019,21 +1021,46 @@ def build_summary(
         root=root,
         skip_external=skip_external,
     )
+    ua_status = understand_anything_status(root)
+    ua_summary: dict[str, Any] | None = None
+    if module:
+        ua_payload = build_understand_anything_summary(
+            module=module,
+            root=root,
+            output_dir=_workflow_dir(item_id, root),
+        )
+        ua_summary = {
+            "module": ua_payload.get("module"),
+            "status": ua_payload.get("status"),
+            "artifact_path": ua_payload.get("artifact_path"),
+            "summary_ref": ua_payload.get("summary_ref"),
+            "graph_exists": ua_payload.get("graph_exists"),
+            "node_count": ua_payload.get("node_count"),
+            "edge_count": ua_payload.get("edge_count"),
+            "nodes_used": ua_payload.get("nodes_used"),
+            "edges_used": ua_payload.get("edges_used"),
+            "blocking_for_issue_workflow": False,
+        }
     return {
         "schema_version": "aistock_code_intelligence_summary_v1",
         "generated_at": _utc_now(),
         "item_id": item_id,
+        "module": module,
         "provider": "codegraph",
         "status": "ok" if context["status"] in {"ok", "repo_index_ready"} or affected["status"] == "ok" else "fallback",
         "context_ref": context.get("context_markdown"),
         "manifest_ref": context.get("manifest_path"),
         "affected_tests_ref": affected.get("artifact_path"),
+        "affected_tests_count": len(affected.get("suggested_tests") or []),
+        "affected_quality": affected.get("quality"),
         "fallback_used": bool(context.get("fallback", {}).get("used") and affected.get("fallback", {}).get("used")),
         "graph_root": context.get("graph_root") or affected.get("graph_root"),
         "graph_root_source": context.get("graph_root_source") or affected.get("graph_root_source"),
         "context": context,
         "affected_tests": affected,
-        "understand_anything": understand_anything_status(root or REPO_ROOT),
+        "understand_anything": ua_status,
+        "understand_anything_summary_ref": (ua_summary or {}).get("summary_ref"),
+        "understand_anything_summary": ua_summary,
     }
 
 
@@ -1048,6 +1075,7 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
     context_fallback = context.get("fallback") or {}
     affected_fallback = affected.get("fallback") or {}
     ua = payload.get("understand_anything") or {}
+    ua_summary = payload.get("understand_anything_summary") or {}
     suggested_tests = [str(item) for item in affected.get("suggested_tests") or [] if str(item).strip()]
     warnings = []
     if context_fallback.get("used"):
@@ -1066,8 +1094,11 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
         f"- affected_quality: `{affected.get('quality') or 'unknown'}`",
         f"- context_ref: `{payload.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{payload.get('affected_tests_ref') or 'not_generated'}`",
+        f"- affected_tests_count: `{payload.get('affected_tests_count', 0)}`",
         f"- changed_files: `{_inline(affected.get('changed_files') or context.get('changed_files'))}`",
         f"- understand_anything_status: `{ua.get('status') or 'unknown'}`",
+        f"- understand_anything_summary_ref: `{payload.get('understand_anything_summary_ref') or 'not_generated'}`",
+        f"- understand_anything_nodes_used: `{ua_summary.get('nodes_used', 0)}`",
         "",
         "### Suggested Impacted Tests",
         *[f"- `{item}`" for item in suggested_tests or ["none"]],
@@ -1176,6 +1207,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
         item_id=args.item_id,
         query=args.query,
         changed_files=changed,
+        module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         skip_external=args.skip_external,
     )
@@ -1266,6 +1298,7 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--query", required=True)
     summary.add_argument("--changed-file", action="append")
     summary.add_argument("--changed-files-file")
+    summary.add_argument("--module")
     summary.add_argument("--root")
     summary.add_argument("--skip-external", action="store_true")
     summary.add_argument("--output")
