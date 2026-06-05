@@ -440,7 +440,7 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
 def _compact_finalizer(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    compact = _pick(value, "workflow_gate", "blocking", "source_merge_commit", "next_actions")
+    compact = _pick(value, "workflow_gate", "blocking", "bug_ids", "batch_mode", "source_merge_commit", "next_actions")
     if "close_sync" in value:
         compact["close_sync"] = _pick(value["close_sync"], "workflow_gate", "registry_root", "updated_bug_json", "merge_commit")
     if "close_sync_commit" in value:
@@ -7589,7 +7589,7 @@ def _build_close_sync_cleanup_after_merge_plan(
 
 def build_merge_finalizer_plan(
     *,
-    bug_id: str,
+    bug_id: str | list[str],
     source_pr_url: str,
     source_branch: str | None,
     source_worktree: str | None,
@@ -7603,7 +7603,13 @@ def build_merge_finalizer_plan(
     apply: bool = False,
     source_pr_check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    canonical_bug_id = bug_id.strip().upper()
+    canonical_bug_ids = flow._unique_strings(
+        [str(item).strip().upper() for item in flow._as_list(bug_id) if str(item).strip()]
+    )
+    if not canonical_bug_ids:
+        raise WorkflowError("merge-finalizer requires at least one --bug-id")
+    canonical_bug_id = canonical_bug_ids[0]
+    batch_mode = len(canonical_bug_ids) > 1
     evidence = [item for item in validation_evidence if item.strip()]
     blocking: list[str] = []
     warnings: list[str] = []
@@ -7624,6 +7630,8 @@ def build_merge_finalizer_plan(
         "schema_version": "aistock_issue_workflow_merge_finalizer_v1",
         "generated_at": _utc_now(),
         "bug_id": canonical_bug_id,
+        "bug_ids": canonical_bug_ids,
+        "batch_mode": batch_mode,
         "source_pr_url": source_pr_url,
         "source_branch": source_branch,
         "source_worktree": source_worktree,
@@ -7642,72 +7650,135 @@ def build_merge_finalizer_plan(
         return payload
     if not apply:
         payload["workflow_gate"] = "ready_for_apply"
+        bug_args = " ".join(f"--bug-id {item}" for item in canonical_bug_ids)
         payload["next_command"] = (
-            f"python scripts/aistock_issue_workflow.py merge-finalizer --bug-id {canonical_bug_id} "
+            f"python scripts/aistock_issue_workflow.py merge-finalizer {bug_args} "
             f"--source-pr-url {source_pr_url} --validation-evidence \"<command> -> passed\" --apply"
         )
         return payload
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
     merge_commit = _merge_commit_from_pr_check(source_pr_check)
-    close_sync = _close_sync_is_complete(
-        bug_id=canonical_bug_id,
-        source_pr_url=source_pr_url,
-        merge_commit=merge_commit,
-        issue_json=issue_json,
-    )
-    if not close_sync:
-        close_sync = _close_sync_pr_in_progress_marker(
-            bug_id=canonical_bug_id,
-            source_pr_url=source_pr_url,
-            merge_commit=merge_commit,
-        )
-    if close_sync:
-        if close_sync.get("close_sync_pr") or close_sync.get("snapshot_source") == "origin_main_ref":
-            close_sync_commit = _close_sync_commit_already_merged(close_sync)
-            close_sync_pr_merge = {
-                "workflow_gate": "already_merged",
-                "auto_merge": merge_close_sync_pr,
-                "pr_url": close_sync_commit.get("pr_url"),
-                "reason": "close_sync_pr_or_bug_json_already_persisted",
-            }
-        elif close_sync.get("open_close_sync_pr"):
-            close_sync_commit = _close_sync_commit_existing_open_pr(close_sync)
+    if batch_mode:
+        incomplete_bug_ids: list[str] = []
+        complete_markers: list[dict[str, Any]] = []
+        for item in canonical_bug_ids:
+            marker = _close_sync_is_complete(
+                bug_id=item,
+                source_pr_url=source_pr_url,
+                merge_commit=merge_commit,
+                issue_json=issue_json if item == canonical_bug_id else None,
+            )
+            if not marker:
+                marker = _close_sync_pr_in_progress_marker(
+                    bug_id=item,
+                    source_pr_url=source_pr_url,
+                    merge_commit=merge_commit,
+                )
+            if marker and (marker.get("close_sync_pr") or marker.get("snapshot_source") == "origin_main_ref"):
+                complete_markers.append(marker)
+            elif marker and marker.get("open_close_sync_pr"):
+                complete_markers.append(marker)
+            else:
+                incomplete_bug_ids.append(item)
+        if not incomplete_bug_ids and complete_markers:
+            close_sync = dict(complete_markers[0])
+            close_sync["bug_ids"] = canonical_bug_ids
+            if close_sync.get("open_close_sync_pr"):
+                close_sync_commit = _close_sync_commit_existing_open_pr(close_sync)
+                close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                    bug_id=canonical_bug_id,
+                    close_sync_commit=close_sync_commit,
+                    auto_merge=merge_close_sync_pr,
+                )
+            else:
+                close_sync_commit = _close_sync_commit_already_merged(close_sync)
+                close_sync_pr_merge = {
+                    "workflow_gate": "already_merged",
+                    "auto_merge": merge_close_sync_pr,
+                    "pr_url": close_sync_commit.get("pr_url"),
+                    "reason": "batch_close_sync_pr_or_bug_json_already_persisted",
+                }
+        else:
+            close_sync = build_close_sync_batch_plan(
+                bug_ids=canonical_bug_ids,
+                pr_url=source_pr_url,
+                apply=True,
+                allow_missing_linkage=allow_missing_linkage,
+                validation_evidence=evidence,
+                merge_commit=merge_commit,
+                production_gates=production_gates or _production_gates_payload(),
+                create_registry_worktree=True,
+            )
+            close_sync_commit = _maybe_commit_and_pr_close_sync(
+                bug_id=canonical_bug_id,
+                close_sync=close_sync,
+                validation_evidence=evidence,
+            )
             close_sync_pr_merge = _merge_close_sync_pr_if_ready(
                 bug_id=canonical_bug_id,
                 close_sync_commit=close_sync_commit,
                 auto_merge=merge_close_sync_pr,
             )
-        else:
-            close_sync_commit = _close_sync_commit_needs_persistence(close_sync)
-            close_sync_pr_merge = {
-                "workflow_gate": "blocked",
-                "auto_merge": merge_close_sync_pr,
-                "blocking": close_sync_commit.get("blocking") or [],
-                "reason": close_sync_commit.get("reason"),
-            }
     else:
-        close_sync = build_close_sync_plan(
+        close_sync = _close_sync_is_complete(
             bug_id=canonical_bug_id,
-            issue_json=issue_json,
-            pr_url=source_pr_url,
-            apply=True,
-            allow_missing_linkage=allow_missing_linkage,
-            validation_evidence=evidence,
+            source_pr_url=source_pr_url,
             merge_commit=merge_commit,
-            production_gates=production_gates or _production_gates_payload(),
-            create_registry_worktree=True,
+            issue_json=issue_json,
         )
-        close_sync_commit = _maybe_commit_and_pr_close_sync(
-            bug_id=canonical_bug_id,
-            close_sync=close_sync,
-            validation_evidence=evidence,
-        )
-        close_sync_pr_merge = _merge_close_sync_pr_if_ready(
-            bug_id=canonical_bug_id,
-            close_sync_commit=close_sync_commit,
-            auto_merge=merge_close_sync_pr,
-        )
+        if not close_sync:
+            close_sync = _close_sync_pr_in_progress_marker(
+                bug_id=canonical_bug_id,
+                source_pr_url=source_pr_url,
+                merge_commit=merge_commit,
+            )
+        if close_sync:
+            if close_sync.get("close_sync_pr") or close_sync.get("snapshot_source") == "origin_main_ref":
+                close_sync_commit = _close_sync_commit_already_merged(close_sync)
+                close_sync_pr_merge = {
+                    "workflow_gate": "already_merged",
+                    "auto_merge": merge_close_sync_pr,
+                    "pr_url": close_sync_commit.get("pr_url"),
+                    "reason": "close_sync_pr_or_bug_json_already_persisted",
+                }
+            elif close_sync.get("open_close_sync_pr"):
+                close_sync_commit = _close_sync_commit_existing_open_pr(close_sync)
+                close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                    bug_id=canonical_bug_id,
+                    close_sync_commit=close_sync_commit,
+                    auto_merge=merge_close_sync_pr,
+                )
+            else:
+                close_sync_commit = _close_sync_commit_needs_persistence(close_sync)
+                close_sync_pr_merge = {
+                    "workflow_gate": "blocked",
+                    "auto_merge": merge_close_sync_pr,
+                    "blocking": close_sync_commit.get("blocking") or [],
+                    "reason": close_sync_commit.get("reason"),
+                }
+        else:
+            close_sync = build_close_sync_plan(
+                bug_id=canonical_bug_id,
+                issue_json=issue_json,
+                pr_url=source_pr_url,
+                apply=True,
+                allow_missing_linkage=allow_missing_linkage,
+                validation_evidence=evidence,
+                merge_commit=merge_commit,
+                production_gates=production_gates or _production_gates_payload(),
+                create_registry_worktree=True,
+            )
+            close_sync_commit = _maybe_commit_and_pr_close_sync(
+                bug_id=canonical_bug_id,
+                close_sync=close_sync,
+                validation_evidence=evidence,
+            )
+            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                bug_id=canonical_bug_id,
+                close_sync_commit=close_sync_commit,
+                auto_merge=merge_close_sync_pr,
+            )
 
     cleanup_plan = None
     if cleanup and source_branch:
@@ -7788,19 +7859,20 @@ def build_merge_finalizer_plan(
         payload["next_actions"].append("rerun_close_sync_cleanup_after_merge_with_apply")
         if close_sync_cleanup_plan.get("next_command"):
             payload["next_commands"].append(close_sync_cleanup_plan["next_command"])
-    _write_state(
-        canonical_bug_id,
-        state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
-        pr_url=source_pr_url,
-        commit=merge_commit,
-        close_sync=close_sync,
-        close_sync_commit=close_sync_commit,
-        close_sync_pr_merge=close_sync_pr_merge,
-        cleanup_plan=cleanup_plan,
-        close_sync_cleanup_plan=close_sync_cleanup_plan,
-        postmortem=postmortem,
-        next_actions=payload["next_actions"],
-    )
+    for state_bug_id in canonical_bug_ids:
+        _write_state(
+            state_bug_id,
+            state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
+            pr_url=source_pr_url,
+            commit=merge_commit,
+            close_sync=close_sync,
+            close_sync_commit=close_sync_commit,
+            close_sync_pr_merge=close_sync_pr_merge,
+            cleanup_plan=cleanup_plan,
+            close_sync_cleanup_plan=close_sync_cleanup_plan,
+            postmortem=postmortem if state_bug_id == canonical_bug_id else None,
+            next_actions=payload["next_actions"],
+        )
     return payload
 
 
@@ -9144,7 +9216,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
 
     finalizer = sub.add_parser("merge-finalizer", help="Finalize a merged issue PR through close-sync, optional close-sync PR merge, cleanup, and postmortem.")
-    finalizer.add_argument("--bug-id", required=True)
+    finalizer.add_argument("--bug-id", action="append", required=True)
     finalizer.add_argument("--issue-json")
     finalizer.add_argument("--source-pr-url", required=True, help="Merged source/fix PR URL.")
     finalizer.add_argument("--source-branch", help="Source/fix PR branch for cleanup.")

@@ -8,7 +8,7 @@ from typing import Any
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
-WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged"}
+WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged", *CLOSE_SYNC_STATUSES}
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-auto-link.yml",
     ".github/workflows/issue-on-test-fail.yml",
@@ -19,6 +19,8 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/test.yml",
     ".github/requirements/pr-quality.txt",
     ".github/requirements/semgrep.txt",
+    ".claude/commands/fix-aistock-issue.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
