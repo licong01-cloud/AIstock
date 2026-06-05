@@ -13,8 +13,8 @@ codegraph:
   max_impact_depth: 3
 understand_anything:
   enabled: true
-  version: "v2.7.3"
-  install_mode: agent_plugin_or_installer
+  version: "v2.7.6"
+  install_mode: claude_marketplace_plus_codex_installer
   project_graph_dir: ".understand-anything"
   commit_graph: false
   default_language: zh

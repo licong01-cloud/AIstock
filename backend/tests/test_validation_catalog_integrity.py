@@ -270,15 +270,17 @@ def test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard() -> None
     run_blocks = [str(step.get("run") or "") for step in steps if isinstance(step, dict)]
 
     freshness_runs = [block for block in run_blocks if "code_intelligence_adapter.py freshness" in block]
+    ua_config_runs = [block for block in run_blocks if "code_intelligence_adapter.py ua-configure" in block]
     ua_runs = [block for block in run_blocks if "code_intelligence_adapter.py ua-summary-all" in block]
 
     assert freshness_runs
     assert "date -u +%u" not in freshness_runs[0]
     assert "exit 0" not in freshness_runs[0]
     assert "|| true" in freshness_runs[0]
+    assert ua_config_runs
     assert ua_runs
-    assert "date -u +%u" in ua_runs[0]
-    assert "exit 0" in ua_runs[0]
+    assert "date -u +%u" not in ua_runs[0]
+    assert "exit 0" not in ua_runs[0]
 
 
 def test_catalog_integrity_reports_command_session_module_and_resource_issues(tmp_path: Path) -> None:

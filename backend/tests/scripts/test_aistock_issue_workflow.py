@@ -941,7 +941,11 @@ def test_doctor_reports_ready_when_client_entries_exist(
     codex_home = isolated_workflow_root / "codex_home"
     (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
     (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    claude_home = isolated_workflow_root / "claude_home"
+    (claude_home / "commands").mkdir(parents=True)
+    (claude_home / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
     monkeypatch.setattr(
         workflow,
@@ -1184,6 +1188,7 @@ def test_doctor_reports_stale_global_skill_manifest(
     global_skill.mkdir(parents=True)
     (global_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CLAUDE_HOME", str(isolated_workflow_root / "claude_home"))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
     monkeypatch.setattr(
         workflow,
@@ -2006,14 +2011,16 @@ def test_install_client_plan_can_copy_global_codex_skill(
     claude.mkdir(parents=True)
     (claude / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
+    claude_home = isolated_workflow_root / "claude_home"
 
-    dry = workflow.build_client_install_plan(codex_home=str(codex_home))
+    dry = workflow.build_client_install_plan(codex_home=str(codex_home), claude_home=str(claude_home))
     assert dry["workflow_gate"] == "ready_for_install"
     assert dry["dry_run"] is True
 
-    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home))
+    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home), claude_home=str(claude_home))
     assert applied["workflow_gate"] == "installed"
     assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "skill"
+    assert (claude_home / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8") == "claude"
 
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
