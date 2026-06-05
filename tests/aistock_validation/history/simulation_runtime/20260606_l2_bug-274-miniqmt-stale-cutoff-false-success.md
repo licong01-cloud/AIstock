@@ -6,6 +6,7 @@
 - github_issue: https://github.com/licong01-cloud/AIstock/issues/788
 - worktree: F:/Dev/AIstock_worktrees/BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-20260606
 - branch: bug/BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-20260606
+- fix_commit: 555c045b959f632e4cac04b4adfbb90f24c2e978
 
 ## 1. ????
 

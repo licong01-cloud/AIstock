@@ -52,6 +52,12 @@
       "actor": "codex",
       "action": "similar_false_success_scan_completed",
       "note": "Read-only DB scan found historical stale PIT terminal success rows and stale submit_failure payload rows; no additional intent-plan-without-broker or no-rebalance-with-intents false-success pattern found."
+    },
+    {
+      "timestamp": "2026-06-05T18:36:56Z",
+      "actor": "codex",
+      "action": "fix_commit_recorded",
+      "note": "Recorded rebased fix commit 555c045b959f632e4cac04b4adfbb90f24c2e978 after syncing branch onto latest origin/main."
     }
   ],
   "evidence_uris": [
@@ -62,7 +68,7 @@
   "expected": "Each target_trade_date must resolve a fresh PIT cutoff consistent with the previous trading day unless an explicitly versioned fixed historical replay is configured; stale cutoff reuse must fail fast and a run with submit_failure or unexecuted required intents must not be marked SUCCEEDED.",
   "first_seen_at": "2026-06-05T17:46:26.246042Z",
   "fix_branch": "bug/BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-20260606",
-  "fix_commit": null,
+  "fix_commit": "555c045b959f632e4cac04b4adfbb90f24c2e978",
   "fixed_at": "2026-06-05T18:34:16Z",
   "github_issue_number": 788,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/788",
