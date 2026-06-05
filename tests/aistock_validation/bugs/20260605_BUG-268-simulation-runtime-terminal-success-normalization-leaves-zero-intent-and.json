@@ -1,0 +1,74 @@
+{
+  "actual": "MiniQMT L2 run simrun_eb5e3458eaff1870 stayed PLANNING_EXECUTION with order_intent_count=0 until an operator DB correction; LocalSim successful retry runs retained submit_failure in run_payload_json.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "tests/aistock_validation/bugs/20260605_BUG-268-simulation-runtime-terminal-success-normalization-leaves-zero-intent-and.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-268",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T01:54:01.514984Z",
+  "description": "MiniQMT L2 run simrun_eb5e3458eaff1870 stayed PLANNING_EXECUTION with order_intent_count=0 until an operator DB correction; LocalSim successful retry runs retained submit_failure in run_payload_json.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260605-009d6fb90f51",
+      "timestamp": "2026-06-05T01:54:01.514984Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/preopen_dual_strategy_20260605/miniqmt_l2_zero_intent_status_correction.json",
+    "tmp/validation/preopen_dual_strategy_20260605/dual_strategy_snapshot_20260605_093812.json"
+  ],
+  "expected": "Existing zero-intent plans must become SUCCEEDED with no_rebalance_required=true and broker_called=false when submit=true; successful retry paths must clear stale submit_failure payload while preserving real failure history elsewhere if needed.",
+  "first_seen_at": "2026-06-05T01:54:01.514984Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 773,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/773",
+  "last_seen_at": "2026-06-05T01:54:01.514984Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run scheduler planning before execution for a MiniQMT binding whose plan has zero intents, then let execution window reuse the existing plan; inspect paper_v2.simulation_daily_run status/payload. For retry cleanup, fail LocalSim submit once, repair data, let auto retry succeed, then inspect run_payload_json.submit_failure.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "simulation runtime terminal success normalization leaves zero-intent and retry runs stale",
+  "trigger_condition": {
+    "fingerprint": "009d6fb90f51972087cf4e1b",
+    "source_event_id": "FE-20260605-009d6fb90f51"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
