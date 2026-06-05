@@ -1,0 +1,97 @@
+{
+  "actual": "dse_2eeb7b60dda279b5 target_trade_date=2026-06-05 kept cutoff_date=2026-06-02; simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6 had 0 intents and SUCCEEDED/no_rebalance_required even though strategy should rotate daily.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260606_BUG-274-miniqmt-l2-daily-selection-evidence-reuses-stale-cutoff-and-suppresses-r.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-274",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T17:46:26.246042Z",
+  "description": "dse_2eeb7b60dda279b5 target_trade_date=2026-06-05 kept cutoff_date=2026-06-02; simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6 had 0 intents and SUCCEEDED/no_rebalance_required even though strategy should rotate daily.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-1487cebaef1a",
+      "timestamp": "2026-06-05T17:46:26.246042Z"
+    }
+  ],
+  "evidence_uris": [
+    "dse_2eeb7b60dda279b5 simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6; prior run dse_702675c6305e32d4 simrun_e22704ae4492c70a; qmt orders 1090519120-1090519127"
+  ],
+  "expected": "Each target_trade_date must resolve a fresh PIT cutoff consistent with the previous trading day unless an explicitly versioned fixed historical replay is configured; stale cutoff reuse must fail fast and a run with submit_failure or unexecuted required intents must not be marked SUCCEEDED.",
+  "first_seen_at": "2026-06-05T17:46:26.246042Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 788,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/788",
+  "last_seen_at": "2026-06-05T17:46:26.246042Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only SQL: compare selection.daily_selection_evidence for pkg_a2f53f3f2f3e4095a910b939464c35e6 on target_trade_date 2026-06-04/2026-06-05 and inspect paper_v2.simulation_daily_run simrun_eb5e3458eaff1870 plus qmt_strategy.position_lot for codex_final_ms_l2_20260603.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT L2 daily selection evidence reuses stale cutoff and suppresses rebalance intents",
+  "trigger_condition": {
+    "fingerprint": "1487cebaef1a29f67e581c28",
+    "source_event_id": "FE-20260606-1487cebaef1a"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
