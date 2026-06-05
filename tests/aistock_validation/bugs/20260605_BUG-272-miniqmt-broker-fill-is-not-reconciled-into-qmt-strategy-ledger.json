@@ -27,21 +27,21 @@
       "timestamp": "2026-06-05T05:14:16.171544Z"
     },
     {
-      "timestamp": "2026-06-05T05:17:26.268034Z",
-      "actor": "codex",
       "action": "scope_expanded_after_root_cause",
-      "note": "Root cause is scheduler reconciliation timing: MiniQMT runs sync before submit but not broker-authoritative order/trade sync after submit, and SUCCEEDED broker-called runs are not polled for late fills. Expand scope to simulation_runtime scheduler and targeted regression test."
+      "actor": "codex",
+      "note": "Root cause is scheduler reconciliation timing: MiniQMT runs sync before submit but not broker-authoritative order/trade sync after submit, and SUCCEEDED broker-called runs are not polled for late fills. Expand scope to simulation_runtime scheduler and targeted regression test.",
+      "timestamp": "2026-06-05T05:17:26.268034Z"
     },
     {
-      "timestamp": "2026-06-05T05:23:10.719321Z",
-      "actor": "codex",
       "action": "implement_fix",
-      "note": "Simulation scheduler now syncs MiniQMT broker order/trade snapshot after submit before reconciliation, and SUCCEEDED broker-called MiniQMT runs are polled idempotently for late fills without resubmitting orders.",
+      "actor": "codex",
       "evidence": [
         "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync -q -> 1 passed",
         "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 31 passed",
         "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 13 passed"
-      ]
+      ],
+      "note": "Simulation scheduler now syncs MiniQMT broker order/trade snapshot after submit before reconciliation, and SUCCEEDED broker-called MiniQMT runs are polled idempotently for late fills without resubmitting orders.",
+      "timestamp": "2026-06-05T05:23:10.719321Z"
     }
   ],
   "evidence_uris": [
@@ -50,8 +50,8 @@
   "expected": "Broker-authoritative MiniQMT fills must be reconciled idempotently into qmt_strategy.order_ledger and qmt_strategy.trade_ledger during scheduler/reconcile sync, including traded_volume, traded_price, order_status, trade_id, price, quantity, amount, strategy attribution, and raw diagnostics.",
   "first_seen_at": "2026-06-05T05:14:16.171544Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b5f4a821dc8be53a8db5e45b58e5a7e2b7c1a3db",
+  "fixed_at": "2026-06-05T06:08:47.741373Z",
   "github_issue_number": 784,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/784",
   "last_seen_at": "2026-06-05T05:14:16.171544Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/785",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -70,7 +71,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger",
     "simulation_runtime"
@@ -80,6 +81,12 @@
     "fingerprint": "19d1a59b9397f5c23b0b011b",
     "source_event_id": "FE-20260605-19d1a59b9397"
   },
+  "validation_evidence": [
+    "ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 44 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
