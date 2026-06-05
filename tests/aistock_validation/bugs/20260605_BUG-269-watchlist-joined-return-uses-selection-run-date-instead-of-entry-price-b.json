@@ -1,0 +1,109 @@
+{
+  "actual": "API currently returns 301312.SZ entry_price_adjusted=133.08, entry_adjustment_factor=1.0, entry_adj_factor_date=2026-06-03, pct_since_entry about -33 percent, even though market.adj_factor is 3.0176 on 2026-06-02 and 4.2343 on 2026-06-03/04.",
+  "allowed_write_scope": [
+    "backend/services/watchlist_service.py",
+    "backend/services/selection_center/service.py",
+    "backend/tests/watchlist",
+    "backend/tests/selection_center",
+    "frontend/src/app/watchlist/page.tsx",
+    "tests/aistock_validation/bugs/20260605_BUG-269-watchlist-joined-return-uses-selection-run-date-instead-of-entry-price-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-269",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T02:53:16.228364Z",
+  "description": "API currently returns 301312.SZ entry_price_adjusted=133.08, entry_adjustment_factor=1.0, entry_adj_factor_date=2026-06-03, pct_since_entry about -33 percent, even though market.adj_factor is 3.0176 on 2026-06-02 and 4.2343 on 2026-06-03/04.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260605-9eea6789ddc8",
+      "timestamp": "2026-06-05T02:53:16.228361Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Watchlist joined return keeps raw entry/latest prices for storage and execution, but every display/stat calculation adjusts entry_price to the latest price basis using the actual entry price basis date from Selection Center reference_price_trade_date or selection_entry_price_time. The 301312.SZ sample should show about -6 percent instead of about -33 percent.",
+  "first_seen_at": "2026-06-05T02:53:16.228364Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 775,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/775",
+  "last_seen_at": "2026-06-05T02:53:16.228364Z",
+  "module": "watchlist",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/watchlist/items and inspect 301312.SZ; compare selection.aggregate_result reference_price_trade_date=2026-06-02 with app.watchlist_items entry_as_of=2026-06-03 and market.adj_factor dates.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "watchlist"
+  ],
+  "title": "Watchlist joined return uses selection run date instead of entry price basis date",
+  "trigger_condition": {
+    "fingerprint": "9eea6789ddc853a643a8f335",
+    "source_event_id": "FE-20260605-9eea6789ddc8"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:watchlist",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/watchlist_service.py",
+      "backend/services/selection_center/service.py",
+      "backend/tests/watchlist",
+      "backend/tests/selection_center",
+      "frontend/src/app/watchlist/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/services/watchlist_service.py",
+    "ui_routes": [
+      "/services/watchlist_service.py"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
