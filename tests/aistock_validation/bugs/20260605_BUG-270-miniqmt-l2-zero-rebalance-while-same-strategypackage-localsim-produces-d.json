@@ -26,14 +26,14 @@
       "timestamp": "2026-06-05T03:09:45.513893Z"
     },
     {
-      "timestamp": "2026-06-05T03:59:27.624158Z",
-      "actor": "codex",
       "action": "implement_fix",
-      "note": "MiniQMT production context now loads and validates the frozen StrategyPackage manifest before planning; zero-intent plans persist target-vs-current no_rebalance_evidence so top-list/quantity match is auditable.",
+      "actor": "codex",
       "evidence": [
         "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_persists_no_rebalance_evidence_when_targets_match_current_positions",
         "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and_persists_ledger_evidence"
-      ]
+      ],
+      "note": "MiniQMT production context now loads and validates the frozen StrategyPackage manifest before planning; zero-intent plans persist target-vs-current no_rebalance_evidence so top-list/quantity match is auditable.",
+      "timestamp": "2026-06-05T03:59:27.624158Z"
     }
   ],
   "evidence_uris": [
@@ -45,8 +45,8 @@
   "expected": "For the same StrategyPackage and trade_date, LocalSim and MiniQMT should derive identical daily selection targets before broker-state-aware execution; MiniQMT should only emit zero intents when its target list exactly matches current strategy holdings and this match is explicitly evidenced.",
   "first_seen_at": "2026-06-05T03:09:45.513893Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d521897b88167cbff62104c7748240cecb6c980b",
+  "fixed_at": "2026-06-05T04:11:03.783585Z",
   "github_issue_number": 777,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/777",
   "last_seen_at": "2026-06-05T03:09:45.513893Z",
@@ -54,6 +54,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/780",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -74,6 +75,11 @@
     "fingerprint": "f0d2bb38b9d4f4525e054f1b",
     "source_event_id": "FE-20260605-f0d2bb38b9d4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 30 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
