@@ -2732,6 +2732,70 @@ def test_selection_center_watchlist_import_uses_selection_entry_price_not_curren
     assert [item["entry_price"] for item in items] == [21.5, 22.5]
 
 
+def test_selection_center_watchlist_import_uses_entry_price_basis_date(monkeypatch) -> None:
+    class DatedEntryPriceEnrichment:
+        def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+            return [
+                candidate.model_copy(
+                    update={
+                        "selection_entry_price": 133.08,
+                        "selection_entry_price_time": "2024-01-01",
+                        "reference_price": 133.08,
+                    }
+                )
+                for candidate in candidates
+            ]
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "qe_watchlist_entry_date_pkg",
+        [{"symbol": "301312.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 133.08}],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=DatedEntryPriceEnrichment(),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("backend.services.selection_center.service.watchlist_service.list_categories", lambda: [])
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.create_category",
+        lambda name, description: 901,
+    )
+
+    def fake_add_items_bulk_from_task_selection(**kwargs):
+        captured["watchlist_call"] = kwargs
+        return {
+            "ok": True,
+            "added": len(kwargs["items"]),
+            "skipped": 0,
+            "moved": 0,
+            "errors": [],
+            "item_ids_by_code": {},
+        }
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.add_items_bulk_from_task_selection",
+        fake_add_items_bulk_from_task_selection,
+    )
+
+    result = service.add_run_to_watchlist(run_id=run.run_id, category_name="EntryPriceDate", top_k=1)
+
+    assert result["ok"] is True
+    item = captured["watchlist_call"]["items"][0]
+    assert item["entry_price"] == 133.08
+    assert item["as_of"] == "2024-01-01"
+
+
 def test_selection_center_watchlist_import_rejects_missing_reference_price() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_score_rows(

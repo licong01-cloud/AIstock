@@ -36,6 +36,8 @@ interface WatchlistItem {
   entry_price_adjusted?: number | null;
   entry_price_basis?: string | null;
   entry_adjustment_factor?: number | null;
+  entry_price_basis_date?: string | null;
+  entry_price_basis_source?: string | null;
   entry_adj_factor_date?: string | null;
   latest_adj_factor_date?: string | null;
   open?: number | null;
@@ -2450,12 +2452,12 @@ function WatchlistPage() {
                       {row.entry_rank != null ? String(row.entry_rank) : "-"}
                     </td>
                     <td data-testid={`watchlist-cell-entry-price-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
-                      <span title={row.entry_price_basis === "qfq_adjusted" ? `前复权加入价: ${row.entry_price_adjusted?.toFixed(3) ?? "-"}；复权因子: ${row.entry_adjustment_factor?.toFixed(6) ?? "-"}` : "未获取到复权因子，使用原始加入价"}>
+                      <span title={row.entry_price_basis === "qfq_adjusted" ? `Adjusted entry price: ${row.entry_price_adjusted?.toFixed(3) ?? "-"}; factor: ${row.entry_adjustment_factor?.toFixed(6) ?? "-"}; basis date: ${row.entry_price_basis_date ?? row.entry_adj_factor_date ?? "-"}` : "Adjustment factor unavailable; using raw entry price"}>
                         {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
                       </span>
                     </td>
                     <td data-testid={`watchlist-cell-entry-as-of-${row.code}`} style={{ padding: 6, color: "#6b7280" }}>
-                      {row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
+                      {row.entry_price_basis_date ? formatDate(row.entry_price_basis_date) : row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
                     </td>
                     <td style={{ padding: 6, textAlign: "right" }}>
                       {row.last != null ? row.last.toFixed(3) : "-"}
