@@ -70,10 +70,18 @@
       "actor": "codex",
       "action": "required_validation_center_backend_passed",
       "note": "Workflow finish required validation_center_backend after post-rebase code-intelligence refresh; nox session passed with 389 tests and coverage gate passed."
+    },
+    {
+      "timestamp": "2026-06-05T18:46:41Z",
+      "actor": "codex",
+      "action": "github_issue_synced_fixed_pending_review",
+      "note": "GitHub issue #788 relabeled status:fixed-pending-review and commented with PR/validation evidence: https://github.com/licong01-cloud/AIstock/issues/788#issuecomment-4634491896"
     }
   ],
   "evidence_uris": [
     "dse_2eeb7b60dda279b5 simrun_eb5e3458eaff1870 plan_544c81e6c2e963b6; prior run dse_702675c6305e32d4 simrun_e22704ae4492c70a; qmt orders 1090519120-1090519127",
+    "https://github.com/licong01-cloud/AIstock/issues/788#issuecomment-4634491896",
+    "https://github.com/licong01-cloud/AIstock/pull/791",
     "read-only DB scan 2026-05-01+: stale PIT terminal success=6, SUCCEEDED submit_failure=2, intent-plan-without-broker=0, no-rebalance-with-intents=0",
     "tests/aistock_validation/history/simulation_runtime/20260606_l2_bug-274-miniqmt-stale-cutoff-false-success.md"
   ],
