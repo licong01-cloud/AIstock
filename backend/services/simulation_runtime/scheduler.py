@@ -1588,6 +1588,8 @@ class SimulationLifecycleScheduler:
                 tail_result=None,
                 reconciliation=reconciliation,
             )
+            if run.status == SimulationDailyRunStatus.SUCCEEDED and status == "RECONCILED":
+                status = "REUSED_EXISTING_PLAN"
             return SimulationSchedulerBindingResult(
                 binding_id=binding.binding_id,
                 strategy_id=binding.strategy_id,
@@ -1829,6 +1831,7 @@ class SimulationLifecycleScheduler:
                 SimulationDailyRunStatus.SUBMITTING,
                 SimulationDailyRunStatus.INTRADAY_RUNNING,
                 SimulationDailyRunStatus.RECONCILING,
+                SimulationDailyRunStatus.SUCCEEDED,
                 SimulationDailyRunStatus.FAILED_RETRYABLE,
             }
             and SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
@@ -1859,6 +1862,22 @@ class SimulationLifecycleScheduler:
         run: SimulationDailyRun,
         context: SimulationRunContext,
     ) -> dict[str, Any] | None:
+        synced = self._sync_miniqmt_snapshot(
+            binding=binding,
+            run=run,
+            context=context,
+            payload_key="sync_before_submit",
+        )
+        return synced[0] if synced is not None else None
+
+    def _sync_miniqmt_snapshot(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+        payload_key: str,
+    ) -> tuple[dict[str, Any], Any] | None:
         if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             return None
         sync_service = getattr(context, "qmt_sync_service", None)
@@ -1879,10 +1898,10 @@ class SimulationLifecycleScheduler:
             status=SimulationDailyRunStatus.RECONCILING,
             payload_patch={
                 "last_stage": "RECONCILING",
-                "sync_before_submit": payload,
+                payload_key: payload,
             },
         )
-        return payload
+        return payload, summary
 
     def _reconcile_after_submit(
         self,
@@ -1905,6 +1924,14 @@ class SimulationLifecycleScheduler:
                 },
             )
         broker_positions = context.broker_positions or []
+        # MiniQMT fills can appear after submit returns; sync the broker snapshot
+        # again before comparing broker positions with strategy lots.
+        sync_after_submit = self._sync_miniqmt_snapshot(
+            binding=binding,
+            run=run,
+            context=context,
+            payload_key="sync_after_submit",
+        )
         if not broker_positions and context.managed_order_service is not None:
             broker = getattr(context.managed_order_service, "_broker", None)
             get_positions = getattr(broker, "get_positions", None)
@@ -1914,6 +1941,7 @@ class SimulationLifecycleScheduler:
             account_id=binding.broker_account_id or "",
             trade_date=run.trade_date,
             broker_positions=broker_positions,
+            sync_summary=sync_after_submit[1] if sync_after_submit is not None else None,
         )
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         report_status = str(payload.get("run", {}).get("status") or "").upper()

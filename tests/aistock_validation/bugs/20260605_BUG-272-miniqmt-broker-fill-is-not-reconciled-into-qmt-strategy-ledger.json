@@ -4,6 +4,8 @@
     "backend/services/qmt_strategy_ledger/sync_service.py",
     "backend/services/qmt_strategy_ledger/repository.py",
     "backend/tests/qmt_strategy_ledger",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260605_BUG-272-miniqmt-broker-fill-is-not-reconciled-into-qmt-strategy-ledger.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,6 +25,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260605-19d1a59b9397",
       "timestamp": "2026-06-05T05:14:16.171544Z"
+    },
+    {
+      "timestamp": "2026-06-05T05:17:26.268034Z",
+      "actor": "codex",
+      "action": "scope_expanded_after_root_cause",
+      "note": "Root cause is scheduler reconciliation timing: MiniQMT runs sync before submit but not broker-authoritative order/trade sync after submit, and SUCCEEDED broker-called runs are not polled for late fills. Expand scope to simulation_runtime scheduler and targeted regression test."
+    },
+    {
+      "timestamp": "2026-06-05T05:23:10.719321Z",
+      "actor": "codex",
+      "action": "implement_fix",
+      "note": "Simulation scheduler now syncs MiniQMT broker order/trade snapshot after submit before reconciliation, and SUCCEEDED broker-called MiniQMT runs are polled idempotently for late fills without resubmitting orders.",
+      "evidence": [
+        "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync -q -> 1 passed",
+        "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 31 passed",
+        "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 13 passed"
+      ]
     }
   ],
   "evidence_uris": [
@@ -45,14 +64,16 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Read-only: GET /api/v1/qmt/orders?cancelable_only=false and GET /api/v1/qmt/trades; then SELECT qmt_order_id,traded_volume,traded_price,order_status FROM qmt_strategy.order_ledger WHERE qmt_order_id='1082130454' and SELECT count(*) FROM qmt_strategy.trade_ledger WHERE qmt_order_id='1082130454'.",
   "required_verification": [
-    "l0"
+    "l0",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/qmt_strategy_ledger/test_sync_service.py -q"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
   "status": "open",
   "suspected_modules": [
-    "qmt_strategy_ledger"
+    "qmt_strategy_ledger",
+    "simulation_runtime"
   ],
   "title": "MiniQMT broker fill is not reconciled into qmt_strategy ledger",
   "trigger_condition": {
