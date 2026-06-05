@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from backend.core import data_source_manager_impl
 from backend.core.data_source_manager_impl import DataSourceManager
 from backend.services import watchlist_service
@@ -97,6 +99,8 @@ class _AdjCursor:
             (
                 "000001.SZ",
                 date(2024, 1, 2),
+                date(2024, 1, 2),
+                "entry_as_of",
                 Decimal("0.5"),
                 date(2024, 1, 2),
                 Decimal("1.0"),
@@ -135,10 +139,53 @@ def test_fetch_qfq_entry_adjustments_uses_market_adj_factor(monkeypatch):
     )
 
     assert "market.adj_factor" in cursor.sql
+    assert "selection.aggregate_result" in cursor.sql
     assert cursor.params[0] == ["000001.SZ"]
+    assert cursor.params[2] == [""]
     assert result["000001.SZ"]["entry_price_basis"] == "qfq_adjusted"
     assert result["000001.SZ"]["entry_price_adjusted"] == 10.0
     assert result["000001.SZ"]["entry_adjustment_factor"] == 0.5
+    assert result["000001.SZ"]["entry_price_basis_date"] == "2024-01-02"
+    assert result["000001.SZ"]["entry_price_basis_source"] == "entry_as_of"
+
+
+def test_fetch_qfq_entry_adjustments_prefers_selection_reference_date(monkeypatch):
+    class SelectionBasisCursor(_AdjCursor):
+        def fetchall(self):
+            return [
+                (
+                    "301312.SZ",
+                    date(2026, 6, 3),
+                    date(2026, 6, 2),
+                    "selection_reference_date",
+                    Decimal("3.0176"),
+                    date(2026, 6, 2),
+                    Decimal("4.2343"),
+                    date(2026, 6, 4),
+                )
+            ]
+
+    cursor = SelectionBasisCursor()
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: _AdjConn(cursor))
+
+    result = watchlist_service._fetch_qfq_entry_adjustments(
+        [
+            {
+                "code": "301312.SZ",
+                "entry_price": 133.08,
+                "entry_as_of": "2026-06-03",
+                "entry_task_id": "sel_ac2346a1225d4e59b6ed421980698e31",
+            }
+        ]
+    )
+
+    assert cursor.params[0] == ["301312.SZ"]
+    assert cursor.params[1] == [date(2026, 6, 3)]
+    assert cursor.params[2] == ["sel_ac2346a1225d4e59b6ed421980698e31"]
+    assert result["301312.SZ"]["entry_price_adjusted"] == pytest.approx(94.840282, rel=1e-6)
+    assert result["301312.SZ"]["entry_adjustment_factor"] == pytest.approx(3.0176 / 4.2343)
+    assert result["301312.SZ"]["entry_price_basis_date"] == "2026-06-02"
+    assert result["301312.SZ"]["entry_price_basis_source"] == "selection_reference_date"
 
 
 def test_fetch_qfq_entry_adjustments_marks_query_failure(monkeypatch):
@@ -183,6 +230,8 @@ def test_list_items_with_quotes_returns_adjusted_entry_metadata(monkeypatch):
                 "entry_price_basis": "qfq_adjusted",
                 "entry_price_adjusted": 5.0,
                 "entry_adjustment_factor": 0.25,
+                "entry_price_basis_date": "2024-01-02",
+                "entry_price_basis_source": "entry_as_of",
                 "entry_adj_factor_date": "2024-01-02",
                 "latest_adj_factor_date": "2024-06-03",
             }
@@ -195,3 +244,5 @@ def test_list_items_with_quotes_returns_adjusted_entry_metadata(monkeypatch):
     assert row["pct_since_entry"] == 100.0
     assert row["entry_price_basis"] == "qfq_adjusted"
     assert row["entry_price_adjusted"] == 5.0
+    assert row["entry_price_basis_date"] == "2024-01-02"
+    assert row["entry_price_basis_source"] == "entry_as_of"

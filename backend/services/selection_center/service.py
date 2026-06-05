@@ -63,6 +63,32 @@ from .runtime_profile import (
 from .tradability import TradabilityFilter
 
 
+def _parse_candidate_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _selection_entry_price_basis_date(candidate: SelectionCandidate, *, fallback: date) -> date:
+    display = (candidate.component_scores or {}).get("selection_result_display")
+    display = display if isinstance(display, dict) else {}
+    for raw in (
+        candidate.selection_entry_price_time,
+        display.get("selection_entry_price_time"),
+        display.get("reference_price_trade_date"),
+        (candidate.component_scores or {}).get("reference_price_trade_date"),
+    ):
+        parsed = _parse_candidate_date(raw)
+        if parsed is not None:
+            return parsed
+    return fallback
+
+
 class SelectionCenterService:
     def __init__(
         self,
@@ -1029,7 +1055,7 @@ class SelectionCenterService:
                 "entry_price": float(candidate.reference_price or 0),
                 "task_id": run.run_id,
                 "loop_id": None,
-                "as_of": run.trade_date.isoformat(),
+                "as_of": _selection_entry_price_basis_date(candidate, fallback=run.trade_date).isoformat(),
                 "entry_source": source_label,
                 "note": (
                     f"Selection Center {run.mode.value}; trade_date={run.trade_date.isoformat()}; "
