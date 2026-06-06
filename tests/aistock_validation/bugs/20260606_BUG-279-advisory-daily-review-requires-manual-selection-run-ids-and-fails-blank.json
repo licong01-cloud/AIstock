@@ -35,8 +35,8 @@
   "expected": "运行中的荐股任务后直接显示下一交易日复评按钮和预览按钮；系统自动解析交易日、策略包、PIT cutoff 与 Selection Center 配置；已复评的交易日按钮不可重复执行；页面不要求人工输入 sel_*。",
   "first_seen_at": "2026-06-06T11:15:04.274698Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1028a93ee37c6518bdaf833751dafa3551a1ac69",
+  "fixed_at": "2026-06-06T13:09:10.671309Z",
   "github_issue_number": 811,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/811",
   "last_seen_at": "2026-06-06T11:15:04.274698Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/813",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2_advisory"
   ],
@@ -108,6 +109,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub PR checks for #813 -> passed (all required checks success; workflow fast lane skipped by rule)",
+    "python -m nox -s paper_v2_l3 with PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 -> passed",
+    "python -m pytest backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -q -> 15 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed",
+    "frontend targeted Playwright advisory spec -> 1 passed",
+    "frontend_tsc -> blocked by existing unrelated tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 TS2322; no changed-file TS errors emitted"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
