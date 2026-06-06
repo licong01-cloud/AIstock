@@ -64,6 +64,7 @@ class FakeReplayService:
                     order_count=1,
                     fill_count=1,
                     position_count=1,
+                    actual_bar_count=240,
                 ),
                 PaperReplayDayResult(
                     trade_date=kwargs["end_date"],
@@ -73,6 +74,7 @@ class FakeReplayService:
                     order_count=1,
                     fill_count=1,
                     position_count=1,
+                    actual_bar_count=241,
                 ),
             ],
         )
@@ -471,12 +473,20 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
     assert len(fills) == 1
     assert fills[0]["quantity"] == 300
     assert states[0].last_processed_bar_time == datetime(2024, 1, 2, 9, 31)
+    assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 1
 
     PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
         session.session_id,
         as_of_time=datetime(2024, 1, 2, 9, 31),
     )
     assert len(paper_repo.list_fills_for_run(run.run_id)) == 1
+    assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 1
+
+    PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 32),
+    )
+    assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 2
 
 
 def test_minqmt_live_session_tick_uses_broker_day_path_without_tdx_market() -> None:
@@ -1166,6 +1176,7 @@ def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar(
     assert replay.calls[0]["start_date"] == date(2024, 1, 2)
     assert replay.calls[0]["end_date"] == date(2024, 1, 3)
     assert [item.trade_date for item in historical_days] == [date(2024, 1, 2), date(2024, 1, 3)]
+    assert [item.actual_bar_count for item in historical_days] == [240, 241]
     assert live_days[-1].trade_date == date(2024, 1, 4)
     assert live_days[-1].last_processed_bar_time == datetime(2024, 1, 4, 9, 31)
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
@@ -1349,6 +1360,7 @@ def test_live_mark_to_market_continues_after_orders_filled() -> None:
     assert snapshots[0]["snapshot_time"] == "2024-01-02T09:32:00"
     assert snapshots[0]["market_value"] == pytest.approx(6300.0)
     assert snapshots[0]["nav"] == pytest.approx(106300.0)
+    assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 1
     events = paper_repo.list_session_events(session.session_id)
     assert events[-1]["event_type"] == "LIVE_MARK_TO_MARKET_SNAPSHOT"
 

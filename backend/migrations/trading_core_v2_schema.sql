@@ -774,10 +774,12 @@ CREATE TABLE IF NOT EXISTS paper_v2.session_day (
     phase TEXT NOT NULL,
     data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL', 'MINIQMT_REALTIME')),
     expected_bar_count INTEGER,
+    actual_bar_count INTEGER,
     latest_available_bar_time TIMESTAMPTZ,
     last_processed_bar_time TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT session_day_actual_bar_count_non_negative CHECK (actual_bar_count IS NULL OR actual_bar_count >= 0),
     UNIQUE(session_id, trade_date)
 );
 

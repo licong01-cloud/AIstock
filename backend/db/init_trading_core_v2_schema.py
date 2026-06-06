@@ -974,13 +974,23 @@ DDL: list[str] = [
         phase TEXT NOT NULL,
         data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL', 'MINIQMT_REALTIME')),
         expected_bar_count INTEGER,
+        actual_bar_count INTEGER,
         latest_available_bar_time TIMESTAMPTZ,
         last_processed_bar_time TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT session_day_actual_bar_count_non_negative CHECK (actual_bar_count IS NULL OR actual_bar_count >= 0),
         UNIQUE(session_id, trade_date)
     )
     """,
+    "ALTER TABLE paper_v2.session_day ADD COLUMN IF NOT EXISTS actual_bar_count INTEGER",
+    "ALTER TABLE paper_v2.session_day DROP CONSTRAINT IF EXISTS session_day_actual_bar_count_non_negative",
+    """
+    ALTER TABLE paper_v2.session_day
+        ADD CONSTRAINT session_day_actual_bar_count_non_negative
+        CHECK (actual_bar_count IS NULL OR actual_bar_count >= 0)
+    """,
+    "COMMENT ON COLUMN paper_v2.session_day.actual_bar_count IS 'Authoritative count of minute bars actually processed by the Paper v2 session day; NULL means legacy or not yet observed, not a sparse intraday snapshot count.'",
     """
     CREATE TABLE IF NOT EXISTS paper_v2.order_execution_state (
         execution_state_id TEXT PRIMARY KEY,

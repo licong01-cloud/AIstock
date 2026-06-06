@@ -127,6 +127,10 @@ class PaperTradingHistoricalReplay:
                 trade_date=trade_date,
                 runtime_config=config,
             )
+            actual_bar_count = self._actual_bar_count_for_run(
+                portfolio_id=portfolio_id,
+                run_id=result.run.run_id,
+            )
             day_results.append(
                 PaperReplayDayResult(
                     trade_date=trade_date,
@@ -136,6 +140,7 @@ class PaperTradingHistoricalReplay:
                     order_count=len(result.orders),
                     fill_count=len(result.fills),
                     position_count=len(result.positions),
+                    actual_bar_count=actual_bar_count,
                 )
             )
         return PaperReplayResult(
@@ -147,6 +152,20 @@ class PaperTradingHistoricalReplay:
             day_results=day_results,
             reset_audit=reset_audit,
         )
+
+    def _actual_bar_count_for_run(self, *, portfolio_id: str, run_id: str) -> int | None:
+        counts: list[int] = []
+        for event in self.repository.list_run_events(portfolio_id, run_id=run_id):
+            if event.get("event_type") != "MARKET_DATA_LOADED":
+                continue
+            context = event.get("context") or {}
+            try:
+                count = int(context.get("bar_count"))
+            except (TypeError, ValueError):
+                continue
+            if count >= 0:
+                counts.append(count)
+        return max(counts) if counts else None
 
     def _existing_runs(self, *, portfolio_id: str, trading_days: list[date]) -> list[dict[str, Any]]:
         existing_runs = []

@@ -10,7 +10,7 @@ Implements 3 event types per D5 Q1 design + T13 routing_class gate:
 Schema synthesize per BUG-006..008 (source has no equivalent column):
   - paper_v2_cash_ledger.entry_type  derived from (side, notional, fee, cash_delta)
   - paper_v2_reset_audit.reset_type  derived from (rerun_policy, deleted_counts)
-  - paper_v2_session_day.data_quality derived from (expected_bar_count, derived actual)
+  - paper_v2_session_day.data_quality derived from (expected_bar_count, source actual_bar_count)
 
 Idempotency strategy (per D5 Q3.b):
   - paper_v2_run                INSERT ... ON CONFLICT (run_id) DO NOTHING
@@ -30,8 +30,8 @@ Boundary:
   - Worker default disabled (handler not registered until ops authorize)
 
 Extension scope: deeper schema reconciliation for paper_v2.cash_ledger /
-reset_audit / session_day deferred to BUG-009..011 follow-up; this handler
-synthesizes around the gaps via _synthesize.py helpers.
+reset_audit deferred to BUG-009..011 follow-up; this handler synthesizes
+around the remaining gaps via _synthesize.py helpers.
 """
 from __future__ import annotations
 
@@ -475,8 +475,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             (run_id,),
         )
         for sd in cur.fetchall():
-            # actual_bar_count not on source; derive from intraday_snapshots count
-            actual = self._count_intraday_snapshots(cur, run_id, sd.get("trade_date"))
+            actual = self._actual_bar_count_for_session_day(cur, run_id, sd)
             quality = synth.synthesize_session_day_data_quality(
                 sd.get("expected_bar_count"), actual,
             )
@@ -1115,6 +1114,12 @@ class PaperV2ArchiveHandler(ArchiveHandler):
         )
         row = cur.fetchone()
         return row.get("package_id") if row else None
+
+    def _actual_bar_count_for_session_day(self, cur: Any, run_id: str, session_day: Mapping[str, Any]) -> int | None:
+        if "actual_bar_count" in session_day:
+            raw = session_day.get("actual_bar_count")
+            return int(raw) if raw is not None else None
+        return self._count_intraday_snapshots(cur, run_id, session_day.get("trade_date"))
 
     def _count_intraday_snapshots(self, cur: Any, run_id: str, trade_date: Any) -> int | None:
         if trade_date is None:

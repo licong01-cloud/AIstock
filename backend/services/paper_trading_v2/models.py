@@ -288,6 +288,7 @@ class PaperReplayDayResult(BaseModel):
     order_count: int
     fill_count: int
     position_count: int
+    actual_bar_count: int | None = None
 
 
 class PaperReplayResult(BaseModel):
@@ -391,6 +392,7 @@ class PaperSessionDay(BaseModel):
     phase: PaperSessionPhase
     data_source: MinuteDataSource
     expected_bar_count: int | None = None
+    actual_bar_count: int | None = Field(default=None, ge=0)
     latest_available_bar_time: datetime | None = None
     last_processed_bar_time: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

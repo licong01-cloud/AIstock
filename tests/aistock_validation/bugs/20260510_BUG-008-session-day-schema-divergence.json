@@ -25,7 +25,7 @@
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
-  "last_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-06-06T13:54:19Z",
   "fixed_at": null,
   "submitted_at": null,
   "closed_at": null,
@@ -64,6 +64,12 @@
       "actor": "codex",
       "action": "github_sync",
       "note": "Linked existing open BUG-008 to GitHub Issue #801 after verifying current code still keeps sparse actual_bar_count caveat open."
+    },
+    {
+      "timestamp": "2026-06-06T13:54:19Z",
+      "actor": "codex",
+      "action": "child_fix_validation_passed_pending_bug_280_pr_and_ddl",
+      "note": "Current-main residual was split to BUG-280; BUG-280 local fix/validation passed and will allow BUG-008 closure only after source PR merge, production DDL apply/verify, and archive source actual_bar_count verification."
     }
   ],
   "github_issue_number": 801,

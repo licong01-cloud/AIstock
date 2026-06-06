@@ -194,6 +194,7 @@ class PaperTradingLiveMinuteExecutor:
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
                 expected_bar_count=existing_day.expected_bar_count if existing_day else None,
+                actual_bar_count=existing_day.actual_bar_count if existing_day else None,
                 latest_available_bar_time=existing_day.latest_available_bar_time if existing_day else None,
                 last_processed_bar_time=existing_day.last_processed_bar_time if existing_day else None,
             )
@@ -291,6 +292,7 @@ class PaperTradingLiveMinuteExecutor:
                             status=PaperSessionStatus.SUCCEEDED,
                             phase=PaperSessionPhase.HISTORICAL_REPLAY,
                             data_source=MinuteDataSource.DB_HISTORICAL,
+                            actual_bar_count=day.actual_bar_count,
                         )
                     )
                 self.repository.save_session_event(
@@ -1613,15 +1615,27 @@ class PaperTradingLiveMinuteExecutor:
         active_states = [state for state in states if state.status not in FINAL_ORDER_STATUSES and state.remaining_quantity > 0]
         latest_available = self._latest_available_time_for_states(active_states or states, session.live_data_source, as_of_time)
         if not active_states:
+            current_last_processed = self._max_processed(states)
             latest_available, last_processed = self._mark_to_market_without_active_orders(
                 session,
                 run,
                 portfolio=portfolio,
                 latest_available=latest_available,
-                current_last_processed=self._max_processed(states),
+                current_last_processed=current_last_processed,
                 as_of_time=as_of_time,
             )
-            self._save_live_day_cursor(session, run, latest_available=latest_available, last_processed=last_processed)
+            actual_bar_count = (
+                self._advance_live_actual_bar_count(session, run, processed_bar_times={last_processed})
+                if last_processed is not None and self._bar_after_cursor(last_processed, current_last_processed)
+                else None
+            )
+            self._save_live_day_cursor(
+                session,
+                run,
+                latest_available=latest_available,
+                last_processed=last_processed,
+                actual_bar_count=actual_bar_count,
+            )
             return self._progress(session.session_id)
 
         latest_cash = self.repository.load_latest_cash(portfolio, run.trade_date)
@@ -1636,6 +1650,7 @@ class PaperTradingLiveMinuteExecutor:
         ledger.settle_trade_date(run.trade_date)
 
         processed_any_bar = False
+        processed_bar_times: set[datetime] = set()
         new_fill_count = 0
         touched_prices: dict[str, float] = {}
         for state in active_states:
@@ -1658,6 +1673,7 @@ class PaperTradingLiveMinuteExecutor:
             if not new_bars:
                 continue
             processed_any_bar = True
+            processed_bar_times.update(self._bar_count_key(bar.bar_time) for bar in new_bars)
             market_context = dict(market_input.market_context)
             market_context.update(
                 {
@@ -1753,7 +1769,14 @@ class PaperTradingLiveMinuteExecutor:
             )
         states_after = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         last_processed = self._max_processed(states_after)
-        self._save_live_day_cursor(session, run, latest_available=latest_available, last_processed=last_processed)
+        actual_bar_count = self._advance_live_actual_bar_count(session, run, processed_bar_times=processed_bar_times)
+        self._save_live_day_cursor(
+            session,
+            run,
+            latest_available=latest_available,
+            last_processed=last_processed,
+            actual_bar_count=actual_bar_count,
+        )
         self.repository.save_session_event(
             session_id=session.session_id,
             run_id=run.run_id,
@@ -1763,6 +1786,7 @@ class PaperTradingLiveMinuteExecutor:
                 "trade_date": run.trade_date.isoformat(),
                 "new_fill_count": new_fill_count,
                 "last_processed_bar_time": last_processed.isoformat() if last_processed else None,
+                "actual_bar_count": actual_bar_count,
             },
         )
         self.repository.update_session_status(
@@ -1911,6 +1935,7 @@ class PaperTradingLiveMinuteExecutor:
         *,
         latest_available: datetime | None,
         last_processed: datetime | None,
+        actual_bar_count: int | None = None,
     ) -> None:
         self.repository.save_session_day(
             PaperSessionDay(
@@ -1921,6 +1946,7 @@ class PaperTradingLiveMinuteExecutor:
                 status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 data_source=run.data_source,
+                actual_bar_count=actual_bar_count,
                 latest_available_bar_time=latest_available,
                 last_processed_bar_time=last_processed,
             )
@@ -2148,6 +2174,29 @@ class PaperTradingLiveMinuteExecutor:
     def _max_processed(states: list[OrderExecutionState]) -> datetime | None:
         values = [state.last_processed_bar_time for state in states if state.last_processed_bar_time is not None]
         return max(values) if values else None
+
+    @staticmethod
+    def _bar_count_key(bar_time: datetime) -> datetime:
+        return bar_time.replace(tzinfo=None) if bar_time.tzinfo is not None else bar_time
+
+    def _advance_live_actual_bar_count(
+        self,
+        session: PaperTradingSession,
+        run: PaperRun,
+        *,
+        processed_bar_times: set[datetime],
+    ) -> int | None:
+        if not processed_bar_times:
+            return None
+        current = self._current_session_day_actual_bar_count(session.session_id, run.trade_date) or 0
+        return current + len(processed_bar_times)
+
+    def _current_session_day_actual_bar_count(self, session_id: str, trade_date: date) -> int | None:
+        current_day = next(
+            (day for day in self.repository.list_session_days(session_id) if day.trade_date == trade_date),
+            None,
+        )
+        return current_day.actual_bar_count if current_day else None
 
     @staticmethod
     def _catchup_replay_end(*, session: PaperTradingSession, as_of_time: datetime) -> date | None:

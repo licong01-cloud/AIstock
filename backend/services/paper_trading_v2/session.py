@@ -903,6 +903,7 @@ class PaperTradingSessionRunner:
                     status=PaperSessionStatus.SUCCEEDED,
                     phase=PaperSessionPhase.HISTORICAL_REPLAY,
                     data_source=result.data_source,
+                    actual_bar_count=day.actual_bar_count,
                 )
             )
 

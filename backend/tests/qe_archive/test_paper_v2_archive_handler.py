@@ -140,6 +140,74 @@ class TestArchiveTextIdPolicy:
         assert isinstance(archived_event_id, str)
 
 
+class TestSessionDayActualBarCount:
+    def test_session_day_archive_prefers_source_actual_bar_count(self):
+        class FakeCursor:
+            def __init__(self):
+                self.rowcount = 0
+                self._rows = []
+                self.session_day_insert_params = []
+                self.snapshot_count_called = False
+
+            def execute(self, sql, params=None):
+                if "SELECT DISTINCT session_id FROM paper_v2.session_day" in sql:
+                    self._rows = [{"session_id": "psess_test"}]
+                    self.rowcount = 0
+                    return
+                if "SELECT * FROM paper_v2.trade_session" in sql:
+                    self._rows = [
+                        {
+                            "session_id": "psess_test",
+                            "start_date": None,
+                            "end_date": None,
+                            "mode": "LIVE_ONLY",
+                            "validated_execution_policy_json": {},
+                            "started_at": None,
+                            "completed_at": None,
+                        }
+                    ]
+                    self.rowcount = 0
+                    return
+                if "INSERT INTO qe_archive.paper_v2_session " in sql:
+                    self.rowcount = 1
+                    return
+                if "SELECT * FROM paper_v2.session_day WHERE run_id" in sql:
+                    self._rows = [
+                        {
+                            "session_id": "psess_test",
+                            "trade_date": "2024-01-02",
+                            "expected_bar_count": 240,
+                            "actual_bar_count": 240,
+                            "latest_available_bar_time": None,
+                        }
+                    ]
+                    self.rowcount = 0
+                    return
+                if "SELECT COUNT(*) AS n FROM paper_v2.intraday_snapshots" in sql:
+                    self.snapshot_count_called = True
+                    raise AssertionError("archive must not use sparse intraday snapshot count when source actual_bar_count exists")
+                if "INSERT INTO qe_archive.paper_v2_session_day" in sql:
+                    self.session_day_insert_params.append(params)
+                    self.rowcount = 1
+                    return
+                if "FROM paper_v2.session_events" in sql:
+                    self._rows = []
+                    self.rowcount = 0
+                    return
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+            def fetchall(self):
+                return self._rows
+
+        cur = FakeCursor()
+        inserted = PaperV2ArchiveHandler()._mirror_sessions_for_run(cur, "run_actual", portfolio_version_id=1)
+
+        assert inserted == 2
+        assert cur.snapshot_count_called is False
+        assert cur.session_day_insert_params[0][4] == 240
+        assert cur.session_day_insert_params[0][6] == "ok"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — require dev DB + Batch A
 # ---------------------------------------------------------------------------
