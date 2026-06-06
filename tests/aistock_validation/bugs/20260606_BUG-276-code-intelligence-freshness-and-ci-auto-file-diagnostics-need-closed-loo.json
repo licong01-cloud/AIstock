@@ -1,0 +1,90 @@
+{
+  "actual": "Latest freshness artifact can lag behind current graph state, and auto-filed issue #559 remained open with diagnostic status partial and no failed test details.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/ci_failure_issue_summary.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260606_BUG-276-code-intelligence-freshness-and-ci-auto-file-diagnostics-need-closed-loo.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/issue-on-test-fail.yml",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-276",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-06T03:30:47.574889Z",
+  "description": "Latest freshness artifact can lag behind current graph state, and auto-filed issue #559 remained open with diagnostic status partial and no failed test details.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-d517c894d8ab",
+      "timestamp": "2026-06-06T03:30:47.574886Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "BUG-276 fix requires workflow wiring and targeted tests for CodeGraph/UA freshness plus CI auto-file diagnostics retry behavior. Added test/workflow files to allowed_write_scope.",
+      "timestamp": "2026-06-06T03:48:09.845464Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issue #559 diagnostic status partial",
+    "GitHub Issue #506 closed but latest freshness artifact may be stale relative to local graph"
+  ],
+  "expected": "Nightly/code-intelligence creates current warning-only freshness/readiness artifacts, and CI auto-filed issues contain actionable diagnostics or an explicit retry/triage state with enough next commands.",
+  "first_seen_at": "2026-06-06T03:30:47.574889Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 798,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/798",
+  "last_seen_at": "2026-06-06T03:30:47.574889Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/code_intelligence_adapter.py doctor --root F:/Dev/AIstock; python scripts/aistock_issue_workflow.py triage-ci-issue --issue 559 --output-format summary",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Code intelligence freshness and CI auto-file diagnostics need closed-loop quality",
+  "trigger_condition": {
+    "fingerprint": "d517c894d8ab2ec69cd146b2",
+    "source_event_id": "FE-20260606-d517c894d8ab"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

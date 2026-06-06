@@ -365,6 +365,10 @@ def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.M
     assert payload["diagnostic_status"] == "deferred"
     assert payload["issue_creation_policy"]["allowed"] is False
     assert payload["issue_creation_policy"]["reason"] == summary.LOGS_NOT_READY_REASON
+    next_command = payload["issue_creation_policy"]["next_command"]
+    assert "--wait-for-completion" in next_command
+    assert "--log-attempts 3" in next_command
+    assert "--stdout-format compact" in next_command
     assert "CI run is still in progress" in payload["failure_event"]["normalized_error"]
     with pytest.raises(ValueError, match="not actionable yet"):
         summary.build_github_issue_payload(payload)
@@ -534,6 +538,8 @@ def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None
     assert payload["diagnostic_status"] == "partial"
     assert payload["issue_creation_policy"]["allowed"] is False
     assert payload["issue_creation_policy"]["reason"] == "diagnostics_not_actionable"
+    assert "--wait-for-completion" in payload["issue_creation_policy"]["next_command"]
+    assert "--log-attempts 3" in payload["issue_creation_policy"]["next_command"]
     assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
     assert payload["agent_handoff"]["needs_bug_json"] is False
     assert payload["agent_handoff"]["next_commands"] == [
@@ -825,6 +831,10 @@ def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None
     build_step = workflow["jobs"]["file-p0-p1-issue"]["steps"][1]["run"]
 
     assert "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json" in build_step
+    assert "--wait-for-completion" in build_step
+    assert "--wait-attempts 2" in build_step
+    assert "--log-attempts 3" in build_step
+    assert "--stdout-format compact" in build_step
     assert "const issuePayloadPath = 'tmp/validation/ci_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
