@@ -1105,16 +1105,17 @@ class PaperTradingV2Repository:
                     """
                     INSERT INTO paper_v2.session_day (
                         session_day_id, session_id, portfolio_id, trade_date, run_id,
-                        status, phase, data_source, expected_bar_count,
+                        status, phase, data_source, expected_bar_count, actual_bar_count,
                         latest_available_bar_time, last_processed_bar_time,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (session_id, trade_date) DO UPDATE SET
                         run_id = EXCLUDED.run_id,
                         status = EXCLUDED.status,
                         phase = EXCLUDED.phase,
                         data_source = EXCLUDED.data_source,
                         expected_bar_count = EXCLUDED.expected_bar_count,
+                        actual_bar_count = COALESCE(EXCLUDED.actual_bar_count, paper_v2.session_day.actual_bar_count),
                         latest_available_bar_time = EXCLUDED.latest_available_bar_time,
                         last_processed_bar_time = EXCLUDED.last_processed_bar_time,
                         updated_at = EXCLUDED.updated_at
@@ -1129,6 +1130,7 @@ class PaperTradingV2Repository:
                         day.phase.value,
                         day.data_source.value,
                         day.expected_bar_count,
+                        day.actual_bar_count,
                         day.latest_available_bar_time,
                         day.last_processed_bar_time,
                         day.created_at,
@@ -2402,6 +2404,7 @@ class PaperTradingV2Repository:
             phase=row["phase"],
             data_source=MinuteDataSource(row["data_source"]),
             expected_bar_count=row.get("expected_bar_count"),
+            actual_bar_count=row.get("actual_bar_count"),
             latest_available_bar_time=row.get("latest_available_bar_time"),
             last_processed_bar_time=row.get("last_processed_bar_time"),
             created_at=row["created_at"],
@@ -2916,8 +2919,13 @@ class InMemoryPaperTradingV2Repository:
         return updated
 
     def save_session_day(self, day: PaperSessionDay) -> PaperSessionDay:
-        self.session_days[(day.session_id, day.trade_date)] = day.model_copy(update={"updated_at": datetime.now(UTC)})
-        return self.session_days[(day.session_id, day.trade_date)]
+        key = (day.session_id, day.trade_date)
+        existing = self.session_days.get(key)
+        update: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+        if existing is not None and day.actual_bar_count is None:
+            update["actual_bar_count"] = existing.actual_bar_count
+        self.session_days[key] = day.model_copy(update=update)
+        return self.session_days[key]
 
     def list_session_days(self, session_id: str) -> list[PaperSessionDay]:
         rows = [day for (stored_session_id, _date), day in self.session_days.items() if stored_session_id == session_id]

@@ -118,6 +118,7 @@ class FakeReplayService:
                     order_count=1,
                     fill_count=1,
                     position_count=1,
+                    actual_bar_count=240,
                 ),
                 PaperReplayDayResult(
                     trade_date=kwargs["end_date"],
@@ -127,6 +128,7 @@ class FakeReplayService:
                     order_count=1,
                     fill_count=1,
                     position_count=1,
+                    actual_bar_count=241,
                 ),
             ],
         )
@@ -220,6 +222,7 @@ def test_replay_only_session_create_tick_and_progress() -> None:
 
     assert progress.session.status == PaperSessionStatus.SUCCEEDED
     assert progress.day_count == 2
+    assert [day.actual_bar_count for day in paper_repo.list_session_days(session.session_id)] == [240, 241]
     assert fake_replay.calls[0]["rerun_policy"] == "reject_existing"
     assert session.runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
     assert session.runtime_config["runtime_profile_activation"]["config_sha256"] == version.config_sha256

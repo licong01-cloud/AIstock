@@ -10,7 +10,11 @@
     "backend/tests/qe_archive",
     "tests/aistock_validation/bugs/20260510_BUG-008-session-day-schema-divergence.json",
     "tests/aistock_validation/bugs/20260606_BUG-280-paper-v2-session-day-lacks-authoritative-actual-bar-count-for-archive-da.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/paper_trading_v2/models.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/replay.py",
+    "backend/migrations/paper_v2_session_day_actual_bar_count_20260606.sql"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-280",
@@ -28,6 +32,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260606-9c1f61c5db32",
       "timestamp": "2026-06-06T13:27:17.772007Z"
+    },
+    {
+      "timestamp": "2026-06-06T13:40:47Z",
+      "actor": "codex",
+      "action": "scope_expanded_after_current_code_recheck",
+      "note": "Current PaperSessionDay model, live tick cursor, replay result, and production DDL migration are required to persist authoritative source actual_bar_count; no runtime restart performed."
+    },
+    {
+      "timestamp": "2026-06-06T13:54:19Z",
+      "actor": "codex",
+      "action": "fix_implemented_validation_passed_pending_pr_and_ddl",
+      "note": "Implemented source actual_bar_count persistence and archive source preference. Validation passed: targeted pytest 5 passed; paper_v2 test_session/test_live_session + qe_archive handler 85 passed/1 skipped; ruff changed Python files passed; git diff --check passed; nox l0, paper_v2_backend, paper_v2_l3, qe_archive_backend, qe_archive_l3 (QE_ARCHIVE_L3_SKIP_UI=1), qe_data_contract_backend, validation_center_backend, validation_module_registry_l0 passed. Production DDL migration pending merge/apply."
     }
   ],
   "evidence_uris": [
@@ -35,18 +51,18 @@
   ],
   "expected": "paper_v2.session_day persists authoritative actual_bar_count from processed minute bars or an equivalent trusted source, and qe_archive.paper_v2_session_day.data_quality derives from that source without sparse snapshot fallback except explicit legacy/unknown cases.",
   "first_seen_at": "2026-06-06T13:27:17.772011Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-280-paper-v2-session-day-lacks-authoritative-actual-20260606",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 815,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/815",
-  "last_seen_at": "2026-06-06T13:27:17.772011Z",
+  "last_seen_at": "2026-06-06T13:54:19Z",
   "module": "paper_v2",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Read-only: query information_schema.columns for paper_v2.session_day and qe_archive.paper_v2_session_day, then compare session_day rows with count(paper_v2.intraday_snapshots) by run_id/trade_date.",
   "required_verification": [
@@ -71,7 +87,7 @@
     "fingerprint": "9c1f61c5db324de12783e0e6",
     "source_event_id": "FE-20260606-9c1f61c5db32"
   },
-  "verification_run_id": null,
+  "verification_run_id": "BUG-280 local validation 2026-06-06: targeted pytest, ruff, diff-check, nox l0/paper_v2/qe_archive/validation gates passed; production DDL pending merge/apply",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
