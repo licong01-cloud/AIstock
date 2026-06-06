@@ -23,6 +23,7 @@ except ImportError as exc:  # pragma: no cover
 
 from scripts.aistock_mcp_common import LoopbackApiClient, require_confirm, sanitize_identifier, sanitize_tail
 from backend.services.quantevolver.seed_contract import ensure_loop_fixed_seed, ensure_template_fixed_seeds
+from backend.services.qe_templates.validator import validate_template_payload
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
@@ -202,6 +203,9 @@ def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any
 @mcp.tool()
 def qe_template_create(template_kind: str, title: str, config_json: dict[str, Any], archive_policy: str = "AUTO", description: str | None = None) -> dict[str, Any]:
     normalized_config = ensure_template_fixed_seeds(template_kind, config_json or {})
+    validation = validate_template_payload(template_kind, normalized_config)
+    if not validation.get("valid"):
+        raise ValueError("template validation failed: " + "; ".join(validation.get("errors") or []))
     return _client().post("/qe-templates", {"template_kind": template_kind, "title": title, "description": description, "config_json": normalized_config, "archive_policy": archive_policy})
 
 

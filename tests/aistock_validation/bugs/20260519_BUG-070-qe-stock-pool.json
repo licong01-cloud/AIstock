@@ -1,4 +1,4 @@
-{
+﻿{
   "schema_version": "aistock_validation_bug_v1",
   "bug_id": "BUG-070",
   "title": "QE historical templates allow future/latest stock_pool to contaminate fixed backtest windows",

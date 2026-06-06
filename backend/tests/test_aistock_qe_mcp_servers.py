@@ -166,6 +166,42 @@ def test_qe_custom_evo_task_tools_use_summary_and_loop_payload_paths(experiment_
     assert captured[5] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/2/analysis", {})
 
 
+def test_qe_template_create_rejects_future_stock_pool_before_http(experiment_mcp):
+    called = False
+
+    def handler(request: httpx.Request):
+        nonlocal called
+        called = True
+        return {"status": "success"}
+
+    _swap(
+        experiment_mcp,
+        experiment_mcp.LoopbackApiClient(
+            base_url="http://127.0.0.1/api/v1",
+            env_name="test",
+            transport=_mock_transport(handler),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="QE_STOCK_POOL_DATE_OUT_OF_WINDOW"):
+        experiment_mcp.qe_template_create(
+            "custom_evo",
+            "future pool",
+            {
+                "loops": [
+                    {
+                        "factor_keys": ["alpha_factor||catalog"],
+                        "model_id": "xgboost_v1",
+                        "stock_pool": "filtered_pool_20260519",
+                        "runtime_flags": {"random_seed": 20260529},
+                    }
+                ]
+            },
+        )
+
+    assert called is False
+
+
 def test_loopback_client_requires_refinement_for_large_success_response(experiment_mcp):
     payload = {"data": "x" * 200}
 
