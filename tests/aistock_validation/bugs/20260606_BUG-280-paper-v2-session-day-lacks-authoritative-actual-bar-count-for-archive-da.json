@@ -1,0 +1,87 @@
+{
+  "actual": "paper_v2.session_day has no actual_bar_count column and PaperV2ArchiveHandler still counts paper_v2.intraday_snapshots rows as actual_bar_count.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/db/init_trading_core_v2_schema.py",
+    "backend/migrations/trading_core_v2_schema.sql",
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/qe_archive",
+    "tests/aistock_validation/bugs/20260510_BUG-008-session-day-schema-divergence.json",
+    "tests/aistock_validation/bugs/20260606_BUG-280-paper-v2-session-day-lacks-authoritative-actual-bar-count-for-archive-da.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-280",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-06T13:27:17.772011Z",
+  "description": "paper_v2.session_day has no actual_bar_count column and PaperV2ArchiveHandler still counts paper_v2.intraday_snapshots rows as actual_bar_count.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-9c1f61c5db32",
+      "timestamp": "2026-06-06T13:27:17.772007Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-008 current-main/DB recheck 2026-06-06; GitHub #801; handler _count_intraday_snapshots still used"
+  ],
+  "expected": "paper_v2.session_day persists authoritative actual_bar_count from processed minute bars or an equivalent trusted source, and qe_archive.paper_v2_session_day.data_quality derives from that source without sparse snapshot fallback except explicit legacy/unknown cases.",
+  "first_seen_at": "2026-06-06T13:27:17.772011Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 815,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/815",
+  "last_seen_at": "2026-06-06T13:27:17.772011Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: query information_schema.columns for paper_v2.session_day and qe_archive.paper_v2_session_day, then compare session_day rows with count(paper_v2.intraday_snapshots) by run_id/trade_date.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "qe_archive_l3",
+    "validation_center_backend",
+    "qe_archive_backend",
+    "qe_data_contract_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 session_day lacks authoritative actual_bar_count for archive data_quality",
+  "trigger_condition": {
+    "fingerprint": "9c1f61c5db324de12783e0e6",
+    "source_event_id": "FE-20260606-9c1f61c5db32"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
