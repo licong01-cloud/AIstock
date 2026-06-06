@@ -44,6 +44,12 @@
       "actor": "codex",
       "note": "Implemented source actual_bar_count persistence and archive source preference. Validation passed: targeted pytest 5 passed; paper_v2 test_session/test_live_session + qe_archive handler 85 passed/1 skipped; ruff changed Python files passed; git diff --check passed; nox l0, paper_v2_backend, paper_v2_l3, qe_archive_backend, qe_archive_l3 (QE_ARCHIVE_L3_SKIP_UI=1), qe_data_contract_backend, validation_center_backend, validation_module_registry_l0 passed. Production DDL migration pending merge/apply.",
       "timestamp": "2026-06-06T13:54:19Z"
+    },
+    {
+      "timestamp": "2026-06-06T14:15:06Z",
+      "actor": "codex",
+      "action": "production_ddl_applied_and_verified",
+      "note": "Applied backend/migrations/paper_v2_session_day_actual_bar_count_20260606.sql to production DB after PR #819 merge; verified actual_bar_count integer column, non-negative CHECK constraint, and column comment. No service restart performed."
     }
   ],
   "evidence_uris": [
@@ -63,7 +69,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/819",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Read-only: query information_schema.columns for paper_v2.session_day and qe_archive.paper_v2_session_day, then compare session_day rows with count(paper_v2.intraday_snapshots) by run_id/trade_date.",
   "required_verification": [

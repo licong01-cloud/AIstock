@@ -1,77 +1,84 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-008",
-  "title": "paper_v2 session_day archive vs source schema divergence — handler must derive data_quality + actual_bar_count",
-  "description": "Archive paper_v2_session_day has trade_session_id, actual_bar_count, data_quality that source lacks. Live source schema: session_id, status, phase, data_source, last_processed_bar_time. Round-2 fix kept data_quality 4-val CHECK as archive-derived field. T14b handler must compute data_quality from (expected_bar_count vs actual_bar_count comparison) and actual_bar_count from minute-bar count between session phase boundaries. trade_session_id is renamed source.session_id — pure mapping. Deferred from round-2.",
-  "module": "qe_archive",
-  "severity": "P2",
-  "risk_area": "data_correctness",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "T14b_PaperV2ArchiveHandler_implementation",
-    "blocked_until": "design_pass_for_handler_derived_fields"
-  },
-  "reproduce_command": "python -c \"from backend.services.paper_trading_v2.repository import probe_session_day_schema; print(probe_session_day_schema())\"",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "drawer:cross-tool/codex-claude-coord/dw-foundation-fix-round-2",
-    "branch:origin/claude/dw-foundation-20260510",
-    "commit:9079ee5"
-  ],
-  "fingerprint": "qe_archive::session_day::archive_vs_source_schema_divergence",
-  "assigned_agent": "claude_code",
-  "fix_branch": "claude/dw-foundation-20260510",
-  "fix_commit": "bd098f8",
-  "verification_run_id": null,
-  "created_at": "2026-05-10T00:00:00Z",
-  "first_seen_at": "2026-05-10T00:00:00Z",
-  "last_seen_at": "2026-06-06T13:54:19Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
     "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
     "docs/architecture/data_warehouse_extension_design_20260510.md"
   ],
-  "suspected_modules": [
-    "backend/services/qe_archive/handlers/",
-    "backend/services/paper_trading_v2/repository.py"
-  ],
-  "required_verification": [
-    "design pass for data_quality categorization thresholds (see BUG-011)",
-    "T14b unit tests for actual_bar_count counting + data_quality mapping"
-  ],
+  "assigned_agent": "claude_code",
+  "bug_id": "BUG-008",
+  "closed_at": null,
   "closure_requirements": [
     "data_quality 4-val (excellent/good/degraded/incomplete) mapping rules documented",
     "actual_bar_count derivation source (minute_bar table query) confirmed"
   ],
+  "created_at": "2026-05-10T00:00:00Z",
+  "description": "Archive paper_v2_session_day has trade_session_id, actual_bar_count, data_quality that source lacks. Live source schema: session_id, status, phase, data_source, last_processed_bar_time. Round-2 fix kept data_quality 4-val CHECK as archive-derived field. T14b handler must compute data_quality from (expected_bar_count vs actual_bar_count comparison) and actual_bar_count from minute-bar count between session phase boundaries. trade_session_id is renamed source.session_id — pure mapping. Deferred from round-2.",
   "events": [
     {
-      "timestamp": "2026-05-10T00:00:00Z",
-      "actor": "claude_code",
       "action": "discovered",
-      "note": "Round-2 P1.4 audit kept data_quality CHECK as archive-derived; flagged as deferred design pass"
-    },
-    {
-      "timestamp": "2026-05-10T22:40:47Z",
       "actor": "claude_code",
+      "note": "Round-2 P1.4 audit kept data_quality CHECK as archive-derived; flagged as deferred design pass",
+      "timestamp": "2026-05-10T00:00:00Z"
+    },
+    {
       "action": "partial_fix",
-      "note": "T14b PaperV2ArchiveHandler synthesize_data_quality implemented + unit tested. Mapping: actual=NULL -> 'missing'; actual >= expected -> 'ok'; actual >= expected*0.5 -> 'partial'; otherwise -> 'low_coverage'. Caveat (per dw-foundation drawer e943f994b1225e6016f9ed8a): the 'derived actual' is computed via COUNT(*) on intraday_snapshots, which under-reports on sparse-capture days and overestimates data_quality categories. KEEPING STATUS=OPEN until source schema gains a proper actual_bar_count column or the derivation is tightened with a tick-level data feed. dw-foundation commit bd098f8"
+      "actor": "claude_code",
+      "note": "T14b PaperV2ArchiveHandler synthesize_data_quality implemented + unit tested. Mapping: actual=NULL -> 'missing'; actual >= expected -> 'ok'; actual >= expected*0.5 -> 'partial'; otherwise -> 'low_coverage'. Caveat (per dw-foundation drawer e943f994b1225e6016f9ed8a): the 'derived actual' is computed via COUNT(*) on intraday_snapshots, which under-reports on sparse-capture days and overestimates data_quality categories. KEEPING STATUS=OPEN until source schema gains a proper actual_bar_count column or the derivation is tightened with a tick-level data feed. dw-foundation commit bd098f8",
+      "timestamp": "2026-05-10T22:40:47Z"
     },
     {
-      "timestamp": "2026-06-06T06:26:19Z",
-      "actor": "codex",
       "action": "github_sync",
-      "note": "Linked existing open BUG-008 to GitHub Issue #801 after verifying current code still keeps sparse actual_bar_count caveat open."
+      "actor": "codex",
+      "note": "Linked existing open BUG-008 to GitHub Issue #801 after verifying current code still keeps sparse actual_bar_count caveat open.",
+      "timestamp": "2026-06-06T06:26:19Z"
     },
     {
-      "timestamp": "2026-06-06T13:54:19Z",
-      "actor": "codex",
       "action": "child_fix_validation_passed_pending_bug_280_pr_and_ddl",
-      "note": "Current-main residual was split to BUG-280; BUG-280 local fix/validation passed and will allow BUG-008 closure only after source PR merge, production DDL apply/verify, and archive source actual_bar_count verification."
+      "actor": "codex",
+      "note": "Current-main residual was split to BUG-280; BUG-280 local fix/validation passed and will allow BUG-008 closure only after source PR merge, production DDL apply/verify, and archive source actual_bar_count verification.",
+      "timestamp": "2026-06-06T13:54:19Z"
     }
   ],
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dw-foundation-fix-round-2",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:9079ee5"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "qe_archive::session_day::archive_vs_source_schema_divergence",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "9c47d4a1c8c0bc24a6a07270942f204f4735922f",
+  "fixed_at": "2026-06-06T14:13:28.505392Z",
   "github_issue_number": 801,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/801"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/801",
+  "last_seen_at": "2026-06-06T13:54:19Z",
+  "module": "qe_archive",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/819",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -c \"from backend.services.paper_trading_v2.repository import probe_session_day_schema; print(probe_session_day_schema())\"",
+  "required_verification": [
+    "design pass for data_quality categorization thresholds (see BUG-011)",
+    "T14b unit tests for actual_bar_count counting + data_quality mapping"
+  ],
+  "risk_area": "data_correctness",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "submitted_at": null,
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/",
+    "backend/services/paper_trading_v2/repository.py"
+  ],
+  "title": "paper_v2 session_day archive vs source schema divergence — handler must derive data_quality + actual_bar_count",
+  "trigger_condition": {
+    "blocked_until": "design_pass_for_handler_derived_fields",
+    "scenario": "T14b_PaperV2ArchiveHandler_implementation"
+  },
+  "validation_evidence": [
+    "BUG-280 PR #819 merged; production DDL applied_and_verified; archive source actual_bar_count verified"
+  ],
+  "verification_run_id": null
 }
