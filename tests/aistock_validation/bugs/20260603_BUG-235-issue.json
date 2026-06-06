@@ -62,10 +62,10 @@
       "timestamp": "2026-06-03T14:37:23Z"
     },
     {
-      "timestamp": "2026-06-06T06:28:48Z",
-      "actor": "codex",
       "action": "registry_sync_import_to_main",
-      "note": "Imported open BUG registry record from active branch bug/BUG-235-issue-20260603 so local main and GitHub Issue remain discoverable while PR https://github.com/licong01-cloud/AIstock/pull/656 is still open."
+      "actor": "codex",
+      "note": "Imported open BUG registry record from active branch bug/BUG-235-issue-20260603 so local main and GitHub Issue remain discoverable while PR https://github.com/licong01-cloud/AIstock/pull/656 is still open.",
+      "timestamp": "2026-06-06T06:28:48Z"
     }
   ],
   "evidence_uris": [
@@ -74,8 +74,8 @@
   "expected": "多策略包荐股每日复评以 fusion_rank 作为 canonical rank，同时保留 package_raw_scores/package_raw_ranks/package_rank_scores/support_count/rank_dispersion/fusion_policy_sha256，缺失 evidence fail-fast 或 WAITING_DATA，并提供 UI/质量报告可消费的证据。",
   "first_seen_at": "2026-06-03T13:56:52.031349Z",
   "fix_branch": "bug/BUG-235-issue-20260603",
-  "fix_commit": "4bb9e628d570bb18b343f0d7d4249f4099c033e3",
-  "fixed_at": null,
+  "fix_commit": "2af93818b5be252ea691a3c7492aaecee5796a4c",
+  "fixed_at": "2026-06-06T08:17:11.790319Z",
   "github_issue_number": 653,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/653",
   "last_seen_at": "2026-06-03T13:56:52.031349Z",
@@ -83,6 +83,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/656",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,7 +96,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "selection_center"
   ],
@@ -105,13 +106,7 @@
     "source_event_id": "FE-20260603-6ee42910bdc0"
   },
   "validation_evidence": [
-    "rtk python -m pytest backend/tests/watchlist/test_advisory_lifecycle.py backend/tests/watchlist/test_advisory_quality_report.py backend/tests/selection_center/test_runtime_selection.py::test_selection_center_weighted_fusion_uses_rank_normalized_scores backend/tests/selection_center/test_selection_center_api.py -q -p no:cacheprovider -> 24 passed",
-    "rtk python -m py_compile backend/services/advisory_lifecycle.py backend/services/selection_center/service.py backend/services/simulation_runtime/selection.py backend/routers/selection_center.py -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s paper_v2_backend -> 597 passed, 1 skipped, 2 xfailed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed"
+    "post-main-merge conflict resolution: py_compile advisory/selection modules passed; targeted pytest advisory_lifecycle/advisory_quality/selection_center_api/runtime_selection 24 passed; git diff --check passed; nox -s l0 passed; nox -s validation_module_registry_l0 passed; watch-ci checks_passed 17 passed and 0 blocking failures; separate advisory_api replay test currently needs DB-backed trading calendar cache and is outside BUG-235 merge evidence"
   ],
-  "verification_run_id": "targeted pytest; py_compile; diff-check; nox:l0; nox:paper_v2_backend; nox:validation_module_registry_l0",
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/656"
+  "verification_run_id": "targeted pytest; py_compile; diff-check; nox:l0; nox:paper_v2_backend; nox:validation_module_registry_l0"
 }
