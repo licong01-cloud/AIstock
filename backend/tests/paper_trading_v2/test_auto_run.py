@@ -8,8 +8,10 @@ import pytest
 from backend.services.paper_trading_v2.auto_run import (
     AutoRunCoordinator,
     compute_auto_run_config_sha256,
+    miniqmt_account_group_id,
     normalize_auto_run_config,
 )
+from backend.services.paper_trading_v2.day_runner import miniqmt_account_slot_context
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperSessionMode, PaperSessionStatus
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -133,7 +135,7 @@ def test_enable_auto_run_supports_existing_local_sim_portfolio_with_tdx_session(
     assert paper_repo.list_active_sessions(portfolio.portfolio_id)[0].session_id == session.session_id
 
 
-def test_minqmt_auto_run_rejects_second_active_binding_without_strategy_gate() -> None:
+def test_minqmt_auto_run_allows_same_account_strategy_slots() -> None:
     service, paper_repo, package_id = _seed_service()
     first = service.create_minqmt_auto_run_portfolio(
         package_id=package_id,
@@ -143,20 +145,78 @@ def test_minqmt_auto_run_rejects_second_active_binding_without_strategy_gate() -
         broker_account_id="acct-a",
         create_session=False,
     )
+    second = service.create_minqmt_auto_run_portfolio(
+        package_id=package_id,
+        portfolio_name="auto-run two",
+        initial_cash=80_000,
+        start_date=date(2024, 1, 2),
+        broker_account_id="acct-a",
+        create_session=False,
+    )
+
+    assert len(paper_repo.portfolios) == 2
+    first_binding = first["binding"]
+    second_binding = second["binding"]
+    assert first_binding.allocation_mode == "account_group_slots"
+    assert second_binding.allocation_mode == "account_group_slots"
+    assert first_binding.broker_account_id == second_binding.broker_account_id == "acct-a"
+    assert first_binding.account_group_id == second_binding.account_group_id == miniqmt_account_group_id("acct-a")
+    assert first_binding.strategy_slot_id == first["portfolio"].portfolio_id
+    assert second_binding.strategy_slot_id == second["portfolio"].portfolio_id
+    assert first_binding.strategy_slot_id != second_binding.strategy_slot_id
+    assert first["auto_run"]["config"]["broker"]["account_group_id"] == first_binding.account_group_id
+    assert second["auto_run"]["config"]["broker"]["strategy_slot_id"] == second_binding.strategy_slot_id
+
+
+def test_minqmt_auto_run_context_exposes_account_group_slot_for_runtime() -> None:
+    service, paper_repo, package_id = _seed_service()
+    result = service.create_minqmt_auto_run_portfolio(
+        package_id=package_id,
+        portfolio_name="auto-run one",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        broker_account_id="acct-a",
+        create_session=False,
+    )
+
+    context = miniqmt_account_slot_context(paper_repo, result["portfolio"])
+
+    assert context == {
+        "account_mode": "account_group_slots",
+        "account_group_id": miniqmt_account_group_id("acct-a"),
+        "strategy_slot_id": result["portfolio"].portfolio_id,
+    }
+
+
+def test_enable_auto_run_rejects_switching_active_binding_without_disable() -> None:
+    service, paper_repo, package_id = _seed_service()
+    portfolio = service.create_portfolio(
+        package_id=package_id,
+        portfolio_name="manual miniqmt",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    service.enable_auto_run(
+        portfolio.portfolio_id,
+        broker_account_id="acct-a",
+        create_session=False,
+        updated_by="pytest",
+    )
 
     with pytest.raises(InvalidStateTransitionError) as exc_info:
-        service.create_minqmt_auto_run_portfolio(
-            package_id=package_id,
-            portfolio_name="auto-run two",
-            initial_cash=100_000,
-            start_date=date(2024, 1, 2),
-            broker_account_id="acct-a",
+        service.enable_auto_run(
+            portfolio.portfolio_id,
+            broker_account_id="acct-b",
             create_session=False,
+            updated_by="pytest",
         )
 
-    assert exc_info.value.error_code == "INVALID_STATE_TRANSITION"
-    assert exc_info.value.context["existing_portfolio_id"] == first["portfolio"].portfolio_id
-    assert len(paper_repo.portfolios) == 1
+    assert "disable auto-run before switching accounts" in exc_info.value.message
+    assert exc_info.value.context["existing_broker_account_id"] == "acct-a"
+    assert exc_info.value.context["broker_account_id"] == "acct-b"
+    assert len(paper_repo.list_active_broker_account_bindings(portfolio.portfolio_id)) == 1
 
 
 def test_auto_run_recovery_creates_missing_live_session_without_ticking_orders() -> None:
@@ -271,7 +331,11 @@ def test_auto_run_migration_declares_required_comments() -> None:
         "COMMENT ON COLUMN paper_v2.portfolio.auto_run_updated_by",
         "COMMENT ON TABLE paper_v2.broker_account_binding",
         "COMMENT ON COLUMN paper_v2.broker_account_binding.broker_account_id",
+        "COMMENT ON COLUMN paper_v2.broker_account_binding.account_group_id",
+        "COMMENT ON COLUMN paper_v2.broker_account_binding.strategy_slot_id",
         "COMMENT ON COLUMN paper_v2.broker_account_binding.allocation_mode",
+        "btrim(regexp_replace(broker_account_id",
+        "idx_paper_v2_broker_account_binding_active_account_slot",
     ]
     for fragment in required_fragments:
         assert fragment in sql

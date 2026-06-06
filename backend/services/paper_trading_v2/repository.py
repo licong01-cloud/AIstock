@@ -82,6 +82,19 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
 }
 
 
+def _broker_binding_conflicts(existing: PaperBrokerAccountBinding, candidate: PaperBrokerAccountBinding) -> bool:
+    if existing.allocation_mode != "account_group_slots" or candidate.allocation_mode != "account_group_slots":
+        return True
+    if not existing.account_group_id or not existing.strategy_slot_id:
+        return True
+    if not candidate.account_group_id or not candidate.strategy_slot_id:
+        return True
+    return (
+        existing.account_group_id == candidate.account_group_id
+        and existing.strategy_slot_id == candidate.strategy_slot_id
+    )
+
+
 def _running_summary_operability(
     *,
     portfolio_status: PortfolioStatus,
@@ -634,15 +647,17 @@ class PaperTradingV2Repository:
                         """
                         INSERT INTO paper_v2.broker_account_binding (
                             binding_id, broker_backend, broker_mode, broker_account_id,
-                            portfolio_id, binding_status, allocation_mode, initial_cash,
-                            created_at, updated_at, created_by
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            account_group_id, strategy_slot_id, portfolio_id, binding_status,
+                            allocation_mode, initial_cash, created_at, updated_at, created_by
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             binding.binding_id,
                             binding.broker_backend,
                             binding.broker_mode,
                             binding.broker_account_id,
+                            binding.account_group_id,
+                            binding.strategy_slot_id,
                             binding.portfolio_id,
                             binding.binding_status.value,
                             binding.allocation_mode,
@@ -659,6 +674,8 @@ class PaperTradingV2Repository:
                             "broker_backend": binding.broker_backend,
                             "broker_mode": binding.broker_mode,
                             "broker_account_id": binding.broker_account_id,
+                            "account_group_id": binding.account_group_id,
+                            "strategy_slot_id": binding.strategy_slot_id,
                             "portfolio_id": binding.portfolio_id,
                             "allocation_mode": binding.allocation_mode,
                         },
@@ -671,7 +688,40 @@ class PaperTradingV2Repository:
         broker_backend: str,
         broker_mode: str,
         broker_account_id: str,
+        account_group_id: str | None = None,
+        strategy_slot_id: str | None = None,
     ) -> PaperBrokerAccountBinding | None:
+        filters = []
+        params: list[Any] = [broker_backend, broker_mode, broker_account_id]
+        if account_group_id is not None:
+            filters.append("AND account_group_id = %s")
+            params.append(account_group_id)
+        if strategy_slot_id is not None:
+            filters.append("AND strategy_slot_id = %s")
+            params.append(strategy_slot_id)
+        rows = self._fetch_rows(
+            f"""
+            SELECT *
+            FROM paper_v2.broker_account_binding
+            WHERE broker_backend = %s
+              AND broker_mode = %s
+              AND broker_account_id = %s
+              AND binding_status = 'ACTIVE'
+              {" ".join(filters)}
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        return self._broker_account_binding_from_row(rows[0]) if rows else None
+
+    def list_active_broker_account_bindings_for_account(
+        self,
+        *,
+        broker_backend: str,
+        broker_mode: str,
+        broker_account_id: str,
+    ) -> list[PaperBrokerAccountBinding]:
         rows = self._fetch_rows(
             """
             SELECT *
@@ -681,11 +731,10 @@ class PaperTradingV2Repository:
               AND broker_account_id = %s
               AND binding_status = 'ACTIVE'
             ORDER BY updated_at DESC
-            LIMIT 1
             """,
             (broker_backend, broker_mode, broker_account_id),
         )
-        return self._broker_account_binding_from_row(rows[0]) if rows else None
+        return [self._broker_account_binding_from_row(row) for row in rows]
 
     def list_active_broker_account_bindings(self, portfolio_id: str | None = None) -> list[PaperBrokerAccountBinding]:
         if portfolio_id:
@@ -2296,6 +2345,8 @@ class PaperTradingV2Repository:
             broker_backend=row["broker_backend"],
             broker_mode=row["broker_mode"],
             broker_account_id=row["broker_account_id"],
+            account_group_id=row.get("account_group_id"),
+            strategy_slot_id=row.get("strategy_slot_id"),
             portfolio_id=row["portfolio_id"],
             binding_status=BrokerAccountBindingStatus(row["binding_status"]),
             allocation_mode=row.get("allocation_mode") or "exclusive_account",
@@ -2698,22 +2749,40 @@ class InMemoryPaperTradingV2Repository:
         return rows[:limit]
 
     def create_broker_account_binding(self, binding: PaperBrokerAccountBinding) -> PaperBrokerAccountBinding:
-        conflict = self.get_active_broker_account_binding(
+        for existing in self.list_active_broker_account_bindings(binding.portfolio_id):
+            if existing.binding_id != binding.binding_id:
+                raise InvalidStateTransitionError(
+                    "Paper v2 portfolio already has an active broker account binding",
+                    context={
+                        "existing_binding_id": existing.binding_id,
+                        "existing_broker_backend": existing.broker_backend,
+                        "existing_broker_account_id": existing.broker_account_id,
+                        "portfolio_id": binding.portfolio_id,
+                    },
+                )
+        conflicts = self.list_active_broker_account_bindings_for_account(
             broker_backend=binding.broker_backend,
             broker_mode=binding.broker_mode,
             broker_account_id=binding.broker_account_id,
         )
-        if conflict is not None and conflict.portfolio_id != binding.portfolio_id:
-            raise InvalidStateTransitionError(
-                "MiniQMT account already has an active Paper v2 auto-run binding",
-                context={
-                    "broker_backend": binding.broker_backend,
-                    "broker_mode": binding.broker_mode,
-                    "broker_account_id": binding.broker_account_id,
-                    "existing_portfolio_id": conflict.portfolio_id,
-                    "portfolio_id": binding.portfolio_id,
-                },
-            )
+        for conflict in conflicts:
+            if conflict.portfolio_id == binding.portfolio_id:
+                continue
+            if _broker_binding_conflicts(conflict, binding):
+                raise InvalidStateTransitionError(
+                    "MiniQMT account already has an incompatible active Paper v2 auto-run binding",
+                    context={
+                        "broker_backend": binding.broker_backend,
+                        "broker_mode": binding.broker_mode,
+                        "broker_account_id": binding.broker_account_id,
+                        "existing_portfolio_id": conflict.portfolio_id,
+                        "portfolio_id": binding.portfolio_id,
+                        "existing_allocation_mode": conflict.allocation_mode,
+                        "allocation_mode": binding.allocation_mode,
+                        "account_group_id": binding.account_group_id,
+                        "strategy_slot_id": binding.strategy_slot_id,
+                    },
+                )
         self.broker_account_bindings[binding.binding_id] = binding
         return binding
 
@@ -2723,6 +2792,8 @@ class InMemoryPaperTradingV2Repository:
         broker_backend: str,
         broker_mode: str,
         broker_account_id: str,
+        account_group_id: str | None = None,
+        strategy_slot_id: str | None = None,
     ) -> PaperBrokerAccountBinding | None:
         for binding in self.broker_account_bindings.values():
             if (
@@ -2730,9 +2801,29 @@ class InMemoryPaperTradingV2Repository:
                 and binding.broker_mode == broker_mode
                 and binding.broker_account_id == broker_account_id
                 and binding.binding_status == BrokerAccountBindingStatus.ACTIVE
+                and (account_group_id is None or binding.account_group_id == account_group_id)
+                and (strategy_slot_id is None or binding.strategy_slot_id == strategy_slot_id)
             ):
                 return binding
         return None
+
+    def list_active_broker_account_bindings_for_account(
+        self,
+        *,
+        broker_backend: str,
+        broker_mode: str,
+        broker_account_id: str,
+    ) -> list[PaperBrokerAccountBinding]:
+        rows = [
+            binding
+            for binding in self.broker_account_bindings.values()
+            if binding.broker_backend == broker_backend
+            and binding.broker_mode == broker_mode
+            and binding.broker_account_id == broker_account_id
+            and binding.binding_status == BrokerAccountBindingStatus.ACTIVE
+        ]
+        rows.sort(key=lambda item: item.updated_at, reverse=True)
+        return rows
 
     def list_active_broker_account_bindings(self, portfolio_id: str | None = None) -> list[PaperBrokerAccountBinding]:
         rows = [

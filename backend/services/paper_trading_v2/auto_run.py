@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -48,6 +49,32 @@ AUTO_RUN_BROKER_DEFAULTS: dict[str, dict[str, str]] = {
         "account_binding_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     },
 }
+
+
+def miniqmt_account_group_id(broker_account_id: str | None) -> str | None:
+    account_id = str(broker_account_id or "").strip()
+    if not account_id:
+        return None
+    safe = re.sub(r"[^A-Za-z0-9_]+", "_", account_id).strip("_") or "unassigned"
+    return f"ag_minqmt_{safe}_sim"
+
+
+def miniqmt_strategy_slot_id(portfolio_id: str | None) -> str | None:
+    slot_id = str(portfolio_id or "").strip()
+    return slot_id or None
+
+
+def miniqmt_strategy_name(strategy_slot_id: str | None) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(strategy_slot_id or ""))
+    return (safe or "aistock_minqmt")[:48]
+
+
+def miniqmt_order_remark(*, portfolio_id: str, package_id: str, intent_id: str) -> str:
+    payload = {"portfolio_id": portfolio_id, "package_id": package_id, "intent_id": intent_id}
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(raw) <= 240:
+        return raw
+    return f"aistock:{portfolio_id[:32]}:{package_id[:32]}:{intent_id[:48]}"
 
 
 def auto_run_live_source_for_broker(broker_backend: str) -> MinuteDataSource:
@@ -418,9 +445,15 @@ class AutoRunCoordinator:
 __all__ = [
     "AUTO_RUN_SCHEMA_VERSION",
     "DEFAULT_TRADE_WINDOW_POLICY",
+    "MINIQMT_ACCOUNT_GROUP_BINDING_MODE",
+    "MINIQMT_LEGACY_BINDING_MODES",
     "auto_run_live_source_for_broker",
     "AutoRunCoordinator",
     "canonical_auto_run_json",
     "compute_auto_run_config_sha256",
+    "miniqmt_account_group_id",
+    "miniqmt_order_remark",
+    "miniqmt_strategy_name",
+    "miniqmt_strategy_slot_id",
     "normalize_auto_run_config",
 ]
