@@ -1080,7 +1080,7 @@ class AdvisoryProgramService:
             run = self.selection_service.get_run(selection_run_id)
         else:
             mode = SelectionMode.SINGLE_PACKAGE if program.package_mode == PACKAGE_MODE_SINGLE else SelectionMode.WEIGHTED_FUSION
-            config = dict(runtime_config)
+            config = self._review_runtime_config(program, runtime_config)
             if program.package_mode == PACKAGE_MODE_FUSION:
                 config["package_weights"] = program.package_weights
             run = self.selection_service.run_packages(
@@ -1097,6 +1097,46 @@ class AdvisoryProgramService:
         if run.trade_date != trade_date:
             raise RuntimeConfigInvalidError("selection run trade_date must match advisory review trade_date", context={"run_id": run.run_id})
         return run
+
+    @staticmethod
+    def _review_runtime_config(program: AdvisoryProgram, runtime_config: Mapping[str, Any] | None) -> dict[str, Any]:
+        config = deepcopy(dict(runtime_config or {}))
+        top_k = int(config.get("top_k") or config.get("display_top_n") or program.target_count)
+        runtime_profile = deepcopy(config.get("runtime_profile") or {})
+        if not isinstance(runtime_profile, dict):
+            raise RuntimeConfigInvalidError(
+                "advisory review runtime_config.runtime_profile must be an object",
+                context={"program_id": program.program_id, "runtime_profile_type": type(runtime_profile).__name__},
+            )
+        selection_profile = deepcopy(runtime_profile.get("selection") or {})
+        if not isinstance(selection_profile, dict):
+            raise RuntimeConfigInvalidError(
+                "advisory review runtime_profile.selection must be an object",
+                context={"program_id": program.program_id, "selection_type": type(selection_profile).__name__},
+            )
+        selection_profile.setdefault("top_k", top_k)
+        runtime_profile["selection"] = selection_profile
+        runtime_profile.setdefault("tradability", {"exclude_suspended": True})
+        runtime_profile.setdefault(
+            "hmm",
+            {"enabled": False, "model_config_id": None, "model_snapshot_id": None, "signal_preset": None},
+        )
+        runtime_profile.setdefault("industry_blacklist", [])
+        artifact_config = deepcopy(config.get("selection_artifact_config") or config.get("selection_artifact") or {})
+        if not isinstance(artifact_config, dict):
+            raise RuntimeConfigInvalidError(
+                "advisory review selection_artifact_config must be an object",
+                context={"program_id": program.program_id, "selection_artifact_config_type": type(artifact_config).__name__},
+            )
+        artifact_config.setdefault("auto_generate", True)
+        artifact_config.setdefault("inference_backend", "wsl")
+        artifact_config.setdefault("pit_mode", "PREVIOUS_TRADING_DAY_CLOSE")
+        config["top_k"] = top_k
+        config["display_top_n"] = int(config.get("display_top_n") or top_k)
+        config["st_pit_authoritative"] = bool(config.get("st_pit_authoritative", True))
+        config["runtime_profile"] = runtime_profile
+        config["selection_artifact_config"] = artifact_config
+        return config
 
     def _validated_config(
         self,

@@ -92,6 +92,12 @@ export type AdvisoryQualityReport = {
   warnings: string[];
 };
 
+export type AdvisoryTradingDayDefaults = {
+  latest_trading_day: string;
+  next_trading_day?: string | null;
+  trading_day_status?: JsonObject;
+};
+
 export type CreateAdvisoryProgramPayload = {
   program_name: string;
   package_mode: "single_package" | "fusion_pool";
@@ -108,7 +114,6 @@ export type CreateAdvisoryProgramPayload = {
 
 export type AdvisoryReviewPayload = {
   trade_date: string;
-  selection_run_id?: string;
   data_source?: string;
   runtime_config?: JsonObject;
   candidates?: JsonObject[];
@@ -163,6 +168,9 @@ export const advisoryApi = {
   async leaderboard(sortBy = "win_rate"): Promise<AdvisoryLeaderboardRow[]> {
     const data = await apiFetch<{ leaderboard: AdvisoryLeaderboardRow[] }>(`/advisory/leaderboard?sort_by=${encodeURIComponent(sortBy)}`);
     return data.leaderboard || [];
+  },
+  async tradingDayDefaults(lookbackTradingDays = 10): Promise<AdvisoryTradingDayDefaults> {
+    return apiFetch<AdvisoryTradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
   },
   async activePool(programId: string): Promise<AdvisoryEpisode[]> {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);
