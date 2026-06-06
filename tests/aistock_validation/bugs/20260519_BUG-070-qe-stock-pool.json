@@ -1,47 +1,4 @@
-﻿{
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-070",
-  "title": "QE historical templates allow future/latest stock_pool to contaminate fixed backtest windows",
-  "description": "Expected: QE historical training/backtest templates use a point-in-time stock pool aligned with the fixed backtest window. For the default QE historical window test_end=2026-04-28 and backtest_end=2026-04-27, templates, MCP preflight, and backend validation should use or require filtered_pool_20260428 and reject filtered_pool dates later than test_end, such as filtered_pool_20260519. Paper/simulation/live flows may use their own cutoff/universe rules and should not affect historical backtests.\nActual: A custom_evo template created through QE MCP referenced filtered_pool_20260519 in loop.stock_pool and strategy_params.stock_pool. Backend validation could still return valid=true and materialize failed later with a missing stock pool RuntimeError/500. If the future/latest pool file exists, fixed historical backtests can be contaminated by a future universe.",
-  "module": "qe",
-  "severity": "P1",
-  "risk_area": "data_correctness",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "reported_via_mcp",
-    "files": [
-      "backend/services/qe_templates/validator.py",
-      "backend/services/qe_templates/materializer.py",
-      "backend/routers/qe_templates.py",
-      "backend/routers/quantevolver_evolution.py",
-      "backend/services/quantevolver/stock_pool_sync.py",
-      "backend/services/quantevolver/config_composer.py",
-      "scripts/aistock_qe_experiment_mcp_server.py"
-    ]
-  },
-  "reproduce_command": "Create a custom_evo QE template with loop.stock_pool='filtered_pool_20260519' and strategy_params.stock_pool='filtered_pool_20260519' for test_end=2026-04-28/backtest_end=2026-04-27, then run qe_template_validate and qe_template_materialize_confirmed.",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/issues/83",
-    "file:backend/services/qe_templates/validator.py",
-    "file:backend/services/qe_templates/materializer.py",
-    "file:backend/routers/qe_templates.py",
-    "file:backend/routers/quantevolver_evolution.py",
-    "file:backend/services/quantevolver/stock_pool_sync.py",
-    "file:backend/services/quantevolver/config_composer.py",
-    "file:scripts/aistock_qe_experiment_mcp_server.py"
-  ],
-  "fingerprint": "8ccdc0342c4d53e1",
-  "assigned_agent": "codex",
-  "fix_branch": "bug/BUG-070-qe-historical-templates-allow-future-latest-stoc-20260529",
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-05-19T15:48:07Z",
-  "first_seen_at": "2026-05-19T15:48:07Z",
-  "last_seen_at": "2026-05-19T15:48:07Z",
-  "fixed_at": null,
-  "submitted_at": "2026-05-19T15:48:07Z",
-  "closed_at": null,
+{
   "allowed_write_scope": [
     "backend/services/qe_templates/validator.py",
     "backend/services/qe_templates/materializer.py",
@@ -56,18 +13,9 @@
     "backend/tests/test_aistock_qe_mcp_servers.py",
     "tests/aistock_validation/bugs/20260519_BUG-070-qe-stock-pool.json"
   ],
-  "suspected_modules": [
-    "backend/services/qe_templates/validator.py",
-    "backend/routers/quantevolver_evolution.py",
-    "backend/services/quantevolver/config_composer.py",
-    "scripts/aistock_qe_experiment_mcp_server.py"
-  ],
-  "required_verification": [
-    "python -m py_compile backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py",
-    "python -m pytest backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
-    "python -m ruff check backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py",
-    "python -m nox -s l0"
-  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-070",
+  "closed_at": null,
   "closure_requirements": [
     "Backend validate/approve/materialize gate rejects future/latest stock_pool contamination for QE historical templates.",
     "MCP qe_template_create preflight rejects the same invalid payload before HTTP submission.",
@@ -75,33 +23,95 @@
     "Materialize no longer turns this resource/scope error into an unstructured 500.",
     "Regression tests cover future and PIT stock pool cases."
   ],
+  "created_at": "2026-05-19T15:48:07Z",
+  "description": "Expected: QE historical training/backtest templates use a point-in-time stock pool aligned with the fixed backtest window. For the default QE historical window test_end=2026-04-28 and backtest_end=2026-04-27, templates, MCP preflight, and backend validation should use or require filtered_pool_20260428 and reject filtered_pool dates later than test_end, such as filtered_pool_20260519. Paper/simulation/live flows may use their own cutoff/universe rules and should not affect historical backtests.\nActual: A custom_evo template created through QE MCP referenced filtered_pool_20260519 in loop.stock_pool and strategy_params.stock_pool. Backend validation could still return valid=true and materialize failed later with a missing stock pool RuntimeError/500. If the future/latest pool file exists, fixed historical backtests can be contaminated by a future universe.",
   "events": [
     {
-      "timestamp": "2026-05-19T15:48:07Z",
-      "actor": "codex",
       "action": "discovered",
-      "note": "Reported via aistock_mcp_server.report_bug; mirrored to GitHub issue #83."
+      "actor": "codex",
+      "note": "Reported via aistock_mcp_server.report_bug; mirrored to GitHub issue #83.",
+      "timestamp": "2026-05-19T15:48:07Z"
     },
     {
-      "timestamp": "2026-05-29T00:00:00Z",
-      "actor": "codex",
       "action": "normalized_registry",
-      "note": "Recovered BUG-070 from historical worktree because the linked GitHub issue existed but BUG JSON was not present on main."
+      "actor": "codex",
+      "note": "Recovered BUG-070 from historical worktree because the linked GitHub issue existed but BUG JSON was not present on main.",
+      "timestamp": "2026-05-29T00:00:00Z"
     },
     {
-      "timestamp": "2026-05-29T00:00:00Z",
-      "actor": "codex",
       "action": "scope_updated_for_fix",
-      "note": "Allowed scope updated to include actual backend, MCP, and regression test files touched by BUG-070 fix."
+      "actor": "codex",
+      "note": "Allowed scope updated to include actual backend, MCP, and regression test files touched by BUG-070 fix.",
+      "timestamp": "2026-05-29T00:00:00Z"
     },
     {
-      "timestamp": "2026-06-06T06:28:48Z",
-      "actor": "codex",
       "action": "registry_sync_import_to_main",
-      "note": "Imported open BUG registry record from active branch bug/BUG-070-qe-historical-templates-allow-future-latest-stoc-20260529 so local main and GitHub Issue remain discoverable while PR https://github.com/licong01-cloud/AIstock/pull/314 is still open."
+      "actor": "codex",
+      "note": "Imported open BUG registry record from active branch bug/BUG-070-qe-historical-templates-allow-future-latest-stoc-20260529 so local main and GitHub Issue remain discoverable while PR https://github.com/licong01-cloud/AIstock/pull/314 is still open.",
+      "timestamp": "2026-06-06T06:28:48Z"
     }
   ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/83",
+    "file:backend/services/qe_templates/validator.py",
+    "file:backend/services/qe_templates/materializer.py",
+    "file:backend/routers/qe_templates.py",
+    "file:backend/routers/quantevolver_evolution.py",
+    "file:backend/services/quantevolver/stock_pool_sync.py",
+    "file:backend/services/quantevolver/config_composer.py",
+    "file:scripts/aistock_qe_experiment_mcp_server.py"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "8ccdc0342c4d53e1",
+  "first_seen_at": "2026-05-19T15:48:07Z",
+  "fix_branch": "bug/BUG-070-qe-historical-templates-allow-future-latest-stoc-20260529",
+  "fix_commit": "975b573b746c277733e49886872ad13b4c72fcfb",
+  "fixed_at": "2026-06-06T09:22:15.222349Z",
   "github_issue_number": 83,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/83",
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/314"
+  "last_seen_at": "2026-05-19T15:48:07Z",
+  "module": "qe",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/314",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Create a custom_evo QE template with loop.stock_pool='filtered_pool_20260519' and strategy_params.stock_pool='filtered_pool_20260519' for test_end=2026-04-28/backtest_end=2026-04-27, then run qe_template_validate and qe_template_materialize_confirmed.",
+  "required_verification": [
+    "python -m py_compile backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py",
+    "python -m pytest backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "python -m ruff check backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py",
+    "python -m nox -s l0"
+  ],
+  "risk_area": "data_correctness",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "submitted_at": "2026-05-19T15:48:07Z",
+  "suspected_modules": [
+    "backend/services/qe_templates/validator.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/config_composer.py",
+    "scripts/aistock_qe_experiment_mcp_server.py"
+  ],
+  "title": "QE historical templates allow future/latest stock_pool to contaminate fixed backtest windows",
+  "trigger_condition": {
+    "files": [
+      "backend/services/qe_templates/validator.py",
+      "backend/services/qe_templates/materializer.py",
+      "backend/routers/qe_templates.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/stock_pool_sync.py",
+      "backend/services/quantevolver/config_composer.py",
+      "scripts/aistock_qe_experiment_mcp_server.py"
+    ],
+    "scenario": "reported_via_mcp"
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py -> passed",
+    "python -m pytest backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider -> 111 passed",
+    "python -m ruff check backend/services/qe_templates/validator.py backend/services/quantevolver/config_composer.py backend/routers/quantevolver_evolution.py scripts/aistock_qe_experiment_mcp_server.py backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/test_aistock_qe_mcp_servers.py -> passed",
+    "git diff --check -> passed",
+    "watch-ci PR #314 -> checks_passed"
+  ],
+  "verification_run_id": null
 }
