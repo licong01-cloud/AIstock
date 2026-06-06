@@ -106,6 +106,12 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
   const updates: Record<string, unknown>[] = [];
   const deletes: Record<string, unknown>[] = [];
 
+  await page.route("**/api/ingestion/alerts/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [], items: [], total: 0 };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+
   await page.route("**/api/v1/quantevolver/strategies**", async (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
