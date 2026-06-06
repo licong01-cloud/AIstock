@@ -41,8 +41,8 @@
   "expected": "Nightly/code-intelligence creates current warning-only freshness/readiness artifacts, and CI auto-filed issues contain actionable diagnostics or an explicit retry/triage state with enough next commands.",
   "first_seen_at": "2026-06-06T03:30:47.574889Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8801b65107d32238fdc44eb3b1e9d26df092126e",
+  "fixed_at": "2026-06-06T04:18:43.104847Z",
   "github_issue_number": 798,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/798",
   "last_seen_at": "2026-06-06T03:30:47.574889Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/799",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -73,6 +74,9 @@
     "fingerprint": "d517c894d8ab2ec69cd146b2",
     "source_event_id": "FE-20260606-d517c894d8ab"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed (53 passed); nox validation_center_backend -> passed (389 passed, coverage gate passed); nox validation_catalog_integrity -> passed; nox validation_module_registry_l0 -> passed; nox guardrail_changed_files -> passed; nox l0 -> passed; git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
