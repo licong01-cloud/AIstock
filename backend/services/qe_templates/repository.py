@@ -26,6 +26,21 @@ COLUMNS = (
     "data_versions_json", "submitted_experiment_id", "submitted_task_id", "runtime_config_sha256",
     "runtime_diff_json", "actual_metrics_json", "metric_delta_json",
 )
+PENDING_HARD_DELETE_STATUSES = ("approved", "draft", "ready_for_review")
+
+
+def hard_delete_blocker(template_id: str, row: Mapping[str, Any] | None) -> str | None:
+    if not row:
+        return f"template not found: {template_id}"
+    status = str(row.get("status") or "")
+    if status not in PENDING_HARD_DELETE_STATUSES:
+        return (
+            "template hard delete is only allowed before materialization/execution; "
+            f"status={status or '<empty>'}"
+        )
+    if row.get("submitted_experiment_id") or row.get("submitted_task_id") or row.get("runtime_config_sha256"):
+        return "template hard delete is blocked because runtime materialization history exists"
+    return None
 
 
 class QETemplateRepository:
@@ -133,6 +148,27 @@ class QETemplateRepository:
         if runtime_config is not None:
             updates["runtime_config_sha256"] = sha256_json(runtime_config)
         return self.update(template_id, updates)
+
+    def delete_pending(self, template_id: str) -> dict[str, Any]:
+        placeholders = ", ".join(["%s"] * len(PENDING_HARD_DELETE_STATUSES))
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    DELETE FROM qe_execution_templates
+                    WHERE template_id = %s
+                      AND status IN ({placeholders})
+                      AND submitted_experiment_id IS NULL
+                      AND submitted_task_id IS NULL
+                      AND runtime_config_sha256 IS NULL
+                    RETURNING *
+                    """,
+                    [template_id, *PENDING_HARD_DELETE_STATUSES],
+                )
+                if cur.rowcount:
+                    return self._row(cur)
+        blocker = hard_delete_blocker(template_id, self.get(template_id))
+        raise ValueError(blocker or f"template hard delete was blocked: {template_id}")
 
     @staticmethod
     def _adapt(column: str, value: Any) -> Any:

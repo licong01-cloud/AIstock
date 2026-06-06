@@ -17,6 +17,7 @@ from backend.routers import quantevolver, quantevolver_evolution
 router = APIRouter(prefix="/qe-templates", tags=["qe-templates"])
 
 TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
+TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
 
@@ -95,6 +96,10 @@ class QETemplateApprovalRequest(BaseModel):
 
 class QETemplateMaterializeRequest(BaseModel):
     confirm_template: str = ""
+
+
+class QETemplateDeleteRequest(BaseModel):
+    confirm_delete: str = ""
 
 
 class QETemplateRunRequest(BaseModel):
@@ -241,3 +246,14 @@ def supersede_qe_template(template_id: str):
         return {"status": "success", "data": _repo().update(template_id, {"status": "superseded"})}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{template_id}")
+def delete_pending_qe_template(template_id: str, request: QETemplateDeleteRequest):
+    if request.confirm_delete != TEMPLATE_DELETE_CONFIRM:
+        raise HTTPException(status_code=400, detail=f"confirm_delete must equal {TEMPLATE_DELETE_CONFIRM}")
+    try:
+        return {"status": "success", "data": {"deleted_template": _repo().delete_pending(template_id)}}
+    except ValueError as exc:
+        status_code = 404 if "template not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
