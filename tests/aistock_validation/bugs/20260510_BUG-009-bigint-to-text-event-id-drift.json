@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P3",
   "risk_area": "data_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "T14b_PaperV2ArchiveHandler_event_archive",
     "type_cast_int_to_str": true
@@ -18,18 +18,20 @@
     "branch:origin/claude/dw-foundation-20260510"
   ],
   "fingerprint": "qe_archive::event_id::bigint_vs_text_drift",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
-  "fix_commit": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/BUG-009-qe-archive-event-id-cast-20260529-20260529",
+  "fix_commit": "ac27bdf0739eae62b42250adee8a14800ce758b2",
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T05:15:00+08:00",
   "submitted_at": null,
-  "closed_at": null,
+  "closed_at": "2026-05-29T01:13:37.002681Z",
   "allowed_write_scope": [
-    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/qe_archive/test_paper_v2_archive_handler.py",
+    "tests/aistock_validation/bugs/20260510_BUG-009-bigint-to-text-event-id-drift.json"
   ],
   "suspected_modules": [
     "backend/services/qe_archive/handlers/"
@@ -48,6 +50,39 @@
       "actor": "claude_code",
       "action": "discovered",
       "note": "Round-2 P1.3 audit flagged bigint→TEXT drift as acceptable but design-pass follow-up"
+    },
+    {
+      "timestamp": "2026-05-29T05:15:00+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked BUG-009 to GitHub Issue #320 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T05:15:00+08:00",
+      "actor": "codex_app",
+      "action": "mark_fixed_pending_validation",
+      "note": "Applied canonical raw decimal TEXT id conversion helper and int64 max order event idempotency coverage."
+    },
+    {
+      "timestamp": "2026-05-29T01:13:37.002681Z",
+      "actor": "codex_app",
+      "action": "close_sync_after_merge",
+      "note": "PR #324 merged; GitHub Issue #320 closed; close-sync persisted merge commit and validation evidence."
     }
-  ]
+  ],
+  "github_issue_number": 320,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/320",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "python -m pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::TestArchiveTextIdPolicy -q -p no:cacheprovider -> 2 passed",
+    "python -m pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py -q -p no:cacheprovider -> 29 passed, 1 skipped",
+    "python -m nox -s qe_archive_backend -> 118 passed",
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> success, blocking=0",
+    "ruff check backend/services/qe_archive/handlers/paper_v2_archive_handler.py backend/tests/qe_archive/test_paper_v2_archive_handler.py -> All checks passed",
+    "git diff --check -> passed",
+    "GitHub PR #324 CI -> all checks passed; Auto-register CI failures as BUGs skipped/non-blocking"
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/324"
 }

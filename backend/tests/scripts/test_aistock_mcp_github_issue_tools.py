@@ -191,6 +191,28 @@ def test_github_issue_create_writes_registry_and_dedupes_without_github_env(mcp_
     assert second["existing"]["bug_id"] == first["bug_id"]
 
 
+def test_report_bug_allocates_without_live_github_scan(mcp_module, monkeypatch: pytest.MonkeyPatch):
+    def fail_if_called():
+        raise AssertionError("report_bug must not perform a live GitHub issue scan")
+
+    monkeypatch.setattr(mcp_module, "_github_issue_client_from_env", fail_if_called)
+
+    result = mcp_module.report_bug(
+        title="Local-only report_bug allocation",
+        severity="P2",
+        module="validation_mcp",
+        files=["scripts/aistock_mcp_server.py"],
+        reproduce_command="validation.report_bug(...)",
+        expected="returns promptly",
+        actual="timed out during global allocation",
+    )
+
+    assert result["deduplicated"] is False
+    assert result["allocation_mode"] == "local_registry_only_no_live_github_scan"
+    assert result["github_sync_required"] is True
+    assert result["preferred_tool"] == "mcp_github_issue_create"
+
+
 def test_github_issue_create_blocks_canonical_root_before_allocation_or_github(
     mcp_module,
     tmp_path: Path,
@@ -320,6 +342,11 @@ def test_github_issue_create_live_path_is_mockable(mcp_module, monkeypatch: pyte
                 "state": "open",
                 "html_url": "https://github.example/issues/77",
             }
+
+        def list_issues(self, *, state: str = "open", labels: list[str] | None = None) -> list[dict[str, Any]]:
+            captured["list_state"] = state
+            captured["list_labels"] = labels
+            return []
 
     monkeypatch.setenv("GH_TOKEN", "pytest-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")

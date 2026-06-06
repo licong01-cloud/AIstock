@@ -1,0 +1,72 @@
+{
+  "actual": "localsim_unattended_l3 fails with RuntimeConfigInvalidError not matching the test expectation; MiniQMT stub L3 passes separately.",
+  "allowed_write_scope": [
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/trading_core/errors.py",
+    "tests/aistock_validation/bugs/20260603_BUG-237-paper-v2-localsim-unattended-l3-gate-fails-on-execution-policy-error-cla.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-237",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T15:27:43.021247Z",
+  "description": "localsim_unattended_l3 fails with RuntimeConfigInvalidError not matching the test expectation; MiniQMT stub L3 passes separately.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-6506277e967c",
+      "timestamp": "2026-06-03T15:27:43.021244Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "localsim_unattended_l3 passes and rejects paper-only/manual execution policies with the intended typed error contract, without weakening fail-fast execution policy validation.",
+  "first_seen_at": "2026-06-03T15:27:43.021247Z",
+  "fix_branch": null,
+  "fix_commit": "f463281fe843e8bc5465f1a6c67852c3ad45c732",
+  "fixed_at": "2026-06-03T16:02:30.330625Z",
+  "github_issue_number": 661,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/661",
+  "last_seen_at": "2026-06-03T15:27:43.021247Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/662",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s localsim_unattended_l3",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 LocalSim unattended L3 gate fails on execution policy error class",
+  "trigger_condition": {
+    "fingerprint": "6506277e967ce7a4d42098e1",
+    "source_event_id": "FE-20260603-6506277e967c"
+  },
+  "validation_evidence": [
+    "python -m nox -s localsim_unattended_l3 -> 31 passed",
+    "python -m nox -s miniqmt_sim_stub_l3 -> 44 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s l0 -> passed; blocking=0",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 596 passed, 1 skipped, 2 xfailed; data_quality_deep 10 passed, 21 skipped",
+    "python -m ruff check backend/tests/simulation_runtime/test_target_rebalance_shared.py -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_run_id": null
+}

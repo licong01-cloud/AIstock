@@ -1,0 +1,111 @@
+{
+  "actual": "The UI did not make full experiment/task/loop visibility explicit and /quantevolver/evolution/tasks only exposed a limit-based list, making older tasks invisible to the page once the first page was exhausted.",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+    "tests/aistock_validation/bugs/20260519_BUG-059-qe-hmm.json"
+  ],
+  "assigned_agent": "codex-app",
+  "bug_id": "BUG-059",
+  "closed_at": null,
+  "closure_requirements": [
+    "GitHub Issue #61 remains linked to this BUG record.",
+    "The experiment history page can load all parent experiments and child loops in batches and exposes count/full-view evidence.",
+    "The evolution tasks API accepts offset and the UI loads all task pages in batches.",
+    "Summary task payloads expose a compact hmm_enabled flag instead of returning raw strategy JSON for list visibility.",
+    "No experiment data is deleted and no production DB write or DDL is performed."
+  ],
+  "created_at": "2026-05-19T05:29:43Z",
+  "description": "The QE experiment history and evolution task pages can make saved experiments, tasks, and loops hard to discover because history is paged/folded without a full-visibility signal and the evolution task list did not support paged full loading. Users cannot safely inspect HMM/QE history before cleanup decisions.",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "Original GitHub mirror recorded this issue as #61; local BUG numbering later normalized to BUG-059 to avoid duplicate BUG-058 reuse.",
+      "timestamp": "2026-05-19T05:29:43Z"
+    },
+    {
+      "action": "scope_confirmed",
+      "actor": "codex-app",
+      "note": "Continuing from isolated worktree and excluding simulation/Paper v2/MiniQMT/StrategyPackage manifest drift per user instruction.",
+      "timestamp": "2026-05-29T04:45:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex-app",
+      "note": "Implemented full visibility loading for QE experiment history and evolution tasks; validation passed except full project tsc is blocked by unrelated research-assistant syntax error on current main.",
+      "timestamp": "2026-05-29T05:05:00Z"
+    },
+    {
+      "action": "commit_prepared",
+      "actor": "codex-app",
+      "note": "Committed fix branch after rebase on origin/main; final commit hash will be recorded by close-sync after PR/merge to avoid self-referential BUG JSON drift.",
+      "timestamp": "2026-05-29T05:13:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/61",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/payload_summary.py"
+  ],
+  "expected": "The existing QE UI style is preserved while users can load all saved parent experiments, child loops, and evolution tasks, see full-view/count indicators, expand/collapse all loops, and verify HMM-related task visibility without deleting data.",
+  "failing_run_id": null,
+  "first_seen_at": "2026-05-19T05:29:43Z",
+  "fix_branch": "bug/BUG-059-qe-experiment-visibility-20260529",
+  "fix_commit": "ca9518e6af447be03b7e945ef44b2f928f52b7ca",
+  "fixed_at": "2026-05-29T05:12:29.246579Z",
+  "github_issue_number": 61,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/61",
+  "last_seen_at": "2026-05-29T05:05:00Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not delete QE/HMM experiments or filesystem data.",
+    "Do not process Paper v2, MiniQMT, or StrategyPackage manifest drift in this issue.",
+    "Do not redesign the UI or migrate it to a new visual system."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/345",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /quantevolver/experiments and /quantevolver/evolution, then compare visible parent/loop/task counts with GET /api/v1/quantevolver/experiments?include_children=true and GET /api/v1/quantevolver/evolution/tasks?limit=200&offset=0.",
+  "required_verification": [
+    "git diff --check",
+    "python -m py_compile backend/routers/quantevolver_evolution.py backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/payload_summary.py",
+    "python -m pytest backend/tests/quantevolver/test_qe_payload_summary_services.py -q",
+    "cd frontend && npx tsc --noEmit --pretty false"
+  ],
+  "risk_area": "observability",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "submitted_at": "2026-05-19T05:29:43Z",
+  "suspected_modules": [
+    "quantevolver",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py"
+  ],
+  "title": "QE experiment history and evolution pages do not show all saved experiments",
+  "trigger_condition": {
+    "fingerprint": "e5e03dec66038957",
+    "scenario": "github_issue_61",
+    "source_event_id": "https://github.com/licong01-cloud/AIstock/issues/61"
+  },
+  "validation_evidence": [
+    "git diff --check origin/main..HEAD -> passed",
+    "python -m py_compile backend/routers/quantevolver_evolution.py backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/payload_summary.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_qe_payload_summary_services.py -q -> 6 passed",
+    "python -m ruff check backend/routers/quantevolver_evolution.py backend/services/quantevolver/payload_summary.py backend/services/quantevolver/qe_evolution_service.py backend/tests/quantevolver/test_qe_payload_summary_services.py -> All checks passed",
+    "cd frontend && node_modules\\\\.bin\\\\tsc.cmd -p tsconfig.bug059.tmp.json --noEmit --pretty false with temporary react-plotly declaration -> passed",
+    "cd frontend && node_modules\\\\.bin\\\\next.cmd lint --file src/app/quantevolver/evolution/page.tsx --file src/app/quantevolver/experiments/page.tsx -> passed with pre-existing react-hooks dependency warnings in experiments/page.tsx"
+  ],
+  "verification_run_id": "BUG-059-local-20260529T0505Z"
+}

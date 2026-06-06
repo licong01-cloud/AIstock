@@ -263,6 +263,17 @@ def get_validation_evidence(
 
 
 @router.get(
+    "/code-intelligence/summary",
+    response_model=ValidationResponse,
+    summary="Summarize warning-only CodeGraph and Understand Anything artifacts",
+)
+def get_validation_code_intelligence_summary(
+    history_store: ValidationHistoryStore = Depends(get_history_store),
+):
+    return _success(history_store.code_intelligence_summary())
+
+
+@router.get(
     "/git/workspace-status",
     response_model=ValidationResponse,
     summary="Get read-only git workspace dirty-file status",
@@ -381,6 +392,33 @@ def get_validation_issue_workflow(
     if detail is None:
         raise HTTPException(status_code=404, detail=f"validation bug not found: {bug_id}")
     return _success(detail)
+
+
+@router.get("/issues/candidates/summary", response_model=ValidationResponse, summary="Summarize issue workflow candidates")
+def get_validation_issue_candidates_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.issue_candidate_summary())
+
+
+@router.get("/issues/candidates", response_model=ValidationResponse, summary="List issue workflow candidates")
+def list_validation_issue_candidates(
+    module: str | None = Query(None),
+    severity: str | None = Query(None),
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(
+        pipeline_center.issue_candidates(
+            module=module,
+            severity=severity,
+            status=status,
+            page=page,
+            page_size=page_size,
+        )
+    )
 
 
 @router.get("/modules/detail-summary", response_model=ValidationResponse, summary="Get module quality detail summary")

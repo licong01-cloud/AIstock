@@ -1,0 +1,83 @@
+{
+  "actual": "Research Assistant BUG records BUG-152, BUG-153, BUG-154, and BUG-156 are already fixed and their GitHub issues are closed, but their BUG JSON workflow_gate fields still show open or ready_for_pr. Clean up these metadata fields with a registry-only issue so fixed records are not misread as unfinished work.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260529_BUG-152-research-assistant-chat-ui-hides-auto-executed-mcp-summary-result-cards.json",
+    "tests/aistock_validation/bugs/20260529_BUG-153-research-assistant-mcp.json",
+    "tests/aistock_validation/bugs/20260529_BUG-154-research-assistant.json",
+    "tests/aistock_validation/bugs/20260529_BUG-156-aistock-mcp-server-default-base-urls-still-fall-back-to-8011-test-port.json",
+    "tests/aistock_validation/bugs/20260529_BUG-157-research-assistant-fixed-bug-registry-workflow-gates-remain-non-final.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-157",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T07:49:00.782363Z",
+  "description": "Research Assistant BUG records BUG-152, BUG-153, BUG-154, and BUG-156 are already fixed and their GitHub issues are closed, but their BUG JSON workflow_gate fields still show open or ready_for_pr. Clean up these metadata fields with a registry-only issue so fixed records are not misread as unfinished work.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-b2d6bdc877cb",
+      "timestamp": "2026-05-29T07:49:00.782359Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Registry-only metadata cleanup scope limited to BUG-152/153/154/156 records, BUG-157 record, and allocator; no product code/runtime files are in scope.",
+      "timestamp": "2026-05-29T07:59:42Z"
+    },
+    {
+      "action": "final_metadata_cleanup",
+      "actor": "codex",
+      "note": "Removed BUG-157 residual workflow_gate after close-sync so fixed Research Assistant BUG records have no non-final workflow gate metadata.",
+      "timestamp": "2026-05-29T08:38:56Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-05-29T07:49:00.782363Z",
+  "fix_branch": null,
+  "fix_commit": "6b2fd36e3a857bac7f2839bcdf3d2662f65930fd",
+  "fixed_at": "2026-05-29T08:43:54.828866Z",
+  "github_issue_number": 362,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/362",
+  "last_seen_at": "2026-05-29T07:49:00.782363Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/367",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant fixed BUG registry workflow gates remain non-final",
+  "trigger_condition": {
+    "fingerprint": "b2d6bdc877cbd8d766156a49",
+    "source_event_id": "FE-20260529-b2d6bdc877cb"
+  },
+  "validation_evidence": [
+    "python -m json.tool tests/aistock_validation/bugs/20260529_BUG-157-research-assistant-fixed-bug-registry-workflow-gates-remain-non-final.json -> passed",
+    "Research Assistant fixed/verified BUG registry stale workflow_gate scan including allowed -> 0 stale records",
+    "git diff --check -> passed",
+    "PR #367 CI checks -> passed"
+  ],
+  "verification_run_id": null
+}

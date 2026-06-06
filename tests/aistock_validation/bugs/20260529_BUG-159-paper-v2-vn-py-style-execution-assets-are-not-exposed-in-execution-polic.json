@@ -1,0 +1,75 @@
+{
+  "actual": "GET /api/v1/execution-policy/algos returns total=5 without vn.py-style assets; GET /api/v1/execution-policy/algos/SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT returns 404; validate-for-strategy reports unknown_algo_code for SNIPER_MINIQMT; MiniQMT portfolio execution-policies is empty even though vn.py-style core assets import successfully.",
+  "allowed_write_scope": [
+    "backend/routers/execution_policy.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/trading_core/execution_algo_capabilities.py",
+    "backend/execution_algos/vnpy_style/registry.py",
+    "backend/tests/paper_trading_v2/test_execution_policy_router.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-159",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T09:53:23.316234Z",
+  "description": "GET /api/v1/execution-policy/algos returns total=5 without vn.py-style assets; GET /api/v1/execution-policy/algos/SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT returns 404; validate-for-strategy reports unknown_algo_code for SNIPER_MINIQMT; MiniQMT portfolio execution-policies is empty even though vn.py-style core assets import successfully.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-d1e70aa38b7c",
+      "timestamp": "2026-05-29T09:53:23.316230Z"
+    }
+  ],
+  "evidence_uris": [
+    "post-merge runtime check on 2026-05-29 17:49+08: backend PID 78056, main 4b62b7e4; vn.py-style core imports passed but API catalog/detail/validation rejected SNIPER_MINIQMT"
+  ],
+  "expected": "SNIPER_MINIQMT, BEST_LIMIT_MINIQMT and TWAP_LITE_MINIQMT are visible from /api/v1/execution-policy/algos and detail endpoints, validate-for-strategy accepts their contracts with the right live/tick requirements, and Paper v2 portfolio/session policy selection can surface supported assets without implicit fallback.",
+  "first_seen_at": "2026-05-29T09:53:23.316234Z",
+  "fix_branch": null,
+  "fix_commit": "3c5c600a9f34a27e774a7d34c8bfeef4573791bf",
+  "fixed_at": "2026-05-29T11:32:49.121201Z",
+  "github_issue_number": 373,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/373",
+  "last_seen_at": "2026-05-29T09:53:23.316234Z",
+  "module": "paper_v2.execution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/379",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod http://127.0.0.1:8001/api/v1/execution-policy/algos; Invoke-RestMethod http://127.0.0.1:8001/api/v1/execution-policy/algos/SNIPER_MINIQMT; POST /api/v1/execution-policy/validate-for-strategy with algo_code=SNIPER_MINIQMT",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2.execution"
+  ],
+  "title": "Paper v2 vn.py-style execution assets are not exposed in execution-policy API or portfolio selector",
+  "trigger_condition": {
+    "fingerprint": "d1e70aa38b7caf2aa97fadb2",
+    "source_event_id": "FE-20260529-d1e70aa38b7c"
+  },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "ruff check backend/routers/execution_policy.py backend/services/paper_trading_v2/service.py backend/execution_algos/vnpy_style/registry.py backend/tests/paper_trading_v2/test_execution_policy_router.py -> passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_execution_policy_router.py backend/tests/mcp/test_execution_policy_facade.py backend/tests/trading_core/test_vnpy_style_execution_assets.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py backend/tests/mcp/test_domain_modules.py::test_domain_modules_register_exact_tool_catalog backend/tests/mcp/test_profiles_registry_gateway.py::test_registry_client_applies_path_prefix_and_tracks_tool_count backend/tests/paper_trading_v2/test_day_runner.py::test_paper_execution_policy_activation_accepts_versioned_policy_that_differs_from_manifest backend/tests/paper_trading_v2/test_day_runner.py::test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trade_date_run backend/tests/paper_trading_v2/test_day_runner.py::test_paper_execution_policy_activation_rejects_existing_run backend/tests/paper_trading_v2/test_day_runner.py::test_paper_execution_policy_activation_replace_requires_explicit_reason -q -p no:cacheprovider -> 36 passed",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s paper_v2_backend -> 537 passed, 1 skipped, 2 xfailed",
+    "GitHub PR #379 checks -> 15/15 completed, all SUCCESS/SKIPPED/NEUTRAL, mergeState=CLEAN"
+  ],
+  "verification_run_id": null
+}

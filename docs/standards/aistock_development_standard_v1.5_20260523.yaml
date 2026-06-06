@@ -139,7 +139,11 @@ rules:
       include_globs:
         - backend/**/*.py
         - scripts/**/*.py
-      exclude_globs: []
+      exclude_globs:
+        - backend/tests/*.py
+        - backend/tests/**/*.py
+        - backend/**/tests/*.py
+        - backend/**/tests/**/*.py
     checker:
       type: regex
       patterns:
@@ -292,6 +296,7 @@ rules:
         - CHANGELOG.md
         - LICENSE
         - VERSION
+        - .mcp.json
         - pyproject.toml
         - package.json
         - package-lock.json

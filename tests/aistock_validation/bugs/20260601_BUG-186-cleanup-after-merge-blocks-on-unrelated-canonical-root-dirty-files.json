@@ -1,0 +1,77 @@
+{
+  "actual": "After BUG-184 source and close-sync PRs were merged, cleanup-after-merge --apply failed because canonical root contained unrelated files from another task. The cleanup flow should not restore/delete/modify unrelated root dirty files, but it should distinguish task-owned generated differences from unrelated pollution and allow safe branch/worktree cleanup when source PR and close-sync PR are already merged. Required behavior: root sync remains blocked when fast-forward is unsafe; unrelated root dirty files are reported as ignored for cleanup, not treated as files to restore; task worktrees/branches can be cleaned if they are clean and merged.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260601_BUG-186-cleanup-after-merge-blocks-on-unrelated-canonical-root-dirty-files.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-186",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T05:57:38.714701Z",
+  "description": "After BUG-184 source and close-sync PRs were merged, cleanup-after-merge --apply failed because canonical root contained unrelated files from another task. The cleanup flow should not restore/delete/modify unrelated root dirty files, but it should distinguish task-owned generated differences from unrelated pollution and allow safe branch/worktree cleanup when source PR and close-sync PR are already merged. Required behavior: root sync remains blocked when fast-forward is unsafe; unrelated root dirty files are reported as ignored for cleanup, not treated as files to restore; task worktrees/branches can be cleaned if they are clean and merged.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-29399aaa99c3",
+      "timestamp": "2026-06-01T05:57:38.714697Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Expanded scope to cleanup-after-merge implementation and workflow tests.",
+      "timestamp": "2026-06-01T06:00:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-01T05:57:38.714701Z",
+  "fix_branch": null,
+  "fix_commit": "61d40e55986fd31261ef33e3776d7100eee46df3",
+  "fixed_at": "2026-06-01T06:24:17.865046Z",
+  "github_issue_number": 461,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/461",
+  "last_seen_at": "2026-06-01T05:57:38.714701Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/462",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "cleanup-after-merge blocks on unrelated canonical root dirty files",
+  "trigger_condition": {
+    "fingerprint": "29399aaa99c3d9bddeccc1d3",
+    "source_event_id": "FE-20260601-29399aaa99c3"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k 'cleanup_after_merge or workflow_smoke' -> 11 passed, 78 deselected",
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation --output-format compact -> workflow_gate=passed, unexpected_dirty_paths=[]",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success, validation_module_registry_l0 8 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "allowed"
+}

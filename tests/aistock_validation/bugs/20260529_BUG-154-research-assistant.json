@@ -1,0 +1,88 @@
+{
+  "actual": "After BUG-153 was merged and local main synced to 1d917189, live API validation on http://127.0.0.1:8001 still returned the old Research Assistant routing behavior until backend restart. The assistant and operator UI do not expose a first-class runtime code/version visibility card or endpoint that compares the running backend code commit with local/origin main, so agents can misreport whether merged fixes are active. Add Research Assistant-scoped runtime code visibility to health/chat/UI so future validation can clearly distinguish code merged from runtime activated without restarting services automatically.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260529_BUG-154-research-assistant.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-154",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T06:00:41.123461Z",
+  "description": "After BUG-153 was merged and local main synced to 1d917189, live API validation on http://127.0.0.1:8001 still returned the old Research Assistant routing behavior until backend restart. The assistant and operator UI do not expose a first-class runtime code/version visibility card or endpoint that compares the running backend code commit with local/origin main, so agents can misreport whether merged fixes are active. Add Research Assistant-scoped runtime code visibility to health/chat/UI so future validation can clearly distinguish code merged from runtime activated without restarting services automatically.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-eb7ee568fb84",
+      "timestamp": "2026-05-29T06:00:41.123456Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope set for Research Assistant service runtime_code payload, chat UI runtime card, targeted backend/API/UI tests, and BUG registry files.",
+      "timestamp": "2026-05-29T06:08:00Z"
+    },
+    {
+      "action": "metadata_cleanup",
+      "actor": "codex",
+      "note": "BUG-157 registry-only cleanup removed stale non-final workflow_gate from fixed Research Assistant BUG record; no runtime/code behavior changed.",
+      "timestamp": "2026-05-29T07:59:42Z"
+    }
+  ],
+  "evidence_uris": [
+    "local-live-api:2026-05-29 after BUG-153 merge, running backend still returned old Research Assistant route until manual restart would occur"
+  ],
+  "expected": "Research Assistant health and chat responses expose a compact runtime_code visibility payload with loaded commit, current repo commit, origin/main commit, source match booleans, and restart-required guidance. Chat UI renders this as a human-readable runtime card without raw JSON and without restarting backend/frontend services.",
+  "first_seen_at": "2026-05-29T06:00:41.123461Z",
+  "fix_branch": null,
+  "fix_commit": "f51de331221ec6ee8be03020a2e1226b23b33f3d",
+  "fixed_at": "2026-05-29T06:39:16.650170Z",
+  "github_issue_number": 353,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/353",
+  "last_seen_at": "2026-05-29T06:00:41.123461Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/354",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "After merging a Research Assistant fix, call GET /api/v1/research-assistant/health and POST /api/v1/research-assistant/chat/turn; before this fix there was no runtime_code card to distinguish merged code from running code.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant 缺少运行时代码可见性导致合入后无法判断是否已加载新版本",
+  "trigger_condition": {
+    "fingerprint": "eb7ee568fb844297fbf07c24",
+    "source_event_id": "FE-20260529-eb7ee568fb84"
+  },
+  "validation_evidence": [
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py::test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans backend/tests/research_assistant/test_service.py::test_chat_turn_includes_runtime_code_visibility_card backend/tests/research_assistant/test_api.py::test_research_assistant_catalog_readiness_api_is_explicit backend/tests/research_assistant/test_api.py::test_research_assistant_api_phase1_smoke -q -p no:cacheprovider -> 4 passed",
+    "F:\\Dev\\AIstock\\frontend\\node_modules\\.bin\\eslint.cmd src/app/research-assistant/chat/page.tsx src/lib/research-assistant/api.ts tests/research-assistant/research-assistant.spec.ts -> passed",
+    "F:\\Dev\\AIstock\\frontend\\node_modules\\.bin\\playwright.cmd test tests/research-assistant/research-assistant.spec.ts --grep 'Codex-like LLM chat' --project=chromium -> 1 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 73 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
+  ],
+  "verification_run_id": null
+}

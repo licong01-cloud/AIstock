@@ -448,6 +448,60 @@ JSON_COLUMNS = {
     "official_rating_snapshot",
 }
 
+QE_ARCHIVE_ANALYTICS_VIEW_DEFS: dict[str, dict[str, str]] = {
+    "run_leaderboard": {
+        "view_name": "v_run_leaderboard",
+        "purpose": "Run-level signal and return/risk leaderboard.",
+        "grain": "run_id",
+    },
+    "seed_robustness": {
+        "view_name": "v_seed_robustness",
+        "purpose": "Multi-seed robustness by config fingerprint.",
+        "grain": "factor_set_hash x model_type x label_horizon x undertrain_mode x topk",
+    },
+    "factor_importance_stability": {
+        "view_name": "v_factor_importance_stability",
+        "purpose": "Factor importance stability across runs and seeds.",
+        "grain": "factor_name x method",
+    },
+    "factor_performance": {
+        "view_name": "v_factor_performance",
+        "purpose": "Factor usage and performance footprint.",
+        "grain": "factor_name",
+    },
+    "model_hyperparam_seed_perf": {
+        "view_name": "v_model_hyperparam_seed_perf",
+        "purpose": "Model hyperparameter by seed performance.",
+        "grain": "model_type x hyperparam_hash x seed",
+    },
+    "overfit_flags": {
+        "view_name": "v_overfit_flags",
+        "purpose": "Run-level overfit and seed-outlier flags.",
+        "grain": "run_id",
+    },
+    "promotion_candidates": {
+        "view_name": "v_promotion_candidates",
+        "purpose": "Stable dual-axis promotion candidate configs.",
+        "grain": "config fingerprint",
+    },
+    "evolution_lineage": {
+        "view_name": "v_evolution_lineage",
+        "purpose": "Task, loop, experiment and run lineage.",
+        "grain": "task_id x loop_index x experiment_id x run_id",
+    },
+}
+
+
+def _clamped_limit(value: int | None, *, default: int = 20, maximum: int = 100) -> int:
+    return max(1, min(int(value or default), maximum))
+
+
+def _order_by_clause(value: str | None, allowed: set[str], default: str) -> str:
+    column = str(value or default).strip().lower()
+    if column not in allowed:
+        column = default
+    return f"{column} DESC NULLS LAST"
+
 
 class QEArchiveRepository:
     """Small repository for explicit archive writes.
@@ -1805,6 +1859,314 @@ class QEArchiveRepository:
                     LEFT JOIN qe_archive.run_model_trial t ON t.run_id = r.run_id
                     {where_sql}
                     ORDER BY r.completed_at DESC NULLS LAST, r.archived_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def get_analytics_view_status(self) -> list[dict[str, Any]]:
+        """Return compact availability and row-count metadata for analytics views."""
+
+        view_names = [definition["view_name"] for definition in QE_ARCHIVE_ANALYTICS_VIEW_DEFS.values()]
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.views
+                    WHERE table_schema = 'qe_archive'
+                      AND table_name = ANY(%s)
+                    """,
+                    (view_names,),
+                )
+                existing = {str(row[0]) for row in cur.fetchall()}
+                result: list[dict[str, Any]] = []
+                for logical_name, definition in QE_ARCHIVE_ANALYTICS_VIEW_DEFS.items():
+                    view_name = definition["view_name"]
+                    item: dict[str, Any] = {
+                        "logical_name": logical_name,
+                        "view_name": view_name,
+                        "available": view_name in existing,
+                        "purpose": definition["purpose"],
+                        "grain": definition["grain"],
+                    }
+                    if view_name in existing:
+                        cur.execute(f"SELECT COUNT(*) FROM qe_archive.{view_name}")
+                        item["row_count"] = int(cur.fetchone()[0])
+                    result.append(item)
+        return result
+
+    def query_run_leaderboard(
+        self,
+        *,
+        model_type: str | None = None,
+        min_icir: float | None = None,
+        min_ir: float | None = None,
+        limit: int = 20,
+        order_by: str = "cagr",
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters: list[str] = []
+        params: list[Any] = []
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        if min_icir is not None:
+            filters.append("icir >= %s")
+            params.append(float(min_icir))
+        if min_ir is not None:
+            filters.append("information_ratio >= %s")
+            params.append(float(min_ir))
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        order_sql = _order_by_clause(
+            order_by,
+            {"cagr", "sharpe", "information_ratio", "icir", "rank_icir", "completed_at", "score_total"},
+            "cagr",
+        )
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, task_id, loop_index, experiment_id, model_type,
+                           factor_count, label_horizon, ic, icir, rank_ic, rank_icir,
+                           cagr, sharpe, information_ratio, max_drawdown, calmar,
+                           random_seed, reproducibility_level, verification_status,
+                           score_total, completed_at
+                    FROM qe_archive.v_run_leaderboard
+                    {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_seed_robustness(
+        self,
+        *,
+        model_type: str | None = None,
+        min_seed_count: int = 2,
+        stable_only: bool = False,
+        limit: int = 20,
+        order_by: str = "cagr_mean",
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters = ["distinct_seed_count >= %s"]
+        params: list[Any] = [max(1, int(min_seed_count or 2))]
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        if stable_only:
+            filters.append("is_return_stable = TRUE")
+        order_sql = _order_by_clause(
+            order_by,
+            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
+            "cagr_mean",
+        )
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
+                           topk, run_count, distinct_seed_count, random_seeds,
+                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                           icir_mean, icir_std, rank_icir_mean,
+                           is_return_stable, latest_completed_at
+                    FROM qe_archive.v_seed_robustness
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_factor_performance(
+        self,
+        *,
+        factor_name: str | None = None,
+        min_runs: int = 1,
+        limit: int = 20,
+        order_by: str = "best_cagr",
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters = ["run_count >= %s"]
+        params: list[Any] = [max(1, int(min_runs or 1))]
+        if factor_name:
+            filters.append("factor_name = %s")
+            params.append(factor_name)
+        order_sql = _order_by_clause(
+            order_by,
+            {"best_cagr", "avg_cagr", "best_sharpe", "avg_sharpe", "best_icir", "avg_icir", "run_count", "latest_used_at"},
+            "best_cagr",
+        )
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT factor_name, is_alpha158, run_count, best_cagr, avg_cagr,
+                           best_sharpe, avg_sharpe, best_icir, avg_icir, latest_used_at
+                    FROM qe_archive.v_factor_performance
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_model_hyperparam_seed_perf(
+        self,
+        *,
+        model_type: str | None = None,
+        hyperparam_hash: str | None = None,
+        limit: int = 20,
+        order_by: str = "cagr",
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters: list[str] = []
+        params: list[Any] = []
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        if hyperparam_hash:
+            filters.append("hyperparam_hash = %s")
+            params.append(hyperparam_hash)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        order_sql = _order_by_clause(
+            order_by,
+            {"cagr", "sharpe", "information_ratio", "icir", "objective_value", "completed_at"},
+            "cagr",
+        )
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT model_type, model_family, hyperparam_hash, label_horizon,
+                           random_seed, objective_name, objective_value, ic, icir,
+                           cagr, sharpe, information_ratio, max_drawdown,
+                           run_id, task_id, loop_index, completed_at
+                    FROM qe_archive.v_model_hyperparam_seed_perf
+                    {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_overfit_flags(
+        self,
+        *,
+        suspicious_only: bool = True,
+        model_type: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters: list[str] = []
+        params: list[Any] = []
+        if suspicious_only:
+            filters.append("is_suspicious = TRUE")
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, task_id, loop_index, model_type, label_horizon,
+                           random_seed, cagr, information_ratio, icir,
+                           training_failed, convergence_ratio, overfit_ratio,
+                           flag_return_without_signal, flag_undertrained_highret,
+                           flag_seed_outlier, is_suspicious
+                    FROM qe_archive.v_overfit_flags
+                    {where_sql}
+                    ORDER BY is_suspicious DESC, cagr DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_promotion_candidates(
+        self,
+        *,
+        model_type: str | None = None,
+        min_seed_count: int = 5,
+        limit: int = 20,
+        order_by: str = "cagr_mean",
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters = ["distinct_seed_count >= %s"]
+        params: list[Any] = [max(1, int(min_seed_count or 5))]
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        order_sql = _order_by_clause(
+            order_by,
+            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
+            "cagr_mean",
+        )
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
+                           topk, run_count, distinct_seed_count, random_seeds,
+                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                           icir_mean, rank_icir_mean, is_return_stable,
+                           latest_completed_at, passes_gate
+                    FROM qe_archive.v_promotion_candidates
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_evolution_lineage(
+        self,
+        *,
+        task_id: str | None = None,
+        experiment_id: str | None = None,
+        model_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit, default=50, maximum=200)
+        filters: list[str] = []
+        params: list[Any] = []
+        if task_id:
+            filters.append("task_id = %s")
+            params.append(task_id)
+        if experiment_id:
+            filters.append("experiment_id = %s")
+            params.append(experiment_id)
+        if model_type:
+            filters.append("model_type = %s")
+            params.append(model_type)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT task_id, loop_index, experiment_id, run_id, model_type,
+                           label_horizon, factor_count, ic, icir, cagr, sharpe,
+                           information_ratio, max_drawdown, random_seed, completed_at
+                    FROM qe_archive.v_evolution_lineage
+                    {where_sql}
+                    ORDER BY task_id, loop_index, completed_at DESC NULLS LAST
                     LIMIT %s
                     """,
                     params,

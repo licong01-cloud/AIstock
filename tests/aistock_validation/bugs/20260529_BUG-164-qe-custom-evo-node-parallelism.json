@@ -1,0 +1,69 @@
+{
+  "actual": "重启后恢复为串行(每次1个loop)，并行度丢失，直至任务跑完或手动 stop+resume 才恢复。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-164",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T13:21:57.062941Z",
+  "description": "重启后恢复为串行(每次1个loop)，并行度丢失，直至任务跑完或手动 stop+resume 才恢复。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-e75ebe6faa31",
+      "timestamp": "2026-05-29T13:21:57.062936Z"
+    }
+  ],
+  "evidence_uris": [
+    "task qe_20260529_135314_9b69: L1+L2/L3+L4 重启前两两并行(13:53-17:09)，约17:10重启后 L5/L6/L7 串行单跑"
+  ],
+  "expected": "后端重启后，恢复逻辑应按 task 的 execution_mode/node_parallelism 重建并行分发(semaphore)，保持配置的并行度继续执行。",
+  "first_seen_at": "2026-05-29T13:21:57.062941Z",
+  "fix_branch": null,
+  "fix_commit": "116f935a0395be93d0a8e5103d86090901e88e78",
+  "fixed_at": "2026-05-29T14:17:58.764793Z",
+  "github_issue_number": 387,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/387",
+  "last_seen_at": "2026-05-29T13:21:57.062941Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/390",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "启动 execution_mode=parallel_2 的 custom_evo 任务，运行中重启后端，观察后续 loop 变为逐个串行",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "qe_data_contract_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom_evo 任务后端重启后恢复退化为串行执行，未保留 node_parallelism 并行度",
+  "trigger_condition": {
+    "fingerprint": "e75ebe6faa310939ac93b939",
+    "source_event_id": "FE-20260529-e75ebe6faa31"
+  },
+  "validation_evidence": [
+    "python -m py_compile backend\\\\services\\\\quantevolver\\\\qe_evolution_service.py -> passed",
+    "python -m pytest backend\\\\tests\\\\unified_engine\\\\test_qe_evolution_service_unified_only.py backend\\\\tests\\\\unified_engine\\\\test_qe_node_execution.py backend\\\\tests\\\\unified_engine\\\\test_qe_custom_evo_status.py -q -> 14 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s qe_data_contract_backend -> passed",
+    "python -m nox -s qe_read_l3 -> backend/session passed; qe_read_ui env/data blocked unrelated to backend fix"
+  ],
+  "verification_run_id": null
+}

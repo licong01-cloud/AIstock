@@ -33,6 +33,13 @@ interface WatchlistItem {
   last?: number | null;
   pct_change?: number | null;
   pct_since_entry?: number | null;
+  entry_price_adjusted?: number | null;
+  entry_price_basis?: string | null;
+  entry_adjustment_factor?: number | null;
+  entry_price_basis_date?: string | null;
+  entry_price_basis_source?: string | null;
+  entry_adj_factor_date?: string | null;
+  latest_adj_factor_date?: string | null;
   open?: number | null;
   prev_close?: number | null;
   high?: number | null;
@@ -132,6 +139,8 @@ const DEFAULT_SORT_FIELD: SortBy = "updated_at";
 const DEFAULT_SORT_DIR: "asc" | "desc" = "desc";
 
 const REALTIME_HINT = "请先刷新价格";
+const WATCHLIST_ROW_HEIGHT_PX = 33;
+const WATCHLIST_HEADER_HEIGHT_PX = 38;
 
 interface NumericFilter {
   op: ">=" | "<=" | ">" | "<" | "=";
@@ -477,6 +486,7 @@ function WatchlistPage() {
   );
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const tableMinHeight = WATCHLIST_HEADER_HEIGHT_PX + Math.max(1, pageSize) * WATCHLIST_ROW_HEIGHT_PX;
   const allSelected =
     items.length > 0 && items.every((it) => selectedIds.includes(it.id));
   const someSelected =
@@ -692,8 +702,9 @@ function WatchlistPage() {
           newPctChange = ((effectivePrice - newPrevClose) / newPrevClose) * 100;
         }
         let newPctSinceEntry = item.pct_since_entry;
-        if (effectivePrice != null && effectivePrice > 0 && item.entry_price != null && item.entry_price > 0) {
-          newPctSinceEntry = ((effectivePrice - item.entry_price) / item.entry_price) * 100;
+        const basisEntryPrice = item.entry_price_adjusted ?? item.entry_price;
+        if (effectivePrice != null && effectivePrice > 0 && basisEntryPrice != null && basisEntryPrice > 0) {
+          newPctSinceEntry = ((effectivePrice - basisEntryPrice) / basisEntryPrice) * 100;
         }
         return {
           ...item,
@@ -2212,8 +2223,8 @@ function WatchlistPage() {
       >
         <div
           style={{
-            maxHeight: 520,
-            overflow: "auto",
+            minHeight: tableMinHeight,
+            overflow: "visible",
             borderRadius: 6,
             border: "1px solid #eee",
           }}
@@ -2265,6 +2276,7 @@ function WatchlistPage() {
                 >
                   分类 {sortBy === "category" && (sortDir === "asc" ? "↑" : "↓")}
                 </th>
+                <th style={{ padding: 6, textAlign: "left" }}>来源</th>
                 <th
                   style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
                   onClick={() => toggleSort("entry_rank")}
@@ -2435,14 +2447,17 @@ function WatchlistPage() {
                     </td>
                     <td style={{ padding: 6 }}>{row.name}</td>
                     <td style={{ padding: 6 }}>{row.category_names || "-"}</td>
+                    <td style={{ padding: 6 }}>{row.entry_source || "-"}</td>
                     <td data-testid={`watchlist-cell-rank-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       {row.entry_rank != null ? String(row.entry_rank) : "-"}
                     </td>
                     <td data-testid={`watchlist-cell-entry-price-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
-                      {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
+                      <span title={row.entry_price_basis === "qfq_adjusted" ? `Adjusted entry price: ${row.entry_price_adjusted?.toFixed(3) ?? "-"}; factor: ${row.entry_adjustment_factor?.toFixed(6) ?? "-"}; basis date: ${row.entry_price_basis_date ?? row.entry_adj_factor_date ?? "-"}` : "Adjustment factor unavailable; using raw entry price"}>
+                        {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
+                      </span>
                     </td>
                     <td data-testid={`watchlist-cell-entry-as-of-${row.code}`} style={{ padding: 6, color: "#6b7280" }}>
-                      {row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
+                      {row.entry_price_basis_date ? formatDate(row.entry_price_basis_date) : row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
                     </td>
                     <td style={{ padding: 6, textAlign: "right" }}>
                       {row.last != null ? row.last.toFixed(3) : "-"}

@@ -1,0 +1,104 @@
+{
+  "actual": "BUG-269 required manual CI waiting messages, gh pr checks --watch produced no timely output, the agent switched to gh pr view statusCheckRollup, and success paths still left tmp/issue_workflow/*.json plus tmp/validation/*.json artifacts.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20260605_BUG-271-issue-workflow-wastes-time-and-tokens-with-verbose-ci-polling-and-succes.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_validation_catalog_integrity.py",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/aistock_validate.py",
+    "backend/tests/test_aistock_validate_coverage.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-271",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T03:44:09.647603Z",
+  "description": "BUG-269 required manual CI waiting messages, gh pr checks --watch produced no timely output, the agent switched to gh pr view statusCheckRollup, and success paths still left tmp/issue_workflow/*.json plus tmp/validation/*.json artifacts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260605-c1dcbec77080",
+      "timestamp": "2026-06-05T03:44:09.647600Z"
+    },
+    {
+      "action": "scope_expand",
+      "actor": "codex",
+      "note": "BUG-271 needs catalog CLI compact success output; add CLI and focused test scope.",
+      "timestamp": "2026-06-05T03:30:00Z"
+    },
+    {
+      "action": "scope_expand",
+      "actor": "codex",
+      "note": "Update focused issue workflow postmortem tests for compact artifact policy.",
+      "timestamp": "2026-06-05T03:35:00Z"
+    },
+    {
+      "action": "scope_expand",
+      "actor": "codex",
+      "note": "Make coverage threshold validation compact without mandatory success snapshot files.",
+      "timestamp": "2026-06-05T03:40:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Successful issue workflows use compact CI polling through workflow commands, do not recommend gh pr checks --watch, avoid statusCheckRollup dumps, and successful local validation/postmortem paths only print PASS-style compact output unless artifacts are explicitly requested or failures need diagnostics.",
+  "first_seen_at": "2026-06-05T03:44:09.647603Z",
+  "fix_branch": null,
+  "fix_commit": "12c35edb71c8f7d6be13bd4c70cbe5893f0eb1bb",
+  "fixed_at": "2026-06-05T04:25:51.582582Z",
+  "github_issue_number": 779,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/779",
+  "last_seen_at": "2026-06-05T03:44:09.647603Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/782",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Create a small issue PR and wait for CI / close-sync; observe repeated manual polling messages and success artifacts in tmp/issue_workflow and tmp/validation.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow wastes time and tokens with verbose CI polling and success artifacts",
+  "trigger_condition": {
+    "fingerprint": "c1dcbec77080edb99d4623b9",
+    "source_event_id": "FE-20260605-c1dcbec77080"
+  },
+  "validation_evidence": [
+    "PR #782 checks passed via watch-ci; local validation passed; tmp/validation success artifacts disabled/no files"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

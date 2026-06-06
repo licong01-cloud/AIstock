@@ -1,0 +1,100 @@
+{
+  "actual": "2026-06-02 MiniQMT unattended paper run entered submit window at 09:25 but order_stock timed out after 2.0s on 301360.SZ, session stayed LIVE_WAITING_BROKER, no same-day native orders/trades were produced, and session scheduler last_result remained in_progress=true with completed_at=null. Expected behavior: MiniQMT submit timeout must be fully diagnosed, native order state must be reconciled before retry, scheduler ticks must not remain blocked, and unattended run should either recover safely or fail-fast with actionable evidence.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-198-paper-v2-miniqmt-order-submit-timeout-blocks-unattended-rebalance.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/infra/qmt_client.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/scheduler.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "tests/aistock_validation/history/paper_trading_v2/20260602_110041_l0_bug-198-miniqmt-submit-timeout-scheduler-recovery.md",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260602_113637_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-198",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "MiniQMT order submit timeout must reconcile or preserve native-order diagnostic evidence before retry/fail-fast.",
+    "Paper v2 scheduler tick must not remain in_progress indefinitely after MiniQMT broker timeout.",
+    "Regression tests must cover MiniQMT submit timeout and scheduler non-blocking completion.",
+    "MiniQMT submit-timeout diagnostics must include the generated strategy_name/order_remark and a native order/trade probe by remark before retry."
+  ],
+  "created_at": "2026-06-02T02:28:05.312639Z",
+  "description": "2026-06-02 MiniQMT unattended paper run entered submit window at 09:25 but order_stock timed out after 2.0s on 301360.SZ, session stayed LIVE_WAITING_BROKER, no same-day native orders/trades were produced, and session scheduler last_result remained in_progress=true with completed_at=null. Expected behavior: MiniQMT submit timeout must be fully diagnosed, native order state must be reconciled before retry, scheduler ticks must not remain blocked, and unattended run should either recover safely or fail-fast with actionable evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-b4174b76bc18",
+      "timestamp": "2026-06-02T02:28:05.312635Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/paper_trading_v2/20260602_110041_l0_bug-198-miniqmt-submit-timeout-scheduler-recovery.md",
+    "python -m py_compile backend/infra/qmt_client.py backend/services/paper_trading_v2/scheduler.py backend/services/paper_trading_v2/live_session.py backend/services/paper_trading_v2/broker/minqmtsim.py -> passed",
+    "pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py -q -> 41 passed",
+    "pytest backend/tests/paper_trading_v2/test_live_session.py -q -> 24 passed",
+    "pytest backend/tests/paper_trading_v2/test_session.py -q -> 27 passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "Live MiniQMT runtime validation deferred on 2026-06-02: MiniQMT client cannot log in; treated as external client/runtime blocker, not an AIstock/Paper v2 code blocker for BUG-198.",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260602_113637_l3_paper-v2-selection-center-l3-regression.md",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 566 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s validation_center_backend -> 320 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-02T02:28:05.312639Z",
+  "fix_branch": null,
+  "fix_commit": "890714ae4159fe0425aa72659b8ea979fad6d7a1",
+  "fixed_at": "2026-06-02T03:47:00.736012Z",
+  "github_issue_number": 525,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/525",
+  "last_seen_at": "2026-06-02T02:28:05.312639Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not treat test port 8012 as production evidence; production Paper v2/MiniQMT runtime checks must use port 8001 only."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/531",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "paper_v2_l3",
+    "validation_module_registry_l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 MiniQMT order submit timeout blocks unattended rebalance",
+  "trigger_condition": {
+    "fingerprint": "b4174b76bc18ebe38976fe66",
+    "source_event_id": "FE-20260602-b4174b76bc18"
+  },
+  "validation_evidence": [
+    "GitHub PR #531 checks -> 16 passed, 0 failed",
+    "pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_live_session.py backend/tests/paper_trading_v2/test_session.py -q -> 92 passed after rebase",
+    "python -m nox -s paper_v2_backend -> 566 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s validation_center_backend -> 320 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
+    "8001 read-only scheduler/qmt/auto-run status checks -> scheduler env/running/thread_alive true, qmt SIM account 62266303; live MiniQMT L5 deferred due external client login blocker"
+  ],
+  "verification_run_id": "20260602_110041_l0_bug-198-miniqmt-submit-timeout-scheduler-recovery",
+  "workflow_gate": "validation_passed"
+}

@@ -377,6 +377,53 @@ def apply_baseline_status(findings: list[Finding], baseline_fingerprints: set[st
     return classified
 
 
+def _finding_scope(file_path: str) -> str:
+    path_key = file_path.replace("\\", "/").lstrip("/")
+    if path_key.startswith("./"):
+        path_key = path_key[2:]
+    lower_path = path_key.lower()
+
+    if "/catalog/" in lower_path or lower_path.startswith("catalog/"):
+        return "config_or_metadata"
+    if lower_path.startswith(("backend/tests/", "frontend/tests/", "tests/")):
+        return "test_or_validation"
+    if lower_path == "noxfile.py" or lower_path.startswith(("scripts/", ".github/workflows/")):
+        return "runtime_or_pipeline"
+    if lower_path.startswith("frontend/src/"):
+        return "frontend_runtime"
+    if lower_path.startswith("backend/"):
+        return "runtime_or_pipeline"
+    if lower_path.startswith("docs/") or lower_path.endswith(".md"):
+        return "docs_or_historical"
+    if lower_path.startswith(".github/") or lower_path.endswith((".json", ".yaml", ".yml", ".toml")):
+        return "config_or_metadata"
+    return "other"
+
+
+def _scope_summary(findings: list[Finding]) -> dict[str, Any]:
+    by_scope: dict[str, int] = {}
+    by_scope_and_severity: dict[str, dict[str, int]] = {}
+    runtime_rules: dict[str, int] = {}
+    for finding in findings:
+        scope = _finding_scope(finding.file)
+        by_scope[scope] = by_scope.get(scope, 0) + 1
+        severity_counts = by_scope_and_severity.setdefault(scope, {})
+        severity_counts[finding.severity] = severity_counts.get(finding.severity, 0) + 1
+        if scope == "runtime_or_pipeline":
+            runtime_rules[finding.rule_id] = runtime_rules.get(finding.rule_id, 0) + 1
+    return {
+        "by_scope": dict(sorted(by_scope.items())),
+        "by_scope_and_severity": {
+            scope: dict(sorted(counts.items(), key=lambda item: item[0]))
+            for scope, counts in sorted(by_scope_and_severity.items())
+        },
+        "top_runtime_or_pipeline_rules": [
+            {"rule_id": rule_id, "count": count}
+            for rule_id, count in sorted(runtime_rules.items(), key=lambda item: (-item[1], item[0]))[:10]
+        ],
+    }
+
+
 def summarize(findings: list[Finding]) -> dict[str, Any]:
     by_severity: dict[str, int] = {}
     by_rule: dict[str, int] = {}
@@ -387,12 +434,16 @@ def summarize(findings: list[Finding]) -> dict[str, Any]:
         by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
         by_category[finding.category] = by_category.get(finding.category, 0) + 1
         by_baseline_status[finding.baseline_status] = by_baseline_status.get(finding.baseline_status, 0) + 1
+    scope_summary = _scope_summary(findings)
     return {
         "total_findings": len(findings),
         "by_severity": dict(sorted(by_severity.items(), key=lambda item: item[0])),
         "by_rule": dict(sorted(by_rule.items())),
         "by_category": dict(sorted(by_category.items())),
         "by_baseline_status": dict(sorted(by_baseline_status.items())),
+        "by_scope": scope_summary["by_scope"],
+        "by_scope_and_severity": scope_summary["by_scope_and_severity"],
+        "top_runtime_or_pipeline_rules": scope_summary["top_runtime_or_pipeline_rules"],
     }
 
 
@@ -469,6 +520,26 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
     )
     for severity in ("P0", "P1", "P2", "P3"):
         lines.append(f"| {severity} | {summary['by_severity'].get(severity, 0)} |")
+    lines.extend(
+        [
+            "",
+            "## Summary By Scope",
+            "",
+            "| Scope | Count | P0 | P1 | P2 | P3 |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for scope, count in summary["by_scope"].items():
+        severity_counts = summary["by_scope_and_severity"].get(scope, {})
+        lines.append(
+            f"| `{scope}` | {count} | "
+            f"{severity_counts.get('P0', 0)} | {severity_counts.get('P1', 0)} | "
+            f"{severity_counts.get('P2', 0)} | {severity_counts.get('P3', 0)} |"
+        )
+    if summary["top_runtime_or_pipeline_rules"]:
+        lines.extend(["", "## Top Runtime Or Pipeline Rules", "", "| Rule | Count |", "|---|---:|"])
+        for item in summary["top_runtime_or_pipeline_rules"]:
+            lines.append(f"| `{item['rule_id']}` | {item['count']} |")
     lines.extend(["", "## Summary By Rule", "", "| Rule | Count |", "|---|---:|"])
     for rule_id, count in summary["by_rule"].items():
         lines.append(f"| `{rule_id}` | {count} |")

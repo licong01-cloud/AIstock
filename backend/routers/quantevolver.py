@@ -663,9 +663,8 @@ def list_factors(
         # 保留 TASK 原始指标（ic/sharpe/annualized_return）和独立指标（ind_*）同时返回
         # 前端自行决定展示优先级，不在后端覆盖
 
-        # 合并因子值缓存信息：
-        # - rdagent_assets/factor_values         回测缓存
-        # - rdagent_assets/factor_values_realtime 官方评估/实盘快照缓存
+        # 合并 QE 回测因子值缓存信息。
+        # factor_values_realtime 属于快照/官方评估链路，不能作为 QE 回测缓存兜底。
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
@@ -1883,6 +1882,14 @@ def get_multi_alpha_results(experiment_id: str):
                 ),
             )
 
+        unified_backtest = {}
+        if isinstance(lifecycle.get("unified_backtest"), dict):
+            unified_backtest = lifecycle["unified_backtest"]
+        elif isinstance(multi_detail.get("unified_backtest"), dict):
+            unified_backtest = multi_detail["unified_backtest"]
+        backtest_loop_id = lifecycle.get("backtest_loop_id") or unified_backtest.get("loop_id")
+        primary_node_id = lifecycle.get("primary_node_id") or unified_backtest.get("primary_node_id")
+
         return {
             "ok": True,
             "experiment_id": experiment_id,
@@ -1891,6 +1898,9 @@ def get_multi_alpha_results(experiment_id: str):
             "stage": lifecycle.get("stage") or ("completed" if ready else exp_status),
             "artifact_status": lifecycle.get("artifact_status") or ("ready" if ready else "pending"),
             "artifact_errors": lifecycle.get("errors", []),
+            "backtest_loop_id": backtest_loop_id,
+            "primary_node_id": primary_node_id,
+            "unified_backtest": unified_backtest or None,
             "groups": groups,
             "meta_weights_history": meta_history,
             "multi_alpha_analysis": result_metrics.get("multi_alpha_analysis") if isinstance(result_metrics, dict) else None,
@@ -3208,21 +3218,12 @@ def regenerate_experiment(experiment_id: str):
 FACTOR_CACHE_ROOT = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values"
 FACTOR_CACHE_SINGLE_DIR = FACTOR_CACHE_ROOT / "single"
 FACTOR_CACHE_META_PATH = FACTOR_CACHE_ROOT / "_meta.json"
-FACTOR_CACHE_REALTIME_ROOT = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values_realtime"
-FACTOR_CACHE_REALTIME_SINGLE_DIR = FACTOR_CACHE_REALTIME_ROOT / "single"
-FACTOR_CACHE_REALTIME_META_PATH = FACTOR_CACHE_REALTIME_ROOT / "_meta.json"
 FACTOR_CACHE_SOURCE_SPECS: Tuple[Dict[str, Any], ...] = (
     {
         "key": "backtest",
-        "label": "回测缓存",
+        "label": "QE回测缓存",
         "single_dir": FACTOR_CACHE_SINGLE_DIR,
         "meta_path": FACTOR_CACHE_META_PATH,
-    },
-    {
-        "key": "realtime_snapshot",
-        "label": "官方快照",
-        "single_dir": FACTOR_CACHE_REALTIME_SINGLE_DIR,
-        "meta_path": FACTOR_CACHE_REALTIME_META_PATH,
     },
 )
 FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
@@ -3233,16 +3234,22 @@ BACKFILL_SCRIPT_WSL = os.getenv(
 FACTOR_CACHE_TASK_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_tasks"
 
 
-def _get_all_factors_with_code_text() -> list:
-    """从 DB 查询所有有 code_text 的因子（含 RDAgent API fallback）。
+def _is_realtime_factor_cache_path(path_value: Any) -> bool:
+    if not path_value:
+        return False
+    normalized = str(path_value).strip().strip("\"'").replace("\\", "/").rstrip("/")
+    return any(part.lower() == "factor_values_realtime" for part in normalized.split("/") if part)
 
-    查询所有 is_available=true 的因子，不预过滤 code_text，
-    对 code_text 为 NULL 的 rdagent_task_sync 因子通过 API 补全。
+
+def _get_all_factors_with_code_text() -> list:
+    """从因子库查询所有有 code_text 的因子。
+
+    QE 回测因子代码的唯一权威来源是 aistock_factor_catalog.code_text。
+    不在运行时回连 RDAgent API 补源码，避免历史实验删除或格式差异
+    导致同名因子的缓存 hash 不稳定。
     """
     from ..db.pg_pool import get_conn
-    from ..services.quantevolver.config_composer import ConfigComposer
 
-    cc = ConfigComposer()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -3254,35 +3261,15 @@ def _get_all_factors_with_code_text() -> list:
             cols = [d[0] for d in cur.description]
             results = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-    # 已有 code_text 的直接保留
-    has_code = [r for r in results if r.get("code_text")]
-    # code_text 为 NULL 但有 RDAgent task_id 的因子，通过 API 获取
-    needs_api = [
-        r for r in results
-        if not r.get("code_text")
-        and r.get("source") == "rdagent_task_sync"
-        and r.get("best_loop_task_run_id")
-    ]
-    api_failures: list[str] = []
-    for r in needs_api:
-        try:
-            source_code = cc._fetch_factor_source_from_api(r["best_loop_task_run_id"], r["factor_name"])
-            if source_code:
-                r["code_text"] = source_code
-                has_code.append(r)
-            else:
-                api_failures.append(r["factor_name"])
-        except Exception as e:
-            logger.warning(f"获取因子源码失败 {r['factor_name']}: {e}")
-            api_failures.append(r["factor_name"])
-
-    if api_failures:
+    missing_code = [r["factor_name"] for r in results if not r.get("code_text")]
+    if missing_code:
         logger.warning(
-            f"[factor-cache] {len(api_failures)} 个因子 code_text 为空且 API 获取失败，跳过: "
-            f"{api_failures[:10]}"
+            "[factor-cache] %s 个可用因子缺少因子库 code_text，跳过 QE 回测缓存计算: %s",
+            len(missing_code),
+            missing_code[:10],
         )
 
-    return has_code
+    return [r for r in results if r.get("code_text")]
 
 # 当前运行中的后台任务
 _active_cache_tasks: Dict[str, Dict[str, Any]] = {}
@@ -3354,14 +3341,20 @@ def _collect_factor_cache_candidates(
     factor_name: str,
     source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
 ) -> List[Dict[str, Any]]:
-    """Collect cache candidates from all authoritative factor-value cache roots.
+    """Collect QE backtest cache candidates.
 
-    The factor list must not let a failed backtest-cache attempt hide a valid
-    official/realtime snapshot cache for the same factor.
+    factor_values_realtime is intentionally ignored even if a caller passes it
+    through source_specs. Missing QE backtest cache must recompute, not fallback
+    to snapshot/official caches.
     """
     candidates: List[Dict[str, Any]] = []
     specs = source_specs or FACTOR_CACHE_SOURCE_SPECS
     for spec in specs:
+        if spec.get("key") != "backtest":
+            continue
+        if _is_realtime_factor_cache_path(spec.get("single_dir")) or _is_realtime_factor_cache_path(spec.get("meta_path")):
+            logger.warning("[factor-cache] ignore realtime cache path in QE backtest specs: %s", spec)
+            continue
         meta_path = Path(spec["meta_path"])
         single_dir = Path(spec["single_dir"])
         meta = _load_cache_meta(meta_path=meta_path)
@@ -3458,8 +3451,8 @@ def _read_file_from_path(path_str: Optional[str]) -> Tuple[Optional[str], Option
 def _get_current_factor_code_hashes(factor_names: List[str]) -> Dict[str, str]:
     """计算因子当前代码的 hash。
 
-    优先使用 DB code_text（与缓存写入时一致），
-    仅当 DB 无 code_text 时 fallback 到 qe_code_path 文件。
+    QE 回测只以因子库 code_text 为权威来源；不 fallback 到
+    qe_code_path 或 RDAgent API，避免展示层 hash 与实际回测代码源漂移。
     """
     if not factor_names:
         return {}
@@ -3470,16 +3463,12 @@ def _get_current_factor_code_hashes(factor_names: List[str]) -> Dict[str, str]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT factor_name, qe_code_path, code_text FROM aistock_factor_catalog WHERE factor_name IN ({placeholders})",
+                f"SELECT factor_name, code_text FROM aistock_factor_catalog WHERE factor_name IN ({placeholders})",
                 factor_names,
             )
-            for factor_name, qe_code_path, code_text in cur.fetchall():
+            for factor_name, code_text in cur.fetchall():
                 if code_text:
                     code_hashes[factor_name] = _hl.sha256(code_text.encode("utf-8")).hexdigest()[:16]
-                else:
-                    file_text, _, _ = _read_file_from_path(qe_code_path)
-                    if file_text:
-                        code_hashes[factor_name] = _hl.sha256(file_text.encode("utf-8")).hexdigest()[:16]
     return code_hashes
 
 
@@ -3515,12 +3504,12 @@ def factor_cache_stats():
                 cached_files.extend(single_dir.glob("*.parquet"))
         total_size = sum(f.stat().st_size for f in cached_files)
 
-        # 代码因子总数 + 可用/禁用因子名集合（从 DB 查询）
+        # 代码因子总数 + 可用/禁用因子名集合（从因子库 code_text 查询）
         db_available_names: set = set()
         db_disabled_names: set = set()
         total_code_factors = 0
         total_disabled_factors = 0
-        # 当前代码 hash：优先 qe_code_path 文件，DB code_text 仅作后备
+        # 当前代码 hash：仅使用因子库 code_text
         db_code_hashes: Dict[str, str] = {}
         try:
             from ..db.pg_pool import get_conn
@@ -3668,12 +3657,10 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # ── 从 DB 获取原始 code_text ──
+    # ── 从因子库获取 QE 回测权威 code_text ──
     if req.factor_names:
-        # 指定因子名 → 用 _get_factors_info (含 RDAgent API fallback)
         factors_info = cc._get_factors_info(req.factor_names)
     else:
-        # 全量 → 用 _get_all_factors_with_code_text (含 API fallback)
         factors_info = _get_all_factors_with_code_text()
 
     factors_code = {}
@@ -6543,12 +6530,26 @@ async def get_experiment_run_status(experiment_id: str):
                 except Exception:
                     lifecycle_source = {}
             lifecycle = lifecycle_source.get("multi_alpha_lifecycle") if isinstance(lifecycle_source, dict) else None
+            detail_source = lifecycle_source.get("multi_alpha_detail") if isinstance(lifecycle_source, dict) else None
             if isinstance(lifecycle, dict):
                 multi_alpha_status["stage"] = lifecycle.get("stage", multi_alpha_status["stage"])
                 multi_alpha_status["artifact_status"] = lifecycle.get(
                     "artifact_status", multi_alpha_status["artifact_status"]
                 )
                 multi_alpha_status["artifact_errors"] = lifecycle.get("errors", [])
+                if lifecycle.get("backtest_loop_id"):
+                    multi_alpha_status["backtest_loop_id"] = lifecycle.get("backtest_loop_id")
+                if lifecycle.get("primary_node_id"):
+                    multi_alpha_status["primary_node_id"] = lifecycle.get("primary_node_id")
+                if isinstance(lifecycle.get("unified_backtest"), dict):
+                    multi_alpha_status["unified_backtest"] = lifecycle.get("unified_backtest")
+            elif isinstance(detail_source, dict) and isinstance(detail_source.get("unified_backtest"), dict):
+                unified_backtest = detail_source["unified_backtest"]
+                multi_alpha_status["unified_backtest"] = unified_backtest
+                if unified_backtest.get("loop_id"):
+                    multi_alpha_status["backtest_loop_id"] = unified_backtest.get("loop_id")
+                if unified_backtest.get("primary_node_id"):
+                    multi_alpha_status["primary_node_id"] = unified_backtest.get("primary_node_id")
             result["multi_alpha"] = multi_alpha_status
             result["multi_alpha_stage"] = multi_alpha_status["stage"]
             result["artifact_status"] = multi_alpha_status["artifact_status"]
@@ -6585,6 +6586,15 @@ async def get_experiment_run_status(experiment_id: str):
                         )
                         fresh_multi_alpha_status["stage"] = "completed"
                         fresh_multi_alpha_status["artifact_status"] = "ready"
+                        result_metrics = result["result_metrics"] if isinstance(result["result_metrics"], dict) else {}
+                        lifecycle = result_metrics.get("multi_alpha_lifecycle") if isinstance(result_metrics, dict) else None
+                        if isinstance(lifecycle, dict):
+                            if lifecycle.get("backtest_loop_id"):
+                                fresh_multi_alpha_status["backtest_loop_id"] = lifecycle.get("backtest_loop_id")
+                            if lifecycle.get("primary_node_id"):
+                                fresh_multi_alpha_status["primary_node_id"] = lifecycle.get("primary_node_id")
+                            if isinstance(lifecycle.get("unified_backtest"), dict):
+                                fresh_multi_alpha_status["unified_backtest"] = lifecycle.get("unified_backtest")
                         result["multi_alpha"] = fresh_multi_alpha_status
                         _archive_experiment_best_effort(experiment_id)
                     except Exception as me:

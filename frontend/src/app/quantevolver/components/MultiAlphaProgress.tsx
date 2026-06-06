@@ -13,6 +13,13 @@ interface GroupStatus {
   error_message?: string | null;
 }
 
+interface UnifiedBacktestStatus {
+  loop_id?: string | null;
+  primary_node_id?: string | null;
+  elapsed_seconds?: number | null;
+  artifact_status?: string | null;
+}
+
 interface MultiAlphaProgressProps {
   experimentId: string;
   apiBase: string;
@@ -52,6 +59,7 @@ export default function MultiAlphaProgress({
   const [stage, setStage] = useState<string>("pending_setup");
   const [artifactStatus, setArtifactStatus] = useState<string>("not_started");
   const [artifactErrors, setArtifactErrors] = useState<string[]>([]);
+  const [unifiedBacktest, setUnifiedBacktest] = useState<UnifiedBacktestStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -72,10 +80,21 @@ export default function MultiAlphaProgress({
           : Array.isArray(lifecycle.artifact_errors)
             ? lifecycle.artifact_errors
             : [];
+        const nextBacktest =
+          lifecycle.unified_backtest && typeof lifecycle.unified_backtest === "object"
+            ? lifecycle.unified_backtest
+            : lifecycle.backtest_loop_id
+              ? {
+                  loop_id: lifecycle.backtest_loop_id,
+                  primary_node_id: lifecycle.primary_node_id,
+                  artifact_status: nextArtifact,
+                }
+              : null;
 
         setStage(nextStage);
         setArtifactStatus(nextArtifact);
         setArtifactErrors(nextErrors);
+        setUnifiedBacktest(nextBacktest);
 
         if (Array.isArray(lifecycle.groups) && lifecycle.groups.length > 0) {
           setGroups(lifecycle.groups);
@@ -101,6 +120,9 @@ export default function MultiAlphaProgress({
           if (data.stage) setStage(data.stage);
           if (data.artifact_status) setArtifactStatus(data.artifact_status);
           if (Array.isArray(data.artifact_errors)) setArtifactErrors(data.artifact_errors);
+          if (data.unified_backtest && typeof data.unified_backtest === "object") {
+            setUnifiedBacktest(data.unified_backtest);
+          }
           failCount = 0;
           setFetchError(null);
         }
@@ -209,6 +231,18 @@ export default function MultiAlphaProgress({
                 : `等待 ${Math.max(groups.length - completedCount, 0)} 个组完成`}
         </span>
       </div>
+      {unifiedBacktest?.loop_id && (
+        <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+          <span className="font-medium">统一回测 run-id：</span>
+          <span className="font-mono">{unifiedBacktest.loop_id}</span>
+          {unifiedBacktest.primary_node_id && (
+            <span className="ml-2 text-emerald-700">节点 {unifiedBacktest.primary_node_id}</span>
+          )}
+          {typeof unifiedBacktest.elapsed_seconds === "number" && (
+            <span className="ml-2 text-emerald-700">{unifiedBacktest.elapsed_seconds}s</span>
+          )}
+        </div>
+      )}
 
       {/* Multi-node log stream */}
       <div className="mt-2">

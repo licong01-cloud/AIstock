@@ -73,6 +73,17 @@ LIVE_SESSION_TZ = ZoneInfo("Asia/Shanghai")
 STK_LIMIT_PREOPEN_READY_DEADLINE = time(9, 14)
 FINAL_ORDER_STATUSES = {OrderStatus.FILLED.value, OrderStatus.CANCELLED.value, OrderStatus.REJECTED.value}
 MINIQMT_RETRYABLE_DATA_ERRORS = (DataUnavailableError, ArtifactGenerationFailedError, HMMRuntimeUnavailableError)
+MINIQMT_PLATFORM_DATA_RETRY_AFTER_SECONDS = 600.0
+MINIQMT_PLATFORM_DATA_RETRY_EVENTS = {
+    "MINIQMT_LIVE_WAITING_PLATFORM_DATA",
+    "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED",
+}
+MINIQMT_BROKER_RETRY_AFTER_SECONDS = 120.0
+MINIQMT_BROKER_RETRY_EVENTS = {
+    "MINIQMT_LIVE_WAITING_BROKER",
+    "MINIQMT_LIVE_BROKER_RETRY_THROTTLED",
+}
+MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS = 90.0
 
 
 class PaperTradingLiveMinuteExecutor:
@@ -417,6 +428,42 @@ class PaperTradingLiveMinuteExecutor:
 
         existing = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
         if existing is not None:
+            stale_empty_run = self._miniqmt_stale_empty_active_run_context(
+                session=session,
+                run=existing,
+                local_as_of=local_as_of,
+            )
+            if stale_empty_run is not None:
+                if self._miniqmt_is_before_final_cutoff(session, local_as_of):
+                    reset_counts = self.repository.reset_portfolio_runs(
+                        portfolio_id=session.portfolio_id,
+                        start_date=trade_date,
+                        end_date=trade_date,
+                    )
+                    self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                    self.repository.save_session_event(
+                        session_id=session.session_id,
+                        event_type="MINIQMT_LIVE_STALE_EMPTY_RUN_RESET",
+                        message="stale MiniQMT active run had no persisted broker orders; reset run slot for before-cutoff retry",
+                        context={
+                            **stale_empty_run,
+                            "reset_counts": reset_counts,
+                            "broker_backend": portfolio.broker_backend,
+                        },
+                    )
+                    existing = None
+                else:
+                    return self._mark_minqmt_day_cutoff_failed(
+                        session,
+                        trade_date=trade_date,
+                        as_of_time=local_as_of,
+                        reason={
+                            "error_code": "MINIQMT_LIVE_STALE_EMPTY_RUN_AFTER_CUTOFF",
+                            "message": "MiniQMT live run stalled before broker order persistence and final cutoff has passed",
+                            "context": stale_empty_run,
+                        },
+                    )
+        if existing is not None:
             if existing.status == RunStatus.SUCCEEDED:
                 self.day_helper.reconcile_minqmt_native_run(
                     portfolio=portfolio,
@@ -533,6 +580,35 @@ class PaperTradingLiveMinuteExecutor:
                 },
             )
 
+        retry_throttle = self._miniqmt_platform_data_retry_throttle_context(
+            session=session,
+            trade_date=trade_date,
+            local_as_of=local_as_of,
+        )
+        if retry_throttle is not None:
+            return self._save_minqmt_waiting_status(
+                session,
+                trade_date=trade_date,
+                status=PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+                event_type="MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED",
+                message="MiniQMT live session is throttling repeated platform-data/live-inference retry",
+                context=retry_throttle,
+            )
+        broker_retry_throttle = self._miniqmt_broker_retry_throttle_context(
+            session=session,
+            trade_date=trade_date,
+            local_as_of=local_as_of,
+        )
+        if broker_retry_throttle is not None:
+            return self._save_minqmt_waiting_status(
+                session,
+                trade_date=trade_date,
+                status=PaperSessionStatus.LIVE_WAITING_BROKER,
+                event_type="MINIQMT_LIVE_BROKER_RETRY_THROTTLED",
+                message="MiniQMT live session is throttling repeated broker submit retry",
+                context=broker_retry_throttle,
+            )
+
         self.repository.save_session_event(
             session_id=session.session_id,
             event_type="MINIQMT_LIVE_TICK_STARTED",
@@ -565,13 +641,25 @@ class PaperTradingLiveMinuteExecutor:
                     end_date=trade_date,
                 )
                 self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                retry_after_seconds = self._miniqmt_broker_retry_after_seconds(session)
+                next_retry_not_before = local_as_of + timedelta(seconds=retry_after_seconds)
                 return self._save_minqmt_waiting_status(
                     session,
                     trade_date=trade_date,
                     status=PaperSessionStatus.LIVE_WAITING_BROKER,
                     event_type="MINIQMT_LIVE_WAITING_BROKER",
                     message="MiniQMT live session is waiting for broker connectivity before final cutoff",
-                    context={"trade_date": trade_date.isoformat(), "as_of_time": local_as_of.isoformat(), "reason": exc.to_dict()},
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "as_of_time": local_as_of.isoformat(),
+                        "reason": exc.to_dict(),
+                        "broker_retry": {
+                            "retry_after_seconds": retry_after_seconds,
+                            "next_retry_not_before": next_retry_not_before.isoformat(),
+                            "retry_policy": "bounded_broker_retry_after_native_reconcile",
+                            "native_order_reconcile_required": True,
+                        },
+                    },
                 )
             raise
         except MINIQMT_RETRYABLE_DATA_ERRORS as exc:
@@ -582,13 +670,26 @@ class PaperTradingLiveMinuteExecutor:
                     end_date=trade_date,
                 )
                 self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                retry_after_seconds = self._miniqmt_platform_data_retry_after_seconds(session)
+                next_retry_not_before = local_as_of + timedelta(seconds=retry_after_seconds)
                 return self._save_minqmt_waiting_status(
                     session,
                     trade_date=trade_date,
                     status=PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
                     event_type="MINIQMT_LIVE_WAITING_PLATFORM_DATA",
                     message="MiniQMT live session is waiting for platform data or HMM cache before final cutoff",
-                    context={"trade_date": trade_date.isoformat(), "as_of_time": local_as_of.isoformat(), "reason": exc.to_dict()},
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "as_of_time": local_as_of.isoformat(),
+                        "reason": exc.to_dict(),
+                        "platform_data_retry": {
+                            "retry_after_seconds": retry_after_seconds,
+                            "next_retry_not_before": next_retry_not_before.isoformat(),
+                            "retry_policy": "bounded_platform_data_retry",
+                            "sql_storm_guard": True,
+                            "selection_artifact_expected_phase": "pre_submit_or_cached",
+                        },
+                    },
                 )
             raise
         self.repository.save_session_day(
@@ -713,6 +814,176 @@ class PaperTradingLiveMinuteExecutor:
         policy = self._miniqmt_trade_window_policy(session)
         final_cutoff = self._parse_policy_time(policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff")
         return local_as_of.time() <= final_cutoff
+
+    def _miniqmt_platform_data_retry_throttle_context(
+        self,
+        *,
+        session: PaperTradingSession,
+        trade_date: date,
+        local_as_of: datetime,
+    ) -> dict[str, Any] | None:
+        for event in reversed(self.repository.list_session_events(session.session_id, limit=500)):
+            event_type = str(event.get("event_type") or "")
+            if event_type not in MINIQMT_PLATFORM_DATA_RETRY_EVENTS:
+                continue
+            context = event.get("context") or {}
+            if not isinstance(context, dict) or context.get("trade_date") != trade_date.isoformat():
+                continue
+            retry_context = context.get("platform_data_retry") or {}
+            if not isinstance(retry_context, dict):
+                return None
+            next_retry = self._parse_minqmt_retry_not_before(retry_context.get("next_retry_not_before"))
+            if next_retry is None or local_as_of >= next_retry:
+                return None
+            return {
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "reason": context.get("reason") if isinstance(context.get("reason"), dict) else None,
+                "previous_event_type": event_type,
+                "platform_data_retry": {
+                    **retry_context,
+                    "throttled": True,
+                    "retry_allowed": False,
+                    "current_time": local_as_of.isoformat(),
+                },
+            }
+        return None
+
+    def _miniqmt_broker_retry_throttle_context(
+        self,
+        *,
+        session: PaperTradingSession,
+        trade_date: date,
+        local_as_of: datetime,
+    ) -> dict[str, Any] | None:
+        for event in reversed(self.repository.list_session_events(session.session_id, limit=500)):
+            event_type = str(event.get("event_type") or "")
+            if event_type not in MINIQMT_BROKER_RETRY_EVENTS:
+                continue
+            context = event.get("context") or {}
+            if not isinstance(context, dict) or context.get("trade_date") != trade_date.isoformat():
+                continue
+            retry_context = context.get("broker_retry") or {}
+            if not isinstance(retry_context, dict):
+                return None
+            next_retry = self._parse_minqmt_retry_not_before(retry_context.get("next_retry_not_before"))
+            if next_retry is None or local_as_of >= next_retry:
+                return None
+            return {
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "reason": context.get("reason") if isinstance(context.get("reason"), dict) else None,
+                "previous_event_type": event_type,
+                "broker_retry": {
+                    **retry_context,
+                    "throttled": True,
+                    "retry_allowed": False,
+                    "current_time": local_as_of.isoformat(),
+                },
+            }
+        return None
+
+    def _miniqmt_platform_data_retry_after_seconds(self, session: PaperTradingSession) -> float:
+        policy = self._miniqmt_trade_window_policy(session)
+        raw = policy.get("platform_data_retry_after_seconds", policy.get("live_inference_retry_after_seconds"))
+        if raw is None:
+            return MINIQMT_PLATFORM_DATA_RETRY_AFTER_SECONDS
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise SessionConfigError(
+                "MiniQMT platform_data_retry_after_seconds must be numeric",
+                context={"platform_data_retry_after_seconds": raw},
+            ) from exc
+        if seconds < 1:
+            raise SessionConfigError(
+                "MiniQMT platform_data_retry_after_seconds must be at least 1 second",
+                context={"platform_data_retry_after_seconds": raw},
+            )
+        return seconds
+
+    def _miniqmt_broker_retry_after_seconds(self, session: PaperTradingSession) -> float:
+        policy = self._miniqmt_trade_window_policy(session)
+        raw = policy.get("broker_retry_after_seconds")
+        if raw is None:
+            return MINIQMT_BROKER_RETRY_AFTER_SECONDS
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise SessionConfigError(
+                "MiniQMT broker_retry_after_seconds must be numeric",
+                context={"broker_retry_after_seconds": raw},
+            ) from exc
+        if seconds < 1:
+            raise SessionConfigError(
+                "MiniQMT broker_retry_after_seconds must be at least 1 second",
+                context={"broker_retry_after_seconds": raw},
+            )
+        return seconds
+
+    @classmethod
+    def _parse_minqmt_retry_not_before(cls, raw: Any) -> datetime | None:
+        if raw in (None, ""):
+            return None
+        try:
+            return cls._local_session_time(datetime.fromisoformat(str(raw)))
+        except ValueError:
+            return None
+
+    def _miniqmt_stale_empty_active_run_context(
+        self,
+        *,
+        session: PaperTradingSession,
+        run: PaperRun,
+        local_as_of: datetime,
+    ) -> dict[str, Any] | None:
+        if run.status != RunStatus.RUNNING:
+            return None
+        orders = self.repository.list_orders_for_run(run.run_id)
+        states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
+        if orders or states:
+            return None
+        run_events = self.repository.list_run_events(session.portfolio_id, run_id=run.run_id, limit=500)
+        event_types = [str(item.get("event_type") or "") for item in run_events]
+        if "MINIQMT_ORDER_SUBMISSION_SEQUENCE" not in event_types:
+            return None
+        submit_evidence = {
+            "MINIQMT_ORDER_SUBMITTED",
+            "MINIQMT_ORDER_SUBMIT_FAILED",
+            "MINIQMT_VNPY_STYLE_EXECUTION_STARTED",
+            "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED",
+            "MINIQMT_NATIVE_RUN_RECONCILED",
+            "RUN_SUCCEEDED",
+            "RUN_FAILED",
+        }
+        if any(event_type in submit_evidence for event_type in event_types):
+            return None
+        age_seconds = self._miniqmt_active_run_age_seconds(run, local_as_of)
+        if age_seconds < MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS:
+            return None
+        return {
+            "run_id": run.run_id,
+            "trade_date": run.trade_date.isoformat(),
+            "run_started_at": run.started_at.isoformat(),
+            "as_of_time": local_as_of.isoformat(),
+            "age_seconds": age_seconds,
+            "stale_after_seconds": MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS,
+            "order_count": len(orders),
+            "order_execution_state_count": len(states),
+            "run_event_types": event_types,
+            "last_run_event_type": event_types[-1] if event_types else None,
+            "recovery_action": "reset_run_slot_and_retry_before_cutoff",
+        }
+
+    @staticmethod
+    def _miniqmt_active_run_age_seconds(run: PaperRun, local_as_of: datetime) -> float:
+        started = run.started_at
+        if started.tzinfo is not None:
+            started = started.astimezone(LIVE_SESSION_TZ).replace(tzinfo=None)
+        current = local_as_of
+        if current.tzinfo is not None:
+            current = current.astimezone(LIVE_SESSION_TZ).replace(tzinfo=None)
+        return max(0.0, (current - started).total_seconds())
 
     @staticmethod
     def _miniqmt_trade_window_policy(session: PaperTradingSession) -> dict[str, Any]:

@@ -17,6 +17,9 @@ class ModuleRegistry:
     mcp: Any
     base_url: str
     env_name: str = "AISTOCK_MCP_BASE_URL"
+    server_name: str = "aistock-gateway"
+    profile: str | None = None
+    selected_modules: tuple[str, ...] = ()
     timeout: float | None = None
     unwrap_data: bool = False
     transport: httpx.BaseTransport | None = None

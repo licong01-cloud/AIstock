@@ -19,6 +19,10 @@ function asArray(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.filter((item): item is JsonObject => typeof item === "object" && item !== null && !Array.isArray(item)) : [];
 }
 
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
 function obj(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : {};
 }
@@ -98,6 +102,18 @@ function SortHeader({
       {label} {isActive ? (direction === "asc" ? "↑" : "↓") : "↕"}
     </button>
   );
+}
+
+const EXECUTION_WARNING_LABELS: Record<string, string> = {
+  fill_detail_scope_is_not_full_run: "成交明细不是全量 run，可能只覆盖本次新增成交",
+  missing_broker_reported_fee: "存在成交缺少 MiniQMT 返回的费用字段，当前用费率模型估算",
+  rejected_order_missing_diagnostic: "存在拒单缺少柜台原始诊断，需要补日志或检查历史订单",
+  non_terminal_orders_remain: "仍有未终态订单，需要继续观察或处理",
+};
+
+function flagLabel(flag: unknown): string {
+  const key = String(flag || "");
+  return EXECUTION_WARNING_LABELS[key] || key || "-";
 }
 
 function packageName(dashboard: PaperLiveDashboard | null): string {
@@ -187,6 +203,13 @@ export default function PaperV2LiveDashboardPage() {
   const target = obj(dashboard?.target_rebalance);
   const minute = obj(dashboard?.minute_execution);
   const minuteSummary = obj(minute.summary);
+  const executionQuality = dashboard?.execution_quality || null;
+  const executionReport = executionQuality?.latest_report || null;
+  const executionSummary = obj(executionReport?.summary);
+  const diagnosticCoverage = obj(executionSummary.diagnostic_coverage);
+  const attentionOrders = asArray(executionReport?.orders_requiring_attention);
+  const costWarnings = asArray(executionQuality?.warnings);
+  const reportWarnings = asStringArray(executionSummary.warning_flags);
   const freshness = obj(dashboard?.data_freshness);
   const scheduler = obj(dashboard?.scheduler);
   const snapshot = latestSnapshot(dashboard);
@@ -329,6 +352,53 @@ export default function PaperV2LiveDashboardPage() {
             { key: "reason", header: "原因", render: (row) => asText(row.reason_label) },
           ]}
         />
+      </SectionCard>
+
+      <SectionCard
+        title="MiniQMT 执行质量与成本对账"
+        eyebrow={executionReport ? `${asText(executionReport.trade_date)} / run ${shortHash(executionReport.run_id)}` : "等待 MiniQMT run 生成报告"}
+        action={<StatusBadge status={executionReport ? "AVAILABLE" : "MISSING"} />}
+      >
+        {executionReport ? (
+          <>
+            <div className="pv2-grid pv2-grid-4">
+              <MetricCard label="成交完成率" value={formatPercent(executionSummary.fill_rate_by_quantity)} hint={`${formatNumber(executionSummary.filled_quantity, 0)} / ${formatNumber(executionSummary.ordered_quantity, 0)} 股`} tone={num(executionSummary.fill_rate_by_quantity) >= 1 ? "success" : "warning"} />
+              <MetricCard label="券商费用" value={formatNumber(executionSummary.broker_reported_fee_total, 2)} hint="MiniQMT 返回聚合费用" />
+              <MetricCard label="估算费用" value={formatNumber(executionSummary.estimated_fee_total, 2)} hint={`差异 ${formatNumber(executionSummary.cost_reconciliation_delta_bps, 2)} bps`} tone={Math.abs(num(executionSummary.cost_reconciliation_delta_bps)) <= 1 ? "success" : "warning"} />
+              <MetricCard label="加权滑点" value={formatNumber(executionSummary.weighted_slippage_bps, 2)} hint="相对订单意图价格，单位 bps" tone={Math.abs(num(executionSummary.weighted_slippage_bps)) <= 10 ? "success" : "warning"} />
+            </div>
+            <NoticePanel title="费用口径说明" tone="info">
+              MiniQMT 当前只按成交记录提供聚合费用；佣金、印花税、过户费拆分为 AIstock 费率模型估算，不当作券商确认字段。
+            </NoticePanel>
+            <div className="pv2-chip-row" style={{ marginBottom: 12 }}>
+              <span className="pv2-chip">诊断覆盖 {formatNumber(diagnosticCoverage.orders_with_diagnostic, 0)} / {formatNumber(diagnosticCoverage.orders_requiring_diagnostic, 0)}</span>
+              <span className="pv2-chip">成交金额 {formatNumber(executionSummary.trade_amount_total, 2)}</span>
+              <span className="pv2-chip">报告来源 {asText(executionQuality?.latest_record?.source?.source_type)}</span>
+              <span className="pv2-chip">明细范围 {asText(executionSummary.fill_detail_scope)}</span>
+            </div>
+            {reportWarnings.length ? (
+              <NoticePanel title="执行质量预警" tone="warning">
+                {reportWarnings.map((item, index) => <span key={index}>{flagLabel(item)}{index < reportWarnings.length - 1 ? "；" : ""}</span>)}
+              </NoticePanel>
+            ) : null}
+            <PaperTable
+              rows={attentionOrders.slice(0, 20)}
+              empty="暂无需要关注的订单。"
+              columns={[
+                { key: "symbol", header: "股票", render: (row) => <SymbolCell row={row} /> },
+                { key: "side", header: "方向", render: (row) => sideLabel(row.side) },
+                { key: "status", header: "状态", render: (row) => <StatusBadge status={String(row.status || "-")} /> },
+                { key: "qty", header: "数量", render: (row) => `${formatNumber(row.filled_quantity, 0)} / ${formatNumber(row.quantity, 0)}` },
+                { key: "raw", header: "柜台状态", render: (row) => asText(row.broker_raw_status) },
+                { key: "msg", header: "诊断", render: (row) => asText(row.broker_status_msg || row.broker_rejection_reason) },
+              ]}
+            />
+          </>
+        ) : (
+          <NoticePanel title="暂未找到执行质量报告" tone="warning">
+            {costWarnings.length ? costWarnings.map((item, index) => <span key={index}>{asText(item.message)}{index < costWarnings.length - 1 ? "；" : ""}</span>) : "MiniQMT 模拟盘完成一次订单对账后，会在日快照与 run event 中生成只读报告。"}
+          </NoticePanel>
+        )}
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">

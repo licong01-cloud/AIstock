@@ -24,6 +24,48 @@ permissions:
   pull-requests: write
 
 jobs:
+  classify-changes:
+    name: Classify CI changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend_required: ${{ steps.classify.outputs.backend_required }}
+      close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
+      workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
+      classification: ${{ steps.classify.outputs.classification }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build changed-file list
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/ci_change_classifier
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
+          fi
+          cat tmp/validation/ci_change_classifier/changed_files.txt
+
+      - name: Classify CI lane
+        id: classify
+        run: |
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+            --output-json tmp/validation/ci_change_classifier/summary.json
+
+      - name: Upload CI change-classifier artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-change-classifier
+          path: tmp/validation/ci_change_classifier/
+          if-no-files-found: ignore
+
   static-gate:
     name: Static gate (l0 + module registry)
     runs-on: windows-latest
@@ -63,7 +105,8 @@ jobs:
 
   backend-tests:
     name: Backend tests (${{ matrix.session }})
-    needs: static-gate
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.backend_required != 'false'
     # ubuntu-latest is required because GitHub-hosted Windows runners do NOT
     # support `services:` containers (pg_isready / docker daemon are absent).
     # All current backend nox sessions are pure Python + a postgres URL, so
@@ -148,10 +191,44 @@ jobs:
             tmp/coverage/
           if-no-files-found: ignore
 
+  workflow-validation-tests:
+    name: Workflow validation fast lane
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.workflow_validation_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install workflow validation deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest ruff nox requests
+
+      - name: Run focused workflow validation tests
+        run: |
+          python -m pytest \
+            backend/tests/scripts/test_ci_change_classifier.py \
+            backend/tests/scripts/test_issue_flow.py \
+            backend/tests/scripts/test_aistock_issue_workflow.py \
+            backend/tests/scripts/test_ci_failure_issue_summary.py \
+            backend/tests/scripts/test_code_intelligence_adapter.py \
+            -q -p no:cacheprovider
+
   failure-bug-register:
     name: Auto-register CI failures as BUGs
-    needs: backend-tests
-    if: failure() && github.event_name == 'pull_request'
+    needs: [backend-tests, workflow-validation-tests]
+    # Keep this job green/no-op when backend tests pass or are intentionally
+    # skipped, so PR check summaries do not report a skipped registrar as
+    # another failure. The failure path below still comments when backend
+    # tests actually fail.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -159,39 +236,109 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - name: No backend failure to register
+        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' }}
+        run: |
+          echo "backend-tests result: ${{ needs.backend-tests.result }}"
+          echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
+          echo "No CI failure BUG registration required."
 
-      - name: Note pending bug-register tooling
+      - uses: actions/checkout@v4
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
+
+      - name: Build CI failure issue context
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          echo "::notice::Backend tests failed on PR ${PR_NUMBER}. Run: ${RUN_URL}"
-          echo "Stage 5 will add scripts/ci_register_failure_as_bug.py to convert this notice into a tests/aistock_validation/bugs/ JSON automatically."
-          echo "Until then, treat the failure as the canonical signal and decide whether to file a BUG manually via MCP report_bug or via the bug_report issue template."
+          mkdir -p tmp/validation/ci_failure_issue
+          python scripts/ci_failure_issue_summary.py \
+            --repo "${{ github.repository }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${RUN_URL}" \
+            --severity "P1" \
+            --source-name "AIstock CI" \
+            --branch "${{ github.head_ref || github.ref_name }}" \
+            --commit "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --log-attempts 3 \
+            --log-wait-seconds 10 \
+            --output tmp/validation/ci_failure_issue/summary.json \
+            --markdown-output tmp/validation/ci_failure_issue/body.md \
+            --context-output tmp/validation/ci_failure_issue/context-pack.json \
+            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
+            --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json
 
-      - name: Comment on PR
+      - name: Upload CI failure issue context
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-ci-failure-issue-context
+          path: tmp/validation/ci_failure_issue/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update CI failure issue
+        if: ${{ (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure') && hashFiles('tmp/validation/ci_failure_issue/github-issue-payload.json') != '' }}
         uses: actions/github-script@v7
         with:
           script: |
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
-              '### CI failure detected',
+            const fs = require('fs');
+            const payload = JSON.parse(fs.readFileSync('tmp/validation/ci_failure_issue/github-issue-payload.json', 'utf8'));
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: payload.dedupe.search_query,
+              per_page: 1,
+            });
+            let issueNumber = null;
+            if (search.data.items.length) {
+              issueNumber = search.data.items[0].number;
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: payload.recurrence_comment,
+              });
+              core.info(`Existing issue #${issueNumber} already tracks fingerprint ${payload.dedupe.fingerprint}.`);
+            } else {
+              try {
+                const created = await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: payload.title,
+                  body: payload.body,
+                  labels: payload.labels,
+                });
+                issueNumber = created.data.number;
+                core.info(`Created issue #${issueNumber}.`);
+              } catch (error) {
+                if (error.status !== 422) {
+                  throw error;
+                }
+                core.warning(`Could not apply labels (${payload.labels.join(', ')}); retrying without labels.`);
+                const created = await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: payload.title,
+                  body: payload.body,
+                });
+                issueNumber = created.data.number;
+                core.info(`Created issue #${issueNumber} without labels.`);
+              }
+            }
+            const routingBody = [
+              '### CI failure issue routed',
               '',
-              `Backend tests failed on this PR. Failed run: [${context.runId}](${runUrl})`,
+              `Backend tests failed on this PR. Diagnostic issue: #${issueNumber}`,
               '',
-              'Auto bug registration is scheduled for Stage 5. For now, please:',
-              '',
-              '1. Review the failed matrix job(s) and decide if this is a real regression.',
-              '2. If yes, file a bug via `aistock-validation/report_bug` MCP tool, or use',
-              '   `.github/ISSUE_TEMPLATE/bug_report.md` and mirror it into',
-              '   `tests/aistock_validation/bugs/` per the bug registry workflow doc.',
-              '3. Link the new BUG-NNN here so reviewers can route the fix.',
+              'Use generated context artifact pr-ci-failure-issue-context and run: '
+                + `python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber} `
+                + 'before promoting to BUG JSON.',
             ].join('\n');
             await github.rest.issues.createComment({
+              owner,
+              repo,
               issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body,
+              body: routingBody,
             });

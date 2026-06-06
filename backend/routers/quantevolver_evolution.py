@@ -40,6 +40,7 @@ from ..services.quantevolver.experiment_config import (
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.seed_contract import ensure_loop_fixed_seed, raise_http_seed_error
+from ..services.quantevolver.payload_summary import derive_position_summary_from_enhanced_metrics
 from ..services.quantevolver.node_execution import (
     QENodePreflightError,
     get_compute_node,
@@ -73,6 +74,16 @@ def _position_metric_missing(enhanced_metrics: Dict[str, Any]) -> bool:
     )
 
 
+def _normalize_rdagent_loop_id(task_id: str, loop_id: str) -> str:
+    raw = str(loop_id or "").strip()
+    if raw.startswith(task_id + "_"):
+        raw = raw[len(task_id) + 1:]
+    if raw.isdigit():
+        return f"Loop{int(raw)}"
+    if raw.lower().startswith("loop") and raw[4:].isdigit():
+        return f"Loop{int(raw[4:])}"
+    return raw
+
 
 def _augment_enhanced_metrics_with_positions(
     task_id: str,
@@ -83,14 +94,24 @@ def _augment_enhanced_metrics_with_positions(
     if not isinstance(enhanced_metrics, dict) or not _position_metric_missing(enhanced_metrics):
         return enhanced_metrics, False
 
-    logger.debug(
-        "Skipping local QE position enrichment for %s/%s(loop_index=%s); "
-        "worker artifacts must be provided by DB cache or node API",
-        task_id,
-        loop_id,
-        loop_index,
-    )
-    return enhanced_metrics, False
+    position_summary = derive_position_summary_from_enhanced_metrics(enhanced_metrics)
+    if not position_summary:
+        logger.debug(
+            "QE position enrichment unavailable for %s/%s(loop_index=%s); "
+            "enhanced metrics do not include enough compact trade evidence",
+            task_id,
+            loop_id,
+            loop_index,
+        )
+        return enhanced_metrics, False
+
+    enriched = dict(enhanced_metrics)
+    existing = enriched.get("position_summary") if isinstance(enriched.get("position_summary"), dict) else {}
+    next_position = {**existing, **{k: v for k, v in position_summary.items() if v is not None}}
+    if next_position == existing:
+        return enhanced_metrics, False
+    enriched["position_summary"] = next_position
+    return enriched, True
 
 def _cache_loop_enhanced_metrics(task_id: str, loop_id: str, metrics_json: Dict[str, Any]) -> None:
     with get_conn() as conn:
@@ -600,12 +621,13 @@ async def list_evolution_tasks(
     detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回大 JSON；full 保留旧完整字段"),
     status: str | None = Query(None, description="Optional status filter (e.g. completed, running, failed)"),
     limit: int = Query(50, ge=1, le=200, description="Maximum tasks to return"),
+    offset: int = Query(0, ge=0, description="Tasks to skip before returning the current page"),
 ):
     """
     从数据库中读取所有 qe_evolution_tasks。默认 summary，避免 MCP/列表返回大 JSON。
     """
     try:
-        tasks = await scheduler.get_all_tasks(detail=detail, status=status, limit=limit)
+        tasks = await scheduler.get_all_tasks(detail=detail, status=status, limit=limit, offset=offset)
         return {"status": "success", "data": tasks, "detail": detail}
     except Exception as e:
         logger.error(f"Failed to list evolution tasks: {str(e)}")
@@ -1156,6 +1178,7 @@ class CustomEvoLoopConfig(BaseModel):
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
     runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")
+    ensemble: Optional[Dict[str, Any]] = Field(None, description="Optional deterministic seed ensemble: enabled, seeds, level, agg")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
     filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
@@ -1762,7 +1785,8 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
         # 优先从 DB 缓存读取（loop 已完成或失败时数据已写入）
         from ..db.pg_pool import get_conn
         import json as _json
-        evolution_loop_db_id = f"{task_id}_{loop_id}"
+        rdagent_loop_id = _normalize_rdagent_loop_id(task_id, loop_id)
+        evolution_loop_db_id = f"{task_id}_{rdagent_loop_id}"
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1774,17 +1798,14 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
             cached = row[0] if isinstance(row[0], dict) else _json.loads(row[0])
             cached_em = cached.get("enhanced_metrics")
             if cached_em:
-                loop_index = int(loop_id.replace("Loop", "")) if loop_id.startswith("Loop") and loop_id[4:].isdigit() else None
-                cached_em, changed = _augment_enhanced_metrics_with_positions(task_id, loop_id, loop_index, cached_em)
+                loop_index = int(rdagent_loop_id.replace("Loop", "")) if rdagent_loop_id.startswith("Loop") and rdagent_loop_id[4:].isdigit() else None
+                cached_em, changed = _augment_enhanced_metrics_with_positions(task_id, rdagent_loop_id, loop_index, cached_em)
                 if changed:
                     cached["enhanced_metrics"] = cached_em
-                    _cache_loop_enhanced_metrics(task_id, loop_id, cached)
+                    _cache_loop_enhanced_metrics(task_id, rdagent_loop_id, cached)
                 return {"status": "success", "data": cached_em}
 
-        # DB 中 loop_id 格式为 "{task_id}_{LoopN}"，RDAgent 文件系统期望 "LoopN"
-        rdagent_loop_id = loop_id
-        if loop_id.startswith(task_id + "_"):
-            rdagent_loop_id = loop_id[len(task_id) + 1:]
+        # DB stores loop_id as "{task_id}_LoopN" while RD-Agent expects "LoopN".
         client = scheduler._get_workspace_client_for_loop(task_id, evolution_loop_db_id)
         data = await client.get_enhanced_metrics(task_id, rdagent_loop_id)
         loop_index = int(rdagent_loop_id.replace("Loop", "")) if rdagent_loop_id.startswith("Loop") and rdagent_loop_id[4:].isdigit() else None

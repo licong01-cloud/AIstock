@@ -112,3 +112,29 @@ def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys) -> None:
     assert json.loads(output_json.read_text(encoding="utf-8"))["workflow_gate"] == "blocked"
     assert "AIstock Runner Health" in output_md.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["schema_version"] == "aistock_runner_health_v1"
+
+
+def test_resolve_github_token_prefers_env_over_gh(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_RUNNER_HEALTH_TOKEN", "runner-token")
+    monkeypatch.setenv("GH_TOKEN", "gh-token")
+
+    token, source = health.resolve_github_token()
+
+    assert token == "runner-token"
+    assert source == "AISTOCK_RUNNER_HEALTH_TOKEN"
+
+
+def test_resolve_github_token_uses_gh_auth_fallback(monkeypatch) -> None:
+    for name in ("AISTOCK_RUNNER_HEALTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    class Result:
+        returncode = 0
+        stdout = "fallback-token\n"
+
+    monkeypatch.setattr(health.subprocess, "run", lambda *args, **kwargs: Result())
+
+    token, source = health.resolve_github_token()
+
+    assert token == "fallback-token"
+    assert source == "gh_auth_token"

@@ -1,0 +1,102 @@
+{
+  "actual": "After the unified MCP natural-language backend is available, the Research Assistant UI must present summary-first MCP result cards and a clear capability catalog instead of hiding routed MCP summaries, showing raw JSON, or making users guess which MCP tools are available. The implementation should follow the unified MCP orchestration design, keep payloads summary-first, and validate the real UI against 3000/8001 without restarting production services.",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/src/lib/research-assistant/ui-copy.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "frontend/src/components/research-assistant/AssistantShared.tsx",
+    "frontend/src/app/research-assistant/layout.tsx",
+    "frontend/src/app/research-assistant/research-assistant.css",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-165-research-assistant-ui-should-present-summary-first-mcp-cards-and-capabil.json"
+  ],
+  "assigned_agent": "Codex",
+  "bug_id": "BUG-165",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T13:44:57.684481Z",
+  "description": "After the unified MCP natural-language backend is available, the Research Assistant UI must present summary-first MCP result cards and a clear capability catalog instead of hiding routed MCP summaries, showing raw JSON, or making users guess which MCP tools are available. The implementation should follow the unified MCP orchestration design, keep payloads summary-first, and validate the real UI against 3000/8001 without restarting production services.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-c49ebacce3f3",
+      "timestamp": "2026-05-29T13:44:57.684476Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Triaged BUG-165 as Research Assistant UI/MCP catalog fix; allowed scope limited to Research Assistant frontend/test files plus BUG metadata.",
+      "timestamp": "2026-05-29T13:55:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added Research Assistant layout and dedicated CSS so the UI no longer depends on Paper v2 shell/components for the MCP catalog slice.",
+      "timestamp": "2026-05-29T14:10:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Research Assistant UI, backend, MCP contract, l0, TypeScript, diff whitespace, and BUG JSON validation passed locally without touching production runtime or DB.",
+      "timestamp": "2026-05-29T14:25:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> passed (7 Playwright tests, Chromium)",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (79 backend tests, 26 MCP contract tests, l0 success with 0 blocking findings)",
+    "cd frontend && npx tsc --noEmit --pretty false -> passed",
+    "git diff --check -> passed",
+    "python -m json.tool BUG-165 JSON and .bug_id_allocator.json -> passed"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-05-29T13:44:57.684481Z",
+  "fix_branch": "bug/registry-research-assistant-research-assistant-ui-should-prese-20260529-3f7cae",
+  "fix_commit": "60a2d9a7be1974e027b8f86158d0e615ac39c278",
+  "fixed_at": "2026-05-29T15:00:27.653656Z",
+  "github_issue_number": 389,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/389",
+  "last_seen_at": "2026-05-29T13:44:57.684481Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/396",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant UI should present summary-first MCP cards and capability catalog clearly",
+  "trigger_condition": {
+    "fingerprint": "c49ebacce3f36c40186e5b3a",
+    "source_event_id": "FE-20260529-c49ebacce3f3"
+  },
+  "validation_evidence": [
+    "python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> passed (7 Playwright tests, Chromium, after rebase to origin/main 3c2dc2ce)",
+    "cd frontend && npx tsc --noEmit --pretty false -> passed (after rebase)",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (79 backend tests, 26 MCP contract tests, l0 success with 0 blocking findings after rebase)",
+    "git diff --check -> passed",
+    "python -m json.tool BUG-165 JSON and .bug_id_allocator.json -> passed"
+  ],
+  "verification_run_id": "BUG-165-local-validation-20260529T1425Z",
+  "workflow_gate": "allowed",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\registry-research-assistant-research-assistant-ui-should-prese-20260529-3f7cae"
+}

@@ -66,6 +66,7 @@ class DiagnosticsReport:
     data_availability: dict[str, Any] = field(default_factory=dict)
     ic_quality: dict[str, Any] = field(default_factory=dict)
     optimization_guidance: list[dict[str, Any]] = field(default_factory=list)
+    unified_backtest: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Service ───────────────────────────────────────────────────────────
@@ -99,6 +100,7 @@ class MultiAlphaDiagnostics:
             data_availability=analysis.get("data_availability") or {},
             ic_quality=analysis.get("ic_quality") or {},
             optimization_guidance=analysis.get("optimization_guidance") or [],
+            unified_backtest=meta_info.get("unified_backtest") or {},
         )
         return {"ok": True, "diagnostics": asdict(report)}
 
@@ -247,6 +249,8 @@ class MultiAlphaDiagnostics:
             meta_info["execution_mode"] = unified.get("execution_mode")
         if unified.get("combined_ic") is not None and meta_info.get("combined_ic") is None:
             meta_info["combined_ic"] = unified.get("combined_ic")
+        if unified.get("unified_backtest"):
+            meta_info["unified_backtest"] = unified.get("unified_backtest")
 
         correlations = self._load_correlations(experiment_id)
         if not correlations:
@@ -367,12 +371,20 @@ class MultiAlphaDiagnostics:
         result_metrics = self._parse_jsonish(result_metrics_raw) or {}
         multi_alpha_config = self._parse_jsonish(multi_alpha_config_raw) or {}
         detail = result_metrics.get("multi_alpha_detail") or {}
+        lifecycle = result_metrics.get("multi_alpha_lifecycle") or {}
         nested_enhanced = result_metrics.get("enhanced_metrics") or {}
         if not isinstance(nested_enhanced, dict):
             nested_enhanced = {}
+        if not isinstance(lifecycle, dict):
+            lifecycle = {}
         analysis = result_metrics.get("multi_alpha_analysis") or nested_enhanced.get("multi_alpha_analysis") or {}
         if not isinstance(analysis, dict):
             analysis = {}
+        unified_backtest = detail.get("unified_backtest") if isinstance(detail, dict) else {}
+        if not isinstance(unified_backtest, dict) or not unified_backtest:
+            unified_backtest = lifecycle.get("unified_backtest") or {}
+        if not isinstance(unified_backtest, dict):
+            unified_backtest = {}
         return {
             "status": status,
             "multi_detail": detail,
@@ -381,6 +393,7 @@ class MultiAlphaDiagnostics:
             "combined_ic": detail.get("combined_ic") if detail else result_metrics.get("IC"),
             "correlations": detail.get("group_correlations") or {},
             "analysis": analysis,
+            "unified_backtest": unified_backtest,
         }
 
     def _build_groups_from_unified(self, unified: dict[str, Any]) -> list[GroupMetrics]:

@@ -1,0 +1,34 @@
+nox > Running session ra_phase6_qe_autonomy
+nox > git diff --check
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe -m py_compile backend/services/research_assistant/qe_autonomy/__init__.py backend/services/research_assistant/qe_autonomy/models.py backend/services/research_assistant/qe_autonomy/providers.py backend/services/research_assistant/qe_autonomy/guards.py backend/services/research_assistant/qe_autonomy/runtime.py backend/services/research_assistant/qe_autonomy/adapter.py backend/services/research_assistant/agent_teams/models.py backend/services/research_assistant/agent_teams/runtime.py backend/services/research_assistant/service.py backend/services/research_assistant/repository.py
+nox > python -m pytest backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py backend/tests/research_assistant/test_qe_autonomous_loop.py backend/tests/research_assistant/test_qe_autonomy_default_disabled.py backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py backend/tests/research_assistant/test_qe_autonomy_budget_guard.py backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py backend/tests/research_assistant/test_qe_autonomy_determinism.py backend/tests/research_assistant/test_core_no_adapter_import.py -q -p no:cacheprovider
+......................                                                   [100%]
+22 passed in 17.46s
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json --fail-on-warning
+{
+  "schema_version": "aistock_validation_catalog_integrity_v1",
+  "generated_at": "2026-06-02T05:41:24.629092+00:00",
+  "repo_root": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602",
+  "state": "passed",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0,
+    "finding_count": 0,
+    "plans": 44,
+    "runner_enabled_plans": 27,
+    "modules": 74,
+    "ui_targets": 50,
+    "file_ownership_rules": 66,
+    "resource_policies": 9,
+    "nox_sessions": 55,
+    "workflow_nox_sessions": 15,
+    "production_8001_touched": false,
+    "production_db_touched": false
+  },
+  "findings": []
+}
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_module_ownership_scan.py --output-json tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.json --summary-md tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.md --fail-on-unmapped --fail-on-ambiguous backend/db/migrations/ra_upgrade/003_qe_autonomy.sql backend/db/init_research_assistant_schema_20260521.py backend/services/research_assistant/qe_autonomy/__init__.py backend/services/research_assistant/qe_autonomy/models.py backend/services/research_assistant/qe_autonomy/providers.py backend/services/research_assistant/qe_autonomy/guards.py backend/services/research_assistant/qe_autonomy/runtime.py backend/services/research_assistant/qe_autonomy/adapter.py backend/services/research_assistant/agent_teams/models.py backend/services/research_assistant/agent_teams/runtime.py backend/services/research_assistant/service.py backend/services/research_assistant/repository.py configs/research_assistant/agent_teams.yaml configs/research_assistant/runtime_context.yaml backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py backend/tests/research_assistant/test_qe_autonomous_loop.py backend/tests/research_assistant/test_qe_autonomy_default_disabled.py backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py backend/tests/research_assistant/test_qe_autonomy_budget_guard.py backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py backend/tests/research_assistant/test_qe_autonomy_determinism.py backend/tests/research_assistant/test_qe_autonomy_fakes.py backend/tests/research_assistant/test_core_no_adapter_import.py tests/aistock_validation/history/research_assistant/20260602_ra_phase6_qe_autonomy_validation.md tests/aistock_validation/catalog/test_plans.yaml tests/aistock_validation/catalog/module_registry.yaml tests/aistock_validation/catalog/file_ownership.yaml backend/services/validation/plan_catalog.py noxfile.py
+Module ownership scan completed: files=33, mapped=33, unmapped=0, ambiguous=0
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_guardrail_scan.py --changed-only --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1 --output-json tmp/validation/guardrails/ra_phase6_qe_autonomy.json --summary-md tmp/validation/guardrails/ra_phase6_qe_autonomy.md
+Guardrail scan completed: mode=changed_only, files=4, findings=0, blocking=0
+nox > Session ra_phase6_qe_autonomy was successful in 22 seconds.

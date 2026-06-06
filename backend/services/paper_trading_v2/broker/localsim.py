@@ -26,7 +26,7 @@ parallel portfolios per process.
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date as date_cls, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
@@ -36,6 +36,7 @@ from backend.services.paper_trading_v2.market_data import (
     PaperV2MinuteMarketDataProvider,
     assert_broker_market_source_match,
 )
+from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
@@ -45,6 +46,7 @@ from backend.services.trading_core.errors import (
     ExecutionAlgoError,
     InvalidStateTransitionError,
     RiskRuleError,
+    RuntimeConfigInvalidError,
     TradingCoreError,
 )
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
@@ -124,6 +126,7 @@ class LocalSimBackend(BrokerBackend):
         oms: OMS | None = None,
         execution_engine: MinuteExecutionEngine | None = None,
         fee_model: FeeModel | None = None,
+        execution_policy: Mapping[str, Any] | None = None,
         initial_available_cash: float | None = None,
         initial_positions: Mapping[str, PositionLot] | None = None,
     ) -> None:
@@ -139,6 +142,10 @@ class LocalSimBackend(BrokerBackend):
         self._portfolio_id = portfolio_id
         self._package_id = package_id or manifest.package_id
         self._manifest = manifest
+        self._execution_policy = self._resolve_execution_policy(
+            manifest=manifest,
+            execution_policy=execution_policy,
+        )
         self._data_source = data_source
         self._market_data_provider = market_data_provider or PaperV2MinuteMarketDataProvider()
         self._oms = oms or OMS()
@@ -233,11 +240,11 @@ class LocalSimBackend(BrokerBackend):
                 final_order, fills, events = self._execution_engine.execute_order(
                     order=order,
                     minute_bars=market_input.minute_bars,
-                    algo_code=self._manifest.minute_execution_policy.algo_code,
-                    algo_config=dict(self._manifest.minute_execution_policy.algo_config or {}),
+                    algo_code=str(self._execution_policy["algo_code"]),
+                    algo_config=dict(self._execution_policy.get("algo_config") or {}),
                     market_context=market_input.market_context,
                     allow_partial_fill=bool(
-                        (self._manifest.minute_execution_policy.algo_config or {}).get(
+                        (self._execution_policy.get("algo_config") or {}).get(
                             "allow_partial_fill", True
                         )
                     ),
@@ -484,8 +491,32 @@ class LocalSimBackend(BrokerBackend):
             )
 
     def _algo_requires_day_features(self) -> bool:
-        algo_code = str(self._manifest.minute_execution_policy.algo_code or "").strip().upper()
+        algo_code = str(self._execution_policy.get("algo_code") or "").strip().upper()
         return algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
+
+    @staticmethod
+    def _resolve_execution_policy(
+        *,
+        manifest: StrategyPackageManifest,
+        execution_policy: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if execution_policy:
+            payload = dict(execution_policy)
+            policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
+            return normalize_execution_policy_json(dict(policy_json))
+
+        minute_policy = getattr(manifest, "minute_execution_policy", None)
+        if minute_policy is not None:
+            return normalize_execution_policy_json(minute_policy.model_dump(mode="json"))
+
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution requires a validated execution policy snapshot",
+            context={
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "manifest_version": manifest.manifest_version,
+            },
+        )
 
     def _build_status(self, handle_id: str, order: Order) -> OrderHandleStatus:
         state = _ORDER_STATUS_TO_HANDLE_STATE.get(order.status)

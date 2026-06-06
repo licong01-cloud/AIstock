@@ -34,7 +34,7 @@ from backend.services.simulation_runtime import (
     TradingRuleService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide, PositionLot
 
 
@@ -380,7 +380,7 @@ def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
         ),
     )
 
-    with pytest.raises(StrategyPackageValidationError):
+    with pytest.raises(RuntimeConfigInvalidError):
         ExecutionPlanCompiler().compile_plan(
             runtime_release=release,
             binding=binding,
@@ -449,6 +449,11 @@ class FakeLocalSimBroker:
             submitted_at=datetime.now(UTC),
             intent_id=intent.intent_id,
         )
+
+
+class FailingLocalSimBroker:
+    def submit_order_intent(self, intent):  # noqa: ANN001
+        raise RuntimeError(f"local submit failed for {intent.intent_id}")
 
 
 class FakeManagedOrderBroker:
@@ -639,3 +644,66 @@ def test_lifecycle_no_rebalance_does_not_call_broker_and_marks_success() -> None
     assert result.intent_count == 0
     assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
     assert result.run.run_payload_json["no_rebalance_required"] is True
+
+
+def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
+    release, binding, repo = _release_binding_repo()
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    build = orchestrator.build_execution_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=_evidence(release),
+        signal_snapshot=_snapshot(),
+        current_positions={},
+        portfolio_id="portfolio_shared",
+    )
+
+    with pytest.raises(RuntimeError, match="local submit failed"):
+        orchestrator.submit_execution_plan(
+            build_result=build,
+            local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+        )
+
+    latest = repo.get_simulation_daily_run(build.run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest.run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_SUBMIT_FAILED"
+
+
+def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
+    release, binding, repo = _release_binding_repo()
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    build = orchestrator.build_execution_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=_evidence(release),
+        signal_snapshot=_snapshot(),
+        current_positions={},
+        portfolio_id="portfolio_shared",
+    )
+
+    with pytest.raises(RuntimeError, match="local submit failed"):
+        orchestrator.submit_execution_plan(
+            build_result=build,
+            local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+        )
+
+
+    failed = repo.get_simulation_daily_run(build.run.run_id)
+    assert failed.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "submit_failure" in failed.run_payload_json
+
+    result = orchestrator.submit_persisted_execution_plan(
+        run=failed,
+        binding=binding,
+        execution_plan=build.execution_plan,
+        local_broker=FakeLocalSimBroker(),  # type: ignore[arg-type]
+    )
+
+    latest = repo.get_simulation_daily_run(build.run.run_id)
+    assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert result.run.run_payload_json["submitted_intents"] == len(build.execution_plan.intents)
+    assert result.run.run_payload_json["last_stage"] == "SUCCEEDED"
+    assert result.run.run_payload_json["broker_called"] is True
+    assert "submit_failure" not in result.run.run_payload_json
+    assert "submit_failure" not in latest.run_payload_json

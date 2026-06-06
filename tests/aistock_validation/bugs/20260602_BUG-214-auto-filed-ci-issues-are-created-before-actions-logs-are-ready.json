@@ -1,0 +1,77 @@
+{
+  "actual": "GitHub Issues #559 and #575 were filed with diagnostic_status=partial and the only extraction error says the Actions run is still in progress; failed tests/errors are empty and reproduce command uses the human job name instead of a precise nox session.",
+  "allowed_write_scope": [
+    "scripts/ci_failure_issue_summary.py",
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "tests/aistock_validation/bugs/20260602_BUG-214-auto-filed-ci-issues-are-created-before-actions-logs-are-ready.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-214",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T11:07:38.697029Z",
+  "description": "GitHub Issues #559 and #575 were filed with diagnostic_status=partial and the only extraction error says the Actions run is still in progress; failed tests/errors are empty and reproduce command uses the human job name instead of a precise nox session.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-7d2d6e6f8674",
+      "timestamp": "2026-06-02T11:07:38.697026Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issues #559 and #575"
+  ],
+  "expected": "Auto-filed CI failure issues contain actionable failed job/test/error diagnostics when logs are available, and avoid filing premature diagnostic-extraction-incomplete issues while the run is still in progress.",
+  "first_seen_at": "2026-06-02T11:07:38.697029Z",
+  "fix_branch": null,
+  "fix_commit": "7156201a2f25e0b2885f80bfcd21b80e80dd7e36",
+  "fixed_at": "2026-06-02T11:49:36.619372Z",
+  "github_issue_number": 578,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/578",
+  "last_seen_at": "2026-06-02T11:07:38.697029Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/579",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/ci_failure_issue_summary.py --run-id <running-run-id> --repo licong01-cloud/AIstock --output tmp/validation/ci_failure_issue/summary.json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Auto-filed CI issues are created before Actions logs are ready",
+  "trigger_condition": {
+    "fingerprint": "7d2d6e6f8674002a85a92e33",
+    "source_event_id": "FE-20260602-7d2d6e6f8674"
+  },
+  "validation_evidence": [
+    "PR #579 CI -> checks_passed",
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider -> 19 passed",
+    "python -m ruff check scripts/ci_failure_issue_summary.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed",
+    "python -m nox -s l0 validation_center_backend -> success",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> success",
+    "python scripts/aistock_issue_workflow.py nightly-intake-smoke -> workflow_gate=passed, unexpected_dirty_paths=[]"
+  ],
+  "verification_run_id": null
+}

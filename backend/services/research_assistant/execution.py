@@ -1,4 +1,4 @@
-"""Execution-closure helpers for the Research Assistant service.
+﻿"""Execution-closure helpers for the Research Assistant service.
 
 This mixin keeps MCP/Skill execution gates explicit while the service remains
 the owner of repositories, task events, trace events, and runtime config.
@@ -9,6 +9,10 @@ from __future__ import annotations
 from datetime import timedelta
 from time import perf_counter
 from typing import Any
+
+from backend.services.research_assistant.mcp_catalog_sync import canonicalize_server_key
+
+from backend.services.mcp_payload_budget import artifact_ref, assert_summary_payload, summary_envelope
 
 from .models import (
     ActionProposalApprovalRequest,
@@ -137,12 +141,82 @@ class ResearchAssistantExecutionMixin:
     def _side_effect_requires_approval(side_effect_level: str, risk_level: str) -> bool:
         return side_effect_level in {"write_nonprod", "high_cost_compute", "production_sensitive"} or risk_level in {"high", "production_sensitive"}
 
-    def _resolve_capability_tool(self, capability: dict[str, Any]) -> dict[str, Any] | None:
+    @staticmethod
+    def _capability_tool_refs(capability: dict[str, Any]) -> list[dict[str, str]]:
         refs = list(capability.get("mcp_tool_refs") or [])
+        return [
+            {"server_key": str(ref.get("server_key") or ""), "tool_name": str(ref.get("tool_name") or "")}
+            for ref in refs
+            if isinstance(ref, dict) and ref.get("server_key") and ref.get("tool_name")
+        ]
+
+    @staticmethod
+    def _route_candidates_from_payload(payload: dict[str, Any] | None) -> list[dict[str, str]]:
+        data = dict(payload or {})
+        candidates: list[dict[str, str]] = []
+
+        def add_candidate(item: dict[str, Any] | None) -> None:
+            if not isinstance(item, dict):
+                return
+            server_key = str(item.get("server_key") or item.get("server") or "").strip()
+            if server_key:
+                server_key = canonicalize_server_key(server_key)
+            tool_name = str(item.get("tool_name") or item.get("tool") or "").strip()
+            if server_key or tool_name:
+                candidates.append({"server_key": server_key, "tool_name": tool_name})
+
+        if data.get("tool_name") or data.get("tool"):
+            add_candidate(data)
+        for key in ("route", "mcp_route_decision", "selected_tool", "tool_route", "mcp_tool"):
+            value = data.get(key)
+            add_candidate(value if isinstance(value, dict) else None)
+        return candidates
+
+    def _resolve_capability_tool(
+        self,
+        capability: dict[str, Any],
+        proposal: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        refs = self._capability_tool_refs(capability)
         if not refs:
             return None
-        ref = refs[0]
+        route_payload = payload
+        if route_payload is None and proposal is not None:
+            route_payload = dict(proposal.get("input_json") or {})
+        selected_ref: dict[str, str] | None = None
+        for candidate in self._route_candidates_from_payload(route_payload):
+            matches = [
+                ref
+                for ref in refs
+                if (not candidate["server_key"] or ref["server_key"] == candidate["server_key"])
+                and (not candidate["tool_name"] or ref["tool_name"] == candidate["tool_name"])
+            ]
+            if matches:
+                selected_ref = matches[0]
+                break
+            if candidate["server_key"] or candidate["tool_name"]:
+                requested = f"{candidate['server_key']}/{candidate['tool_name']}".strip("/")
+                allowed = ", ".join(f"{ref['server_key']}/{ref['tool_name']}" for ref in refs[:20])
+                raise ValueError(f"selected MCP tool is not allowed by capability: {requested}; allowed={allowed}")
+        ref = selected_ref or refs[0]
         return self.repository.find_one("mcp_tools", {"server_key": ref["server_key"], "tool_name": ref["tool_name"]})
+
+    def _effective_action_profile(self, capability: dict[str, Any], tool: dict[str, Any] | None = None) -> dict[str, Any]:
+        use_tool_profile = bool(tool) and str(capability.get("capability_key") or "").endswith(".mcp_orchestration")
+        profile = tool if use_tool_profile else capability
+        risk_level = str((profile or {}).get("risk_level") or "medium")
+        side_effect_level = str((profile or {}).get("side_effect_level") or "read_only")
+        required_confirmations = [str(item) for item in ((profile or {}).get("required_confirmations") or [])]
+        if risk_level == "low" and side_effect_level == "read_only":
+            required_confirmations = []
+        requires_approval = bool((profile or {}).get("requires_approval")) or self._side_effect_requires_approval(side_effect_level, risk_level)
+        return {
+            "risk_level": risk_level,
+            "side_effect_level": side_effect_level,
+            "required_confirmations": required_confirmations,
+            "requires_approval": requires_approval,
+        }
 
     def _execution_policy(self, capability: dict[str, Any]) -> dict[str, Any]:
         cfg = self.active_runtime_config()["execution"]
@@ -202,6 +276,8 @@ class ResearchAssistantExecutionMixin:
         runtime_activation = self.active_runtime_config_activation()
         prompt_activation = self.active_prompt_activation()
         input_json = dict(data.input_json)
+        selected_tool = self._resolve_capability_tool(capability, {"input_json": input_json})
+        effective_profile = self._effective_action_profile(capability, selected_tool)
         plan_digest = self._proposal_digest(
             capability,
             input_json,
@@ -223,8 +299,8 @@ class ResearchAssistantExecutionMixin:
                 "proposal_type": data.proposal_type,
                 "title": data.title,
                 "summary": data.summary,
-                "risk_level": capability["risk_level"],
-                "side_effect_level": capability["side_effect_level"],
+                "risk_level": effective_profile["risk_level"],
+                "side_effect_level": effective_profile["side_effect_level"],
                 "input_json": input_json,
                 "expected_result_json": data.expected_result_json,
                 "plan_digest": plan_digest,
@@ -241,9 +317,15 @@ class ResearchAssistantExecutionMixin:
             data.task_id,
             TaskEventCreate(
                 event_type="action_proposed",
-                severity="warning" if self._side_effect_requires_approval(capability["side_effect_level"], capability["risk_level"]) else "info",
+                severity="warning" if effective_profile["requires_approval"] or effective_profile["required_confirmations"] else "info",
                 message=f"已生成 Action Proposal：{data.title}；确认前不会执行。",
-                payload_json={"action_proposal_id": proposal["action_proposal_id"], "capability_key": data.capability_key, "plan_digest": plan_digest},
+                payload_json={
+                    "action_proposal_id": proposal["action_proposal_id"],
+                    "capability_key": data.capability_key,
+                    "plan_digest": plan_digest,
+                    "server_key": selected_tool.get("server_key") if selected_tool else None,
+                    "tool_name": selected_tool.get("tool_name") if selected_tool else None,
+                },
             ),
         )
         return proposal
@@ -286,7 +368,8 @@ class ResearchAssistantExecutionMixin:
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
-        required = list(capability.get("required_confirmations") or [])
+        tool = self._resolve_capability_tool(capability, proposal)
+        required = self._effective_action_profile(capability, tool)["required_confirmations"]
         if required and data.confirmation_text not in required:
             raise ValueError(f"confirmation_text must be one of capability.required_confirmations: {required}")
         updated = self.repository.update_record("action_proposals", action_proposal_id, {"status": "confirmed"})
@@ -317,10 +400,14 @@ class ResearchAssistantExecutionMixin:
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
-        if proposal.get("status") not in {"confirmed", "approval_required", "approved", "preflight_failed"}:
-            raise ValueError(f"proposal must be confirmed before preflight; status={proposal.get('status')}")
-        tool = self._resolve_capability_tool(capability)
         payload = data.payload_json or dict(proposal.get("input_json") or {})
+        tool = self._resolve_capability_tool(capability, proposal, payload)
+        effective_profile = self._effective_action_profile(capability, tool)
+        allowed_statuses = {"confirmed", "approval_required", "approved", "preflight_failed"}
+        if not effective_profile["requires_approval"] and not effective_profile["required_confirmations"]:
+            allowed_statuses.add("proposed")
+        if proposal.get("status") not in allowed_statuses:
+            raise ValueError(f"proposal must be confirmed before preflight; status={proposal.get('status')}")
         if tool:
             result = self.preflight_mcp_tool(
                 McpPreflightRequest(
@@ -331,15 +418,31 @@ class ResearchAssistantExecutionMixin:
                     idempotency_key=data.idempotency_key or proposal["idempotency_key"],
                 )
             )
+            if effective_profile["requires_approval"] and not result.get("approval_required"):
+                result = dict(result)
+                result["requires_approval"] = True
+                result["approval_required"] = True
+                result["passed"] = False
+                result["capability_policy_requires_approval"] = True
+                result["missing_confirmations"] = list(effective_profile["required_confirmations"])
+                checks = list(result.get("preflight_checks") or [])
+                if "capability_policy" not in checks:
+                    checks.append("capability_policy")
+                result["preflight_checks"] = checks
             self.repository.update_record(
                 "mcp_tool_events",
                 result["tool_event_id"],
-                {"action_proposal_id": action_proposal_id, "plan_digest": proposal["plan_digest"], "transport": "loopback_http"},
+                {
+                    "action_proposal_id": action_proposal_id,
+                    "plan_digest": proposal["plan_digest"],
+                    "transport": "research_assistant_preflight",
+                    "response_json": result,
+                },
             )
         else:
             result = {
                 "passed": True,
-                "approval_required": self._side_effect_requires_approval(capability["side_effect_level"], capability["risk_level"]),
+                "approval_required": effective_profile["requires_approval"],
                 "failed_checks": [],
                 "preflight_checks": ["capability_status", "skill_registry"],
                 "payload_digest": sha256_json(payload),
@@ -368,7 +471,9 @@ class ResearchAssistantExecutionMixin:
         self._assert_proposal_digest_current(proposal, capability)
         if proposal.get("status") not in {"approval_required", "approved"}:
             raise ValueError(f"proposal approval requires approval_required status; status={proposal.get('status')}")
-        required_texts = [str(item) for item in (capability.get("required_confirmations") or [ASSISTANT_APPROVAL_CONFIRM_TEXT])]
+        tool = self._resolve_capability_tool(capability, proposal)
+        effective_profile = self._effective_action_profile(capability, tool)
+        required_texts = effective_profile["required_confirmations"] or [ASSISTANT_APPROVAL_CONFIRM_TEXT]
         if not data.confirmation_text or data.confirmation_text not in required_texts:
             raise ValueError(f"approval confirmation_text must be one of capability.required_confirmations: {required_texts}")
         required_text = data.confirmation_text
@@ -408,27 +513,27 @@ class ResearchAssistantExecutionMixin:
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
-        if data.actor_role in {"secondary_worker", "verifier_critic"} and self._side_effect_requires_approval(capability["side_effect_level"], capability["risk_level"]):
+        payload = data.payload_json or dict(proposal.get("input_json") or {})
+        tool = self._resolve_capability_tool(capability, proposal, payload)
+        effective_profile = self._effective_action_profile(capability, tool)
+        if data.actor_role in {"secondary_worker", "verifier_critic"} and effective_profile["requires_approval"]:
             return self._record_action_failure(proposal, capability, "multi_model_boundary_blocked", "secondary/verifier cannot execute high-risk MCP directly.", retryable=False)
         if data.dry_run:
             return {"status": "dry_run", "executed": False, "proposal": proposal, "human_cards": [{"title": proposal["title"], "summary": proposal["summary"], "next_step": "dry-run does not call real MCP."}]}
-        if capability["side_effect_level"] == "production_sensitive" or capability["risk_level"] == "production_sensitive":
+        if effective_profile["side_effect_level"] == "production_sensitive" or effective_profile["risk_level"] == "production_sensitive":
             return self._record_action_failure(proposal, capability, "production_boundary_blocked", "Phase 1 blocks automatic production_sensitive execution; explicit user authorization is required.", retryable=False)
         if proposal.get("status") == "approval_required":
             return self._record_action_failure(proposal, capability, "approval_missing", "Action Proposal is missing a valid approval bound to the plan digest.", retryable=False)
         if proposal.get("status") not in {"preflight_passed", "approved"}:
             return self._record_action_failure(proposal, capability, "preflight_or_approval_missing", "Execution requires passed preflight and approval when required.", retryable=False)
-        requires_approval = self._side_effect_requires_approval(capability["side_effect_level"], capability["risk_level"])
         approval = self.repository.get_record("approvals", str(proposal.get("approval_id"))) if proposal.get("approval_id") else None
-        if requires_approval and (not approval or approval.get("status") != "approved" or approval.get("plan_digest") != proposal.get("plan_digest")):
+        if effective_profile["requires_approval"] and (not approval or approval.get("status") != "approved" or approval.get("plan_digest") != proposal.get("plan_digest")):
             return self._record_action_failure(proposal, capability, "approval_missing", "High-risk Action Proposal is missing a valid approval bound to the plan digest.", retryable=False)
-        tool = self._resolve_capability_tool(capability)
         if not tool:
             return self._execute_skill_or_workflow_only(proposal, capability)
 
-        execution_policy = self._execution_policy(capability)
+        execution_policy = self._execution_policy({**capability, **effective_profile})
         timeout_seconds = int(execution_policy["timeout_seconds"])
-        payload = data.payload_json or dict(proposal.get("input_json") or {})
         self.repository.update_record("action_proposals", action_proposal_id, {"status": "executing"})
         self.add_task_event(
             proposal["task_id"],
@@ -499,7 +604,7 @@ class ResearchAssistantExecutionMixin:
                     "action_proposal_id": action_proposal_id,
                     "approval_id": proposal.get("approval_id"),
                     "plan_digest": proposal.get("plan_digest"),
-                    "transport": "loopback_http",
+                    "transport": str(adapter_result.get("transport") or "loopback_http"),
                     "timeout_ms": timeout_seconds * 1000,
                     "attempt_index": attempt_index,
                     "duration_ms": duration_ms,
@@ -583,7 +688,229 @@ class ResearchAssistantExecutionMixin:
             return {"status": "succeeded" if validation["validation"]["valid"] else "failed", "result_json": validation, "result_cards": [{"title": "QE template 校验结果", "summary": validation["human_summary"], "template_id": validation["template"]["template_id"]}], "artifact_refs": [validation["template"]["template_id"]], "error_json": {} if validation["validation"]["valid"] else {"errors": validation["validation"]["errors"]}, "retry_count": 0}
         if name in {"qe_template_materialize_confirmed", "qe_template_run_confirmed"}:
             return {"status": "failed", "result_json": {}, "result_cards": [{"title": "执行被阻断", "summary": "当前本地适配器不会在测试/开发态直接 materialize 或 run QE。"}], "artifact_refs": [], "error_json": {"code": "adapter_not_enabled_for_high_cost_qe"}, "retry_count": 0}
+        if self._is_summary_first_read_tool(tool):
+            return self._execute_summary_first_read_tool(tool, payload)
         raise ValueError(f"loopback adapter is not implemented for tool: {name}")
+
+    @staticmethod
+    def _is_summary_first_read_tool(tool: dict[str, Any]) -> bool:
+        return str(tool.get("risk_level") or "") == "low" and str(tool.get("side_effect_level") or "") == "read_only"
+
+    @staticmethod
+    def _summary_adapter_args(payload: dict[str, Any]) -> dict[str, Any]:
+        args: dict[str, Any] = {}
+        for key in ("args", "tool_args", "parameters", "params"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                args.update(value)
+        for key in (
+            "server_key",
+            "risk_level",
+            "search",
+            "q",
+            "limit",
+            "offset",
+            "factor_name",
+            "model_id",
+            "package_id",
+            "algo_code",
+            "method",
+            "min_abs_corr",
+            "qe_selectable",
+            "query",
+            "locale",
+            "provider",
+            "url",
+            "max_chars",
+        ):
+            if key in payload and key not in args:
+                args[key] = payload[key]
+        return args
+
+    def _execute_summary_first_read_tool(self, tool: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "")
+        tool_name = str(tool.get("tool_name") or "")
+        args = self._summary_adapter_args(payload)
+        server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
+        health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
+        domain = str(health.get("domain") or server_key)
+        limit = int(args.get("limit") or 20)
+        offset = int(args.get("offset") or 0)
+        items, total = self._summary_adapter_items(tool, args, limit=limit, offset=offset)
+        artifact_refs = self._summary_adapter_artifact_refs(server_key, tool_name, args)
+        result_json = summary_envelope(
+            domain=domain,
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            omitted_sections=[
+                "raw_payload",
+                "full_logs",
+                "matrix",
+                "model_weights",
+                "training_curves",
+                "factor_value_rows",
+                "database_rows",
+            ],
+            detail_tool=self._summary_adapter_detail_tool(server_key, tool_name),
+            detail_args_hint=self._summary_adapter_detail_args(tool_name, args),
+            artifact_refs=artifact_refs,
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "summary",
+                "source": "research_assistant_catalog_summary_adapter",
+                "live_backend_called": False,
+                "next_step": "Use the referenced detail tool or execute the backend MCP facade when live data is required.",
+                **(
+                    {
+                        "evidence_policy": {
+                            "external_evidence_only": True,
+                            "not_final_conclusion": True,
+                            "candidate_branches": ["external.", "personal.topic."],
+                            "l4_handoff": "hypothesis_then_low_cost_validation_only",
+                        }
+                    }
+                    if server_key == "aistock-external-research"
+                    else {}
+                ),
+            },
+        )
+        assert_summary_payload(result_json)
+        card = {
+            "title": f"{server_key}/{tool_name}",
+            "summary": f"Prepared a summary-first MCP result envelope for {domain}; heavy sections are omitted or referenced.",
+            "route": f"{server_key}/{tool_name}",
+            "summary_first": True,
+            "next_step": result_json["next_step"],
+        }
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [card],
+            "artifact_refs": artifact_refs,
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "research_assistant_catalog_summary_adapter",
+        }
+
+    def _summary_adapter_items(self, tool: dict[str, Any], args: dict[str, Any], *, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        server_key = str(tool.get("server_key") or "")
+        tool_name = str(tool.get("tool_name") or "")
+        if tool_name == "assistant_list_mcp_tools":
+            search = str(args.get("search") or args.get("q") or "").strip().lower()
+            page = self.list_mcp_tools(
+                server_key=str(args["server_key"]) if args.get("server_key") else None,
+                risk_level=str(args["risk_level"]) if args.get("risk_level") else None,
+                search=search or None,
+                limit=limit,
+                offset=offset,
+            )
+            window = list(page["items"])
+            return [
+                {
+                    "server_key": item.get("server_key"),
+                    "tool_name": item.get("tool_name"),
+                    "title": item.get("title"),
+                    "risk_level": item.get("risk_level"),
+                    "side_effect_level": item.get("side_effect_level"),
+                    "requires_approval": bool(item.get("requires_approval")),
+                    "status": item.get("status"),
+                }
+                for item in window
+            ], int(page["total"])
+        if server_key == "aistock-external-research":
+            query = str(args.get("query") or args.get("q") or "external research").strip()
+            as_of = utc_now().date().isoformat()
+            if tool_name == "external_research_fetch_extract":
+                url = str(args.get("url") or "https://example.org/external-research")
+                return [
+                    {
+                        "title": f"Extracted evidence for {url}",
+                        "summary": "Capped extract preview; full content is behind detail_ref.",
+                        "url": url,
+                        "source": "external_research_summary_adapter",
+                        "as_of": as_of,
+                        "evidence_ref": f"external-evidence:{sha256_json({'url': url})[:16]}",
+                        "provider": "summary_adapter",
+                        "detail_ref": {"server": server_key, "tool": tool_name, "args_hint": {"url": url, "max_chars": args.get("max_chars") or 2000}},
+                    }
+                ], 1
+            result_type = "paper" if tool_name == "external_research_search_papers" else "web"
+            digest = sha256_json({"query": query, "tool": tool_name})
+            return [
+                {
+                    "title": f"{query} external evidence candidate",
+                    "summary": f"Summary-first {result_type} evidence for {query}; use as hypothesis evidence, not a final conclusion.",
+                    "url": f"https://example.org/external-research/{digest[:12]}",
+                    "source": "external_research_summary_adapter",
+                    "as_of": as_of,
+                    "evidence_ref": f"external-evidence:{digest[:16]}",
+                    "provider": "summary_adapter",
+                    "result_type": result_type,
+                    "detail_ref": {"server": server_key, "tool": "external_research_fetch_extract", "args_hint": {"url": "<url>", "max_chars": 2000}},
+                }
+            ][:limit], 1
+        return [
+            {
+                "item_type": "mcp_read_tool_summary",
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "title": tool.get("title"),
+                "risk_level": tool.get("risk_level"),
+                "side_effect_level": tool.get("side_effect_level"),
+                "requires_approval": bool(tool.get("requires_approval")),
+                "status": tool.get("status"),
+                "summary_first_contract": "list/search/overview returns compact fields; detail and heavy artifacts stay behind refs.",
+            }
+        ], 1
+
+    @staticmethod
+    def _summary_adapter_detail_tool(server_key: str, tool_name: str) -> str | None:
+        detail_by_tool = {
+            "factor_library_list": "factor_library_get",
+            "factor_library_search": "factor_library_get",
+            "factor_corr_get_top_pairs": "factor_corr_get_matrix_ref",
+            "factor_corr_get_clusters": "factor_corr_get_matrix_ref",
+            "model_registry_list": "model_registry_get",
+            "strategy_governance_list_packages": "strategy_governance_get_package",
+            "execution_policy_list_algos": "execution_policy_get_algo",
+            "mcp_github_issue_list": "mcp_github_issue_search",
+            "qe_archive_health": "qe_archive_list_runs",
+            "external_research_search_web": "external_research_fetch_extract",
+            "external_research_search_papers": "external_research_fetch_extract",
+        }
+        detail = detail_by_tool.get(tool_name)
+        return f"{server_key}/{detail}" if detail else f"{server_key}/{tool_name}"
+
+    @staticmethod
+    def _summary_adapter_detail_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if tool_name.startswith("factor_library_"):
+            return {"factor_name": args.get("factor_name") or "<factor_name>"}
+        if tool_name.startswith("model_registry_"):
+            return {"model_id": args.get("model_id") or "<model_id>"}
+        if tool_name.startswith("strategy_governance_"):
+            return {"package_id": args.get("package_id") or "<package_id>"}
+        if tool_name.startswith("execution_policy_"):
+            return {"algo_code": args.get("algo_code") or "<algo_code>"}
+        if tool_name.startswith("factor_corr_"):
+            return {"as_of_date": args.get("as_of_date") or "<as_of_date>"}
+        return {}
+
+    @staticmethod
+    def _summary_adapter_artifact_refs(server_key: str, tool_name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+        refs = [artifact_ref("mcp_summary_execution", f"research_assistant:{server_key}:{tool_name}", {"source": "catalog_summary_adapter"})]
+        if "matrix" in tool_name or "corr" in tool_name:
+            refs.append(artifact_ref("factor_correlation_matrix", "factor_correlation:matrix_ref", {"method": args.get("method")}))
+        if "artifact" in tool_name:
+            refs.append(artifact_ref("mcp_domain_artifact", f"{server_key}:{tool_name}:artifact_ref"))
+        if "logs" in tool_name:
+            refs.append(artifact_ref("mcp_log_tail", f"{server_key}:{tool_name}:log_ref"))
+        if server_key == "aistock-external-research":
+            refs.append(artifact_ref("external_evidence_summary", f"{server_key}:{tool_name}:evidence_ref", {"summary_first": True}))
+        return refs
 
     def _qe_template_create_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
         template_id = new_id("qet")
@@ -647,7 +974,7 @@ class ResearchAssistantExecutionMixin:
     def _record_action_failure(self, proposal: dict[str, Any], capability: dict[str, Any], code: str, message: str, *, retryable: bool, event_type: str = "mcp_failed") -> dict[str, Any]:
         updated = self.repository.update_record("action_proposals", proposal["action_proposal_id"], {"status": "failed"})
         error_json = {"code": code, "human_reason": message, "next_step": "修正输入、重新 preflight 或重新创建 Action Proposal。", "audit_link": f"/research-assistant/actions/{proposal['action_proposal_id']}", "retryable": retryable}
-        tool = self._resolve_capability_tool(capability)
+        tool = self._resolve_capability_tool(capability, proposal)
         if tool:
             self.repository.create_record(
                 "mcp_tool_events",

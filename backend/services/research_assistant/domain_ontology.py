@@ -20,6 +20,7 @@ class McpDomain(str, Enum):
     MODEL_REGISTRY = "model_registry"
     STRATEGY_GOVERNANCE = "strategy_governance"
     EXECUTION_POLICY = "execution_policy"
+    EXTERNAL_RESEARCH = "external_research"
     GENERAL = "general"
 
 
@@ -66,7 +67,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.QE_EXPERIMENT: DomainSpec(
         domain=McpDomain.QE_EXPERIMENT,
         intent_value="experiment_draft_request",
-        server_key="aistock-qe-experiment",
+        server_key="aistock-qe",
         default_tool="qe_experiment_list",
         risk_policy="draft_validate_confirmed_run",
         summary_zh="QE experiment, custom_evo loop, template materialization and run management",
@@ -79,12 +80,12 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.QE_WAREHOUSE: DomainSpec(
         domain=McpDomain.QE_WAREHOUSE,
         intent_value="qe_warehouse_request",
-        server_key="aistock-qe-archive",
+        server_key="aistock-qe",
         default_tool="qe_archive_health",
         risk_policy="read_preview_confirmed_backfill",
-        summary_zh="QE archive warehouse, ingestion, outbox, backfill and historical query operations",
-        synonyms=("warehouse", "archive", "outbox", "backfill", "archived", "archive job", "skips", "source status", "ingestion", "data warehouse", "数仓", "入仓", "归档", "补录", "漏入库", "ruku", "shucang", "guidang", "bulu", "louruku"),
-        read_tools=("qe_archive_health", "qe_archive_list_runs", "qe_archive_list_outbox", "qe_archive_get_source_status"),
+        summary_zh="QE archive warehouse, ingestion, outbox, backfill and analytics views",
+        synonyms=("warehouse", "archive", "outbox", "backfill", "archived", "archive job", "skips", "source status", "ingestion", "data warehouse", "leaderboard", "run leaderboard", "seed robustness", "promotion candidate", "overfit", "lineage", "hyperparam seed", "factor performance", "analytics view", "数仓", "入仓", "归档", "补录", "漏入库", "排行榜", "种子鲁棒性", "晋升候选", "过拟合", "演进血缘", "超参", "因子表现", "分析视图", "ruku", "shucang", "guidang", "bulu", "louruku"),
+        read_tools=("qe_archive_health", "qe_archive_list_runs", "qe_archive_list_outbox", "qe_archive_get_source_status", "qe_archive_query_analytics_view_status", "qe_archive_query_run_leaderboard", "qe_archive_query_seed_robustness", "qe_archive_query_factor_performance", "qe_archive_query_model_hyperparam_seed_perf", "qe_archive_query_overfit_flags", "qe_archive_query_promotion_candidates", "qe_archive_query_evolution_lineage"),
         plan_tools=("qe_archive_backfill_preview", "qe_archive_backfill_selection_preview"),
         confirmed_tools=("qe_archive_backfill_execute_confirmed", "qe_archive_backfill_selection_execute_confirmed"),
         prompt_key="domain.qe_warehouse",
@@ -118,7 +119,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_LIBRARY: DomainSpec(
         domain=McpDomain.FACTOR_LIBRARY,
         intent_value="factor_library_request",
-        server_key="aistock-factor-library",
+        server_key="aistock-factor",
         default_tool="factor_library_list",
         risk_policy="summary_list_detail_on_demand_confirmed_registration",
         summary_zh="Factor catalog, metadata, coverage, quality labels and usage summaries",
@@ -131,7 +132,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_METRICS: DomainSpec(
         domain=McpDomain.FACTOR_METRICS,
         intent_value="factor_metrics_request",
-        server_key="aistock-factor-metrics",
+        server_key="aistock-factor",
         default_tool="factor_metrics_plan",
         risk_policy="async_job_preflight_confirmed_submit",
         summary_zh="Independent factor metric calculation, IC, RankIC, group return and stability jobs",
@@ -144,7 +145,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.FACTOR_CORRELATION: DomainSpec(
         domain=McpDomain.FACTOR_CORRELATION,
         intent_value="factor_correlation_request",
-        server_key="aistock-factor-correlation",
+        server_key="aistock-factor",
         default_tool="factor_corr_plan",
         risk_policy="async_matrix_job_artifact_ref_only",
         summary_zh="Factor correlation, redundant pairs, clusters, replacement suggestions and matrix refs",
@@ -157,7 +158,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.MODEL_REGISTRY: DomainSpec(
         domain=McpDomain.MODEL_REGISTRY,
         intent_value="model_registry_request",
-        server_key="aistock-model-registry",
+        server_key="aistock-qe",
         default_tool="model_registry_list",
         risk_policy="summary_detail_artifact_refs_confirmed_lifecycle",
         summary_zh="Model registry, model trials, seed stability, hyperparameter history and artifact refs",
@@ -170,7 +171,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.STRATEGY_GOVERNANCE: DomainSpec(
         domain=McpDomain.STRATEGY_GOVERNANCE,
         intent_value="strategy_governance_request",
-        server_key="aistock-strategy-governance",
+        server_key="aistock-trading-ops",
         default_tool="strategy_governance_list_packages",
         risk_policy="readiness_plan_confirmed_promotion_retirement",
         summary_zh="StrategyPackage governance, health, Selection/Paper readiness, promotion and retirement",
@@ -183,7 +184,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
     McpDomain.EXECUTION_POLICY: DomainSpec(
         domain=McpDomain.EXECUTION_POLICY,
         intent_value="execution_policy_request",
-        server_key="aistock-execution-policy",
+        server_key="aistock-trading-ops",
         default_tool="execution_policy_list_algos",
         risk_policy="read_validate_plan_confirmed_binding_no_real_trade",
         summary_zh="Execution policy library, minute algos, market-state constraints and strategy binding validation",
@@ -192,6 +193,41 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         plan_tools=("execution_policy_validate_for_strategy", "execution_policy_plan_binding"),
         confirmed_tools=("execution_policy_bind_confirmed", "execution_policy_retire_confirmed"),
         prompt_key="domain.execution_policy",
+    ),
+    McpDomain.EXTERNAL_RESEARCH: DomainSpec(
+        domain=McpDomain.EXTERNAL_RESEARCH,
+        intent_value="external_research_request",
+        server_key="aistock-external-research",
+        default_tool="external_research_search_web",
+        risk_policy="read_only_search_draft_only_evidence_candidates",
+        summary_zh="External web and academic research search with provenance-first evidence candidates",
+        synonyms=(
+            "external research",
+            "external search",
+            "web search",
+            "search web",
+            "paper search",
+            "academic search",
+            "papers",
+            "arxiv",
+            "semantic scholar",
+            "literature",
+            "external evidence",
+            "fetch extract",
+            "save evidence",
+            "外部研究",
+            "外部检索",
+            "网页搜索",
+            "论文检索",
+            "学术检索",
+            "文献",
+            "外部证据",
+            "保存证据",
+        ),
+        read_tools=("external_research_search_web", "external_research_search_papers", "external_research_fetch_extract"),
+        plan_tools=("external_research_save_evidence",),
+        confirmed_tools=(),
+        prompt_key="domain.external_research",
     ),
 }
 

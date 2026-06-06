@@ -1730,6 +1730,7 @@ class PaperTradingV2Repository:
                         status = EXCLUDED.status,
                         filled_quantity = EXCLUDED.filled_quantity,
                         avg_fill_price = EXCLUDED.avg_fill_price,
+                        metadata = EXCLUDED.metadata,
                         stock_name = COALESCE(orders.stock_name, EXCLUDED.stock_name),
                         updated_at = EXCLUDED.updated_at
                     """,
@@ -2473,6 +2474,7 @@ class InMemoryPaperTradingV2Repository:
         # save_positions overwrites all rows for a run.
         self.position_capture: dict[str, dict[str, datetime]] = {}
         self.snapshots: dict[str, AccountSnapshot] = {}
+        self.snapshot_metadata: dict[tuple[str, date], dict[str, Any]] = {}
         # T5 side-channel for daily_snapshots watermarks. Keyed by
         # (portfolio_id, trade_date) to preserve created_at on upsert.
         self.snapshot_capture: dict[tuple[str, date], dict[str, datetime]] = {}
@@ -3323,6 +3325,7 @@ class InMemoryPaperTradingV2Repository:
         # that here so tests can verify updated_at moves but created_at does not.
         now = datetime.now(UTC)
         cap_key = (snapshot.portfolio_id, trade_date)
+        self.snapshot_metadata[cap_key] = dict(metadata or {})
         existing = self.snapshot_capture.get(cap_key)
         if existing is None:
             self.snapshot_capture[cap_key] = {"created_at": now, "updated_at": now}
@@ -3520,5 +3523,6 @@ class InMemoryPaperTradingV2Repository:
                 item["run_id"] = run_id
                 item["trade_date"] = run.trade_date
                 item["position_count"] = len(self.positions.get(run_id, []))
+                item["metadata"] = self.snapshot_metadata.get((snapshot.portfolio_id, run.trade_date), {})
                 rows.append(item)
         return rows[:limit]

@@ -1,0 +1,41 @@
+{
+  "schema_version": "aistock_validation_runner_evidence_v1",
+  "generated_at": "2026-06-02T06:09:04.800201+00:00",
+  "job_id": "valjob_20260602_060848_0027fa39",
+  "plan_key": "ra_phase6_qe_autonomy",
+  "status": "passed",
+  "archive": {
+    "status": "archived",
+    "run_id": "research-assistant-qe-autonomy_20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation__16f1f4ace9",
+    "history_root": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history",
+    "run_record_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation.md",
+    "metadata_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation.json",
+    "evidence_manifest_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-evidence.json",
+    "runner_job_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-job.json",
+    "runner_log_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-log.txt",
+    "runner_evidence_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-evidence.json",
+    "coverage_snapshot_path": null,
+    "artifact_paths": []
+  },
+  "production_8001_touched": false,
+  "evidence": [
+    {
+      "kind": "job_record",
+      "path": "tmp/validation/runner/jobs/valjob_20260602_060848_0027fa39.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 4034,
+      "child_count": null,
+      "sha256": "4ab6cc154e9ba08b72cfac84d6d02cf7400772ea2c81abda952c3c7b143679eb"
+    },
+    {
+      "kind": "execution_log",
+      "path": "tmp/validation/runner/jobs/valjob_20260602_060848_0027fa39.log",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 5327,
+      "child_count": null,
+      "sha256": "4df12709cf3ba915208c59e6a8e1f5b8dcc255f177c1f7f3ca183786ab623f9f"
+    }
+  ]
+}

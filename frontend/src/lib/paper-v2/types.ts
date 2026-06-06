@@ -180,11 +180,16 @@ export type SelectionCandidate = {
   selection_entry_price?: number | null;
   selection_entry_price_source?: string | null;
   selection_entry_price_time?: string | null;
+  signal_ref_price?: number | null;
   previous_close?: number | null;
   volume?: number | null;
   current_price?: number | null;
   current_price_source?: string | null;
   current_price_time?: string | null;
+  suggested_entry_price_band?: JsonObject | null;
+  suggested_stop_loss_zone?: JsonObject | null;
+  guidance_status?: string | null;
+  price_guard_policy_sha256?: string | null;
   component_scores?: JsonObject;
   reason?: string | null;
   context?: JsonObject;
@@ -506,6 +511,41 @@ export type SimulationRuntimeRunsResponse = {
   runs: SimulationRuntimeRunSummary[];
 };
 
+export type MiniQMTExecutionQualityReport = JsonObject & {
+  schema_version: "miniqmt_execution_quality_report_v1";
+  portfolio_id: string;
+  run_id: string;
+  trade_date: string;
+  generated_at?: string;
+  report_scope?: string;
+  summary?: JsonObject;
+  fills?: JsonObject[];
+  orders_requiring_attention?: JsonObject[];
+};
+
+export type MiniQMTExecutionQualityRecord = JsonObject & {
+  record_key?: string;
+  run_id?: string;
+  trade_date?: string;
+  generated_at?: string;
+  source?: JsonObject;
+  summary?: JsonObject;
+  report: MiniQMTExecutionQualityReport;
+};
+
+export type MiniQMTExecutionQualityResponse = JsonObject & {
+  schema_version: "miniqmt_execution_quality_query_v1";
+  portfolio_id: string;
+  filters?: JsonObject;
+  source_counts?: JsonObject;
+  report_count: number;
+  available_report_count?: number;
+  latest_record?: MiniQMTExecutionQualityRecord | null;
+  latest_report?: MiniQMTExecutionQualityReport | null;
+  reports: MiniQMTExecutionQualityRecord[];
+  warnings?: JsonObject[];
+};
+
 export type PaperLiveDashboard = {
   portfolio: PaperPortfolio;
   package: JsonObject;
@@ -519,6 +559,7 @@ export type PaperLiveDashboard = {
   daily_signal?: JsonObject;
   target_rebalance?: JsonObject;
   minute_execution?: JsonObject;
+  execution_quality?: MiniQMTExecutionQualityResponse;
   intraday_nav?: JsonObject;
   positions?: JsonObject[];
   orders?: JsonObject[];

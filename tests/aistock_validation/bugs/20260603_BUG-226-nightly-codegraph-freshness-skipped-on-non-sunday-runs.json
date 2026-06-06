@@ -1,0 +1,70 @@
+{
+  "actual": "The code-intelligence-weekly step checks Sunday UTC at the top and exits 0 before running scripts/code_intelligence_adapter.py freshness, so six scheduled runs per week produce no CodeGraph freshness artifact.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "docs/architecture/aistock_codegraph_nightly_freshness_design_20260602.md",
+    "tests/aistock_validation/bugs/20260603_BUG-226-nightly-codegraph-freshness-skipped-on-non-sunday-runs.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-226",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T19:59:45.761678Z",
+  "description": "The code-intelligence-weekly step checks Sunday UTC at the top and exits 0 before running scripts/code_intelligence_adapter.py freshness, so six scheduled runs per week produce no CodeGraph freshness artifact.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-0de0015ec7a4",
+      "timestamp": "2026-06-02T19:59:45.761675Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Nightly should build and upload CodeGraph freshness artifacts on every scheduled or workflow_dispatch run, keep the result warning-only, and gate only Understand Anything summary generation to the weekly cadence.",
+  "first_seen_at": "2026-06-02T19:59:45.761678Z",
+  "fix_branch": null,
+  "fix_commit": "6947b287aa44e3cee885758cb72421bff9b35101",
+  "fixed_at": "2026-06-03T02:33:20.355172Z",
+  "github_issue_number": 611,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/611",
+  "last_seen_at": "2026-06-02T19:59:45.761678Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/612",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect .github/workflows/nightly.yml code-intelligence-weekly step: the non-Sunday guard exits before codegraph freshness; run workflow YAML parse/tests after splitting freshness and weekly UA steps.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_coverage_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly CodeGraph freshness skipped on non-Sunday runs",
+  "trigger_condition": {
+    "fingerprint": "0de0015ec7a43fc7d739deac",
+    "source_event_id": "FE-20260603-0de0015ec7a4"
+  },
+  "validation_evidence": [
+    "PR #612 CI green and merged -> passed"
+  ],
+  "verification_run_id": null
+}

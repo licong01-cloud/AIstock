@@ -31,6 +31,12 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from backend.services.market_data.instrument_validator import (
+    DEFAULT_SQL_CHUNK_SIZE,
+    load_chunks_with_logging,
+    normalize_and_validate_ts_codes,
+    normalize_ts_code,
+)
 
 logger = logging.getLogger("aistock.qe_data_service")
 LIVE_ASOF_STATIC_PREFIXES = ("bb_", "cp_", "md_", "sw2_")
@@ -210,16 +216,23 @@ SECTOR_DATA_COLUMNS: List[str] = [
 ]
 
 
-def _normalize_instrument(code: str) -> str:
-    s = str(code).strip()
-    if not s:
-        return s
-    if "." in s:
-        return s.upper()
-    up = s.upper()
-    if len(up) >= 8 and up[:2] in {"SH", "SZ", "BJ"}:
-        return f"{up[2:]}.{up[:2]}"
-    return up
+def _normalize_instrument(code: object) -> str:
+    return normalize_ts_code(code)
+
+
+def _normalize_and_validate_instruments(
+    instruments: Iterable[object],
+    *,
+    source: str,
+    start_date: object | None = None,
+    end_date: object | None = None,
+) -> List[str]:
+    return normalize_and_validate_ts_codes(
+        instruments,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 def _to_date(d: Union[str, date, datetime]) -> date:
@@ -286,7 +299,9 @@ def load_daily_pv(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_daily_pv", start_date=start, end_date=end
+    )
 
     if not ts_codes:
         return pd.DataFrame()
@@ -297,21 +312,45 @@ def load_daily_pv(
         logger.debug(f"load_daily_pv: 缓存命中 {len(ts_codes)} 支股票 {start}~{end}")
         return cached
 
-    placeholders = ",".join(["%s"] * len(ts_codes))
+    # 1. 加载未复权原始行情。全市场股票池必须分块查询并记录 correlation，
+    # 避免盘中执行窗口触发不可诊断的超长 SQL / Broken pipe。
+    def _load_raw_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> pd.DataFrame:
+        placeholders = ",".join(["%s"] * len(chunk))
+        sql_raw = f"""
+            SELECT trade_date, ts_code,
+                   open_li, high_li, low_li, close_li, volume_hand, amount_li
+            FROM market.kline_daily_raw
+            WHERE ts_code IN ({placeholders})
+              AND trade_date >= %s AND trade_date <= %s
+            ORDER BY trade_date, ts_code
+        """
+        params_raw = chunk + [start.isoformat(), end.isoformat()]
+        with get_conn() as conn:
+            try:
+                return pd.read_sql(sql_raw, conn, params=params_raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "load_daily_pv raw chunk failed: correlation_id=%s symbols=%s start=%s end=%s error=%s",
+                    correlation_id,
+                    len(chunk),
+                    start,
+                    end,
+                    exc,
+                )
+                raise
 
-    # 1. 加载未复权原始行情
-    sql_raw = f"""
-        SELECT trade_date, ts_code,
-               open_li, high_li, low_li, close_li, volume_hand, amount_li
-        FROM market.kline_daily_raw
-        WHERE ts_code IN ({placeholders})
-          AND trade_date >= %s AND trade_date <= %s
-        ORDER BY trade_date, ts_code
-    """
-    params_raw = ts_codes + [start.isoformat(), end.isoformat()]
-
-    with get_conn() as conn:
-        df_raw = pd.read_sql(sql_raw, conn, params=params_raw)
+    raw_chunks = load_chunks_with_logging(
+        ts_codes=ts_codes,
+        source="load_daily_pv.raw",
+        start_date=start,
+        end_date=end,
+        chunk_size=DEFAULT_SQL_CHUNK_SIZE,
+        loader=_load_raw_chunk,
+    )
+    df_raw = pd.concat(
+        [chunk for chunk in raw_chunks if not chunk.empty],
+        ignore_index=True,
+    ) if raw_chunks else pd.DataFrame()
 
     if df_raw.empty:
         return pd.DataFrame()
@@ -320,17 +359,43 @@ def load_daily_pv(
     #    查询范围：start 到今天（确保能获取到最新的 adj_factor 用于归一化）
     from datetime import date as date_type
     today = date_type.today()
-    sql_adj = f"""
-        SELECT ts_code, trade_date, adj_factor
-        FROM market.adj_factor
-        WHERE ts_code IN ({placeholders})
-          AND trade_date >= %s AND trade_date <= %s
-        ORDER BY ts_code, trade_date
-    """
-    params_adj = ts_codes + [start.isoformat(), today.isoformat()]
 
-    with get_conn() as conn:
-        df_adj = pd.read_sql(sql_adj, conn, params=params_adj)
+    def _load_adj_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> pd.DataFrame:
+        placeholders = ",".join(["%s"] * len(chunk))
+        sql_adj = f"""
+            SELECT ts_code, trade_date, adj_factor
+            FROM market.adj_factor
+            WHERE ts_code IN ({placeholders})
+              AND trade_date >= %s AND trade_date <= %s
+            ORDER BY ts_code, trade_date
+        """
+        params_adj = chunk + [start.isoformat(), today.isoformat()]
+        with get_conn() as conn:
+            try:
+                return pd.read_sql(sql_adj, conn, params=params_adj)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "load_daily_pv adj_factor chunk failed: correlation_id=%s symbols=%s start=%s end=%s error=%s",
+                    correlation_id,
+                    len(chunk),
+                    start,
+                    today,
+                    exc,
+                )
+                raise
+
+    adj_chunks = load_chunks_with_logging(
+        ts_codes=ts_codes,
+        source="load_daily_pv.adj_factor",
+        start_date=start,
+        end_date=today,
+        chunk_size=DEFAULT_SQL_CHUNK_SIZE,
+        loader=_load_adj_chunk,
+    )
+    df_adj = pd.concat(
+        [chunk for chunk in adj_chunks if not chunk.empty],
+        ignore_index=True,
+    ) if adj_chunks else pd.DataFrame()
 
     if df_adj.empty:
         raise RuntimeError(
@@ -417,11 +482,13 @@ def load_daily_basic(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_daily_basic", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_daily_basic", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_daily_basic: 缓存命中")
+        logger.debug("load_daily_basic: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -461,11 +528,13 @@ def load_moneyflow(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_moneyflow", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_moneyflow", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_moneyflow: 缓存命中")
+        logger.debug("load_moneyflow: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -510,11 +579,13 @@ def load_bak_basic(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_bak_basic", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_bak_basic", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_bak_basic: 缓存命中")
+        logger.debug("load_bak_basic: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -556,11 +627,13 @@ def load_cyq_perf(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_cyq_perf", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_cyq_perf", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_cyq_perf: 缓存命中")
+        logger.debug("load_cyq_perf: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -598,7 +671,9 @@ def load_sector_data(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_sector_data", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_sector_data", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
@@ -639,7 +714,9 @@ def load_margin_detail(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_margin_detail", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_margin_detail", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
@@ -928,6 +1005,9 @@ def build_static_factors(
     Returns:
         MultiIndex(datetime, instrument) DataFrame，包含所有 static_factors 字段
     """
+    instruments = _normalize_and_validate_instruments(
+        instruments, source="build_static_factors", start_date=start_date, end_date=end_date
+    )
     logger.info(f"build_static_factors: {len(instruments)} instruments, {start_date} ~ {end_date}")
 
     # 1. 加载各原始数据表

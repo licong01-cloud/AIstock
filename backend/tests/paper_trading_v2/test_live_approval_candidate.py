@@ -151,6 +151,7 @@ def test_paper_v2_live_approval_candidate_binds_immutable_release_hashes() -> No
     assert approval.broker_compatibility["simulation_binding_id"].startswith("simbind_")
     assert approval.audit_json["runtime_release"]["metadata"]["runtime_config_activation_id"] == runtime_activation.activation_id
     assert approval.audit_json["runtime_release"]["metadata"]["execution_policy_activation_id"] == execution_activation.activation_id
+    assert approval.audit_json["runtime_release"]["execution_policy"]["policy_json"] == execution_activation.policy_json
     assert approval.audit_json["runtime_release"]["daily_strategy"]["profile_version_id"] == (
         "platform_default_daily_strategy_profile_v1"
     )

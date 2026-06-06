@@ -9,16 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from backend.services.research_pipeline.models import (
-    RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
-    RESEARCH_PROMOTE_CONFIRM,
-    RESEARCH_RETRY_STAGE_CONFIRM,
-    RESEARCH_RUN_STAGE_CONFIRM,
-)
-
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
 
+
+RESEARCH_RUN_STAGE_CONFIRM = "RESEARCH_RUN_STAGE"
+RESEARCH_RETRY_STAGE_CONFIRM = "RESEARCH_RETRY_STAGE"
+RESEARCH_PROMOTE_CONFIRM = "RESEARCH_PROMOTE"
+RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM = "RESEARCH_HMM_BACKFILL_EXECUTE"
 
 TOOL_NAMES = (
     "research_create_experiment",

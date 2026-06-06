@@ -12,6 +12,7 @@ import {
   type ValidationAgentContext,
   type ValidationBug,
   type ValidationBugSummary,
+  type ValidationCodeIntelligenceSummary,
   type ValidationBusinessAssertion,
   type ValidationCoverageDetail,
   type ValidationCoverageSummary,
@@ -30,6 +31,8 @@ import {
   type ValidationGithubIssueSync,
   type ValidationGithubPr,
   type ValidationGithubPrSummary,
+  type ValidationIssueCandidateItem,
+  type ValidationIssueCandidateSummary,
   type ValidationIssueWorkflowItem,
   type ValidationIssueWorkflowSummary,
   type ValidationLegacyDebtGroup,
@@ -188,6 +191,80 @@ function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: Validatio
             )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无 Issue workflow 数据</td></tr>}
           </tbody>
         </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+
+function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssueCandidateSummary | null; items?: ValidationPage<ValidationIssueCandidateItem> | null }) {
+  const candidates = items?.items || [];
+  return (
+    <SectionCard title="Issue Candidate Queue" eyebrow="CI / Nightly / FailureEvent / agent handoff">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Candidates" value={summary?.candidate_count ?? candidates.length} hint="read-only queue" tone="info" />
+        <MetricCard label="Open" value={summary?.open_count ?? 0} hint="not promoted or ignored" tone={(summary?.open_count || 0) ? "warning" : "success"} />
+        <MetricCard label="Linked Issues" value={summary?.linked_issue_count ?? 0} hint="GitHub issue link" tone="success" />
+        <MetricCard label="Missing Links" value={summary?.missing_issue_link_count ?? 0} hint="triage before repair" tone={(summary?.missing_issue_link_count || 0) ? "warning" : "success"} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <CountChips counts={summary?.by_status} />
+      </div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>Candidate</th><th>Status</th><th>Module / Severity</th><th>Links</th><th>Evidence</th><th>Suggested Validation</th></tr></thead>
+          <tbody>
+            {candidates.length ? candidates.map((item) => (
+              <tr key={item.candidate_id}>
+                <td>
+                  <strong>{display(item.title || item.candidate_id)}</strong><br />
+                  <span className="pv2-muted pv2-mono">{compactId(item.candidate_id)}</span><br />
+                  <span className="pv2-muted pv2-mono">fp {compactId(item.fingerprint)}</span>
+                </td>
+                <td><StatusBadge status={item.status || "new"} /><br /><span className="pv2-muted">{display(item.source_type)}</span><br />runs {display(item.run_count ?? 1)}</td>
+                <td>{display(item.module_id)}<br /><StatusBadge status={item.severity || "P1"} /></td>
+                <td>
+                  {item.github_issue_url ? <a href={item.github_issue_url}>{display(item.github_issue_number || item.github_issue_url)}</a> : <span className="pv2-muted">No GitHub issue link</span>}<br />
+                  {item.linked_pr_url ? <a href={item.linked_pr_url}>PR</a> : <span className="pv2-muted">No PR link</span>}
+                </td>
+                <td><BadgeList items={(item.evidence_refs || []).slice(0, 3)} empty="No compact evidence refs" /><span className="pv2-muted">{display(item.source_path)}</span></td>
+                <td><BadgeList items={(item.recommended_validation || []).slice(0, 3)} empty="Run triage before selecting validation" /></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>No issue candidates yet. CI/Nightly candidate artifacts can appear here without raw JSON dumps.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function CodeIntelligencePanel({ summary }: { summary?: ValidationCodeIntelligenceSummary | null }) {
+  const codegraph = isObject(summary?.codegraph) ? summary?.codegraph : {};
+  const understandAnything = isObject(summary?.understand_anything) ? summary?.understand_anything : {};
+  const warnings = Array.isArray(summary?.warnings) ? summary?.warnings.filter((item): item is string => typeof item === "string") : [];
+  const reasonCodes = Array.isArray(summary?.reason_codes) ? summary?.reason_codes.filter((item): item is string => typeof item === "string") : [];
+  return (
+    <SectionCard title="Code Intelligence Freshness" eyebrow="CodeGraph / Understand Anything / warning-only">
+      <div className="pv2-notice pv2-notice-info">
+        <div className="pv2-notice-title">Warning-only acceleration context</div>
+        <div className="pv2-notice-body">CodeGraph and Understand Anything are context accelerators only. Missing or stale graph data must not block issue workflow, PR merge, nox, pytest, Validation Center, or production gates.</div>
+      </div>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Data State" value={display(summary?.data_state || "missing")} hint={`artifacts ${display(summary?.artifact_count ?? 0)}`} tone={summary?.data_state === "complete" ? "success" : "warning"} />
+        <MetricCard label="Workflow Blocking" value={display(summary?.blocking_for_issue_workflow)} hint="must stay false" tone={summary?.blocking_for_issue_workflow === false ? "success" : "warning"} />
+        <MetricCard label="CodeGraph" value={display(codegraph.freshness || codegraph.status || "missing")} hint={display(codegraph.generated_at)} tone={codegraph.freshness === "fresh" ? "success" : "warning"} />
+        <MetricCard label="UA Summaries" value={display(understandAnything.summary_count ?? 0)} hint="Understand Anything" tone={Number(understandAnything.summary_count ?? 0) ? "success" : "warning"} />
+      </div>
+      <KeyValuePanel rows={[
+        ["schema_version", summary?.schema_version],
+        ["artifact_roots", summary?.artifact_roots],
+        ["codegraph_artifact", codegraph.artifact_path],
+        ["codegraph_summary", codegraph.summary_ref],
+        ["understand_anything_manifest", isObject(understandAnything.manifest) ? understandAnything.manifest.artifact_path : undefined],
+      ]} />
+      <div className="pv2-grid pv2-grid-2" style={{ marginTop: 12 }}>
+        <div><h3 className="pv2-subtitle">Warnings</h3><BadgeList items={warnings} empty="No warning" /></div>
+        <div><h3 className="pv2-subtitle">Reason Codes</h3><BadgeList items={reasonCodes} empty="No reason code" /></div>
       </div>
     </SectionCard>
   );
@@ -704,6 +781,7 @@ export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
   const [platformHealth, setPlatformHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
+  const [codeIntelligenceSummary, setCodeIntelligenceSummary] = useState<ValidationCodeIntelligenceSummary | null>(null);
   const [findingSummary, setFindingSummary] = useState<ValidationFindingSummary | null>(null);
   const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<ValidationGitWorkspaceStatus | null>(null);
@@ -714,6 +792,8 @@ export default function ValidationCenterPage() {
   const [mergeGate, setMergeGate] = useState<ValidationMergeGate | null>(null);
   const [issueWorkflowSummary, setIssueWorkflowSummary] = useState<ValidationIssueWorkflowSummary | null>(null);
   const [issueWorkflow, setIssueWorkflow] = useState<ValidationPage<ValidationIssueWorkflowItem>>(emptyPage<ValidationIssueWorkflowItem>());
+  const [issueCandidateSummary, setIssueCandidateSummary] = useState<ValidationIssueCandidateSummary | null>(null);
+  const [issueCandidates, setIssueCandidates] = useState<ValidationPage<ValidationIssueCandidateItem>>(emptyPage<ValidationIssueCandidateItem>());
   const [moduleDetailSummary, setModuleDetailSummary] = useState<ValidationModuleQualitySummary | null>(null);
   const [pipelineTestSummary, setPipelineTestSummary] = useState<ValidationPipelineTestSummary | null>(null);
   const [pipelineTests, setPipelineTests] = useState<ValidationPage<ValidationPipelineTestItem>>(emptyPage<ValidationPipelineTestItem>());
@@ -771,6 +851,7 @@ export default function ValidationCenterPage() {
         healthData,
         platformHealthData,
         summaryData,
+        codeIntelligenceData,
         planCatalog,
         coverageData,
         evidenceData,
@@ -787,6 +868,8 @@ export default function ValidationCenterPage() {
         mergeGateData,
         issueWorkflowSummaryData,
         issueWorkflowData,
+        issueCandidateSummaryData,
+        issueCandidateData,
         moduleDetailData,
         pipelineTestSummaryData,
         pipelineTestsData,
@@ -802,6 +885,7 @@ export default function ValidationCenterPage() {
         validationApi.health(),
         optional("platform/health", () => validationApi.platformHealth(), null as ValidationHealth | null),
         validationApi.summary(),
+        optional("code-intelligence/summary", () => validationApi.codeIntelligenceSummary(), null as ValidationCodeIntelligenceSummary | null),
         validationApi.plans(),
         validationApi.coverage({ page: 1, page_size: 10 }),
         validationApi.evidence({ page: 1, page_size: 10 }),
@@ -818,6 +902,8 @@ export default function ValidationCenterPage() {
         optional("merge-gate/summary", () => validationApi.mergeGateSummary(), null as ValidationMergeGate | null),
         optional("issues/workflow/summary", () => validationApi.issueWorkflowSummary(), null as ValidationIssueWorkflowSummary | null),
         optional("issues/workflow", () => validationApi.issueWorkflow({ page: 1, page_size: 20 }), emptyPage<ValidationIssueWorkflowItem>()),
+        optional("issues/candidates/summary", () => validationApi.issueCandidateSummary(), null as ValidationIssueCandidateSummary | null),
+        optional("issues/candidates", () => validationApi.issueCandidates({ page: 1, page_size: 20 }), emptyPage<ValidationIssueCandidateItem>()),
         optional("modules/detail-summary", () => validationApi.moduleDetailSummary(), null as ValidationModuleQualitySummary | null),
         optional("pipeline/tests/summary", () => validationApi.pipelineTestsSummary(), null as ValidationPipelineTestSummary | null),
         optional("pipeline/tests", () => validationApi.pipelineTests({ page: 1, page_size: 20 }), emptyPage<ValidationPipelineTestItem>()),
@@ -833,6 +919,7 @@ export default function ValidationCenterPage() {
       setHealth(healthData);
       setPlatformHealth(platformHealthData);
       setSummary(summaryData);
+      setCodeIntelligenceSummary(codeIntelligenceData || summaryData.code_intelligence || null);
       setPlans(planCatalog.plans || []);
       setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
       setEvidence(evidenceData || emptyPage<ValidationEvidenceSummary>(10));
@@ -849,6 +936,8 @@ export default function ValidationCenterPage() {
       setMergeGate(mergeGateData);
       setIssueWorkflowSummary(issueWorkflowSummaryData);
       setIssueWorkflow(issueWorkflowData || emptyPage<ValidationIssueWorkflowItem>());
+      setIssueCandidateSummary(issueCandidateSummaryData);
+      setIssueCandidates(issueCandidateData || emptyPage<ValidationIssueCandidateItem>());
       setModuleDetailSummary(moduleDetailData);
       setPipelineTestSummary(pipelineTestSummaryData);
       setPipelineTests(pipelineTestsData || emptyPage<ValidationPipelineTestItem>());
@@ -1097,6 +1186,7 @@ export default function ValidationCenterPage() {
         automationSummary={automationSummary}
         branchDetailSummary={branchDetailSummary}
         cardsSummary={phase1Cards}
+        codeIntelligenceSummary={codeIntelligenceSummary}
         executions={executions}
         githubIssueSummary={githubIssueSummary}
         githubPrSummary={githubPrSummary}
@@ -1123,9 +1213,12 @@ export default function ValidationCenterPage() {
 
       {activeSection === "merge_gate" ? <MergeGatePanel mergeGate={mergeGate} /> : null}
 
+      {activeSection === "code_intelligence" ? <CodeIntelligencePanel summary={codeIntelligenceSummary || summary?.code_intelligence || null} /> : null}
+
       {activeSection === "issue_workflow" ? (
         <>
           <IssueWorkflowPanel summary={issueWorkflowSummary} items={issueWorkflow} onOpenBug={(bugId) => void openBug(bugId)} />
+          <IssueCandidateQueuePanel summary={issueCandidateSummary} items={issueCandidates} />
         </>
       ) : null}
 

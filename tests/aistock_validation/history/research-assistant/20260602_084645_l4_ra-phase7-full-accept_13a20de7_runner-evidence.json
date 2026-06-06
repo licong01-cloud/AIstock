@@ -1,0 +1,60 @@
+{
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "generated_at": "2026-06-02T08:46:45.665028+00:00",
+  "module": "research_assistant",
+  "level": "L4",
+  "title": "Runner evidence for ra_phase7_full_accept",
+  "run_id": "research-assistant_20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation__3a012e01b6",
+  "git_commit": "07a5279b",
+  "operator": "codex",
+  "runner_job_id": "valjob_20260602_084455_13a20de7",
+  "evidence": [
+    {
+      "kind": "run_metadata",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602\\tests\\aistock_validation\\history\\research-assistant\\20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 5570,
+      "child_count": null,
+      "sha256": "31ea1b42f9777c2372c6feeae4c9be67f935cc959e466b4f2b6712ad82e45f1f"
+    },
+    {
+      "kind": "run_record",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602\\tests\\aistock_validation\\history\\research-assistant\\20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation.md",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 1347,
+      "child_count": null,
+      "sha256": "8613ff3a91a788b7a9310e1f8a6ff98ac3ed8f75f847787f403f6341e4b927d4"
+    },
+    {
+      "kind": "runner_job",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602\\tests\\aistock_validation\\history\\research-assistant\\20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-job.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 3987,
+      "child_count": null,
+      "sha256": "270c14dcc66ce85333cf2f0891b221b6def455b200e6dc816c6ed8fdf866a28d"
+    },
+    {
+      "kind": "runner_log",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602\\tests\\aistock_validation\\history\\research-assistant\\20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-log.txt",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 29332,
+      "child_count": null,
+      "sha256": "74ff70d8090260f9ebf0376217e7b76ee7c7bfaa2f4c34b79e1f77138116e9ec"
+    },
+    {
+      "kind": "runner_evidence",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602\\tests\\aistock_validation\\history\\research-assistant\\20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-evidence.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 2576,
+      "child_count": null,
+      "sha256": "c20791800afa2fa8f7d500f1978a55b7653d553e5df2aeb4f569bd6a172fe31b"
+    }
+  ],
+  "missing_count": 0,
+  "missing": []
+}

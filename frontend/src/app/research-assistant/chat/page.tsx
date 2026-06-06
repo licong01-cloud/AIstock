@@ -15,6 +15,8 @@ import {
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
+import { BlockerCard } from "@/components/research-assistant/BlockerCard";
+import { EvidenceCard, evidenceCompleteness, normalizeEvidenceRef } from "@/components/research-assistant/EvidenceCard";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
   LOCAL_DATA_MANAGEMENT_PHASES,
@@ -23,6 +25,9 @@ import {
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type AssistantBlockerCard,
+  type AssistantEvidenceCard,
+  type JsonObject,
   type LocalDataPhase,
   type LocalDataPhaseKey,
 } from "@/lib/research-assistant/api";
@@ -33,6 +38,7 @@ type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
 type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
 type LocalDataPhaseCard = { key?: string; phase?: string; title?: string; label?: string; status?: string; description?: string };
+type McpResultCard = JsonObject & { title?: string; summary?: string; route?: string; next_step?: string; summary_first?: boolean };
 type McpRouteDecision = {
   domain?: string;
   server_key?: string | null;
@@ -51,9 +57,27 @@ type ContextHealth = {
   key_fact_count?: number;
   show_badge?: boolean;
 };
+type RuntimeCodeVisibility = {
+  schema_version?: string;
+  status?: string;
+  runtime_loaded_at?: string;
+  runtime_loaded_git_commit_short?: string | null;
+  current_repo_git_commit_short?: string | null;
+  origin_main_git_commit_short?: string | null;
+  loaded_source_matches_disk?: boolean;
+  loaded_commit_matches_repo?: boolean;
+  repo_matches_origin_main?: boolean;
+  runtime_matches_origin_main?: boolean;
+  restart_required_to_activate_main?: boolean;
+  operator_message?: string;
+};
 
 type ChatCards = {
   dialogue_mode?: string;
+  summary?: string;
+  orchestrator_summary?: string;
+  evidence_cards?: JsonObject[];
+  blocker_cards?: JsonObject[];
   mode_decision?: Record<string, unknown>;
   plan_card?: PlanCard;
   clarification_card?: ClarificationCard;
@@ -64,8 +88,13 @@ type ChatCards = {
   local_data_card?: Record<string, unknown>;
   local_data_phases?: LocalDataPhaseCard[];
   mcp_route_decision?: McpRouteDecision;
+  mcp_execution_result?: JsonObject;
+  mcp_summary_result?: JsonObject;
+  mcp_tool_event?: JsonObject;
+  mcp_result_cards?: McpResultCard[];
   safety?: Record<string, unknown>;
   context_health?: ContextHealth;
+  runtime_code?: RuntimeCodeVisibility;
   ui_display?: {
     show_plan_card?: boolean;
     show_clarification_card?: boolean;
@@ -155,6 +184,167 @@ function proposalStatusText(status?: string): string {
   return chatCopy.proposalStatusText[status as keyof typeof chatCopy.proposalStatusText] || status;
 }
 
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const items = value.map((item) => textValue(item)).filter((item) => item && item !== "-");
+    return items.length ? items.join(" / ") : "-";
+  }
+  return "-";
+}
+
+function recordList(value: unknown): JsonObject[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is JsonObject => Boolean(asRecord(item)));
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => textValue(item))
+    .filter((item) => item && item !== "-");
+}
+
+function extractEvidenceCards(cards: JsonObject, contextPack?: JsonObject): AssistantEvidenceCard[] {
+  const direct = [
+    ...recordList(cards.evidence_cards),
+    ...recordList(cards.stock_evidence_cards),
+    ...recordList(cards.evidence_card ? [cards.evidence_card] : []),
+  ];
+  const normalized = direct.map((item, index) => {
+    const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs.map(normalizeEvidenceRef) : [];
+    const card: AssistantEvidenceCard = {
+      ...item,
+      card_id: String(item.card_id || `chat-evidence-${index + 1}`),
+      title: String(item.title || item.card_id || `Evidence ${index + 1}`),
+      summary: String(item.summary || item.description || ""),
+      evidence_refs: refs,
+      status: String(item.status || "supported"),
+    };
+    const completeness = evidenceCompleteness(card);
+    return { ...card, status: completeness.ok && card.status === "supported" ? "supported" : card.status === "blocked" ? "blocked" : "insufficient" };
+  });
+  if (normalized.length) return normalized;
+
+  const contextRefs = Array.isArray(contextPack?.evidence_refs) ? contextPack.evidence_refs.map(normalizeEvidenceRef) : [];
+  if (!contextRefs.length) return [];
+  const card: AssistantEvidenceCard = {
+    card_id: "context-pack-evidence",
+    title: "Context Pack evidence",
+    summary: "Evidence returned by the context pack. Missing source/provenance/as_of remains insufficient.",
+    evidence_refs: contextRefs,
+    status: "supported",
+  };
+  const completeness = evidenceCompleteness(card);
+  return [{ ...card, status: completeness.ok ? "supported" : "insufficient" }];
+}
+
+function extractBlockerCards(cards: JsonObject): AssistantBlockerCard[] {
+  const explicit = [
+    ...recordList(cards.blocker_cards),
+    ...recordList(cards.blockers),
+    ...recordList(cards.blocker_card ? [cards.blocker_card] : []),
+  ];
+  const blockers = explicit.flatMap((item, index) => {
+    const status = String(item.status || "");
+    const reason = String(item.reason || item.blocked_reason || "");
+    const nextStep = String(item.next_step || item.operator_action || "");
+    if (!status || !reason || !nextStep) return [];
+    return [{
+      ...item,
+      blocker_id: String(item.blocker_id || `chat-blocker-${index + 1}`),
+      status,
+      reason,
+      next_step: nextStep,
+      provenance: asRecord(item.provenance) || undefined,
+      as_of: typeof item.as_of === "string" ? item.as_of : undefined,
+    } as AssistantBlockerCard];
+  });
+  const proposalBlockers = recordList(cards.action_proposals).flatMap((proposal, index) => {
+    if (!proposal.approval_required && proposal.status !== "approval_required") return [];
+    return [{
+      blocker_id: String(proposal.action_proposal_id || `proposal-blocker-${index + 1}`),
+      status: "approval_required",
+      reason: String(proposal.title || "High risk action requires approval"),
+      next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
+      provenance: { source: "action_proposals" },
+      as_of: typeof proposal.as_of === "string" ? proposal.as_of : undefined,
+    } as AssistantBlockerCard];
+  });
+  return [...blockers, ...proposalBlockers];
+}
+
+function assistantSummaryText(result: AssistantChatTurnResult): string {
+  const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+  const contentJson = asRecord(result.assistant_message?.content_json) || {};
+  const summary = String(cards.orchestrator_summary || cards.summary || contentJson.summary || result.assistant_message?.content_text || "").trim();
+  if (!summary || summary.startsWith("{") || summary.includes("worker_results") || summary.includes("payload_json")) {
+    return "The orchestrator summary is unavailable or unsafe for the main bubble. Open Workbench or Trace for worker process details.";
+  }
+  return summary;
+}
+
+function hasMcpExecutionCards(cards: ChatCards): boolean {
+  return Boolean(
+    asRecord(cards.mcp_execution_result) ||
+      asRecord(cards.mcp_summary_result) ||
+      recordList(cards.mcp_result_cards).length ||
+      asRecord(cards.mcp_tool_event),
+  );
+}
+
+function humanOmittedSection(section: string): string {
+  const labels: Record<string, string> = {
+    raw_payload: "原始 payload",
+    full_logs: "完整日志",
+    matrix: "矩阵",
+    model_weights: "模型权重",
+    training_curves: "训练曲线",
+    factor_value_rows: "因子明细行",
+    database_rows: "数据库原始行",
+  };
+  return labels[section] || section.replaceAll("_", " ");
+}
+
+function mcpCountText(summary: JsonObject, execution: JsonObject): string {
+  const responseSummary = asRecord(execution.response_summary) || {};
+  const returned = summary.returned_count ?? summary.returned ?? responseSummary.returned_count;
+  const total = summary.total_count ?? summary.total ?? responseSummary.total_count;
+  if (returned === undefined && total === undefined) return "";
+  return `返回 ${textValue(returned)} / 总计 ${textValue(total)}`;
+}
+
+function mcpSummaryItemTitle(item: JsonObject, index: number): string {
+  return textValue(
+    item.title ||
+      item.name ||
+      item.factor_name ||
+      item.model_name ||
+      item.strategy_name ||
+      item.tool_name ||
+      item.server_key ||
+      `概要条目 ${index + 1}`,
+  );
+}
+
+function mcpSummaryItemMeta(item: JsonObject): string {
+  return [
+    item.category,
+    item.status,
+    item.risk_level,
+    item.server_key && item.tool_name ? `${item.server_key}/${item.tool_name}` : item.tool_name,
+  ]
+    .map((value) => textValue(value))
+    .filter((value) => value && value !== "-")
+    .join(" · ");
+}
+
+function mcpResultCards(cards: ChatCards): McpResultCard[] {
+  return recordList(cards.mcp_result_cards) as McpResultCard[];
+}
 
 function phaseRecordStatus(records: LocalDataPhaseCard[], phase: LocalDataPhase): string | null {
   const matched = records.find((record) => {
@@ -195,6 +385,15 @@ function hasLocalDataContext(cards: ChatCards): boolean {
   );
 }
 
+function runtimeCodeVisibility(cards: ChatCards): RuntimeCodeVisibility | null {
+  const runtime = asRecord(cards.runtime_code);
+  if (!runtime?.schema_version) return null;
+  return runtime as RuntimeCodeVisibility;
+}
+
+function hasRuntimeCodeVisibility(cards: ChatCards): boolean {
+  return Boolean(runtimeCodeVisibility(cards));
+}
 function localDataCapabilityText(capability: Record<string, unknown>): string {
   return String(
     capability.local_data_management ||
@@ -210,7 +409,7 @@ function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: Ch
   const hasPlan = showPlan && Boolean(cards.plan_card?.title || cards.plan_card?.steps?.length);
   const hasClarification = showClarify && Boolean(cards.clarification_card?.questions?.length);
   const hasProposal = Boolean(cards.action_proposals?.length);
-  return hasPlan || hasClarification || hasProposal || Boolean(routeDecision(cards)) || hasLocalDataContext(cards);
+  return hasPlan || hasClarification || hasProposal || Boolean(routeDecision(cards)) || hasMcpExecutionCards(cards) || hasLocalDataContext(cards);
 }
 
 function createAdapter(
@@ -247,7 +446,7 @@ function createAdapter(
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
-      const reply = stripAssistantToolChoiceMarkup(result.assistant_message?.content_text || chatCopy.fallbackReply, routeDecision(cards));
+      const reply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
       return { content: [{ type: "text", text: reply }] };
     },
   };
@@ -327,6 +526,111 @@ function ChatMessage() {
   );
 }
 
+function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
+  const execution = asRecord(cards.mcp_execution_result) || {};
+  const summary = asRecord(cards.mcp_summary_result) || {};
+  const toolEvent = asRecord(cards.mcp_tool_event) || {};
+  const resultCards = mcpResultCards(cards);
+  if (!Object.keys(execution).length && !Object.keys(summary).length && !resultCards.length && !Object.keys(toolEvent).length) return null;
+
+  const route = textValue(
+    execution.route ||
+      (execution.server_key && execution.tool_name ? `${execution.server_key}/${execution.tool_name}` : undefined) ||
+      resultCards[0]?.route ||
+      (toolEvent.server_key && toolEvent.tool_name ? `${toolEvent.server_key}/${toolEvent.tool_name}` : undefined),
+  );
+  const status = textValue(execution.status || toolEvent.status || "succeeded");
+  const countText = mcpCountText(summary, execution);
+  const responseSummary = asRecord(execution.response_summary) || {};
+  const items = recordList(summary.items).slice(0, 5);
+  const omittedSections = stringList(summary.omitted_sections);
+  const artifactRefs = stringList(summary.artifact_refs || toolEvent.artifact_refs || responseSummary.artifact_refs);
+  const nextStep = textValue(summary.next_step || resultCards[0]?.next_step || responseSummary.next_step);
+  const detailTool = textValue(summary.detail_tool || responseSummary.detail_tool);
+
+  return (
+    <div className="ra-chat-confirm-card" data-testid="ra-mcp-summary-card">
+      <strong>已执行只读 MCP 摘要查询</strong>
+      <p>{route} · {status} · summary-first</p>
+      {resultCards.map((card, index) => (
+        <div className="ra-chat-mcp-result" key={`${card.title || card.route || "mcp-card"}-${index}`}>
+          <strong>{textValue(card.title || card.route || route)}</strong>
+          <p>{textValue(card.summary)}</p>
+          {card.next_step ? <p>下一步：{textValue(card.next_step)}</p> : null}
+        </div>
+      ))}
+      {countText ? <p>{countText}</p> : null}
+      {items.length ? (
+        <ul>
+          {items.map((item, index) => (
+            <li key={`${mcpSummaryItemTitle(item, index)}-${index}`}>
+              <strong>{mcpSummaryItemTitle(item, index)}</strong>
+              {mcpSummaryItemMeta(item) ? <> · {mcpSummaryItemMeta(item)}</> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {omittedSections.length ? <p>已折叠：{omittedSections.map(humanOmittedSection).join(" / ")}。</p> : null}
+      {artifactRefs.length ? <p>审计引用：{artifactRefs.slice(0, 3).join(" / ")}</p> : null}
+      {detailTool !== "-" ? <p>需要详情时再调用：{detailTool}</p> : null}
+      {nextStep !== "-" ? <p>下一步：{nextStep}</p> : null}
+    </div>
+  );
+}
+
+function RuntimeCodeCard({ cards }: { cards: ChatCards }) {
+  const runtime = runtimeCodeVisibility(cards);
+  if (!runtime) return null;
+  const restartRequired = runtime.restart_required_to_activate_main === true;
+  const status = textValue(runtime.status);
+  const runtimeCommit = textValue(runtime.runtime_loaded_git_commit_short);
+  const repoCommit = textValue(runtime.current_repo_git_commit_short);
+  const originCommit = textValue(runtime.origin_main_git_commit_short);
+  return (
+    <div className="ra-chat-confirm-card" data-testid="ra-runtime-code-card">
+      <strong>运行时代码可见性</strong>
+      <p>状态：{status}；运行中 commit：{runtimeCommit}；本地 main：{repoCommit}；origin/main：{originCommit}</p>
+      <p>{runtime.operator_message || (restartRequired ? "运行中的后端可能尚未加载已合入代码。" : "运行中的后端与仓库版本一致。")}</p>
+      <p>
+        加载文件匹配：{textValue(runtime.loaded_source_matches_disk)}；commit 匹配：{textValue(runtime.loaded_commit_matches_repo)}；main 同步：{textValue(runtime.repo_matches_origin_main)}
+      </p>
+      {restartRequired ? <p>需要你手动重启后端后，新合入代码才会在运行时生效；我不会自动重启服务。</p> : null}
+    </div>
+  );
+}
+
+function RuntimeCodePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
+  const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
+  if (!hasRuntimeCodeVisibility(cards)) return null;
+  return (
+    <section className="ra-chat-card" data-testid="ra-runtime-code-panel">
+      <span className="ra-chat-eyebrow">Runtime</span>
+      <RuntimeCodeCard cards={cards} />
+    </section>
+  );
+}
+
+function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
+  if (!latest) return null;
+  const cards = asCards(latest.cards || latest.assistant_message?.content_json?.cards);
+  const contextPack = asRecord(latest.context_pack);
+  const evidenceCards = extractEvidenceCards(cards as JsonObject, contextPack || undefined);
+  const blockerCards = extractBlockerCards(cards as JsonObject);
+  if (!evidenceCards.length && !blockerCards.length) return null;
+  return (
+    <section className="ra-chat-card ra-phase7-panel" data-testid="ra-phase7-evidence-panel">
+      <span className="ra-chat-eyebrow">Phase 7 Evidence / Blockers</span>
+      <h2>Evidence cards and gated blockers</h2>
+      <p>Evidence must carry source, provenance, and as_of. Missing fields remain insufficient instead of receiving a generated date.</p>
+      <div className="ra-phase7-card-grid">
+        {evidenceCards.map((card) => <EvidenceCard card={card} key={card.card_id} />)}
+        {blockerCards.map((card) => <BlockerCard card={card} key={card.blocker_id} />)}
+      </div>
+      {latest.task?.task_id ? <Link className="ra-chat-admin-link" href={`/research-assistant/workbench?task_id=${encodeURIComponent(latest.task.task_id)}`}>Open Workbench process</Link> : null}
+    </section>
+  );
+}
+
 function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
   if (!shouldShowSideDetails(latest, cards)) return null;
@@ -376,12 +680,13 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
       {route ? (
         <div className="ra-chat-confirm-card" data-testid="ra-mcp-route-card">
           <strong>MCP route decision</strong>
-          <p>{route.domain || "mcp"} -> {route.server_key}/{route.tool_name}</p>
+          <p>{route.domain || "mcp"} {"->"} {route.server_key}/{route.tool_name}</p>
           <p>{route.summary_first ? "summary-first：列表只展示概要，详情按需展开。" : "按工具返回结果展示。"}</p>
           <p>{route.confirmation_required ? "需要确认和审批后才可执行。" : route.preflight_required ? "先执行 preflight/计划，不直接写入。" : "只读查询，不执行写操作。"}</p>
           {route.reason ? <p>{route.reason}</p> : null}
         </div>
       ) : null}
+      <McpSummaryResultCard cards={cards} />
       {showLocalData ? (
         <div className="ra-chat-confirm-card" data-testid="ra-local-data-plan-card">
           <strong>本地数据管理执行阶段</strong>
@@ -520,7 +825,11 @@ export default function ResearchAssistantChatPage() {
           onInitialize={initializeCatalogs}
         />
       ) : (
-        <PlanSummary latest={latest} />
+        <>
+          <Phase7EvidencePanel latest={latest} />
+          <RuntimeCodePanel latest={latest} />
+          <PlanSummary latest={latest} />
+        </>
       )}
     </main>
   );

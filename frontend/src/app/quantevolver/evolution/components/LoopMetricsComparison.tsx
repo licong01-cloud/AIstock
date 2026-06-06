@@ -26,8 +26,21 @@ interface LoopRow {
   loop: any;
   sourceIndex: number;
   diagnostics: LoopDiagnostics;
-  rankReturn: number;
-  rankDrawdown: number;
+  rank: LoopRankMetrics;
+  bestEligible: boolean;
+}
+
+interface LoopRankMetrics {
+  cagr?: number;
+  annualizedReturn?: number;
+  absMaxDrawdown?: number;
+  costMaxDrawdown?: number;
+  sharpe?: number;
+  ic?: number;
+  avgCount?: number;
+  maxCount?: number;
+  finalCash?: number;
+  finalStockValue?: number;
 }
 
 function metricNumber(metrics: Record<string, any>, keys: string[]): number | undefined {
@@ -40,6 +53,56 @@ function metricNumber(metrics: Record<string, any>, keys: string[]): number | un
     }
   }
   return undefined;
+}
+
+function isFiniteMetric(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function buildRankMetrics(diagnostics: LoopDiagnostics): LoopRankMetrics {
+  const metrics = diagnostics.metrics || {};
+  const ar = diagnostics.absoluteReturns || {};
+  const pos = diagnostics.position;
+
+  return {
+    cagr: metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute"]),
+    annualizedReturn: metricNumber(metrics, ["annualized_return", "ann_return"]),
+    absMaxDrawdown: metricNumber(ar, ["max_drawdown", "max_drawdown_absolute"]),
+    costMaxDrawdown: metricNumber(metrics, ["max_drawdown"]),
+    sharpe: metricNumber(ar, ["sharpe", "sharpe_absolute"]) ?? metricNumber(metrics, ["sharpe", "Sharpe"]),
+    ic: metricNumber(metrics, ["IC", "ic"]),
+    avgCount: pos.avgCount,
+    maxCount: pos.maxCount,
+    finalCash: pos.finalCash,
+    finalStockValue: pos.finalStockValue,
+  };
+}
+
+function hasCompleteRankMetrics(loop: any, rank: LoopRankMetrics): boolean {
+  const status = loop?.status;
+  const statusEligible = !status || status === "completed";
+  return (
+    statusEligible &&
+    isFiniteMetric(rank.cagr) &&
+    isFiniteMetric(rank.absMaxDrawdown) &&
+    isFiniteMetric(rank.sharpe) &&
+    isFiniteMetric(rank.avgCount) &&
+    isFiniteMetric(rank.maxCount) &&
+    isFiniteMetric(rank.finalCash) &&
+    isFiniteMetric(rank.finalStockValue)
+  );
+}
+
+function isBetterRankCandidate(current: LoopRow, best: LoopRow): boolean {
+  const currentReturn = current.rank.cagr ?? -Infinity;
+  const bestReturn = best.rank.cagr ?? -Infinity;
+  if (currentReturn !== bestReturn) return currentReturn > bestReturn;
+
+  const currentDrawdown = Math.abs(current.rank.absMaxDrawdown ?? Infinity);
+  const bestDrawdown = Math.abs(best.rank.absMaxDrawdown ?? Infinity);
+  if (currentDrawdown !== bestDrawdown) return currentDrawdown < bestDrawdown;
+
+  return (current.rank.sharpe ?? -Infinity) > (best.rank.sharpe ?? -Infinity);
 }
 
 function statusText(status?: string): string {
@@ -111,26 +174,22 @@ export default function LoopMetricsComparison({
 
   const rows: LoopRow[] = loops.map((loop, sourceIndex) => {
     const diagnostics = extractLoopDiagnostics(loop);
-    const metrics = diagnostics.metrics || {};
-    const absoluteReturns = diagnostics.absoluteReturns || {};
-    const cagr = metricNumber(absoluteReturns, ["cagr", "cagr_absolute", "annualized_return_absolute"]);
-    const annReturn = metricNumber(metrics, ["annualized_return", "ann_return", "return"]);
-    const maxDrawdown = metricNumber(absoluteReturns, ["max_drawdown", "max_drawdown_absolute"]);
+    const rank = buildRankMetrics(diagnostics);
 
     return {
       loop,
       sourceIndex,
       diagnostics,
-      rankReturn: cagr ?? annReturn ?? -Infinity,
-      rankDrawdown: Math.abs(maxDrawdown ?? metricNumber(metrics, ["max_drawdown"]) ?? Infinity),
+      rank,
+      bestEligible: hasCompleteRankMetrics(loop, rank),
     };
   });
 
-  const bestLoop = rows.reduce((best, current) => {
-    if (current.rankReturn > best.rankReturn) return current;
-    if (current.rankReturn === best.rankReturn && current.rankDrawdown < best.rankDrawdown) return current;
-    return best;
-  }, rows[0]);
+  const bestCandidateRows = rows.filter((row) => row.bestEligible);
+  const bestLoop = bestCandidateRows.reduce<LoopRow | undefined>((best, current) => {
+    if (!best) return current;
+    return isBetterRankCandidate(current, best) ? current : best;
+  }, undefined);
 
   return (
     <div style={{
@@ -187,24 +246,23 @@ export default function LoopMetricsComparison({
           <tbody>
             {rows.map((row) => {
               const { loop, diagnostics } = row;
-              const metrics = diagnostics.metrics || {};
-              const ar = diagnostics.absoluteReturns || {};
               const pos = diagnostics.position;
               const model = diagnostics.model;
               const isBest = bestLoop?.loop?.loop_index === loop.loop_index;
               const isSelected = selectedLoopIndex === loop.loop_index;
-              const cagr = metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute"]);
-              const absMaxDrawdown = metricNumber(ar, ["max_drawdown", "max_drawdown_absolute"]);
-              const annualizedReturn = metricNumber(metrics, ["annualized_return", "ann_return"]);
-              const costMaxDrawdown = metricNumber(metrics, ["max_drawdown"]);
-              const sharpe = metricNumber(metrics, ["sharpe", "Sharpe"]);
-              const ic = metricNumber(metrics, ["IC", "ic"]);
+              const cagr = row.rank.cagr;
+              const absMaxDrawdown = row.rank.absMaxDrawdown;
+              const annualizedReturn = row.rank.annualizedReturn;
+              const costMaxDrawdown = row.rank.costMaxDrawdown;
+              const sharpe = row.rank.sharpe;
+              const ic = row.rank.ic;
               const statusColors = statusStyle(loop.status);
 
               return (
                 <tr
                   key={loop.loop_id || loop.loop_index}
                   onClick={() => onLoopSelect?.(loop.loop_index)}
+                  title={row.bestEligible ? undefined : "Incomplete metrics: loop is excluded from best-loop ranking."}
                   style={{
                     cursor: onLoopSelect ? "pointer" : "default",
                     backgroundColor: isSelected ? "#eff6ff" : (row.sourceIndex % 2 === 0 ? "#fff" : "#f8fafc"),
@@ -285,6 +343,11 @@ export default function LoopMetricsComparison({
                     }}>
                       {statusText(loop.status)}
                     </span>
+                    {!row.bestEligible && (
+                      <div style={{ marginTop: "4px", color: "#b45309", fontSize: "10px", fontWeight: 700 }}>
+                        Incomplete metrics
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -294,6 +357,9 @@ export default function LoopMetricsComparison({
       </div>
       <div style={{ marginTop: "10px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
         持仓最小/平均/最大只从已缓存的 enhanced metrics 或已回填 holding audit 摘要读取；旧 Loop 未回填该摘要时显示 “-”，不会在页面加载时重跑实验或修改实验行为。
+      </div>
+      <div style={{ marginTop: "6px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
+        Best-loop selection only ranks completed loops with CAGR, absolute MaxDD, Sharpe, average/max holdings, ending cash, and stock market value.
       </div>
     </div>
   );

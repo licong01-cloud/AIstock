@@ -253,6 +253,26 @@ def test_validation_select_maps_catalog_plans_and_production_gates(capsys: pytes
     }
 
 
+def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "watchlist",
+        "--changed-file",
+        "backend/core/data_source_manager_impl.py",
+        "--changed-file",
+        "backend/tests/watchlist/test_realtime_amount_units.py",
+        "--changed-file",
+        "tests/aistock_validation/bugs/20260602_BUG-195-watchlist-turnover-amount-column-displays-1000x-too-small-values.json",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "watchlist" in payload["impacted_modules"]
+    assert payload["ownership"]["unmatched_files"] == []
+    assert "validation_center_backend" not in payload["required_plans"]
+    assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
+
+
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue = _write_json(tmp_path / "bug.json", {
         "bug_id": "BUG-124",
@@ -299,11 +319,394 @@ def test_close_sync_and_cleanup_apply_are_dry_run_only(tmp_path: Path, capsys: p
     assert "intentionally not implemented" in capsys.readouterr().err
 
 
+def test_pr_check_infers_linkage_and_scope_from_bug_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260529_BUG-155-workflow-efficiency.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-155",
+                "github_issue_number": 355,
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-155-workflow-efficiency" if args[:2] == ["branch", "--show-current"] else "fix BUG-155")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260529_BUG-155-workflow-efficiency.json",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert "BUG-155" in summary["linked_issues"]
+    assert "#355" in summary["linked_issues"]
+    assert summary["scope_check"]["status"] == "passed"
+    assert summary["scope_check"]["status_source"] == "inferred_from_bug_json"
+    assert summary["linkage_inference"]["status"] == "inferred"
+
+
+def test_pr_check_infers_linkage_from_pr_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = _write_json(
+        tmp_path / "bug.json",
+        {
+            "module": "validation",
+            "allowed_write_scope": ["scripts/issue_flow.py"],
+        },
+    )
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "Fixes BUG-156")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Closes #356")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--issue-json",
+            str(issue),
+            "--changed-file",
+            "scripts/issue_flow.py",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert "BUG-156" in summary["linked_issues"]
+    assert "#356" in summary["linked_issues"]
+    assert summary["scope_check"]["status"] == "passed"
+    assert summary["scope_check"]["status_source"] == "issue_record"
+    assert summary["linkage_inference"]["pr_metadata_present"] is True
+    assert summary["linkage_inference"]["status"] == "inferred"
+
+
+def test_pr_check_does_not_use_stale_history_when_diff_log_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+
+    def fake_git(args: list[str], cwd: Path = flow.REPO_ROOT, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/pr-quality-gate"
+        return ""
+
+    monkeypatch.setattr(flow, "_git_output", fake_git)
+
+    assert flow.main(["pr-check", "--changed-file", "scripts/issue_flow.py"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert summary["linked_issues"] == []
+    assert summary["task_tier"] == "T0"
+    assert summary["linkage_inference"]["status"] == "missing"
+
+
+def test_pr_check_p1_evidence_gate_warns_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-198-pr-quality-gate")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "warning"
+    assert gate["enforced"] is False
+    assert "validation_evidence" in gate["warnings"]
+
+
+def test_pr_check_p1_evidence_gate_blocks_when_enforced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-198 P1")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 2
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "blocked"
+    assert gate["enforced"] is True
+    assert gate["severity"] == "P1"
+    assert gate["checks"]["linked_issue"] is True
+    assert gate["checks"]["scope_passed"] is True
+    assert "validation_evidence" in gate["blocking"]
+    assert "production_gates" in gate["blocking"]
+
+
+def test_pr_check_p1_evidence_gate_passes_with_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "Validation Evidence: python -m nox -s l0 -> passed\n"
+        "production_ddl_gate=noop\n"
+        "production_frontend_dependency_gate=noop\n"
+        "production_backend_dependency_gate=noop",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-198 P1")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["blocking"] == []
+    assert gate["checks"] == {
+        "linked_issue": True,
+        "scope_passed": True,
+        "validation_evidence": True,
+        "production_gates": True,
+    }
+
+
+def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "status": "fixed",
+                "allowed_write_scope": ["tests/aistock_validation/bugs/**"],
+                "validation_evidence": ["python -m nox -s l0 -> passed"],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "chore(issue): close-sync BUG-198")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["checks"] == {
+        "linked_issue": True,
+        "scope_passed": True,
+        "validation_evidence": True,
+        "production_gates": True,
+    }
+
+
+def test_pr_check_does_not_treat_workflow_gate_design_pr_as_high_risk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix(validation): enforce P0/P1 PR evidence gate by default")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## What\n"
+        "- enable GitHub PR Quality P0/P1 evidence gate by default\n"
+        "## Scope notes\n"
+        "- GitHub Issue #257 remains an infra blocker and is not fixed by this PR",
+    )
+    monkeypatch.setattr(
+        flow,
+        "_git_output",
+        lambda args, cwd=flow.REPO_ROOT, check=True: (
+            "codex/workflow-pr-quality-evidence-20260603"
+            if args[:2] == ["branch", "--show-current"]
+            else "fix(validation): enforce p0 p1 pr evidence gate by default"
+        ),
+    )
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            ".github/workflows/pr-quality.yml",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "not_applicable"
+    assert gate["blocking"] == []
+
+
+def test_pr_check_t3_feature_warns_without_design_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "feat: T3 Research Assistant workflow pack")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Feature implementation for a T3 architecture change.")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "feature/t3-ra-workflow-pack")
+
+    assert flow.main(["pr-check", "--changed-file", "docs/architecture/example.md"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert summary["task_tier"] == "T3"
+    assert gate["workflow_gate"] == "warning"
+    assert gate["blocking"] == []
+    assert gate["warnings"] == ["design_acceptance_matrix"]
+
+
+def test_pr_check_t3_feature_passes_with_design_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "Feature: T3 validation workflow")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## Design Acceptance Matrix\n- API contract: pass\n- Validation evidence: pass",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "feature/t3-validation-workflow")
+
+    assert flow.main(["pr-check", "--changed-file", "docs/architecture/example.md"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["warnings"] == []
+
+
+def test_pr_check_design_compliance_ignores_non_t3_bug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix: BUG-515 P1 workflow issue")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-515-workflow")
+
+    assert flow.main(["pr-check", "--changed-file", "scripts/issue_flow.py"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert gate["workflow_gate"] == "not_applicable"
+    assert gate["warnings"] == []
+
+
 def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
     assert tomllib.loads(Path("ruff.toml").read_text(encoding="utf-8"))["lint"]["select"]
     assert json.loads(Path(".github/renovate.json").read_text(encoding="utf-8"))["dependencyDashboard"] is True
+    assert "semgrep" in Path(".github/requirements/semgrep.txt").read_text(encoding="utf-8")
+    assert "semgrep" in Path(".github/requirements/pr-quality.txt").read_text(encoding="utf-8")
     for workflow in [
         ".github/workflows/pr-quality.yml",
         ".github/workflows/semgrep.yml",
@@ -313,3 +716,87 @@ def test_open_source_tooling_configs_are_parseable() -> None:
         loaded = yaml.safe_load(Path(workflow).read_text(encoding="utf-8"))
         assert loaded["name"]
         assert loaded["jobs"]
+
+
+def test_pr_quality_semgrep_scans_changed_files_only() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    setup_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
+    ]
+    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/pr-quality.txt"
+
+    install_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Install quality tooling"
+    ]
+    assert "python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt" in str(install_steps[0]["run"])
+
+    semgrep_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "").startswith("Semgrep AIstock guardrails")
+    ]
+    assert len(semgrep_steps) == 1
+
+    run = str(semgrep_steps[0]["run"])
+    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "semgrep_changed_files.txt" in run
+    assert "xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep" in run
+    assert "semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json ." not in run
+    assert '"paths":{"scanned":[]}' in run
+
+
+def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    build_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Build AIstock PR quality summary"
+    ]
+    assert len(build_steps) == 1
+
+    env = build_steps[0]["env"]
+    assert env["AISTOCK_PR_QUALITY_ENFORCE_P0P1"] == "${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}"
+
+
+def test_standalone_semgrep_scans_changed_files_only() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["semgrep"]["steps"]
+    setup_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
+    ]
+    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/semgrep.txt"
+
+    install_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Install Semgrep"
+    ]
+    assert "python -m pip install --prefer-binary -r .github/requirements/semgrep.txt" in str(install_steps[0]["run"])
+
+    semgrep_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Run Semgrep"
+    ]
+    assert len(semgrep_steps) == 1
+
+    run = str(semgrep_steps[0]["run"])
+    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRT" in run
+    assert "semgrep_changed_files.txt" in run
+    assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
+    assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
+    assert '"paths":{"scanned":[]}' in run
+
+
+def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
+    assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]

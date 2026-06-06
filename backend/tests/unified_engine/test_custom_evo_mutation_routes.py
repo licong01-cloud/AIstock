@@ -42,7 +42,7 @@ class DummyScheduler:
         return {"submitted_loop_ids": []}
 
 
-def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522):
+def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None):
     runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
     return qe.CustomEvoLoopConfig(
         label=label,
@@ -53,6 +53,7 @@ def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522):
         node_id=node_id,
         stock_pool=stock_pool,
         runtime_flags=runtime_flags,
+        ensemble=ensemble,
     )
 
 
@@ -146,6 +147,28 @@ def test_custom_evo_rerun_route_rejects_seedless_trainable_loop(monkeypatch):
     assert exc.value.status_code == 400
     assert "runtime_flags.random_seed" in str(exc.value.detail)
     assert [call[0] for call in dummy.calls] == ["config"]
+
+
+def test_custom_evo_rerun_accepts_seedless_loop_when_ensemble_seeds_are_explicit(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    req = qe.CustomEvoLoopRerunRequest(
+        loop=_loop(
+            "ensemble",
+            random_seed=None,
+            ensemble={"enabled": True, "seeds": [42, 2026], "level": "score", "agg": "mean"},
+        ),
+        confirm_delete_old_result=True,
+    )
+    result = asyncio.run(qe.rerun_custom_evo_loop("task-a", 2, req, BackgroundTasks()))
+
+    loop_config = dummy.calls[1][1]["loop_config"]
+    assert result["status"] == "success"
+    assert loop_config["runtime_flags"]["random_seed"] == 42
+    assert loop_config["runtime_flags"]["ensemble"]["seeds"] == [42, 2026]
+    assert loop_config["ensemble"]["agg"] == "mean"
 
 
 def test_custom_evo_rerun_keeps_full_distributed_parallelism(monkeypatch):

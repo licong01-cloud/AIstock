@@ -1755,6 +1755,16 @@ def test_selection_center_weighted_fusion_uses_rank_normalized_scores() -> None:
         manifest_a.package_id: 0.25,
         manifest_b.package_id: 0.75,
     }
+    assert top.component_scores["package_presence"] == {
+        manifest_a.package_id: "selected_topK",
+        manifest_b.package_id: "selected_topK",
+    }
+    assert top.component_scores["support_count"] == 2
+    assert top.component_scores["rank_dispersion"] == 1
+    assert top.component_scores["fusion_policy_sha256"]
+    single_support = next(item for item in run.aggregate_results if item.symbol == "000001.SZ")
+    assert single_support.component_scores["package_rank_scores"][manifest_b.package_id] == 0.0
+    assert single_support.component_scores["package_presence"][manifest_b.package_id] == "not_selected_in_full_evidence"
 
 
 def test_selection_center_aggregates_existing_single_package_runs() -> None:
@@ -2287,6 +2297,62 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
     assert cached.candidates[0].component_scores["hmm"]["coefficients_path"] == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
 
 
+def test_strategy_package_runtime_auto_generation_accepts_metadata_only_builtin_preset(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+
+    class MetadataOnlyPresetProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            self.calls = []
+
+        def _list_trading_days(self, start_date, end_date):
+            return [date(2024, 1, 1)]
+
+        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, as_of_date=None, effective_trade_date=None):
+            self.calls.append({"signal_preset": signal_preset, "as_of_date": as_of_date, "effective_trade_date": effective_trade_date})
+            output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "generation_mode": "daily_asof_prediction_v1",
+                        "snapshot_id": snapshot_id,
+                        "config_id": "cfg_001",
+                        "preset_key": signal_preset,
+                        "preset_coeffs": {"trending": 1.05, "neutral": 1.0, "fading": 0.96},
+                        "as_of_trade_date": as_of_date.isoformat(),
+                        "effective_trade_date": effective_trade_date.isoformat(),
+                        "daily_coefficients": {"2024-01-02": {"801780.SI": 1.05}},
+                        "stock_sector_map": {"000001.SZ": "801780.SI"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {"status": "CREATED", "output_path": str(output)}
+
+    provider = MetadataOnlyPresetProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_metadata_preset", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.calls == [{"signal_preset": "preset_A", "as_of_date": date(2024, 1, 1), "effective_trade_date": date(2024, 1, 2)}]
+    assert snapshot.candidates[0].component_scores["hmm"]["coefficient"] == pytest.approx(1.05)
+
+
 def test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config(tmp_path) -> None:
     old_model_path = tmp_path / "old_models.json"
     new_model_path = tmp_path / "new_models.json"
@@ -2664,6 +2730,70 @@ def test_selection_center_watchlist_import_uses_selection_entry_price_not_curren
     assert result["ok"] is True
     items = captured["watchlist_call"]["items"]
     assert [item["entry_price"] for item in items] == [21.5, 22.5]
+
+
+def test_selection_center_watchlist_import_uses_entry_price_basis_date(monkeypatch) -> None:
+    class DatedEntryPriceEnrichment:
+        def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+            return [
+                candidate.model_copy(
+                    update={
+                        "selection_entry_price": 133.08,
+                        "selection_entry_price_time": "2024-01-01",
+                        "reference_price": 133.08,
+                    }
+                )
+                for candidate in candidates
+            ]
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "qe_watchlist_entry_date_pkg",
+        [{"symbol": "301312.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 133.08}],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=DatedEntryPriceEnrichment(),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("backend.services.selection_center.service.watchlist_service.list_categories", lambda: [])
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.create_category",
+        lambda name, description: 901,
+    )
+
+    def fake_add_items_bulk_from_task_selection(**kwargs):
+        captured["watchlist_call"] = kwargs
+        return {
+            "ok": True,
+            "added": len(kwargs["items"]),
+            "skipped": 0,
+            "moved": 0,
+            "errors": [],
+            "item_ids_by_code": {},
+        }
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.add_items_bulk_from_task_selection",
+        fake_add_items_bulk_from_task_selection,
+    )
+
+    result = service.add_run_to_watchlist(run_id=run.run_id, category_name="EntryPriceDate", top_k=1)
+
+    assert result["ok"] is True
+    item = captured["watchlist_call"]["items"][0]
+    assert item["entry_price"] == 133.08
+    assert item["as_of"] == "2024-01-01"
 
 
 def test_selection_center_watchlist_import_rejects_missing_reference_price() -> None:

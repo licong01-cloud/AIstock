@@ -8,7 +8,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import StrategyRuntimeRelease
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 
 def _service() -> StrategyRuntimeReleaseService:
@@ -45,17 +45,33 @@ def test_strategy_runtime_release_hash_is_canonical_and_idempotent() -> None:
     assert first.release_config_json["schema_version"] == "strategy_runtime_release_v1"
     assert first.release_config_json["package_id"] == "pkg_unit"
     assert "broker_account_id" not in first.release_config_json
+    assert "account_group_id" not in first.release_config_json
+    assert "strategy_slot_id" not in first.release_config_json
+
+
+def test_strategy_runtime_release_can_persist_full_execution_policy_snapshot() -> None:
+    service = _service()
+    policy_json = {
+        "algo_code": "SNIPER_MINIQMT",
+        "algo_config": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+    }
+
+    release = service.create_release(**_release_kwargs(execution_policy_json=policy_json))
+
+    assert release.release_config_json["execution_policy"]["policy_json"] == policy_json
+    assert release.release_config_json["execution_policy"]["policy_version_id"] == "exec_policy_unit"
+    assert release.release_config_json["execution_policy"]["policy_sha256"] == "exec_policy_hash_unit"
 
 
 def test_strategy_runtime_release_requires_all_policy_versions() -> None:
     service = _service()
 
-    with pytest.raises(StrategyPackageValidationError, match="requires all runtime"):
+    with pytest.raises(RuntimeConfigInvalidError, match="requires all runtime"):
         service.create_release(**_release_kwargs(execution_policy_version_id=""))
 
 
 def test_strategy_runtime_release_rejects_alpha_core_or_broker_fields() -> None:
-    with pytest.raises(StrategyPackageValidationError, match="cannot contain alpha-core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot contain alpha-core"):
         StrategyRuntimeRelease(
             release_id="srr_bad_alpha",
             package_id="pkg_unit",
@@ -75,7 +91,7 @@ def test_strategy_runtime_release_rejects_alpha_core_or_broker_fields() -> None:
             },
         )
 
-    with pytest.raises(StrategyPackageValidationError, match="cannot contain alpha-core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot contain alpha-core"):
         StrategyRuntimeRelease(
             release_id="srr_bad_broker",
             package_id="pkg_unit",
@@ -107,6 +123,8 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
         release=baseline,
         broker_backend="minqmt_sim",
         broker_account_id="broker_account_a",
+        account_group_id="ag_minqmt_broker_account_a_sim",
+        strategy_slot_id="slot_strategy_a",
         capital_allocation=10_000_000,
         strategy_name="strategy_a",
         order_remark_prefix="aistock_a",
@@ -116,6 +134,8 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
         release=baseline,
         broker_backend="minqmt_sim",
         broker_account_id="broker_account_b",
+        account_group_id="ag_minqmt_broker_account_b_sim",
+        strategy_slot_id="slot_strategy_a_b",
         capital_allocation=20_000_000,
         strategy_name="strategy_a_v2",
         order_remark_prefix="aistock_a_v2",
@@ -125,3 +145,7 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
     assert binding_a.binding_hash != binding_b.binding_hash
     assert binding_a.release_hash == baseline.release_hash
     assert binding_b.release_hash == baseline.release_hash
+    assert binding_a.account_group_id == "ag_minqmt_broker_account_a_sim"
+    assert binding_a.strategy_slot_id == "slot_strategy_a"
+    assert binding_a.binding_config_json["account_group_id"] == "ag_minqmt_broker_account_a_sim"
+    assert binding_a.binding_config_json["strategy_slot_id"] == "slot_strategy_a"

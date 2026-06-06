@@ -1,0 +1,69 @@
+{
+  "actual": "The classifier returns full_ci_required whenever open/in_progress BUG JSON is present with workflow files, causing full backend matrix runs for workflow-only fixes.",
+  "allowed_write_scope": [
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
+    "tests/aistock_validation/bugs/20260604_BUG-257-workflow-bug-metadata-disables-validation-fast-lane.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-257",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T06:25:30.200394Z",
+  "description": "The classifier returns full_ci_required whenever open/in_progress BUG JSON is present with workflow files, causing full backend matrix runs for workflow-only fixes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-8a5df365674a",
+      "timestamp": "2026-06-04T06:25:30.200389Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "When changed non-registry files are all workflow/validation fast-lane files, and BUG registry changes are only same-task workflow/validation metadata plus allocator, CI classification should remain workflow_validation_only and run the focused workflow validation lane.",
+  "first_seen_at": "2026-06-04T06:25:30.200394Z",
+  "fix_branch": "bug/BUG-257-workflow-bug-metadata-disables-validation-fast-l-20260604",
+  "fix_commit": "4743f3181b0b626a3cf6c8b266a45ecbb9eef354",
+  "fix_started_at": "2026-06-04T06:33:00Z",
+  "fixed_at": "2026-06-04T06:40:32.005428Z",
+  "github_issue_number": 723,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/723",
+  "last_seen_at": "2026-06-04T06:25:30.200394Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/725",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --changed-file tests/aistock_validation/bugs/<open-workflow-bug>.json --changed-file tests/aistock_validation/bugs/.bug_id_allocator.json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Workflow BUG metadata disables validation fast lane",
+  "trigger_condition": {
+    "fingerprint": "8a5df365674ab610c6d554ea",
+    "source_event_id": "FE-20260604-8a5df365674a"
+  },
+  "validation_evidence": [
+    "ci_change_classifier same-task workflow BUG metadata -> workflow_validation_only; pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 10 passed; ruff check scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py -> passed; git diff --check -> passed; workflow-smoke changed-file scripts/ci_change_classifier.py module validation -> passed; nox -s l0 validation_center_backend validation_module_registry_l0 -> passed; nox -s guardrail_changed_files -- --changed-only -> passed; watch-ci PR #725 -> checks_passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr"
+}

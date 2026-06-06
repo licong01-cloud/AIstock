@@ -587,23 +587,35 @@ class HMMTrainingService:
         return None
 
     @classmethod
+    def _is_metadata_only_signal_preset(cls, preset_coeffs: Any) -> bool:
+        if not isinstance(preset_coeffs, dict) or not preset_coeffs:
+            return False
+        metadata_keys = cls._signal_preset_metadata_keys()
+        return all(str(key) in metadata_keys for key in preset_coeffs)
+
+    @classmethod
     def _extract_signal_preset_coefficients(
         cls,
         config_json: Any,
         signal_preset: str,
     ) -> Dict[str, float]:
         cfg = cls._normalise_config_json(config_json)
+        default_presets = cls._default_signal_presets()
         presets = cfg.get("signal_presets")
         if not isinstance(presets, dict) or not presets:
-            presets = cls._default_signal_presets()
+            presets = default_presets
         if signal_preset not in presets:
             raise ValueError(f"HMM signal_preset does not exist in config: {signal_preset}")
-        preset_coeffs = presets[signal_preset]
+        raw_preset_coeffs = presets[signal_preset]
         preset_coeffs = cls._coefficient_mapping_from_preset(
-            preset_coeffs,
+            raw_preset_coeffs,
             signal_preset=signal_preset,
         )
         if not isinstance(preset_coeffs, dict) or not preset_coeffs:
+            # Metadata-only presets are invalid even for built-in names. Using
+            # default coefficients here hides a broken runtime HMM config.
+            if cls._is_metadata_only_signal_preset(raw_preset_coeffs):
+                raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
             raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
         result: Dict[str, float] = {}
         for label, raw_value in preset_coeffs.items():

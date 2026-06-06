@@ -256,8 +256,206 @@ modules:
     ui_routes: [/research-assistant, /research-assistant/chat, /research-assistant/workbench, /research-assistant/tasks, /research-assistant/streams, /research-assistant/memory, /research-assistant/graph, /research-assistant/mcp-tools, /research-assistant/skills, /research-assistant/approvals, /research-assistant/reports, /research-assistant/models, /research-assistant/settings, /research-assistant/external-agents, /research-assistant/trace, /research-assistant/notifications, /research-assistant/issue-candidates]
     api_routes: [/api/v1/research-assistant/*]
     test_plans:
-      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract]
-      recommended: [research_assistant_ui]
+      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept]
+      recommended: [mcp_gateway_phase5_assistant, research_assistant_ui]
+  - module_id: research_assistant.memory_tree
+    display_name: Research Assistant Memory Tree
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Tree-shaped deterministic memory retrieval, governance columns, resident directives, and context-pack injection.
+    description_zh: 覆盖树形记忆召回、真树治理列、常驻偏好指令与上下文注入。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase1_memory_tree, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.memory_curator
+    display_name: Research Assistant Memory Curator
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Memory auto-growth, reflection consolidation, de-duplication, and approval-aware curation.
+    description_zh: 覆盖记忆自增长、反思巩固、去重与审批感知治理。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase1_memory_tree, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.graph_context
+    display_name: Research Assistant Graph Context
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Knowledge graph neighbor selection and graph_relation_refs injection into assistant context packs.
+    description_zh: 覆盖知识图谱邻居选择与 graph_relation_refs 推理注入。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase2_graph_context, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.react_grounding
+    display_name: Research Assistant ReAct Grounding
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: critical
+    owner: claude_code_boundary
+    description: Tool-use loop, tool-result message backfill, grounded answer composition, and retry recovery.
+    description_zh: 覆盖工具调用循环、工具结果回灌、接地回答生成与失败恢复。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.evidence_guard
+    display_name: Research Assistant Evidence Guard
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: critical
+    owner: claude_code_boundary
+    description: Evidence-first answer contract, placeholder blocking, source_refs checks, and factual downgrade rules.
+    description_zh: 覆盖证据优先回答契约、占位符阻断、来源检查与事实降级规则。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend, ra_phase7_full_accept]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.external_research
+    display_name: Research Assistant External Research MCP
+    parent_module: research_assistant
+    module_type: product_feature
+    risk_level: high
+    owner: claude_code_boundary
+    description: External search and academic research MCP facade with provider provenance and compact summaries.
+    description_zh: 覆盖外部搜索、学术检索、来源证据与紧凑返回契约。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase4_external_research, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.agent_teams
+    display_name: Research Assistant Agent Teams
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Orchestrator-worker team runtime, agent runs, parallel task delegation, and worker audit trail.
+    description_zh: 覆盖主从编排、并行任务、agent run 账本与 worker 审计轨迹。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend, ra_phase7_full_accept]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.qe_autonomy
+    display_name: Research Assistant QE Autonomy
+    parent_module: research_assistant
+    module_type: product_feature
+    risk_level: critical
+    owner: claude_code_boundary
+    description: QE autonomous loop design, evaluator callbacks, stop conditions, budget guards, and submission boundary.
+    description_zh: 覆盖 QE 自主 loop、评估回调、停止条件、预算守护与提交边界。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend, ra_phase7_full_accept]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.code_intelligence
+    display_name: Research Assistant Code Intelligence
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: CodeGraph adapter consumption, impact context refs, provenance, and affected-test evidence.
+    description_zh: 覆盖代码图谱适配器消费、影响引用、来源追踪与受影响测试证据。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.proactive_reports
+    display_name: Research Assistant Proactive Reports
+    parent_module: research_assistant
+    module_type: product_feature
+    risk_level: medium
+    owner: claude_code_boundary
+    description: Evidence-backed morning and experiment daily reports with scheduler-safe generation.
+    description_zh: 覆盖证据优先的晨报、实验日报与安全定时生成。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.reflection_card
+    display_name: Research Assistant Reflection Card
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: medium
+    owner: claude_code_boundary
+    description: Assistant reflection cards, failure learning records, and curator feedback loops.
+    description_zh: 覆盖反思卡、失败学习记录与 curator 反馈闭环。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.prompt_lab
+    display_name: Research Assistant Prompt Lab
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Offline prompt evaluation, judge-gated candidate prompts, and approval-only activation changes.
+    description_zh: 覆盖离线提示词评估、裁判门禁候选提示词与审批后激活。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.skill_library
+    display_name: Research Assistant Skill Library
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: medium
+    owner: claude_code_boundary
+    description: Reusable assistant skills, research curriculum, and gated skill promotion records.
+    description_zh: 覆盖可复用技能库、研究课程与门禁化技能晋升记录。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.product_core
+    display_name: Research Assistant Product Core
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Portable assistant core engine that must not import AIstock domain adapters directly.
+    description_zh: 覆盖可产品化助手核心引擎与禁止反向依赖 AIstock 适配器边界。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.core_adapter
+    display_name: Research Assistant Core Adapter Boundary
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Provider interfaces and dependency-direction checks between portable core and adapters.
+    description_zh: 覆盖 provider 接口、核心适配器边界与依赖方向检查。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.generic_mcp_client
+    display_name: Research Assistant Generic MCP Client
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: high
+    owner: claude_code_boundary
+    description: Generic MCP discovery, quarantine, capability review, and compact tool metadata handling.
+    description_zh: 覆盖通用 MCP 发现、隔离、能力审核与紧凑工具元数据处理。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.aistock_domain_adapter
+    display_name: Research Assistant AIstock Domain Adapter
+    parent_module: research_assistant
+    module_type: technical_layer
+    risk_level: critical
+    owner: claude_code_boundary
+    description: AIstock facade, DB, MCP, validation, QE, and stock-domain adapter layer for the portable core.
+    description_zh: 覆盖 AIstock facade、数据库、MCP、验证、QE 与股票领域适配层。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
+  - module_id: research_assistant.aistock_knowledge_pack
+    display_name: Research Assistant AIstock Knowledge Pack
+    parent_module: research_assistant
+    module_type: data_pipeline
+    risk_level: high
+    owner: claude_code_boundary
+    description: AIstock-specific knowledge pack loading, data isolation, and private-domain context packaging.
+    description_zh: 覆盖 AIstock 知识包加载、数据隔离与私有领域上下文打包。
+    test_plans:
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [research_assistant_mcp_contract]
   - module_id: validation
     display_name: Validation Center
     module_type: cross_cutting
@@ -325,6 +523,16 @@ modules:
     description_zh: 覆盖共享后端、API、数据库、调度、配置、监控和跨模块基础设施。
     test_plans:
       required_on_change: [l0]
+  - module_id: platform.mcp_gateway
+    display_name: MCP Gateway
+    parent_module: platform
+    module_type: cross_cutting
+    risk_level: high
+    description: Unified MCP gateway, profile registry, tool manifest, and client-facing MCP configuration.
+    description_zh: 覆盖统一 MCP gateway、profile 注册表、工具清单和客户端侧 MCP 配置。
+    test_plans:
+      required_on_change: [l0]
+      recommended: [mcp_gateway_manifest_quality, mcp_gateway_phase5_assistant, mcp_gateway_phase6_resource_monitor, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
   - module_id: platform.api
     display_name: Platform API
     parent_module: platform

@@ -1,0 +1,105 @@
+{
+  "actual": "Assistant can catalog and route many MCP intents, but the next implementation needs to complete real governed MCP invocation and summary-first response contracts instead of stopping at route explanation or static capability text.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/**",
+    "backend/tests/research_assistant/**",
+    "backend/tests/mcp/**",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-149-research-assistant-should-execute-unified-mcp-summary-first-tool-calls.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-149",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized after PR merge."
+  ],
+  "created_at": "2026-05-29T02:23:00.694546Z",
+  "description": "Assistant can catalog and route many MCP intents, but the next implementation needs to complete real governed MCP invocation and summary-first response contracts instead of stopping at route explanation or static capability text.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-4a2b7f818abd",
+      "timestamp": "2026-05-29T02:23:00.694542Z"
+    },
+    {
+      "action": "start_fix_worktree",
+      "actor": "codex",
+      "note": "Copied registry BUG-149 record into fix worktree so workflow finish/pr gates can run with the code changes.",
+      "timestamp": "2026-05-29T03:30:00Z"
+    },
+    {
+      "action": "scope_sync",
+      "actor": "codex",
+      "note": "Included the GitHub-linked BUG-149 JSON itself in allowed_write_scope so registration and fix evidence can travel in the same issue PR.",
+      "timestamp": "2026-05-29T03:19:30Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Implemented route-selected read-only summary-first execution bridge; confirmed/high-risk tools remain gated.",
+      "timestamp": "2026-05-29T03:21:00Z"
+    },
+    {
+      "action": "pre_close_sync_status_normalize_on_main",
+      "actor": "codex",
+      "note": "Normalized workflow-internal validation_passed to valid BUG status after PR #338 merge so close-sync can update fixed state.",
+      "timestamp": "2026-05-29T03:35:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/research_assistant_unified_mcp_natural_language_orchestration_design_20260527.md",
+    "docs/architecture/research_assistant_full_mcp_orchestration_design_20260527.md",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py"
+  ],
+  "expected": "For supported read-only MCP domains, Research Assistant can choose the correct server/tool from natural language, run the approved summary-first tool path through the unified MCP gateway/catalog, return compact human cards with artifact_ref for large data, and record execution trace/evidence. Confirmed or high-risk tools remain preflight/approval gated. Tests cover factor library, factor metrics, factor correlation, model registry, strategy governance, execution policy, QE archive, local data, validation issue, and research pipeline routes.",
+  "first_seen_at": "2026-05-29T02:23:00.694546Z",
+  "fix_branch": "bug/BUG-149-research-assistant-should-execute-unified-mcp-su-20260529",
+  "fix_commit": "06f938a23419e5b8efdbb551cf4392eec88bbdf5",
+  "fixed_at": "2026-05-29T03:32:25.946598Z",
+  "github_issue_number": 337,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/337",
+  "last_seen_at": "2026-05-29T02:23:00.694546Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/338",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -X utf8 -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant should execute unified MCP summary-first tool calls",
+  "trigger_condition": {
+    "fingerprint": "4a2b7f818abd236bb40dafe0",
+    "source_event_id": "FE-20260529-4a2b7f818abd"
+  },
+  "validation_evidence": [
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider -> 12 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_execution_closure.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 21 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 7 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful",
+    "python -m ruff check backend/services/research_assistant/execution.py backend/tests/research_assistant/test_execution_closure.py -> All checks passed",
+    "git diff --check; python -X utf8 -m py_compile backend/services/research_assistant/execution.py backend/tests/research_assistant/test_execution_closure.py -> passed"
+  ],
+  "verification_run_id": "BUG-149-local-20260529T0321Z"
+}

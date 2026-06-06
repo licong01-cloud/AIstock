@@ -171,7 +171,7 @@ test("Paper overview displays official trading-day status from unified service",
   await expect(page.getByText("market.trading_calendar does not cover the full next month")).toBeVisible();
 });
 
-test("Portfolio creation persists HMM model config for automatic coefficient cache", async ({ page }) => {
+test("Portfolio creation persists HMM model config in the initial session runtime config", async ({ page }) => {
   const captures: JsonObject[] = [];
   await mockPaperV2Api(page, captures);
 
@@ -184,15 +184,12 @@ test("Portfolio creation persists HMM model config for automatic coefficient cac
   await page.getByTestId("portfolio-replay-end").fill("2026-05-20");
   await page.getByTestId("portfolio-create").click();
 
-  await expect.poll(() => captures.length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
-  const profile = captures.find((item) => item.path.endsWith("/runtime-profiles"));
+  await expect.poll(() => captures.some((item) => item.path.endsWith("/sessions")), { timeout: 30_000 }).toBeTruthy();
   const session = captures.find((item) => item.path.endsWith("/sessions"));
-  expect(profile?.payload.config_json.runtime_profile.hmm.model_config_id).toBe(configId);
-  expect(profile?.payload.config_json.runtime_profile.hmm.model_snapshot_id).toBeNull();
-  expect(profile?.payload.config_json.runtime_profile.hmm.coefficients_path).toBeUndefined();
   expect(session?.payload.runtime_config.runtime_profile.hmm.model_config_id).toBe(configId);
   expect(session?.payload.runtime_config.runtime_profile.hmm.model_snapshot_id).toBeNull();
   expect(session?.payload.runtime_config.runtime_profile.hmm.coefficients_path).toBeUndefined();
+  expect(session?.payload.runtime_config.runtime_profile.hmm.signal_preset).toBe("preset_A");
 });
 
 test("Run console sends HMM model config for day, replay, live, switch, and runtime profile actions", async ({ page }) => {

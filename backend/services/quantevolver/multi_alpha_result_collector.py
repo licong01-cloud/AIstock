@@ -119,7 +119,10 @@ class MultiAlphaResultCollector:
             # get_loop_metrics 返回完整的 qlib_results_enhanced.json
             # 它本身就是 enhanced_metrics，需要标记以便 _build_result_metrics 正确处理
             await self._validate_single_node_artifacts(qe_task_id, qe_loop_id, groups)
-            raw_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
+            single_node_id = next(iter(node_ids)) if len(node_ids) == 1 else None
+            raw_metrics = await self._fetch_combined_metrics(
+                qe_task_id, qe_loop_id, node_id=single_node_id
+            )
             combined_metrics = {}
             if raw_metrics:
                 # 提取 summary 中的标量指标到顶层
@@ -128,7 +131,7 @@ class MultiAlphaResultCollector:
                 # 保存完整的 enhanced_metrics（供统一分析层使用）
                 combined_metrics["_enhanced_metrics"] = raw_metrics
             ma_results = await self._fetch_multi_alpha_results_json(
-                qe_task_id, qe_loop_id
+                qe_task_id, qe_loop_id, node_id=single_node_id
             )
             group_enhanced_metrics = await self._fetch_single_node_group_enhanced(
                 qe_task_id, qe_loop_id, groups
@@ -255,7 +258,7 @@ class MultiAlphaResultCollector:
                 return dict(zip(cols, row))
 
     async def _fetch_combined_metrics(
-        self, task_id: str, loop_id: str
+        self, task_id: str, loop_id: str, node_id: str | None = None
     ) -> dict[str, Any]:
         """Fetch the authoritative combined enhanced metrics artifact.
 
@@ -266,7 +269,8 @@ class MultiAlphaResultCollector:
         """
         from .qe_workspace_client import QEWorkspaceClient
 
-        async with QEWorkspaceClient() as client:
+        client_cm = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+        async with client_cm as client:
             raw = await client.get_workspace_file(
                 task_id, loop_id, "qlib_results_enhanced.json"
             )
@@ -426,7 +430,7 @@ class MultiAlphaResultCollector:
         return group_enhanced
 
     async def _fetch_multi_alpha_results_json(
-        self, task_id: str, loop_id: str
+        self, task_id: str, loop_id: str, node_id: str | None = None
     ) -> dict | None:
         """尝试从 workspace 获取 meta_model_runner.py 产出的详细结果 JSON。
 
@@ -436,7 +440,8 @@ class MultiAlphaResultCollector:
         from .qe_workspace_client import QEWorkspaceClient
 
         try:
-            async with QEWorkspaceClient() as client:
+            client_cm = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+            async with client_cm as client:
                 raw = await client.get_workspace_file(
                     task_id, loop_id, "multi_alpha_results.json"
                 )
@@ -980,7 +985,8 @@ class MultiAlphaResultCollector:
         first_group_name = first_group["group_name"]
 
         backtest_files = {
-            "combined_prediction.pkl": pred_b64,  # base64 encoded binary
+            # RD-Agent decodes *.b64 payloads back to the original filename.
+            "combined_prediction.pkl.b64": pred_b64,
         }
 
         # 下载回测依赖文件
@@ -1020,12 +1026,14 @@ class MultiAlphaResultCollector:
 
             # 下载 benchmark 文件（可选 — load_benchmark_series 有 qlib 数据源 fallback）
             try:
-                benchmark_content = await client.get_workspace_file(
+                benchmark_content = await client.download_workspace_file_bytes(
                     qe_task_id, first_loop_id,
                     f"group_{first_group_name}/benchmark_sh000300.parquet",
                 )
                 if benchmark_content:
-                    backtest_files["benchmark_sh000300.parquet"] = benchmark_content
+                    backtest_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
+                        benchmark_content
+                    ).decode("ascii")
             except Exception:
                 logger.info("benchmark_sh000300.parquet 不可用，回测将从 qlib 数据源计算 benchmark")
 
@@ -1109,7 +1117,19 @@ class MultiAlphaResultCollector:
             )
 
         # 保存完整的 enhanced_metrics（供统一分析层使用）
+        unified_backtest = {
+            "task_id": qe_task_id,
+            "loop_id": loop_id,
+            "primary_node_id": primary_node_id,
+            "status": "completed",
+            "artifact_status": "ready",
+            "elapsed_seconds": elapsed,
+            "prediction_payload_file": "combined_prediction.pkl.b64",
+            "prediction_workspace_file": "combined_prediction.pkl",
+            "metrics_source": "get_loop_metrics",
+        }
         result["_enhanced_metrics"] = metrics
+        result["_unified_backtest"] = unified_backtest
 
         logger.info(
             f"分布式统一回测指标: IC={result.get('IC')}, "
@@ -1306,6 +1326,7 @@ class MultiAlphaResultCollector:
 
         # 提取统一回测的完整增强指标（如果有）
         enhanced = combined_metrics.pop("_enhanced_metrics", None)
+        unified_backtest = combined_metrics.pop("_unified_backtest", None)
         if enhanced and isinstance(enhanced, dict):
             result["enhanced_metrics"] = enhanced
 
@@ -1325,6 +1346,8 @@ class MultiAlphaResultCollector:
             "group_correlations": correlations,
             "ic_quality": ic_quality or {},
         }
+        if isinstance(unified_backtest, dict) and unified_backtest:
+            multi_alpha_detail["unified_backtest"] = unified_backtest
         result["multi_alpha_detail"] = multi_alpha_detail
 
         multi_alpha_analysis = self._build_multi_alpha_analysis(
@@ -1336,9 +1359,22 @@ class MultiAlphaResultCollector:
         )
         result["multi_alpha_analysis"] = multi_alpha_analysis
 
+        if isinstance(unified_backtest, dict) and unified_backtest:
+            lifecycle = {
+                "stage": "completed",
+                "artifact_status": "ready",
+                "errors": [],
+                "backtest_loop_id": unified_backtest.get("loop_id"),
+                "primary_node_id": unified_backtest.get("primary_node_id"),
+                "unified_backtest": unified_backtest,
+            }
+            result["multi_alpha_lifecycle"] = lifecycle
+
         if isinstance(result.get("enhanced_metrics"), dict):
             result["enhanced_metrics"]["multi_alpha_detail"] = multi_alpha_detail
             result["enhanced_metrics"]["multi_alpha_analysis"] = multi_alpha_analysis
+            if isinstance(unified_backtest, dict) and unified_backtest:
+                result["enhanced_metrics"]["multi_alpha_lifecycle"] = result["multi_alpha_lifecycle"]
 
         return result
 

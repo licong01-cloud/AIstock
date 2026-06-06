@@ -1,0 +1,74 @@
+{
+  "actual": "GET /api/v1/paper-v2/session-scheduler/status on 2026-06-02 14:57 Asia/Shanghai returned scheduler.running=true/thread_alive=true but last_result.errors[0].error_code=PAPER_V2_SESSION_TICK_STILL_RUNNING and active_session_ticks contained psess_baed8bc473dc4f5dbc56b30b77550446 with elapsed_seconds about 294 after timed_out_at 60s.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/scheduler.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "tests/aistock_validation/bugs/20260602_BUG-207-paper-v2-scheduler-keeps-timed-out-live-session-worker-active-and-skips.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-207",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T07:03:17.714526Z",
+  "description": "GET /api/v1/paper-v2/session-scheduler/status on 2026-06-02 14:57 Asia/Shanghai returned scheduler.running=true/thread_alive=true but last_result.errors[0].error_code=PAPER_V2_SESSION_TICK_STILL_RUNNING and active_session_ticks contained psess_baed8bc473dc4f5dbc56b30b77550446 with elapsed_seconds about 294 after timed_out_at 60s.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-53e1e4496c35",
+      "timestamp": "2026-06-02T07:03:17.714523Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-02 post-restart read-only validation: scheduler last_run_at=2026-06-02T06:57:57Z; active_session_ticks session=psess_baed8bc473dc4f5dbc56b30b77550446 portfolio=paper_3bf764d1f95a44dd80e1852d2e87bef0 elapsed_seconds=294.39586; last_error DATA_UNAVAILABLE TDX minute data fetch failed symbol=001373.SZ trade_date=2026-06-02."
+  ],
+  "expected": "A timed-out Paper v2 live session tick must release or mark the worker terminal/failed with actionable diagnostics, so subsequent scheduler ticks can recover, retry according to policy, or move the session to a correct waiting/failed state without an indefinitely active worker.",
+  "first_seen_at": "2026-06-02T07:03:17.714526Z",
+  "fix_branch": null,
+  "fix_commit": "855a448343134d4d2d7bd71867d45d47729abe8f",
+  "fixed_at": "2026-06-02T08:05:01.734497Z",
+  "github_issue_number": 554,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/554",
+  "last_seen_at": "2026-06-02T07:03:17.714526Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/560",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "On production 8001 read-only: Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status | ConvertTo-Json -Depth 12; observe active_session_ticks and PAPER_V2_SESSION_TICK_STILL_RUNNING after the 60s timeout.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 scheduler keeps timed-out live session worker active and skips ticks indefinitely",
+  "trigger_condition": {
+    "fingerprint": "53e1e4496c35c80e70c48cef",
+    "source_event_id": "FE-20260602-53e1e4496c35"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_session.py -q -> 29 passed",
+    "python -m ruff check backend/services/paper_trading_v2/scheduler.py backend/tests/paper_trading_v2/test_session.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 570 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": null
+}

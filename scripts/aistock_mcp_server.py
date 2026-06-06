@@ -42,6 +42,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from backend.mcp.validation_issue_items import compact_issue_item
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 try:  # FastMCP is the canonical stdio MCP server. Imported lazily-friendly.
@@ -576,7 +578,7 @@ def _bug_id_scan_roots() -> list[Path]:
     return _unique_existing_paths(candidates)
 
 
-def _scan_global_bug_ids() -> set[int]:
+def _scan_global_bug_ids(*, include_github: bool = True) -> set[int]:
     ids = set(_scan_existing_bug_ids())
     for bugs_root in _bug_id_scan_roots():
         allocator = bugs_root / ".bug_id_allocator.json"
@@ -603,13 +605,14 @@ def _scan_global_bug_ids() -> set[int]:
             number = _bug_id_number(path.name)
             if number:
                 ids.add(number)
-    try:
-        for issue in _github_issue_client_from_env().list_issues(state="all", labels=None):
-            number = _bug_id_number(str(issue.get("bug_id") or "")) or _bug_id_number(str(issue.get("title") or ""))
-            if number:
-                ids.add(number)
-    except Exception:
-        pass
+    if include_github:
+        try:
+            for issue in _github_issue_client_from_env().list_issues(state="all", labels=None):
+                number = _bug_id_number(str(issue.get("bug_id") or "")) or _bug_id_number(str(issue.get("title") or ""))
+                if number:
+                    ids.add(number)
+        except (RuntimeError, ValueError, OSError, httpx.HTTPError):
+            pass
     return ids
 
 
@@ -653,9 +656,9 @@ def _write_bug_id_allocator(last_allocated: int) -> None:
     tmp_path.replace(BUG_ID_ALLOCATOR_PATH)
 
 
-def _allocate_next_bug_id() -> str:
+def _allocate_next_bug_id(*, include_github: bool = True) -> str:
     with _BugIdAllocatorLock():
-        registry_max = max(_scan_global_bug_ids() or {0})
+        registry_max = max(_scan_global_bug_ids(include_github=include_github) or {0})
         next_int = max(_read_bug_id_allocator_last(), registry_max) + 1
         reservation_root = _bug_id_reservation_root()
         reservation_root.mkdir(parents=True, exist_ok=True)
@@ -680,8 +683,8 @@ def _allocate_next_bug_id() -> str:
     return f"BUG-{next_int:03d}"
 
 
-def _next_bug_id() -> str:
-    return _allocate_next_bug_id()
+def _next_bug_id(*, include_github: bool = True) -> str:
+    return _allocate_next_bug_id(include_github=include_github)
 
 
 def _fingerprint(module: str, title: str, reproduce_command: str) -> str:
@@ -971,27 +974,7 @@ def _normalize_registry_issue(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_issue_item(item: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        "source": item.get("source"),
-        "registry_is_source_of_truth": item.get("registry_is_source_of_truth"),
-        "bug_id": item.get("bug_id"),
-        "number": item.get("number"),
-        "title": item.get("title") or "",
-        "state": item.get("state"),
-        "status": item.get("status"),
-        "severity": item.get("severity"),
-        "module": item.get("module"),
-        "labels": item.get("labels") or [],
-        "html_url": item.get("html_url"),
-        "source_path": item.get("source_path"),
-    }
-    if isinstance(item.get("github_issue"), dict):
-        compact["github_issue"] = {
-            key: item["github_issue"].get(key)
-            for key in ("number", "state", "title", "html_url")
-            if item["github_issue"].get(key) is not None
-        }
-    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+    return compact_issue_item(item)
 
 
 def _maybe_compact_issue_items(items: list[dict[str, Any]], *, compact: bool) -> list[dict[str, Any]]:
@@ -1724,7 +1707,7 @@ def report_bug(
             "existing": duplicate,
             "fingerprint": fingerprint,
         }
-    bug_id = _next_bug_id()
+    bug_id = _next_bug_id(include_github=False)
     now_iso = _utcnow_iso()
     record = _build_bug_record(
         bug_id=bug_id,
@@ -1748,6 +1731,9 @@ def report_bug(
         "bug_id": bug_id,
         "path": str(path.relative_to(REPO_ROOT)).replace("\\", "/"),
         "fingerprint": fingerprint,
+        "allocation_mode": "local_registry_only_no_live_github_scan",
+        "github_sync_required": True,
+        "preferred_tool": "mcp_github_issue_create",
     }
 
 
