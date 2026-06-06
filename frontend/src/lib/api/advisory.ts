@@ -115,6 +115,15 @@ export type AdvisoryReviewPayload = {
   market_by_symbol?: Record<string, JsonObject>;
 };
 
+export type AdvisoryReviewPreviewPayload = {
+  items: JsonObject[];
+  package_evidence_by_code: Record<string, Record<string, JsonObject>>;
+  market_by_code: Record<string, JsonObject>;
+  trade_date: string;
+  exit_guard_policy: JsonObject;
+  fusion_policy: JsonObject;
+};
+
 function body(payload: unknown, method = "POST"): RequestInit {
   return { method, body: globalThis.JSON["stringify"](payload) };
 }
@@ -189,5 +198,12 @@ export const advisoryApi = {
   async qualityReport(records: JsonObject[], minBucketSize = 30): Promise<AdvisoryQualityReport> {
     const data = await apiFetch<{ report: AdvisoryQualityReport }>("/advisory/quality-report", body({ records, min_bucket_size: minBucketSize }));
     return data.report;
+  },
+  async reviewPreview(payload: AdvisoryReviewPreviewPayload): Promise<JsonObject[]> {
+    const data = await apiFetch<{ records: JsonObject[] }>(
+      "/selection-center/advisory/multi-package-review/preview",
+      body(payload),
+    );
+    return data.records || [];
   },
 };
