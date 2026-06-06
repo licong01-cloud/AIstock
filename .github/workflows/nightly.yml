@@ -307,15 +307,13 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
-      - name: Build weekly Understand Anything summaries
+      - name: Build Understand Anything readiness summaries
         run: |
-          # Equivalent to the previous bash weekly guard: date -u +%u.
-          if ($env:GITHUB_EVENT_NAME -eq "schedule" -and (Get-Date).ToUniversalTime().DayOfWeek -ne "Sunday") {
-            Write-Host "Skipping weekly Understand Anything summary outside Sunday UTC."
-            exit 0
-          }
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
+            --language zh `
+            --output "$outDir/ua-configure.stdout.json"
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
             --output-dir $outDir `
             --output "$outDir/ua-summary-manifest.stdout.json"

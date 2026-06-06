@@ -53,6 +53,14 @@
       "actor": "codex_app",
       "action": "discovered",
       "note": "REV-7 T16 regime_label P2.4 - cron prod enable requires ops review"
+    },
+    {
+      "timestamp": "2026-06-06T06:26:19Z",
+      "actor": "codex",
+      "action": "github_sync",
+      "note": "Linked existing open BUG-034 process/ops gate to GitHub Issue #802."
     }
-  ]
+  ],
+  "github_issue_number": 802,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/802"
 }

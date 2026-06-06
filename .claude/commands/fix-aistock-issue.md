@@ -16,6 +16,8 @@ For small or unclear scope, run `python F:\Dev\AIstock\scripts\aistock_issue_wor
 
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 
+Use graph-first context before broad searches. After `run --mode plan`, read the task card's Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg` or source reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise treat UA as warning-only and continue with CodeGraph plus allowed scope.
+
 ## Submit/Register BUG workflow
 
 For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:
@@ -46,8 +48,9 @@ Then switch to the returned worktree and read:
 - `fix_ready_path`
 - `state_path`
 - `events_path`
+- `task_card_md` Code Intelligence refs
 
-Fix only inside `allowed_write_scope`. If more files are needed, stop and request scope expansion.
+Fix only inside `allowed_write_scope`. Use graph-first refs before targeted `rg`; if more files are needed, stop and request scope expansion.
 
 ## Resume workflow
 
@@ -136,4 +139,4 @@ Cleanup may remove safe orphaned task worktree directories containing only empty
 
 ## Client Install
 
-After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill. Before merge, use `install-client` without `--apply` as a dry-run.
+After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill and user-level Claude Code command. Before merge, use `install-client` without `--apply` as a dry-run.

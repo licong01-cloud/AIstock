@@ -669,7 +669,7 @@ def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
     assert latest.run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_SUBMIT_FAILED"
 
 
-def test_lifecycle_successful_retry_clears_stale_submit_failure() -> None:
+def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
     release, binding, repo = _release_binding_repo()
     orchestrator = SimulationLifecycleOrchestrator(repository=repo)
     build = orchestrator.build_execution_plan(
@@ -686,17 +686,24 @@ def test_lifecycle_successful_retry_clears_stale_submit_failure() -> None:
             build_result=build,
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
         )
-    failed = repo.get_simulation_daily_run(build.run.run_id)
-    assert failed.run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_SUBMIT_FAILED"
 
-    retried = orchestrator.submit_persisted_execution_plan(
+
+    failed = repo.get_simulation_daily_run(build.run.run_id)
+    assert failed.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "submit_failure" in failed.run_payload_json
+
+    result = orchestrator.submit_persisted_execution_plan(
         run=failed,
         binding=binding,
         execution_plan=build.execution_plan,
-        local_broker=FakeLocalSimBroker(),
+        local_broker=FakeLocalSimBroker(),  # type: ignore[arg-type]
     )
 
-    assert retried.run.status == SimulationDailyRunStatus.SUCCEEDED
-    assert retried.run.run_payload_json["last_stage"] == "SUCCEEDED"
-    assert retried.run.run_payload_json["submit_failure"] is None
-    assert retried.run.run_payload_json["broker_called"] is True
+    latest = repo.get_simulation_daily_run(build.run.run_id)
+    assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert result.run.run_payload_json["submitted_intents"] == len(build.execution_plan.intents)
+    assert result.run.run_payload_json["last_stage"] == "SUCCEEDED"
+    assert result.run.run_payload_json["broker_called"] is True
+    assert "submit_failure" not in result.run.run_payload_json
+    assert "submit_failure" not in latest.run_payload_json

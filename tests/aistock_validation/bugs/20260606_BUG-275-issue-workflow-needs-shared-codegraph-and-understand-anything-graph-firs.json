@@ -1,0 +1,104 @@
+{
+  "actual": "CodeGraph freshness is ready, but Understand Anything reports graph_exists=false/status=not_required_missing; workflow doctor treats UA as optional and new windows may still broad-scan code manually.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260606_BUG-275-issue-workflow-needs-shared-codegraph-and-understand-anything-graph-firs.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/catalog/code_intelligence.yaml",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/test_validation_catalog_integrity.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-275",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T19:06:57.575011Z",
+  "description": "CodeGraph freshness is ready, but Understand Anything reports graph_exists=false/status=not_required_missing; workflow doctor treats UA as optional and new windows may still broad-scan code manually.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-8d8a87ae4acc",
+      "timestamp": "2026-06-05T19:06:57.575007Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Expanded workflow BUG scope to include agent client wrappers, code-intelligence catalog, Nightly code-intelligence artifact, and unit tests needed to make CodeGraph/Understand Anything usable by Codex and Claude Code consistently.",
+      "timestamp": "2026-06-05T19:15:00Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Added Nightly workflow integrity test because UA readiness summary now runs on every code-intelligence job instead of weekly-only.",
+      "timestamp": "2026-06-05T19:25:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "doctor shows CodeGraph ready and Understand Anything graph missing"
+  ],
+  "expected": "Issue workflow provides a shared CodeGraph + Understand Anything readiness/configuration path, generates or validates UA graph artifacts, exposes compact graph-first summaries in context packs/task cards, and installs identical Codex skill and Claude command guidance.",
+  "first_seen_at": "2026-06-05T19:06:57.575011Z",
+  "fix_branch": null,
+  "fix_commit": "3c7540712f14f0044efc8b8fc3ffde53fbf99a5a",
+  "fixed_at": "2026-06-05T19:57:05.082295Z",
+  "github_issue_number": 793,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/793",
+  "last_seen_at": "2026-06-05T19:06:57.575011Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/795",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/code_intelligence_adapter.py doctor --skip-external --output -",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow needs shared CodeGraph and Understand Anything graph-first context",
+  "trigger_condition": {
+    "fingerprint": "8d8a87ae4acc96c3016d58a7",
+    "source_event_id": "FE-20260606-8d8a87ae4acc"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/test_validation_catalog_integrity.py -q -> 166 passed",
+    "nox -s l0 guardrail_changed_files validation_module_registry_l0 validation_catalog_integrity validation_center_backend -> passed",
+    "workflow-smoke changed code-intelligence/workflow files -> PASS"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

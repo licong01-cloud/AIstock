@@ -51,6 +51,7 @@ ARTIFACT_PATH_PATTERNS = (
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
+ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
@@ -386,7 +387,15 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
     if "scope_check" in value:
         compact["scope_check"] = _pick(value["scope_check"], "status", "violations", "status_source")
     if "code_intelligence" in value:
-        compact["code_intelligence"] = _pick(value["code_intelligence"], "status", "context_ref", "affected_tests_ref", "fallback_used")
+        compact["code_intelligence"] = _pick(
+            value["code_intelligence"],
+            "status",
+            "context_ref",
+            "affected_tests_ref",
+            "affected_tests_count",
+            "understand_anything_summary_ref",
+            "fallback_used",
+        )
     if "pre_pr_gate" in value:
         compact["pre_pr_gate"] = _pick(value["pre_pr_gate"], "workflow_gate", "blocking")
     return compact
@@ -487,6 +496,7 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
         "needs_bug_json",
         "failure_event_path",
         "context_pack_md_path",
+        "triage_action",
     )
     issue = value.get("github_issue")
     if isinstance(issue, dict):
@@ -545,6 +555,8 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
         compact["infra_action"] = _pick(value["infra_action"], "workflow_gate", "reason")
     if isinstance(value.get("superseded_action"), dict):
         compact["superseded_action"] = _pick(value["superseded_action"], "workflow_gate", "reason", "next_command")
+    if "triage_action" in value:
+        compact["triage_action"] = value.get("triage_action")
     if isinstance(value.get("submit_bug"), dict):
         submit_bug = value["submit_bug"]
         compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
@@ -646,6 +658,9 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "codegraph_status",
                 "codegraph_freshness",
                 "codegraph_freshness_ref",
+                "understand_anything_status",
+                "understand_anything_graph_exists",
+                "understand_anything_next_command",
                 "fallback_used",
                 "readiness_next_command",
                 "fallback_reason",
@@ -781,6 +796,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_ci_issue_janitor(payload) or {})
     elif schema.endswith("_promote_ci_issue_v1"):
         compact.update(_compact_promote_ci_issue(payload) or {})
+    elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
+        compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
     else:
         for key in (
             "module",
@@ -797,17 +814,126 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             if key in payload:
                 compact[key] = payload[key]
+        if "code_intelligence_hint" in payload and isinstance(payload["code_intelligence_hint"], dict):
+            compact["code_intelligence_hint"] = _pick(
+                payload["code_intelligence_hint"],
+                "workflow_gate",
+                "latest_freshness",
+                "artifact_path",
+                "consume_command",
+                "readiness_next_command",
+                "blocking_for_issue_workflow",
+            )
 
     compact["full_payload"] = "use --output-format full-json or --output <tmp/issue_workflow/...json> for details"
     return compact
+
+
+def _short_status_word(gate: str | None) -> str:
+    value = (gate or "").lower()
+    if value in {"passed", "ready", "ready_for_pr", "ready_for_apply", "checks_passed", "planned", "promoted", "complete", "merged", "merged_close_synced"}:
+        return "PASS"
+    if "blocked" in value or value in {"failed", "checks_failed", "validation_evidence_missing"}:
+        return "BLOCKED"
+    if "warning" in value or "pending" in value:
+        return "WAIT"
+    return "INFO"
+
+
+def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> list[str]:
+    schema = str(payload.get("schema_version") or compact.get("schema_version") or "")
+    gate = str(compact.get("workflow_gate") or payload.get("workflow_gate") or "unknown")
+    bug_id = str(compact.get("bug_id") or payload.get("bug_id") or "").strip()
+    prefix = f"{_short_status_word(gate)} {bug_id}".strip()
+    if schema == "aistock_issue_workflow_watch_ci_v1":
+        checks = compact.get("check_summary") if isinstance(compact.get("check_summary"), dict) else payload.get("check_summary") or {}
+        return [
+            (
+                f"{prefix} workflow_gate={gate} pr={compact.get('pr_url') or 'unknown'} "
+                f"passed={checks.get('passed_count', 0)} pending={checks.get('pending_count', 0)} "
+                f"failed={checks.get('failed_count', 0)} next={';'.join(payload.get('next_actions') or compact.get('next_actions') or []) or 'none'}"
+            )
+        ]
+    if schema == "aistock_nightly_intake_smoke_v1":
+        return [
+            (
+                f"{prefix} nightly-intake-smoke workflow_gate={gate} github_writes={str(compact.get('github_writes')).lower()} "
+                f"unexpected_dirty_paths={len(compact.get('unexpected_dirty_paths') or [])} "
+                f"next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_triage_ci_issue_v1"):
+        return [
+            (
+                f"{prefix} triage-ci-issue workflow_gate={gate} classification={compact.get('classification_recommendation') or 'unknown'} "
+                f"needs_bug_json={str(bool(compact.get('needs_bug_json'))).lower()} next={compact.get('next_command') or compact.get('triage_action') or 'none'}"
+            )
+        ]
+    if schema.endswith("_promote_ci_issue_v1"):
+        triage = compact.get("triage") if isinstance(compact.get("triage"), dict) else {}
+        return [
+            (
+                f"{prefix} promote-ci-issue workflow_gate={gate} classification={triage.get('classification_recommendation') or 'unknown'} "
+                f"next={compact.get('next_command') or compact.get('triage_action') or 'none'}"
+            )
+        ]
+    if schema.endswith("_start_v1"):
+        worktree_plan = compact.get("worktree_plan") if isinstance(compact.get("worktree_plan"), dict) else {}
+        return [
+            (
+                f"{prefix} workflow_gate={gate} module={compact.get('module') or 'unknown'} "
+                f"worktree_created={str(bool(worktree_plan.get('created'))).lower()} "
+                f"context={compact.get('context_pack_md') or 'not_generated'}"
+            )
+        ]
+    if schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
+        return [
+            (
+                f"{prefix} workflow_gate={gate} closure_ready={str(bool(compact.get('closure_ready'))).lower()} "
+                f"validation_evidence={compact.get('validation_evidence_count', 0)} pr_body={compact.get('pr_body_path') or 'not_generated'}"
+            )
+        ]
+    if schema.endswith("_doctor_v1"):
+        return [
+            (
+                f"{prefix} doctor workflow_gate={gate} restart_recommended={str(bool(compact.get('restart_recommended'))).lower()} "
+                f"warnings={compact.get('warnings_count', 0)} next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_smoke_v1") or schema == "aistock_batch_workflow_smoke_v1":
+        return [
+            (
+                f"{prefix} workflow_gate={gate} dry_run={str(bool(compact.get('dry_run'))).lower()} "
+                f"unexpected_dirty_paths={len(compact.get('unexpected_dirty_paths') or [])} next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema.endswith("_run_v1"):
+        return [
+            (
+                f"{prefix} workflow_gate={gate} mode={compact.get('mode') or payload.get('mode') or 'unknown'} "
+                f"next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    return [
+        (
+            f"{prefix} workflow_gate={gate} "
+            f"next={compact.get('next_command') or 'none'}"
+        )
+    ]
 
 
 def _emit(payload: dict[str, Any], output: str | None = None, output_format: str = "compact") -> None:
     output_path = _resolve_output_path(output)
     if output_path:
         _write_json(output_path, payload)
-    stdout_payload = payload if output_format == "full-json" else _compact_payload(payload)
-    sys.stdout.write(json.dumps(stdout_payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    if output_format == "full-json":
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+        return
+    compact = _compact_payload(payload)
+    if output_format == "summary":
+        sys.stdout.write("\n".join(_format_summary_lines(payload, compact)) + "\n")
+        return
+    sys.stdout.write(json.dumps(compact, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
 def _emit_args(payload: dict[str, Any], args: argparse.Namespace) -> None:
@@ -1196,6 +1322,12 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
     next_command = None
     if fallback_used:
         next_command = codegraph.get("bootstrap_command") or bootstrap.get("codegraph") or "codegraph init -i"
+    ua_status = str(ua.get("status") or "unknown")
+    ua_next_command = None
+    if ua_status == "not_configured":
+        ua_next_command = ua.get("configure_command") or bootstrap.get("understand_anything_configure")
+    elif not ua.get("graph_exists"):
+        ua_next_command = ua.get("generate_graph_command") or bootstrap.get("understand_anything_generate_graph")
     return {
         "schema_version": "aistock_issue_workflow_h7_code_intelligence_readiness_v1",
         "workflow_gate": "warning" if fallback_used else "ready",
@@ -1203,11 +1335,31 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
         "codegraph_status": codegraph_status,
         "codegraph_freshness": latest_freshness.get("freshness"),
         "codegraph_freshness_ref": latest_freshness.get("artifact_path"),
-        "understand_anything_status": ua.get("status"),
+        "understand_anything_status": ua_status,
+        "understand_anything_graph_exists": ua.get("graph_exists"),
+        "understand_anything_next_command": ua_next_command,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
         "readiness_next_command": next_command,
         "blocking_for_issue_workflow": False,
+    }
+
+
+def _code_intelligence_hint(root: Path | None = None) -> dict[str, Any]:
+    freshness = code_intelligence.latest_codegraph_freshness(root or REPO_ROOT)
+    latest = freshness.get("latest") if isinstance(freshness.get("latest"), dict) else {}
+    freshness_value = latest.get("freshness") if latest else None
+    return {
+        "schema_version": "aistock_issue_workflow_code_intelligence_hint_v1",
+        "workflow_gate": freshness.get("workflow_gate") or "warning",
+        "blocking_for_issue_workflow": False,
+        "latest_freshness": freshness_value,
+        "artifact_path": latest.get("artifact_path") if latest else None,
+        "summary_ref": latest.get("summary_ref") if latest else None,
+        "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness",
+        "readiness_next_command": None
+        if freshness_value == "fresh"
+        else "python scripts/code_intelligence_adapter.py freshness --skip-external",
     }
 
 
@@ -3255,6 +3407,7 @@ def _build_code_intelligence_summary(
         item_id=item_id,
         query=_issue_query(record, changed_files),
         changed_files=changed_files or [],
+        module=str(record.get("module") or "").strip() or None,
         root=root,
         skip_external=False,
     )
@@ -3262,15 +3415,22 @@ def _build_code_intelligence_summary(
 
 def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str, Any]) -> dict[str, Any]:
     ua = code_intelligence_summary.get("understand_anything")
+    ua_summary = code_intelligence_summary.get("understand_anything_summary")
     return {
         "provider": code_intelligence_summary.get("provider"),
         "status": code_intelligence_summary.get("status"),
         "context_ref": code_intelligence_summary.get("context_ref"),
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_nodes_used": (ua_summary or {}).get("nodes_used") if isinstance(ua_summary, dict) else None,
+        "understand_anything_graph_exists": (ua_summary or {}).get("graph_exists") if isinstance(ua_summary, dict) else None,
+        "understand_anything_generate_graph_command": (ua or {}).get("generate_graph_command") if isinstance(ua, dict) else None,
         "blocking_for_issue_workflow": False,
     }
 
@@ -3341,6 +3501,7 @@ def build_task_card(
         "next_client_steps": [
             "switch_to_worktree_if_created",
             "read task-card.md first, then context-pack.md only when needed",
+            "read Code Intelligence refs before rg; broad scans require a scoped miss reason",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -3388,8 +3549,14 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- status: `{code_intel.get('status') or 'unknown'}`",
         f"- context_ref: `{code_intel.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
+        f"- affected_tests_count: `{code_intel.get('affected_tests_count', 0)}`",
+        f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
+        f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
+        f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
+        f"- understand_anything_nodes_used: `{code_intel.get('understand_anything_nodes_used', 0)}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- blocking_for_issue_workflow: `{str(bool(code_intel.get('blocking_for_issue_workflow'))).lower()}`",
+        f"- ua_generate_graph_command: `{code_intel.get('understand_anything_generate_graph_command') or 'not_required'}`",
         "",
         "## Production Gates",
         *[f"- {key}: `{value}`" for key, value in sorted((task_card.get("production_gates") or {}).items())],
@@ -3530,6 +3697,7 @@ def _build_batch_code_intelligence_summary(
         item_id=batch_id,
         query=_batch_code_intelligence_query(records, changed_files),
         changed_files=changed_files or [],
+        module=str(records[0].get("module") or "").strip() if records else None,
         root=root,
         skip_external=False,
     )
@@ -3736,6 +3904,7 @@ def build_fast_path_plan(
         "tier_reasons": reasons,
         "context_strategy": context_strategy,
         "validation": validation,
+        "code_intelligence_hint": _code_intelligence_hint(REPO_ROOT),
         "required_validation": required,
         "recommended_validation": recommended,
         "required_commands": _plans_to_commands(required),
@@ -4143,6 +4312,16 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
     handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
     entrypoints = handoff.get("workflow_entrypoints") if isinstance(handoff.get("workflow_entrypoints"), dict) else {}
     body = str(issue_payload.get("body") or "")
+    closed_loop_checks = {
+        "agent_handoff_section": "## Agent Handoff" in body,
+        "triage_entrypoint": "triage-ci-issue" in str(entrypoints.get("triage") or ""),
+        "promotion_requires_registry_worktree": "--create-registry-worktree --apply" in str(entrypoints.get("promote") or ""),
+        "needs_bug_json_recorded": handoff.get("needs_bug_json") is True,
+        "candidate_history_tmp_only": bool(candidate_history_path and _path_under_repo_tmp_validation(candidate_history_path)),
+    }
+    for label, ok in closed_loop_checks.items():
+        if not ok:
+            blocking.append(f"Nightly intake closed-loop check failed: {label}")
     if "triage-ci-issue --issue <issue-number>" not in body:
         blocking.append("GitHub Issue payload is missing triage-ci-issue handoff")
     if "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" not in body:
@@ -4177,6 +4356,7 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
         "issue_title": issue_payload.get("title"),
         "nightly_failed_stages": stdout_payload.get("nightly_failed_stages") if isinstance(stdout_payload, dict) else [],
+        "closed_loop_checks": closed_loop_checks,
         "handoff_entrypoints": entrypoints,
         "dirty_paths_before": dirty_before,
         "dirty_paths_after": dirty_after,
@@ -4241,6 +4421,10 @@ def build_start_plan(
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_summary": code_intelligence_summary.get("understand_anything_summary"),
         "understand_anything": code_intelligence_summary.get("understand_anything"),
     }
     fix_ready["code_intelligence"] = context_pack["code_intelligence"]
@@ -4413,6 +4597,8 @@ def build_finish_plan(
             "context_ref": code_intelligence_summary.get("context_ref"),
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
+            "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+            "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
             "readiness_next_command": h7_code_intelligence.get("readiness_next_command"),
             "fallback_reason": h7_code_intelligence.get("fallback_reason"),
         },
@@ -4448,6 +4634,9 @@ def build_finish_plan(
             "manifest_ref": code_intelligence_summary.get("manifest_ref"),
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
+            "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+            "affected_quality": code_intelligence_summary.get("affected_quality"),
+            "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
         },
         "codegraph_suggested_tests": codegraph_tests,
         "h7_code_intelligence": h7_code_intelligence,
@@ -4680,6 +4869,10 @@ def build_start_batch_plan(
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_summary": code_intelligence_summary.get("understand_anything_summary"),
         "understand_anything": code_intelligence_summary.get("understand_anything"),
     }
     batch_plan["code_intelligence"] = batch_code_intelligence
@@ -4985,6 +5178,10 @@ def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
+def _claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_HOME") or Path.home() / ".claude")
+
+
 def _mcp_config_snapshot() -> dict[str, Any]:
     candidates = [
         _codex_home() / "config.toml",
@@ -5006,16 +5203,19 @@ def _mcp_config_snapshot() -> dict[str, Any]:
     return {"files": files, "stale_worktree_config_files": stale_paths}
 
 
-def _client_manifest(codex_home: Path | None = None) -> dict[str, Any]:
+def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
+    claude_home = claude_home or _claude_home()
     repo_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
     global_skill = codex_home / "skills" / "fix-aistock-issue"
     repo_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    global_claude = claude_home / "commands" / "fix-aistock-issue.md"
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
     repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
     repo_skill_sha = _sha256_tree(repo_skill)
     global_skill_sha = _sha256_tree(global_skill)
     claude_sha = _sha256_file(repo_claude)
+    global_claude_sha = _sha256_file(global_claude)
     cli_sha = _sha256_file(cli)
     codex_status = "missing_global"
     if repo_skill_sha and global_skill_sha:
@@ -5031,15 +5231,19 @@ def _client_manifest(codex_home: Path | None = None) -> dict[str, Any]:
         "codex_skill_sha256": repo_skill_sha,
         "global_codex_skill_sha256": global_skill_sha,
         "claude_command_sha256": claude_sha,
+        "global_claude_command_sha256": global_claude_sha,
         "codex_skill_status": codex_status,
-        "claude_command_status": "present" if claude_sha else "missing",
+        "claude_command_status": "current"
+        if claude_sha and global_claude_sha == claude_sha
+        else ("stale_global" if claude_sha and global_claude_sha else ("missing_global" if claude_sha else "missing_repo")),
         "paths": {
             "repo_codex_skill": str(repo_skill),
             "global_codex_skill": str(global_skill),
             "claude_command": str(repo_claude),
+            "global_claude_command": str(global_claude),
             "workflow_cli": str(cli),
         },
-        "restart_recommended": codex_status != "current",
+        "restart_recommended": codex_status != "current" or (claude_sha and global_claude_sha != claude_sha),
         "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
     }
 
@@ -5106,8 +5310,10 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append("global Codex issue skill is missing or stale; run install-client --apply and restart old client windows")
     elif client_manifest["codex_skill_status"] == "missing_repo_skill":
         blocking.append("repo Codex issue skill is missing")
-    if client_manifest["claude_command_status"] == "missing":
-        warnings.append("Claude Code issue command is missing; Claude can still call the repo CLI directly")
+    if client_manifest["claude_command_status"] == "missing_repo":
+        warnings.append("repo Claude Code issue command is missing; Claude can still call the repo CLI directly")
+    elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
+        warnings.append("global Claude Code issue command is missing or stale; run install-client --apply")
 
     code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
     for warning in code_intel.get("warnings") or []:
@@ -5140,11 +5346,18 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     }
 
 
-def build_client_install_plan(*, apply: bool = False, codex_home: str | None = None) -> dict[str, Any]:
+def build_client_install_plan(
+    *,
+    apply: bool = False,
+    codex_home: str | None = None,
+    claude_home: str | None = None,
+) -> dict[str, Any]:
     source_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
     source_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_skill = target_home / "skills" / "fix-aistock-issue"
+    target_claude_home = Path(claude_home) if claude_home else _claude_home()
+    target_claude = target_claude_home / "commands" / "fix-aistock-issue.md"
     blocking: list[str] = []
     if not source_skill.exists():
         blocking.append(f"missing repo Codex skill: {source_skill}")
@@ -5160,7 +5373,7 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         {
             "action": "verify_claude_code_command",
             "source": str(source_claude),
-            "target": "repo-local .claude/commands/fix-aistock-issue.md",
+            "target": str(target_claude),
             "safe": source_claude.exists(),
         },
     ]
@@ -5172,7 +5385,8 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         "blocking": blocking,
         "actions": actions,
         "codex_home": str(target_home),
-        "client_manifest_before": _client_manifest(target_home),
+        "claude_home": str(target_claude_home),
+        "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
         if blocking:
@@ -5181,12 +5395,19 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
             shutil.rmtree(target_skill)
         target_skill.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_skill, target_skill)
+        target_claude.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_claude, target_claude)
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
-        payload["installed"] = [{"target": str(target_skill)}]
-        payload["client_manifest_after"] = _client_manifest(target_home)
+        payload["installed"] = [{"target": str(target_skill)}, {"target": str(target_claude)}]
+        payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
     manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
-    _write_json(manifest_path, payload.get("client_manifest_after") or payload.get("client_manifest_before") or _client_manifest(target_home))
+    _write_json(
+        manifest_path,
+        payload.get("client_manifest_after")
+        or payload.get("client_manifest_before")
+        or _client_manifest(target_home, target_claude_home),
+    )
     payload["client_manifest_path"] = _repo_rel(manifest_path)
     return payload
 
@@ -5251,7 +5472,20 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     }
 
 
-def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_markdown: bool = True) -> dict[str, Any]:
+def _workflow_artifacts_enabled() -> bool:
+    value = os.environ.get("AISTOCK_WORKFLOW_ARTIFACTS", "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    return os.environ.get("AISTOCK_VALIDATION_ARTIFACTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def build_postmortem_plan(
+    *,
+    bug_id: str,
+    worktree: str | None = None,
+    output_markdown: bool = True,
+    persist_artifacts: bool | None = None,
+) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
     candidates = [(root, _load_state(canonical_bug_id, root)) for root in roots]
@@ -5323,8 +5557,11 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
         "production_gates": state.get("production_gates") or {},
         "recent_events": events[-20:],
     }
+    if persist_artifacts is None:
+        persist_artifacts = _workflow_artifacts_enabled() or str(state.get("state") or "") == "blocked"
+    payload["artifact_policy"] = "persisted" if persist_artifacts else "compact_success_no_artifact"
     output_dir = root / WORKFLOW_ROOT / canonical_bug_id
-    if output_markdown:
+    if output_markdown and persist_artifacts:
         lines = [
             f"# {canonical_bug_id} Workflow Postmortem",
             "",
@@ -5366,6 +5603,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
                 f"- codegraph_status: `{h7_code_intelligence.get('codegraph_status') or 'unknown'}`",
                 f"- codegraph_freshness: `{h7_code_intelligence.get('codegraph_freshness') or 'not_available'}`",
                 f"- codegraph_freshness_ref: `{h7_code_intelligence.get('codegraph_freshness_ref') or 'not_available'}`",
+                f"- understand_anything_status: `{h7_code_intelligence.get('understand_anything_status') or 'unknown'}`",
+                f"- understand_anything_graph_exists: `{str(bool(h7_code_intelligence.get('understand_anything_graph_exists'))).lower()}`",
+                f"- understand_anything_next_command: `{h7_code_intelligence.get('understand_anything_next_command') or 'not_required'}`",
                 f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
                 f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
                 "",
@@ -5376,8 +5616,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
         )
         _write_text(output_dir / "postmortem.md", "\n".join(lines))
         payload["postmortem_md_path"] = _repo_rel(output_dir / "postmortem.md", root)
-    payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
-    _write_json(output_dir / "postmortem.json", payload)
+    if persist_artifacts:
+        payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
+        _write_json(output_dir / "postmortem.json", payload)
     return payload
 
 
@@ -5489,6 +5730,25 @@ def build_triage_ci_issue_plan(
         github_issue_number=issue.get("number"),
         github_issue_url=github_issue_url,
     )
+    actionable = classification in ACTIONABLE_CI_CLASSIFICATIONS
+    triage_action: str | None = None
+    if not actionable and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"}:
+        triage_action = "triage_incomplete_collect_failure_diagnostics_before_bug_promotion"
+        failure_event["candidate_status"] = "triage_incomplete"
+        context_pack["failure_event"] = failure_event
+        handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+        handoff["needs_bug_json"] = False
+        handoff["handoff_mode"] = "triage_only"
+        handoff["workflow_entrypoints"] = {
+            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
+            "promote": "blocked_until_diagnostic_status_complete",
+        }
+        handoff["next_commands"] = [f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}"]
+        handoff["stop_conditions"] = [
+            "Do not promote BUG JSON until CI/Nightly diagnostics identify a concrete code or test failure.",
+            "Do not edit source files from this triage-only issue.",
+        ]
+        context_pack["agent_handoff"] = handoff
     if superseded_action:
         failure_event["candidate_status"] = "superseded_by_later_main_success"
         failure_event["superseded_action"] = superseded_action
@@ -5528,8 +5788,8 @@ def build_triage_ci_issue_plan(
         "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
-        "needs_bug_json": linked is None
-        and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"},
+        "needs_bug_json": linked is None and actionable,
+        "triage_action": triage_action,
         "suggested_bug": {
             "module": module,
             "severity": summary.get("severity") or "P1",
@@ -5567,6 +5827,8 @@ def build_triage_ci_issue_plan(
                 else (
                     f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
                     "--create-registry-worktree --apply"
+                    if linked is None and actionable
+                    else triage_action
                     if linked is None
                     else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
                 )
@@ -5837,6 +6099,18 @@ def build_promote_ci_issue_plan(
             "triage": triage,
             "superseded_action": action,
             "next_command": action.get("next_command") or "close_ci_issue_as_superseded_after_review",
+        }
+    if triage.get("classification_recommendation") not in ACTIONABLE_CI_CLASSIFICATIONS:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_triage_incomplete_not_code_bug",
+            "dry_run": not apply,
+            "triage": triage,
+            "triage_action": triage.get("triage_action")
+            or "triage_incomplete_collect_failure_diagnostics_before_bug_promotion",
+            "next_command": triage.get("next_command")
+            or "rerun_triage_ci_issue_after_failure_diagnostics_are_available",
         }
     if apply and not create_registry_worktree:
         return {
@@ -7525,7 +7799,10 @@ def _merge_close_sync_pr_if_ready(
             "auto_merge": True,
             "pr_url": pr_url,
             "blocking": [str(exc)],
-            "next_command": f"gh pr checks {pr_url} --watch",
+            "next_command": (
+                f"python scripts/aistock_issue_workflow.py watch-ci --bug-id {bug_id} "
+                f"--pr-url {pr_url} --attempts 6 --delay-seconds 30"
+            ),
         }
     return {
         "workflow_gate": "merged",
@@ -8727,7 +9004,11 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
 
 
 def cmd_install_client(args: argparse.Namespace) -> int:
-    payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
+    payload = build_client_install_plan(
+        apply=args.apply,
+        codex_home=args.codex_home,
+        claude_home=args.claude_home,
+    )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
@@ -8809,6 +9090,7 @@ def cmd_postmortem(args: argparse.Namespace) -> int:
         bug_id=args.bug_id,
         worktree=args.worktree,
         output_markdown=not args.no_markdown,
+        persist_artifacts=args.persist_artifacts,
     )
     _emit_args(payload, args)
     return 0
@@ -8880,9 +9162,16 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         bug_id = args.bug_id.strip().upper()
         try:
             pre_cleanup_postmortem = build_postmortem_plan(bug_id=bug_id, output_markdown=False)
-            pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
-            _write_json(pre_cleanup_path, pre_cleanup_postmortem)
-            payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+            if _workflow_artifacts_enabled():
+                pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
+                _write_json(pre_cleanup_path, pre_cleanup_postmortem)
+                payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+            else:
+                payload["pre_cleanup_postmortem"] = {
+                    "artifact_policy": "compact_success_no_artifact",
+                    "timing_summary": pre_cleanup_postmortem.get("timing_summary"),
+                    "h6_summary": pre_cleanup_postmortem.get("h6_summary"),
+                }
         except WorkflowError as exc:
             payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")
         cleanup_evidence = {
@@ -8980,6 +9269,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_client = sub.add_parser("install-client", help="Install or dry-run developer-client entry wrappers.")
     install_client.add_argument("--apply", action="store_true")
     install_client.add_argument("--codex-home")
+    install_client.add_argument("--claude-home")
     add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
 
@@ -9061,6 +9351,11 @@ def build_parser() -> argparse.ArgumentParser:
     postmortem.add_argument("--bug-id", required=True)
     postmortem.add_argument("--worktree")
     postmortem.add_argument("--no-markdown", action="store_true")
+    postmortem.add_argument(
+        "--persist-artifacts",
+        action="store_true",
+        help="Write postmortem JSON/Markdown artifacts. Defaults to compact stdout only on successful workflows.",
+    )
     add_output_options(postmortem)
     postmortem.set_defaults(func=cmd_postmortem)
 

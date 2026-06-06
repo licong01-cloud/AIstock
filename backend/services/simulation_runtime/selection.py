@@ -789,16 +789,19 @@ class StrategyPackageSelectionService:
 
     def _apply_point_in_time_selection_config(self, config: dict[str, Any], *, trade_date: date) -> dict[str, Any]:
         artifact_config = self.selection_artifact_config(config)
-        raw_mode = artifact_config.get("pit_mode") or artifact_config.get("cutoff_policy") or config.get("pit_mode")
-        if raw_mode is None:
-            raw_mode = "NONE"
-        pit_mode = self._normalize_pit_mode(str(raw_mode))
+        pit_mode = self.selection_pit_mode(config, artifact_config=artifact_config)
         if pit_mode == "NONE":
             cutoff = artifact_config.get("cutoff_date")
             if cutoff:
                 self.parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
             return config
-        explicit_cutoff = self.parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
+        explicit_cutoff = None
+        if self.is_fixed_cutoff_replay_config(config, artifact_config=artifact_config):
+            explicit_cutoff = self.parse_selection_cutoff_date(
+                artifact_config,
+                trade_date=trade_date,
+                strict_before=True,
+            )
         context = self.resolve_point_in_time_context(
             trade_date=trade_date,
             pit_mode=pit_mode,
@@ -806,6 +809,10 @@ class StrategyPackageSelectionService:
         )
         updated = dict(config)
         updated_artifact = dict(artifact_config)
+        requested_cutoff = artifact_config.get("cutoff_date")
+        if requested_cutoff and explicit_cutoff is None and str(requested_cutoff) != context["cutoff_date"]:
+            context["requested_cutoff_date"] = str(requested_cutoff)
+            context["cutoff_override_reason"] = "daily_previous_trading_day_resolution"
         updated_artifact["pit_mode"] = context["pit_mode"]
         updated_artifact["cutoff_date"] = context["cutoff_date"]
         updated["selection_artifact_config"] = updated_artifact
@@ -827,6 +834,59 @@ class StrategyPackageSelectionService:
                 context={"selection_artifact_config_type": type(artifact_config).__name__},
             )
         return artifact_config
+
+    @staticmethod
+    def selection_pit_mode(config: dict[str, Any], artifact_config: dict[str, Any] | None = None) -> str:
+        artifact = artifact_config or StrategyPackageSelectionService.selection_artifact_config(config)
+        raw_mode = artifact.get("pit_mode") or config.get("pit_mode")
+        if raw_mode is None:
+            cutoff_policy = artifact.get("cutoff_policy")
+            if cutoff_policy is not None and not StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+                config,
+                artifact_config=artifact,
+            ):
+                raw_mode = cutoff_policy
+        if raw_mode is None and artifact.get("cutoff_date") and StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+            config,
+            artifact_config=artifact,
+        ):
+            raw_mode = "PREVIOUS_TRADING_DAY_CLOSE"
+        if raw_mode is None:
+            raw_mode = "NONE"
+        return StrategyPackageSelectionService._normalize_pit_mode(str(raw_mode))
+
+    @staticmethod
+    def is_fixed_cutoff_replay_config(
+        config: dict[str, Any],
+        *,
+        artifact_config: dict[str, Any] | None = None,
+    ) -> bool:
+        artifact = artifact_config or StrategyPackageSelectionService.selection_artifact_config(config)
+        policy_values = (
+            artifact.get("cutoff_policy"),
+            artifact.get("cutoff_mode"),
+            artifact.get("selection_cutoff_policy"),
+            config.get("cutoff_policy"),
+        )
+        fixed_policies = {
+            "PINNED",
+            "FIXED",
+            "FIXED_CUTOFF",
+            "FIXED_REPLAY",
+            "HISTORICAL_REPLAY",
+            "FIXED_HISTORICAL_REPLAY",
+            "PINNED_HISTORICAL_REPLAY",
+        }
+        if any(str(value or "").strip().upper() in fixed_policies for value in policy_values):
+            return True
+        fixed_flags = (
+            "fixed_cutoff",
+            "fixed_replay",
+            "allow_fixed_cutoff",
+            "historical_replay",
+            "pinned_cutoff",
+        )
+        return any(bool(artifact.get(flag) or config.get(flag)) for flag in fixed_flags)
 
     @staticmethod
     def _normalize_pit_mode(pit_mode: str) -> str:

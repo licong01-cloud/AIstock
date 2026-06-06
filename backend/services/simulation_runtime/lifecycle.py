@@ -209,12 +209,8 @@ class SimulationLifecycleOrchestrator:
             succeeded = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=SimulationDailyRunStatus.SUCCEEDED,
-                payload_patch={
-                    "no_rebalance_required": True,
-                    "broker_called": False,
-                    "last_stage": "SUCCEEDED",
-                    "submit_failure": None,
-                },
+                payload_patch={"no_rebalance_required": True, "broker_called": False, "last_stage": "SUCCEEDED"},
+                payload_unset=("submit_failure",),
             )
             return SimulationExecutionResult(
                 run=succeeded,
@@ -257,6 +253,7 @@ class SimulationLifecycleOrchestrator:
                     "last_stage": "SUCCEEDED",
                     "submit_failure": None,
                 },
+                payload_unset=("submit_failure",),
             )
             return SimulationExecutionResult(
                 run=succeeded,
@@ -304,12 +301,11 @@ class SimulationLifecycleOrchestrator:
                 "qmt_batch_result": qmt_result.to_dict(),
                 "last_stage": next_status.value,
             }
-            if qmt_result.success:
-                payload_patch["submit_failure"] = None
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=next_status,
                 payload_patch=payload_patch,
+                payload_unset=("submit_failure",) if qmt_result.success else None,
             )
             return SimulationExecutionResult(
                 run=updated,

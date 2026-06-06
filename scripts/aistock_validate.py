@@ -627,7 +627,7 @@ def cmd_coverage(args: argparse.Namespace) -> int:
 
     failed_gates = [gate for gate in gates if gate["status"] == "failed"]
     status = "failed" if failed_gates else "passed"
-    output = Path(args.output).resolve()
+    output = Path(args.output).resolve() if args.output else None
     snapshot = {
         "schema_version": COVERAGE_SNAPSHOT_SCHEMA_VERSION,
         "generated_at": _now_iso(),
@@ -639,15 +639,16 @@ def cmd_coverage(args: argparse.Namespace) -> int:
         "operator": _operator(),
         "status": status,
         "source": source,
-        "output_path": _path_for_json(output),
+        "output_path": _path_for_json(output) if output else None,
         "totals": totals,
         "diff": diff,
         "quality_gates": gates,
         "failed_gates": failed_gates,
         "files": files,
     }
-    _write_json(output, snapshot)
-    print(output)
+    if output:
+        _write_json(output, snapshot)
+        print(output)
     print(
         "coverage: "
         f"line={totals['line_percent']} "
@@ -738,7 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
     coverage.add_argument("--level")
     coverage.add_argument("--title")
     coverage.add_argument("--run-id")
-    coverage.add_argument("--output", required=True)
+    coverage.add_argument("--output")
     coverage.add_argument("--line-threshold", type=float)
     coverage.add_argument("--branch-threshold", type=float)
     coverage.add_argument("--diff-line-threshold", type=float)

@@ -9,8 +9,7 @@ REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
 
-from backend.services.validation.catalog_integrity import (
-    DEFAULT_OUTPUT_PATH,
+from backend.services.validation.catalog_integrity import (  # noqa: E402
     CATALOG_INTEGRITY_SCHEMA,
     run_catalog_integrity,
 )
@@ -21,8 +20,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo-root", default=None, help="Repository root to inspect.")
     parser.add_argument(
         "--output-json",
-        default=str(DEFAULT_OUTPUT_PATH),
+        default=None,
         help="Where to write the structured integrity report JSON.",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=("compact", "json"),
+        default="compact",
+        help="Stdout format. Default compact avoids dumping successful JSON into agent context.",
     )
     parser.add_argument(
         "--fail-on-warning",
@@ -38,7 +43,15 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(args.repo_root) if args.repo_root else None
     output_path = Path(args.output_json) if args.output_json else None
     report = run_catalog_integrity(repo_root=repo_root, output_path=output_path)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.output_format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(
+            "catalog_integrity "
+            f"state={report.get('state')} "
+            f"findings={len(report.get('findings') or [])} "
+            f"output_json={str(output_path) if output_path else 'disabled'}"
+        )
     if report.get("schema_version") != CATALOG_INTEGRITY_SCHEMA:
         return 1
     if report.get("state") != "passed":

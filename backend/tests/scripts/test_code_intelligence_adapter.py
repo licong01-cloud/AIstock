@@ -33,6 +33,7 @@ def test_code_intelligence_doctor_falls_back_without_codegraph(
     assert payload["workflow_gate"] == "warning"
     assert payload["codegraph"]["status"] == "unavailable"
     assert payload["understand_anything"]["blocking_for_issue_workflow"] is False
+    assert payload["understand_anything"]["status"] in {"not_configured", "configured_missing_graph"}
 
 
 def test_context_and_affected_artifacts_use_fallback_when_index_missing(
@@ -170,6 +171,57 @@ def test_build_summary_links_context_and_affected_refs(tmp_path: Path, monkeypat
     assert payload["status"] == "fallback"
     assert payload["context_ref"].endswith("codegraph-context.md")
     assert payload["affected_tests_ref"].endswith("affected-tests.json")
+
+
+def test_build_summary_includes_ua_module_ref_without_inlining_graph(tmp_path: Path, monkeypatch) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [{"source": "validation.workflow", "target": "scripts/aistock_issue_workflow.py"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_summary(
+        item_id="BUG-273",
+        query="workflow validation",
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation",
+        root=tmp_path,
+        skip_external=True,
+    )
+
+    assert payload["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert payload["understand_anything_summary"]["nodes_used"] == 1
+    assert "selected_nodes" not in payload["understand_anything_summary"]
+    assert (tmp_path / payload["understand_anything_summary"]["artifact_path"]).exists()
+
+
+def test_understand_anything_status_reports_configured_missing_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    skill = home / ".agents" / "skills" / "understand"
+    skill.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True)
+
+    assert payload["status"] == "configured_missing_graph"
+    assert payload["codex_skill_exists"] is True
+    assert payload["graph_exists"] is False
+    assert payload["generate_graph_command"].startswith("/understand")
 
 
 def test_affected_tests_supplements_codegraph_with_repo_import_scan(
@@ -491,6 +543,76 @@ def test_latest_codegraph_freshness_reads_newest_artifact_without_external_call(
     assert payload["latest"]["index_summary"]["nodes"] == 20
 
 
+def test_latest_codegraph_freshness_uses_live_status_when_artifact_is_stale(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "stale.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "warning",
+                "freshness": "stale",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/stale.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    live_status = {
+        "available": True,
+        "index_exists": True,
+        "status": "ok",
+        "status_check": {"ok": True},
+        "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        "git_commit": "abc123",
+        "graph_root": str(tmp_path),
+        "graph_root_source": "current_worktree",
+    }
+
+    payload = adapter.latest_codegraph_freshness(tmp_path, live_status=live_status)
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["latest"]["freshness"] == "stale"
+    assert payload["effective_source"] == "live_status"
+    assert payload["effective"]["freshness"] == "fresh"
+    assert payload["warnings"] == []
+    assert payload["notes"]
+
+
+def test_latest_codegraph_freshness_refreshes_missing_artifact_on_demand(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "status": "ok",
+            "status_check": {"ok": True},
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+            "git_commit": "abc123",
+            "working_tree_dirty": False,
+            "graph_root": str(tmp_path),
+            "graph_root_source": "current_worktree",
+            "version": "0.9.4",
+        },
+    )
+
+    payload = adapter.latest_codegraph_freshness(
+        tmp_path,
+        refresh_if_stale=True,
+        output_dir=tmp_path / "tmp" / "validation" / "code-intelligence" / "latest",
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["refreshed"] is True
+    assert payload["effective_source"] == "refreshed_artifact"
+    assert payload["effective"]["freshness"] == "fresh"
+    assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json").exists()
+
+
 def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
     artifact_dir.mkdir(parents=True)
@@ -529,7 +651,7 @@ def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_p
         "gh run download 12345 --repo licong01-cloud/AIstock "
         "-n code-intelligence-12345 -D tmp/validation/code-intelligence/downloaded/12345"
     )
-    assert payload["download"]["local_latest_freshness_command"] == "python scripts/code_intelligence_adapter.py latest-freshness"
+    assert payload["download"]["local_latest_freshness_command"] == "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale"
     assert payload["consumable_refs"]["codegraph_freshness_json"].endswith("codegraph-freshness.json")
     assert (tmp_path / payload["artifact_path"]).exists()
     markdown = (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
@@ -607,6 +729,53 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
     assert payload["nodes_used"] == 1
     assert (tmp_path / payload["artifact_path"]).exists()
     assert "Understand Anything Summary" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+
+
+def test_understand_anything_summary_marks_ancestor_graph_as_base_current(tmp_path: Path, monkeypatch) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
+
+    payload = adapter.build_understand_anything_summary(module="validation", root=tmp_path)
+    manifest = adapter.build_understand_anything_summary_manifest(modules=["validation"], root=tmp_path)
+
+    assert payload["freshness"] == "base_current"
+    assert payload["status"] == "ok"
+    assert payload["graph_commit"] == "base123"
+    assert payload["current_git_commit"] == "feature456"
+    assert manifest["workflow_gate"] == "ready"
+    assert manifest["summary_refs"][0]["freshness"] == "base_current"
+
+
+def test_configure_understand_anything_writes_config_and_ignore(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    payload = adapter.configure_understand_anything(root=tmp_path, language="zh", auto_update=False)
+
+    assert payload["workflow_gate"] == "configured"
+    config = json.loads((tmp_path / payload["config_path"]).read_text(encoding="utf-8"))
+    assert config["outputLanguage"] == "zh"
+    assert config["autoUpdate"] is False
+    assert (tmp_path / payload["understandignore_path"]).exists()
 
 
 def test_understand_anything_summary_manifest_uses_standard_modules(tmp_path: Path, monkeypatch) -> None:

@@ -270,15 +270,17 @@ def test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard() -> None
     run_blocks = [str(step.get("run") or "") for step in steps if isinstance(step, dict)]
 
     freshness_runs = [block for block in run_blocks if "code_intelligence_adapter.py freshness" in block]
+    ua_config_runs = [block for block in run_blocks if "code_intelligence_adapter.py ua-configure" in block]
     ua_runs = [block for block in run_blocks if "code_intelligence_adapter.py ua-summary-all" in block]
 
     assert freshness_runs
     assert "date -u +%u" not in freshness_runs[0]
     assert "exit 0" not in freshness_runs[0]
     assert "|| true" in freshness_runs[0]
+    assert ua_config_runs
     assert ua_runs
-    assert "date -u +%u" in ua_runs[0]
-    assert "exit 0" in ua_runs[0]
+    assert "date -u +%u" not in ua_runs[0]
+    assert "exit 0" not in ua_runs[0]
 
 
 def test_catalog_integrity_reports_command_session_module_and_resource_issues(tmp_path: Path) -> None:
@@ -348,8 +350,25 @@ def test_catalog_integrity_cli_writes_json_report(tmp_path: Path, capsys) -> Non
     )
 
     captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "catalog_integrity state=passed" in captured.out
+    assert output_json.exists()
+    assert json.loads(output_json.read_text(encoding="utf-8"))["state"] == "passed"
+
+
+def test_catalog_integrity_cli_can_emit_json_stdout(tmp_path: Path, capsys) -> None:
+    _write_pass_repo(tmp_path)
+
+    exit_code = catalog_integrity_main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--output-format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["schema_version"] == CATALOG_INTEGRITY_SCHEMA
-    assert output_json.exists()
-    assert json.loads(output_json.read_text(encoding="utf-8"))["state"] == "passed"

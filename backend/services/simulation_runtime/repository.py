@@ -495,9 +495,12 @@ class SimulationRuntimeRepository:
         selection_evidence: DailySelectionEvidence | None = None,
         execution_plan: ExecutionPlan | None = None,
         payload_patch: dict[str, Any] | None = None,
+        payload_unset: Iterable[str] | None = None,
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        for key in payload_unset or ():
+            merged_payload.pop(str(key), None)
         updated = current.model_copy(
             update={
                 "status": status or current.status,
@@ -952,8 +955,12 @@ class InMemorySimulationRuntimeRepository:
         selection_evidence: DailySelectionEvidence | None = None,
         execution_plan: ExecutionPlan | None = None,
         payload_patch: dict[str, Any] | None = None,
+        payload_unset: Iterable[str] | None = None,
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
+        merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        for key in payload_unset or ():
+            merged_payload.pop(str(key), None)
         updated = current.model_copy(
             update={
                 "status": status or current.status,
@@ -961,7 +968,7 @@ class InMemorySimulationRuntimeRepository:
                 "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
                 "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
                 "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
-                "run_payload_json": {**current.run_payload_json, **(payload_patch or {})},
+                "run_payload_json": merged_payload,
             }
         )
         self.daily_runs[run_id] = updated

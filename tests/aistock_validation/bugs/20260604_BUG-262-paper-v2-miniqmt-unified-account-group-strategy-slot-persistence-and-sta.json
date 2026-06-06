@@ -43,22 +43,22 @@
       "timestamp": "2026-06-04T15:17:36.494805Z"
     },
     {
-      "timestamp": "2026-06-04T15:28:14.299599Z",
-      "actor": "codex",
       "action": "validation_refreshed_pending_live_sim",
-      "note": "Refreshed targeted frontend tsc, paper-v2 mock UI, simulation_runtime pytest, and qe_archive_l3 read-only gates; BUG remains open pending 2026-06-05 live simulation confirmation."
+      "actor": "codex",
+      "note": "Refreshed targeted frontend tsc, paper-v2 mock UI, simulation_runtime pytest, and qe_archive_l3 read-only gates; BUG remains open pending 2026-06-05 live simulation confirmation.",
+      "timestamp": "2026-06-04T15:28:14.299599Z"
     },
     {
-      "timestamp": "2026-06-04T15:30:24.771655Z",
-      "actor": "codex",
       "action": "fix_commit_recorded_pending_live_sim",
-      "note": "Recorded code fix commit 4620510098edd9f12f36d63717636d38f15299d6; BUG remains open until 2026-06-05 live simulation validation."
+      "actor": "codex",
+      "note": "Recorded code fix commit 4620510098edd9f12f36d63717636d38f15299d6; BUG remains open until 2026-06-05 live simulation validation.",
+      "timestamp": "2026-06-04T15:30:24.771655Z"
     },
     {
-      "timestamp": "2026-06-04T15:34:47.723361Z",
-      "actor": "codex",
       "action": "post_rebase_validation_refreshed_pending_live_sim",
-      "note": "Rebased onto origin/main and reran diff-check, simulation_runtime pytest, l0, targeted frontend tsc, and paper-v2 UI E2E. BUG remains open pending live simulation."
+      "actor": "codex",
+      "note": "Rebased onto origin/main and reran diff-check, simulation_runtime pytest, l0, targeted frontend tsc, and paper-v2 UI E2E. BUG remains open pending live simulation.",
+      "timestamp": "2026-06-04T15:34:47.723361Z"
     }
   ],
   "evidence_uris": [
@@ -69,8 +69,8 @@
   "expected": "MiniQMT SIM single and multi strategy bindings persist account_group_id and strategy_slot_id, daily runs carry the same attribution, simulation-runtime and Paper v2 status/bootstrap APIs expose account-group/slot/unified status, and tests/validation prove no silent fallback or duplicate-submit risk.",
   "first_seen_at": "2026-06-04T14:51:10.640527Z",
   "fix_branch": "bug/BUG-262-paper-v2-miniqmt-unified-account-group-strategy-20260604",
-  "fix_commit": "4620510098edd9f12f36d63717636d38f15299d6",
-  "fixed_at": null,
+  "fix_commit": "223f13c1f5c30c50069d6f8c146887e344a00425",
+  "fixed_at": "2026-06-06T07:05:46.151101Z",
   "github_issue_number": 756,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/756",
   "last_seen_at": "2026-06-04T15:34:47.723361Z",
@@ -78,8 +78,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/760",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Run the read-only BUG-210 recheck from tmp/issue_workflow/paper_v2_open_bug_runtime_recheck_20260604.json or query information_schema for paper_v2.simulation_release_binding/simulation_daily_run and inspect active 2026-06-05 bindings.",
   "required_verification": [
@@ -95,7 +96,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -150,6 +151,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "2026-06-06 read-only production DB audit: paper_v2 simulation_release_binding/simulation_daily_run account_group_id+strategy_slot_id columns, comments, indexes present; minqmt release bindings 10/10 and daily runs 8/8 attributed; 2026-06-05 MiniQMT runs 2/2 SUCCEEDED with slots"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -163,27 +167,5 @@
       "Keep validation_center_backend only when the changed files actually affect Validation Center."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "validation_evidence": [
-    "python -m compileall -q backend/services/simulation_runtime backend/services/paper_trading_v2/scheduler.py backend/db/init_trading_core_v2_schema.py backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_schema_comments.py -> passed",
-    "python -m pytest backend/tests/simulation_runtime/test_strategy_runtime_release.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_schema_comments.py -q -> 17 passed",
-    "python -m pytest backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py -q -> 2 passed",
-    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_evidence backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resubmit backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile -q -> 4 passed",
-    "python -m pytest backend/tests/simulation_runtime -q -> 77 passed",
-    "git diff --check -> passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
-    "python -m nox -s validation_module_registry_l0 -> passed",
-    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed; UI covered by targeted mock Playwright because production/backend restart is explicitly prohibited",
-    "python -m nox -s validation_center_backend -> 371 passed; coverage line=80.07 branch=62.3",
-    "frontend targeted tsc tmp/tsconfig-bug262.json after scope cleanup -> passed",
-    "SIMULATION_RUNTIME_UI_MOCK_API=1 npx playwright test frontend/tests/paper-v2/simulation-runtime-ops.spec.ts -> 1 passed",
-    "QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 with root .env loaded -> passed; qe_archive_backend 121 passed, qe_archive_data_quality failures=[], data_quality_deep 10 passed/21 skipped; qe_archive_ui intentionally skipped because BUG-262 UI is paper-v2 scoped and paper-v2 UI E2E passed",
-    "full frontend npx tsc --noEmit -> blocked by pre-existing tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 Type null not assignable to string outside BUG-262 scope",
-    "post-rebase git diff --check origin/main..HEAD -> passed",
-    "post-rebase python -m pytest backend/tests/simulation_runtime -q -> 77 passed",
-    "post-rebase python -m nox -s l0 -> passed",
-    "post-rebase node node_modules/typescript/bin/tsc --project tmp/tsconfig-bug262.json --pretty false -> passed",
-    "post-rebase SIMULATION_RUNTIME_UI_MOCK_API=1 node node_modules/playwright/cli.js test tests/paper-v2/simulation-runtime-ops.spec.ts -> 1 passed"
-  ]
+  }
 }

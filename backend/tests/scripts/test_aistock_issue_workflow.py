@@ -19,8 +19,17 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
         "manifest_ref": "tmp/issue_workflow/BUG-199/code-intelligence.json",
         "affected_tests_ref": "tmp/issue_workflow/BUG-199/affected-tests.json",
         "fallback_used": True,
+        "affected_tests_count": 0,
+        "affected_quality": "codegraph_fallback",
         "affected_tests": {"suggested_tests": []},
         "understand_anything": {"status": "not_required_missing"},
+        "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
+        "understand_anything_summary": {
+            "status": "fallback",
+            "graph_exists": False,
+            "nodes_used": 0,
+            "summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
+        },
     }
     payload.update(overrides)
     return payload
@@ -88,6 +97,56 @@ def test_emit_defaults_to_compact_success_payload(capsys: pytest.CaptureFixture[
     assert "statusCheckRollup" not in out
     assert "recent_events" not in out
     assert "skip_reasons" not in out
+
+
+def test_emit_summary_outputs_human_success_line(capsys: pytest.CaptureFixture[str]) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_smoke_v1",
+            "workflow_gate": "passed",
+            "bug_id": "BUG-199",
+            "statusCheckRollup": [{"name": "noisy"}],
+            "recent_events": [{"event": "noisy"}],
+        },
+        output_format="summary",
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("PASS BUG-199")
+    assert "workflow_gate=passed" in out
+    assert "{" not in out
+    assert "schema_version" not in out
+    assert "statusCheckRollup" not in out
+    assert "recent_events" not in out
+
+
+def test_emit_summary_for_watch_ci_keeps_counts_without_rollup(capsys: pytest.CaptureFixture[str]) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_watch_ci_v1",
+            "workflow_gate": "checks_passed",
+            "bug_id": "BUG-199",
+            "pr_url": "https://github.example/pull/199",
+            "check_summary": {
+                "failed_count": 0,
+                "pending_count": 0,
+                "passed_count": 7,
+                "non_blocking_count": 1,
+            },
+            "next_actions": ["merge_only_if_user_authorized"],
+            "statusCheckRollup": [{"name": "noisy"}],
+        },
+        output_format="summary",
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("PASS BUG-199")
+    assert "passed=7" in out
+    assert "pending=0" in out
+    assert "failed=0" in out
+    assert "merge_only_if_user_authorized" in out
+    assert "{" not in out
+    assert "statusCheckRollup" not in out
 
 
 def test_compact_merge_output_hides_verbose_finalizer_and_postmortem_lists(
@@ -376,6 +435,8 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["supported_clients"] == ["Codex", "Claude Code", "Cursor", "CLI"]
     assert task_card["artifact_refs"]["context_pack_md"].endswith("context-pack.md")
     assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
     assert task_card["token_budget"]["large_graph_payload_inlined"] is False
     assert "suggested_tests" not in json.dumps(task_card, ensure_ascii=False)
@@ -727,6 +788,8 @@ def test_fast_path_classifies_workflow_script_as_t1(isolated_workflow_root: Path
         "backend_dependency": "noop",
     }
     assert "python -m nox -s guardrail_changed_files" in payload["required_commands"]
+    assert payload["code_intelligence_hint"]["blocking_for_issue_workflow"] is False
+    assert payload["code_intelligence_hint"]["consume_command"] == "python scripts/code_intelligence_adapter.py latest-freshness"
 
 
 def test_start_and_finish_embed_fast_path(
@@ -806,6 +869,9 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert (isolated_workflow_root / payload["candidate_history_path"]).exists()
     assert "triage-ci-issue" in payload["handoff_entrypoints"]["triage"]
     assert "promote-ci-issue" in payload["handoff_entrypoints"]["promote"]
+    assert payload["closed_loop_checks"]["agent_handoff_section"] is True
+    assert payload["closed_loop_checks"]["promotion_requires_registry_worktree"] is True
+    assert payload["closed_loop_checks"]["candidate_history_tmp_only"] is True
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
@@ -875,7 +941,11 @@ def test_doctor_reports_ready_when_client_entries_exist(
     codex_home = isolated_workflow_root / "codex_home"
     (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
     (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    claude_home = isolated_workflow_root / "claude_home"
+    (claude_home / "commands").mkdir(parents=True)
+    (claude_home / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
     monkeypatch.setattr(
         workflow,
@@ -1118,6 +1188,7 @@ def test_doctor_reports_stale_global_skill_manifest(
     global_skill.mkdir(parents=True)
     (global_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CLAUDE_HOME", str(isolated_workflow_root / "claude_home"))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
     monkeypatch.setattr(
         workflow,
@@ -1940,14 +2011,16 @@ def test_install_client_plan_can_copy_global_codex_skill(
     claude.mkdir(parents=True)
     (claude / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
+    claude_home = isolated_workflow_root / "claude_home"
 
-    dry = workflow.build_client_install_plan(codex_home=str(codex_home))
+    dry = workflow.build_client_install_plan(codex_home=str(codex_home), claude_home=str(claude_home))
     assert dry["workflow_gate"] == "ready_for_install"
     assert dry["dry_run"] is True
 
-    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home))
+    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home), claude_home=str(claude_home))
     assert applied["workflow_gate"] == "installed"
     assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "skill"
+    assert (claude_home / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8") == "claude"
 
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
@@ -2132,7 +2205,11 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     )
     monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
 
-    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+    payload = workflow.build_postmortem_plan(
+        bug_id="BUG-199",
+        worktree=str(isolated_workflow_root),
+        persist_artifacts=True,
+    )
 
     assert payload["schema_version"] == "aistock_issue_workflow_postmortem_v1"
     assert payload["timing_summary"]["event_count"] == 2
@@ -2148,6 +2225,47 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     md_text = postmortem_md.read_text(encoding="utf-8")
     assert "## H6 Cost Summary" in md_text
     assert "## H7 Code Intelligence" in md_text
+
+
+def test_postmortem_defaults_to_compact_success_without_artifacts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_root = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        workflow_root / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "validation_passed",
+            "branch": "bug/BUG-199-workflow",
+            "worktree": str(isolated_workflow_root),
+        },
+    )
+    events_path = workflow_root / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-05-26T00:00:05Z",
+                "event": "command:validation",
+                "state": "validation_passed",
+                "duration_seconds": 1.5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda _bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda _bug_id: {"status": "checked"})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+
+    assert payload["artifact_policy"] == "compact_success_no_artifact"
+    assert "postmortem_json_path" not in payload
+    assert "postmortem_md_path" not in payload
+    assert not (workflow_root / "postmortem.json").exists()
+    assert not (workflow_root / "postmortem.md").exists()
 
 
 def test_postmortem_prefers_fix_workflow_over_registry_intake(
@@ -4942,6 +5060,35 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith(
         "--issue 197 --create-registry-worktree --apply"
     )
+
+
+def test_triage_ci_issue_incomplete_diagnostics_blocks_bug_promotion(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 901,
+        "title": "[P1] AIstock CI failed without run details",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/901",
+        "body": "CI failed, but the run summary is not available yet.",
+        "labels": [],
+    }
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=901)
+
+    assert payload["classification_recommendation"] == "needs_log_triage"
+    assert payload["needs_bug_json"] is False
+    assert payload["next_command"] == "triage_incomplete_collect_failure_diagnostics_before_bug_promotion"
+    assert payload["context_pack"]["agent_handoff"]["needs_bug_json"] is False
+    assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"] == "blocked_until_diagnostic_status_complete"
+
+    promote = workflow.build_promote_ci_issue_plan(issue_number=901, apply=True, bug_id=None)
+    assert promote["workflow_gate"] == "blocked_triage_incomplete_not_code_bug"
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
 def test_triage_ci_issue_preserves_issue_locator_and_marks_superseded_main_success(
