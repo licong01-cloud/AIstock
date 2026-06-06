@@ -190,6 +190,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'catalog': ('mcp_gateway_health
                    'qe_template_get',
                    'qe_template_validate',
                    'qe_template_materialize_confirmed',
+                   'qe_template_delete_confirmed',
                    'qe_template_run_confirmed'),
  'research': ('research_create_experiment',
               'research_list_experiments',

@@ -202,6 +202,38 @@ def test_qe_template_create_rejects_future_stock_pool_before_http(experiment_mcp
     assert called is False
 
 
+def test_qe_template_delete_requires_confirm_before_http(experiment_mcp):
+    called = False
+
+    def handler(request: httpx.Request):
+        nonlocal called
+        called = True
+        return {"status": "success"}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+    with pytest.raises(ValueError, match="confirm_delete"):
+        experiment_mcp.qe_template_delete_confirmed("qet_1")
+    assert called is False
+
+
+def test_qe_template_delete_posts_confirmed_delete_path(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["payload"] = json.loads(request.content.decode("utf-8"))
+        return {"status": "success", "data": {"deleted_template": {"template_id": "qet_1"}}}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+    result = experiment_mcp.qe_template_delete_confirmed("qet_1", confirm_delete="QE_TEMPLATE_DELETE")
+
+    assert result["status"] == "success"
+    assert captured["method"] == "DELETE"
+    assert captured["path"].endswith("/qe-templates/qet_1")
+    assert captured["payload"] == {"confirm_delete": "QE_TEMPLATE_DELETE"}
+
+
 def test_loopback_client_requires_refinement_for_large_success_response(experiment_mcp):
     payload = {"data": "x" * 200}
 

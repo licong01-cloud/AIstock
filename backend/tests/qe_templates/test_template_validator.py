@@ -278,3 +278,36 @@ def test_materializer_requires_manual_approval_before_materialize() -> None:
 
     with pytest.raises(ValueError, match="before approval"):
         asyncio.run(QETemplateMaterializer(repository=FakeRepository()).materialize("qet_1"))  # type: ignore[arg-type]
+
+
+def test_template_repository_delete_pending_allows_only_unmaterialized_rows() -> None:
+    from backend.services.qe_templates.repository import hard_delete_blocker
+
+    assert hard_delete_blocker(
+        "qet_draft",
+        {"template_id": "qet_draft", "status": "draft", "submitted_experiment_id": None, "submitted_task_id": None, "runtime_config_sha256": None},
+    ) is None
+    assert hard_delete_blocker("qet_missing", None) == "template not found: qet_missing"
+    assert "only allowed before materialization" in (
+        hard_delete_blocker(
+            "qet_materialized",
+            {"template_id": "qet_materialized", "status": "materialized", "submitted_experiment_id": None, "submitted_task_id": None, "runtime_config_sha256": None},
+        ) or ""
+    )
+    assert "runtime materialization history" in (
+        hard_delete_blocker(
+            "qet_runtime",
+            {"template_id": "qet_runtime", "status": "approved", "submitted_experiment_id": "qe_1", "submitted_task_id": None, "runtime_config_sha256": None},
+        ) or ""
+    )
+
+
+def test_template_delete_endpoint_requires_confirmation() -> None:
+    from fastapi import HTTPException
+    from backend.routers.qe_templates import QETemplateDeleteRequest, delete_pending_qe_template
+
+    with pytest.raises(HTTPException) as exc_info:
+        delete_pending_qe_template("qet_1", QETemplateDeleteRequest(confirm_delete="WRONG"))
+
+    assert exc_info.value.status_code == 400
+    assert "QE_TEMPLATE_DELETE" in str(exc_info.value.detail)

@@ -16,7 +16,14 @@
     "backend/tests/qe_templates/",
     "frontend/src/app/quantevolver/templates/",
     "frontend/src/lib/qe-templates/",
-    "tests/aistock_validation/bugs/20260606_BUG-277-qe-template-pending-hard-delete-lifecycle-missing.json"
+    "tests/aistock_validation/bugs/20260606_BUG-277-qe-template-pending-hard-delete-lifecycle-missing.json",
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "backend/tests/mcp/",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "backend/tests/research_assistant/",
+    "frontend/tests/qe-templates/"
   ],
   "required_verification": [
     "l0",
@@ -58,6 +65,24 @@
       "actor": "codex",
       "action": "github_registry_renumber",
       "note": "Renumbered GitHub Issue #114 from BUG-086 to BUG-277 because the previous BUG ID already exists locally with a different fixed issue."
+    },
+    {
+      "timestamp": "2026-06-06T09:52:00Z",
+      "actor": "codex",
+      "action": "scope_expansion_for_declared_closure_requirement",
+      "note": "Closure requirements include an MCP delete tool, so the fix scope was expanded before editing MCP gateway/script wrappers and their tests."
+    },
+    {
+      "timestamp": "2026-06-06T09:58:00Z",
+      "actor": "codex",
+      "action": "scope_expansion_for_manifest_count_contract_tests",
+      "note": "Adding qe_template_delete_confirmed changes the gateway manifest count consumed by Research Assistant catalog contract tests."
+    },
+    {
+      "timestamp": "2026-06-06T10:21:00Z",
+      "actor": "codex",
+      "action": "scope_expansion_for_frontend_delete_e2e",
+      "note": "Closure requires UI delete button confirmation and refresh behavior, so the focused QE template Playwright spec was added to scope before editing."
     }
   ]
 }

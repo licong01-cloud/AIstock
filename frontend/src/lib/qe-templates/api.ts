@@ -97,6 +97,10 @@ export type QETemplateRunResult = {
   run_result?: JsonObject;
 };
 
+export type QETemplateDeleteResult = {
+  deleted_template: QETemplate;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -177,6 +181,13 @@ export const qeTemplatesApi = {
   },
   async supersede(templateId: string): Promise<QETemplate> {
     const response = await apiFetch<{ status: string; data: QETemplate }>(`/qe-templates/${encodeURIComponent(templateId)}/supersede`, body({}));
+    return response.data;
+  },
+  async deletePending(templateId: string): Promise<QETemplateDeleteResult> {
+    const response = await apiFetch<{ status: string; data: QETemplateDeleteResult }>(
+      `/qe-templates/${encodeURIComponent(templateId)}`,
+      { method: "DELETE", body: JSON.stringify({ confirm_delete: "QE_TEMPLATE_DELETE" }) },
+    );
     return response.data;
   },
 };

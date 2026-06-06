@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/qe-templates/api";
 
 const EDITABLE_STATUSES = new Set(["draft", "ready_for_review", "approved"]);
+const HARD_DELETE_STATUSES = new Set(["draft", "ready_for_review", "approved"]);
 const ARCHIVE_POLICIES: ArchivePolicy[] = ["AUTO", "SKIP", "MANUAL_ONLY"];
 const LABEL_HORIZONS = [1, 3, 5, 10, 20];
 const SPLIT_FIELDS = [
@@ -978,6 +980,7 @@ function LoopEditor({
 
 export default function QETemplateDetailPage({ params }: { params: { templateId: string } }) {
   const templateId = decodeURIComponent(params.templateId);
+  const router = useRouter();
   const [template, setTemplate] = useState<QETemplate | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1042,6 +1045,9 @@ export default function QETemplateDetailPage({ params }: { params: { templateId:
   }, []);
 
   const canEdit = template ? EDITABLE_STATUSES.has(template.status) : false;
+  const canHardDelete = template
+    ? HARD_DELETE_STATUSES.has(template.status) && !template.submitted_experiment_id && !template.submitted_task_id && !template.runtime_config_sha256
+    : false;
   const resultHref = targetHref(template);
   const loopCount = useMemo(() => loopsFromConfig(config).length, [config]);
 
@@ -1149,6 +1155,20 @@ export default function QETemplateDetailPage({ params }: { params: { templateId:
     }
   }
 
+  async function deletePendingTemplate() {
+    if (!template || !canHardDelete) return;
+    if (!window.confirm("确认删除这个尚未物化或执行的 QE 模板？删除后不可恢复。")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await qeTemplatesApi.deletePending(template.template_id);
+      router.push("/quantevolver/templates");
+    } catch (err) {
+      setError(err);
+      setBusy(false);
+    }
+  }
+
   if (!template && !error) {
     return <main className="pv2-shell"><div className="pv2-notice pv2-notice-info">正在加载模板...</div></main>;
   }
@@ -1247,6 +1267,7 @@ export default function QETemplateDetailPage({ params }: { params: { templateId:
                   <button className="pv2-button" type="button" onClick={() => void validateTemplate()} disabled={busy || dirty}>校验模板</button>
                   <button className="pv2-button-danger" type="button" onClick={() => void executeTemplate()} disabled={busy || !template || template.status === "run_requested" || template.status === "superseded"}>保存并执行</button>
                   <button className="pv2-button-ghost" type="button" onClick={() => void supersedeTemplate()} disabled={busy || template.status === "superseded"}>废弃模板</button>
+                  <button className="pv2-button-danger" type="button" onClick={() => void deletePendingTemplate()} disabled={busy || !canHardDelete}>删除待执行模板</button>
                 </div>
                 {dirty ? <div className="pv2-help">当前存在未保存修改；点击执行会先保存再校验。</div> : null}
               </div>

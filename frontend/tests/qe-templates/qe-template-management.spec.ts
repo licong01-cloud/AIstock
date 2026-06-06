@@ -104,6 +104,13 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
   let currentCustom = clone(customTemplate);
   const calls: string[] = [];
   const updates: Record<string, unknown>[] = [];
+  const deletes: Record<string, unknown>[] = [];
+
+  await page.route("**/api/ingestion/alerts/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [], items: [], total: 0 };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
 
   await page.route("**/api/v1/quantevolver/strategies**", async (route) => route.fulfill({
     status: 200,
@@ -223,10 +230,20 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
       return respond({ status: "success", data: id === currentCustom.template_id ? currentCustom : currentSingle });
     }
 
+    if (method === "DELETE" && path.endsWith(`/qe-templates/${id}`)) {
+      calls.push("delete");
+      const body = request.postDataJSON() as Record<string, unknown>;
+      deletes.push(body);
+      const deleted = id === currentCustom.template_id ? currentCustom : currentSingle;
+      if (id === currentCustom.template_id) currentCustom = { ...currentCustom, status: "deleted" };
+      else currentSingle = { ...currentSingle, status: "deleted" };
+      return respond({ status: "success", data: { deleted_template: deleted } });
+    }
+
     return respond({ detail: `unexpected route ${method} ${path}` }, 404);
   });
 
-  return { calls, updates };
+  return { calls, updates, deletes };
 }
 
 test("QE templates list shows MCP single and custom evolution templates", async ({ page }) => {
@@ -298,4 +315,18 @@ test("custom evolution template edits loop details and executes through custom c
   await expect(page.getByText(/执行请求已提交/)).toBeVisible();
   await expect(page.getByRole("link", { name: "查看运行详情" })).toBeVisible();
   expect(mock.calls).toEqual(["update", "validate", "approve", "materialize", "run"]);
+});
+
+
+test("operator can hard delete an unmaterialized pending template", async ({ page }) => {
+  const mock = await installTemplateMocks(page);
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/quantevolver/templates/qet_single_demo");
+  await expect(page.getByRole("button", { name: "删除待执行模板" })).toBeEnabled();
+  await page.getByRole("button", { name: "删除待执行模板" }).click();
+  await expect(page).toHaveURL(/\/quantevolver\/templates$/);
+
+  expect(mock.calls).toEqual(["delete"]);
+  expect(mock.deletes.at(-1)).toEqual({ confirm_delete: "QE_TEMPLATE_DELETE" });
 });

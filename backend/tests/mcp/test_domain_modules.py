@@ -15,6 +15,7 @@ from backend.mcp.modules import (
     factor_library,
     factor_metrics,
     model_registry,
+    qe_experiment,
     strategy_governance,
 )
 from backend.mcp.registry import ModuleRegistry
@@ -198,6 +199,27 @@ def test_model_strategy_execution_modules_call_facades_and_confirm_before_http()
     mcp.tools["execution_policy_retire_confirmed"]({"package_id": "pkg_1", "policy_id": "pol_1"}, confirm=execution_policy.RETIRE_EXECUTION_POLICY_CONFIRM)
     assert len(calls) == execution_policy.TOOL_COUNT
     assert all(call["path"].startswith("/api/v1/execution-policy/") for call in calls)
+
+
+def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+
+    with pytest.raises(ValueError, match=qe_experiment.QE_TEMPLATE_DELETE_CONFIRM):
+        mcp.tools["qe_template_delete_confirmed"]("qet_1", confirm_delete="WRONG")
+    assert calls == []
+
+    mcp.tools["qe_template_delete_confirmed"]("qet_1", confirm_delete=qe_experiment.QE_TEMPLATE_DELETE_CONFIRM)
+
+    assert calls == [
+        {
+            "method": "DELETE",
+            "path": "/api/v1/qe-templates/qet_1",
+            "query": {},
+            "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
+        }
+    ]
+    assert qe_experiment.TOOL_COUNT == 27
+
 
 
 @pytest.mark.parametrize("module", [factor_library, factor_metrics, factor_correlation, model_registry, strategy_governance, execution_policy, external_research])

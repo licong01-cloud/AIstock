@@ -16,6 +16,7 @@ QE_EXPERIMENT_STOP_CONFIRM = "QE_EXPERIMENT_STOP"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
 QE_CUSTOM_EVO_DELETE_CONFIRM = "QE_CUSTOM_EVO_DELETE"
 QE_TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
+QE_TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
 
 TOOL_NAMES = (
     "qe_experiment_list",
@@ -43,6 +44,7 @@ TOOL_NAMES = (
     "qe_template_get",
     "qe_template_validate",
     "qe_template_materialize_confirmed",
+    "qe_template_delete_confirmed",
     "qe_template_run_confirmed",
 )
 TOOL_COUNT = len(TOOL_NAMES)
@@ -275,6 +277,12 @@ def register(registry: "ModuleRegistry") -> None:
         registry.confirm(confirm_template, QE_TEMPLATE_MATERIALIZE_CONFIRM, "confirm_template")
         safe = registry.sanitize(template_id, "template_id")
         return client.post(f"/qe-templates/{safe}/materialize", {"confirm_template": QE_TEMPLATE_MATERIALIZE_CONFIRM})
+
+    @registry.mcp.tool(name="qe_template_delete_confirmed")
+    def qe_template_delete_confirmed(template_id: str, confirm_delete: str | None = None) -> Any:
+        registry.confirm(confirm_delete, QE_TEMPLATE_DELETE_CONFIRM, "confirm_delete")
+        safe = registry.sanitize(template_id, "template_id")
+        return client.delete(f"/qe-templates/{safe}", {"confirm_delete": QE_TEMPLATE_DELETE_CONFIRM})
 
     @registry.mcp.tool(name="qe_template_run_confirmed")
     def qe_template_run_confirmed(template_id: str, confirm_run: str | None = None, node_id: str | None = None) -> Any:

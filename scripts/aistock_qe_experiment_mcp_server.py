@@ -31,6 +31,7 @@ QE_EXPERIMENT_STOP_CONFIRM = "QE_EXPERIMENT_STOP"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
 QE_CUSTOM_EVO_DELETE_CONFIRM = "QE_CUSTOM_EVO_DELETE"
 QE_TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
+QE_TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
 
 mcp = FastMCP("aistock-qe-experiment")
 _default_client = LoopbackApiClient(
@@ -226,6 +227,13 @@ def qe_template_materialize_confirmed(template_id: str, confirm_template: str | 
     require_confirm(confirm_template, QE_TEMPLATE_MATERIALIZE_CONFIRM, "confirm_template")
     safe = sanitize_identifier(template_id, "template_id")
     return _client().post(f"/qe-templates/{safe}/materialize", {"confirm_template": QE_TEMPLATE_MATERIALIZE_CONFIRM})
+
+
+@mcp.tool()
+def qe_template_delete_confirmed(template_id: str, confirm_delete: str | None = None) -> dict[str, Any]:
+    require_confirm(confirm_delete, QE_TEMPLATE_DELETE_CONFIRM, "confirm_delete")
+    safe = sanitize_identifier(template_id, "template_id")
+    return _client().delete(f"/qe-templates/{safe}", {"confirm_delete": QE_TEMPLATE_DELETE_CONFIRM})
 
 
 @mcp.tool()
