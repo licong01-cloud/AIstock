@@ -29,8 +29,8 @@
   "expected": "演进轨迹页面在指标图附近展示每个 loop 的简介/目标说明，并在图表 hover 中显示 label 与 description；功能通过标准 BUG/PR 流程合入 main。",
   "first_seen_at": "2026-06-06T13:27:32.204711Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "27e7ab88f292c144f7b4962146d3777a884ce3a8",
+  "fixed_at": "2026-06-06T13:55:22.669047Z",
   "github_issue_number": 816,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/816",
   "last_seen_at": "2026-06-06T13:27:32.204711Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/817",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -89,6 +90,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 qe_data_contract_backend validation_center_backend -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed",
+    "QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 with local read-only DB env -> passed",
+    "frontend npm ci --ignore-scripts; npm exec tsc on EvolutionTrajectory.tsx -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
