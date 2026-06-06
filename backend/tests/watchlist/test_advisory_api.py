@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import advisory as advisory_router
 from backend.services.advisory_program import AdvisoryProgramService, InMemoryAdvisoryProgramRepository
+from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
 
 
-def _client() -> tuple[TestClient, AdvisoryProgramService]:
+class FakeTradingCalendar:
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+        return [day for day in [date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 8)] if start_date <= day <= end_date]
+
+
+def _client(selection_service=None) -> tuple[TestClient, AdvisoryProgramService]:
     app = FastAPI()
     app.include_router(advisory_router.router, prefix="/api/v1")
-    service = AdvisoryProgramService(repository=InMemoryAdvisoryProgramRepository(), selection_service=None)
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=selection_service,
+        calendar_provider=FakeTradingCalendar(),
+    )
     app.dependency_overrides[advisory_router.get_advisory_program_service] = lambda: service
     return TestClient(app), service
 
@@ -137,3 +149,53 @@ def test_advisory_quality_report_endpoint_rejects_future_decision_inputs() -> No
 
     assert response.status_code == 400
     assert "future outcome fields" in response.json()["detail"]["message"]
+
+
+def test_advisory_api_preview_auto_reviews_without_selection_run_id() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.runtime_config = None
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            assert mode == SelectionMode.SINGLE_PACKAGE
+            self.runtime_config = dict(runtime_config)
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config=dict(runtime_config),
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        reference_price=10.0,
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    client, _service = _client(selection_service=fake_selection)
+    created = client.post(
+        "/api/v1/advisory/programs",
+        json={
+            "program_name": "Auto review",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_a"],
+            "target_count": 20,
+            "status": "ENABLED",
+        },
+    )
+    assert created.status_code == 200
+    program_id = created.json()["program"]["program_id"]
+
+    review = client.post(f"/api/v1/advisory/programs/{program_id}/reviews/preview", json={"trade_date": "2026-06-08"})
+
+    assert review.status_code == 200
+    assert review.json()["review"]["review_status"] == "SUCCEEDED"
+    assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
+    assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
+    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 20

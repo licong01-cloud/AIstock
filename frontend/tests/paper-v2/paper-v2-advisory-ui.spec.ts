@@ -124,10 +124,40 @@ async function mockShellApis(page: Page) {
     const path = new URL(route.request().url()).pathname;
     return json(route, path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] });
   });
+  await page.route("**/api/v1/paper-v2/trading-days/defaults**", async (route) => json(route, {
+    as_of_date: "2026-06-08",
+    lookback_trading_days: 10,
+    latest_trading_day: "2026-06-08",
+    replay_start_date: "2026-05-25",
+    replay_end_date: "2026-06-08",
+    available_trading_day_count: 10,
+    next_trading_day: "2026-06-09",
+  }));
 }
 
 async function mockAdvisoryApis(page: Page) {
   const calls: string[] = [];
+  const reviewBodies: JsonObject[] = [];
+  let latestReviewTradeDate = program.latest_review_trade_date;
+  let lastReviewStatus = program.last_review_status;
+  const enabledProgram = () => ({
+    ...program,
+    status: "ENABLED",
+    last_review_status: lastReviewStatus,
+    latest_review_trade_date: latestReviewTradeDate,
+  });
+  const reviewPayload = (preview: boolean) => ({
+    ok: true,
+    review: {
+      program: enabledProgram(),
+      trade_date: "2026-06-08",
+      review_status: "SUCCEEDED",
+      decisions: reviews.slice(0, 2).map((row) => ({ ...row, trade_date: "2026-06-08" })),
+      active_pool: activePool,
+      metrics: { win_rate: 0.64 },
+      preview,
+    },
+  });
   await page.route("**/api/v1/advisory/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -136,14 +166,13 @@ async function mockAdvisoryApis(page: Page) {
     calls.push(`${method} ${path}${url.search}`);
 
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
-      return json(route, { ok: true, programs: [program] });
+      return json(route, { ok: true, programs: [{ ...program, last_review_status: lastReviewStatus, latest_review_trade_date: latestReviewTradeDate }] });
     }
     if (path.endsWith("/api/v1/advisory/leaderboard") && method === "GET") {
       return json(route, {
         ok: true,
         leaderboard: [{
-          ...program,
-          status: "ENABLED",
+          ...enabledProgram(),
           entered_episode_count: 42,
           active_count: 3,
           take_profit_count: 5,
@@ -176,6 +205,17 @@ async function mockAdvisoryApis(page: Page) {
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/enable`) && method === "POST") {
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
+    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews/preview`) && method === "POST") {
+      reviewBodies.push(request.postDataJSON() as JsonObject);
+      return json(route, reviewPayload(true));
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews/run`) && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      reviewBodies.push(body);
+      latestReviewTradeDate = String(body.trade_date || latestReviewTradeDate);
+      lastReviewStatus = "SUCCEEDED";
+      return json(route, reviewPayload(false));
+    }
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
@@ -190,7 +230,7 @@ async function mockAdvisoryApis(page: Page) {
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
-  return calls;
+  return { calls, reviewBodies };
 }
 
 async function activeSymbols(page: Page) {
@@ -212,15 +252,35 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
 
   await mockShellApis(page);
-  const calls = await mockAdvisoryApis(page);
+  const { calls, reviewBodies } = await mockAdvisoryApis(page);
   await page.goto("/paper-v2/advisory");
 
   await expect(page.getByRole("heading", { name: "运行中的荐股任务排行榜" })).toBeVisible();
   await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible();
   await expect(page.getByText("高级候选")).toHaveCount(0);
   await expect(page.getByText("高级行情")).toHaveCount(0);
+  await expect(page.getByText("选股运行 ID")).toHaveCount(0);
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("JSON");
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
+
+  await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
+  expect(reviewBodies.at(-1)).toMatchObject({
+    trade_date: "2026-06-08",
+    runtime_config: {
+      selection_artifact_config: {
+        auto_generate: true,
+        pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+      },
+    },
+  });
+  expect(reviewBodies.at(-1)).not.toHaveProperty("selection_run_id");
+
+  await page.getByTestId(`advisory-run-${PROGRAM_ID}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("已复评");
 
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);

@@ -339,6 +339,50 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
     assert replay["summary"]["win_rate"] == 1.0
 
 
+def test_review_from_selection_builds_default_authoritative_runtime_config() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.runtime_config = None
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            self.runtime_config = dict(runtime_config)
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config=dict(runtime_config),
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        reference_price=10.0,
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=fake_selection,
+        calendar_provider=FakeTradingCalendar([]),
+    )
+    program = _program(service, target_count=20)
+
+    result = service.run_review_from_selection(program.program_id, trade_date=date(2026, 6, 8), preview=True)
+
+    assert result.review_status == "SUCCEEDED"
+    assert fake_selection.runtime_config["top_k"] == 20
+    assert fake_selection.runtime_config["display_top_n"] == 20
+    assert fake_selection.runtime_config["st_pit_authoritative"] is True
+    assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
+    assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
+    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 20
+
+
 def test_replay_uses_trading_calendar_and_skips_weekend_fixture_gaps() -> None:
     class RejectWeekendSelectionService:
         def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):

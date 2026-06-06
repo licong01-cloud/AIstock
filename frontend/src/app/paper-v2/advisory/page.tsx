@@ -184,9 +184,37 @@ function SortHeader({ column, sort, onClick }: { column: ActivePoolColumn; sort:
   );
 }
 
+function reviewRuntimeConfig(program: AdvisoryProgram): JsonObject {
+  const topK = Math.max(1, Math.min(50, Number(program.target_count || 20)));
+  return {
+    top_k: topK,
+    display_top_n: topK,
+    st_pit_authoritative: true,
+    selection_artifact_config: {
+      auto_generate: true,
+      inference_backend: "wsl",
+      pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+    },
+    runtime_profile: {
+      selection: { top_k: topK },
+      tradability: { exclude_suspended: true },
+      industry_blacklist: [],
+      hmm: { enabled: false, model_config_id: null, model_snapshot_id: null, signal_preset: null },
+    },
+  };
+}
+
+function reviewState(program: AdvisoryProgram, targetDate: string) {
+  if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", hint: "等待交易日服务返回最近交易日。" };
+  if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", hint: "任务启用后才可执行每日复评。" };
+  if (program.latest_review_trade_date && program.latest_review_trade_date >= targetDate) {
+    return { canPreview: true, canRun: false, label: "已复评", hint: `${targetDate} 已完成复评，等待下一个交易日。` };
+  }
+  return { canPreview: true, canRun: true, label: "执行复评", hint: `目标交易日 ${targetDate}，由系统自动生成选股候选。` };
+}
+
 function AdvisoryPageContent() {
   const params = useSearchParams();
-  const prefillRunId = params.get("selection_run_id") || "";
   const prefillPackages = params.get("package_ids") || "";
   const [programs, setPrograms] = useState<AdvisoryProgram[]>([]);
   const [leaderboard, setLeaderboard] = useState<AdvisoryLeaderboardRow[]>([]);
@@ -196,8 +224,8 @@ function AdvisoryPageContent() {
   const [packageMode, setPackageMode] = useState<"single_package" | "fusion_pool">(packageIdsFromText(prefillPackages).length > 1 ? "fusion_pool" : "single_package");
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
   const [targetCount, setTargetCount] = useState(20);
-  const [tradeDate, setTradeDate] = useState("");
-  const [selectionRunId, setSelectionRunId] = useState(prefillRunId);
+  const [reviewTradeDate, setReviewTradeDate] = useState("");
+  const [reviewingKey, setReviewingKey] = useState("");
   const [activePool, setActivePool] = useState<AdvisoryEpisode[]>([]);
   const [activeSort, setActiveSort] = useState<ActivePoolSort>(null);
   const [reviews, setReviews] = useState<AdvisoryReviewDecision[]>([]);
@@ -274,12 +302,14 @@ function AdvisoryPageContent() {
     setLoading(true);
     setError(null);
     try {
-      const [programRows, boardRows] = await Promise.all([
+      const [programRows, boardRows, tradingDefaults] = await Promise.all([
         advisoryApi.programs(false),
         advisoryApi.leaderboard(sortBy),
+        advisoryApi.tradingDayDefaults(10),
       ]);
       setPrograms(programRows);
       setLeaderboard(boardRows);
+      setReviewTradeDate(tradingDefaults.latest_trading_day);
       const resolvedProgramId = nextProgramId || selectedProgramId || programRows[0]?.program_id || "";
       setSelectedProgramId(resolvedProgramId);
       setReviewPage(1);
@@ -323,8 +353,7 @@ function AdvisoryPageContent() {
       setPackageMode(ids.length > 1 ? "fusion_pool" : "single_package");
       setPackageRows(packageRowsFromText(prefillPackages));
     }
-    if (prefillRunId) setSelectionRunId(prefillRunId);
-  }, [prefillPackages, prefillRunId]);
+  }, [prefillPackages]);
 
   async function createProgram() {
     setError(null);
@@ -374,22 +403,26 @@ function AdvisoryPageContent() {
     }
   }
 
-  async function runReview(preview: boolean) {
-    if (!selectedProgram) return;
+  async function runReview(program: AdvisoryProgram, preview: boolean) {
+    const state = reviewState(program, reviewTradeDate);
+    if (!state.canPreview || (!preview && !state.canRun)) return;
     setError(null);
     setReviewResult(null);
+    setReviewingKey(`${program.program_id}:${preview ? "preview" : "run"}`);
     try {
       const payload = {
-        trade_date: tradeDate,
-        selection_run_id: selectionRunId.trim() || undefined,
+        trade_date: reviewTradeDate,
+        runtime_config: reviewRuntimeConfig(program),
       };
       const result = preview
-        ? await advisoryApi.previewReview(selectedProgram.program_id, payload)
-        : await advisoryApi.runReview(selectedProgram.program_id, payload);
+        ? await advisoryApi.previewReview(program.program_id, payload)
+        : await advisoryApi.runReview(program.program_id, payload);
       setReviewResult(result);
-      await refreshAll(selectedProgram.program_id);
+      await refreshAll(program.program_id);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setReviewingKey("");
     }
   }
 
@@ -463,6 +496,10 @@ function AdvisoryPageContent() {
     }
   }
 
+  const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate) : null;
+  const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
+  const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
+
   return (
     <main className="pv2-main">
       <section className="pv2-card">
@@ -499,25 +536,54 @@ function AdvisoryPageContent() {
                 <th>胜率</th>
                 <th>平均涨幅</th>
                 <th>最近复评</th>
+                <th>每日复评</th>
               </tr>
             </thead>
             <tbody>
-              {leaderboard.map((row) => (
-                <tr key={row.program_id} onClick={() => void selectProgram(row.program_id)}>
-                  <td><strong>{row.program_name}</strong><br /><span className="pv2-muted pv2-mono">{short(row.package_ids.join("+"), 24)}</span></td>
-                  <td>{row.status}</td>
-                  <td>{short(row.enabled_since, 16)}</td>
-                  <td>{row.entered_episode_count ?? 0}</td>
-                  <td>{row.active_count ?? 0}</td>
-                  <td>{row.take_profit_count ?? 0}</td>
-                  <td>{row.stop_loss_count ?? 0}</td>
-                  <td>{fmtPct(row.win_rate)}</td>
-                  <td>{fmtBps(row.avg_return_bps)}</td>
-                  <td>{row.last_review_status || "STALE"}</td>
-                </tr>
-              ))}
+              {leaderboard.map((row) => {
+                const state = reviewState(row, reviewTradeDate);
+                const previewKey = `${row.program_id}:preview`;
+                const runKey = `${row.program_id}:run`;
+                return (
+                  <tr key={row.program_id} onClick={() => void selectProgram(row.program_id)}>
+                    <td><strong>{row.program_name}</strong><br /><span className="pv2-muted pv2-mono">{short(row.package_ids.join("+"), 24)}</span></td>
+                    <td>{row.status}</td>
+                    <td>{short(row.enabled_since, 16)}</td>
+                    <td>{row.entered_episode_count ?? 0}</td>
+                    <td>{row.active_count ?? 0}</td>
+                    <td>{row.take_profit_count ?? 0}</td>
+                    <td>{row.stop_loss_count ?? 0}</td>
+                    <td>{fmtPct(row.win_rate)}</td>
+                    <td>{fmtBps(row.avg_return_bps)}</td>
+                    <td>{row.last_review_status || "STALE"}<br /><span className="pv2-muted">{row.latest_review_trade_date || "尚未复评"}</span></td>
+                    <td>
+                      <div className="pv2-row-actions">
+                        <button
+                          className="pv2-button"
+                          data-testid={`advisory-preview-${row.program_id}`}
+                          disabled={!state.canPreview || reviewingKey === previewKey}
+                          onClick={(event) => { event.stopPropagation(); void runReview(row, true); }}
+                          type="button"
+                        >
+                          {reviewingKey === previewKey ? "预览中..." : "预览"}
+                        </button>
+                        <button
+                          className="pv2-button-primary"
+                          data-testid={`advisory-run-${row.program_id}`}
+                          disabled={!state.canRun || reviewingKey === runKey}
+                          onClick={(event) => { event.stopPropagation(); void runReview(row, false); }}
+                          type="button"
+                        >
+                          {reviewingKey === runKey ? "执行中..." : state.label}
+                        </button>
+                      </div>
+                      <span className="pv2-muted">{state.hint}</span>
+                    </td>
+                  </tr>
+                );
+              })}
               {!leaderboard.length ? (
-                <tr><td colSpan={10}>暂无启用中的荐股任务；请在下方创建，页面不会展示 mock 行。</td></tr>
+                <tr><td colSpan={11}>暂无启用中的荐股任务；请在下方创建，页面不会展示 mock 行。</td></tr>
               ) : null}
             </tbody>
           </table>
@@ -585,16 +651,32 @@ function AdvisoryPageContent() {
           <div>
             <div className="pv2-kicker">每日复评</div>
             <h2>{selectedProgram ? selectedProgram.program_name : "未选择荐股任务"}</h2>
-            <p className="pv2-muted">每日复评使用 active_pool ∪ TopK；候选与行情由 Selection Center 和行情服务提供，页面不支持手工粘贴原始载荷。</p>
+            <p className="pv2-muted">每日复评使用 active_pool ∪ TopK；候选与行情由 Selection Center 自动生成，页面不暴露内部选股运行编号。</p>
           </div>
           <div className="pv2-row-actions">
-            <button className="pv2-button" onClick={() => runReview(true)} disabled={!selectedProgram || !tradeDate} type="button">预览</button>
-            <button className="pv2-button-primary" onClick={() => runReview(false)} disabled={!selectedProgram || !tradeDate} type="button">执行复评</button>
+            <button
+              className="pv2-button"
+              data-testid="advisory-selected-preview"
+              onClick={() => selectedProgram && void runReview(selectedProgram, true)}
+              disabled={!selectedProgram || !selectedReviewState?.canPreview || reviewingKey === selectedPreviewKey}
+              type="button"
+            >
+              {reviewingKey === selectedPreviewKey ? "预览中..." : "预览"}
+            </button>
+            <button
+              className="pv2-button-primary"
+              data-testid="advisory-selected-run"
+              onClick={() => selectedProgram && void runReview(selectedProgram, false)}
+              disabled={!selectedProgram || !selectedReviewState?.canRun || reviewingKey === selectedRunKey}
+              type="button"
+            >
+              {reviewingKey === selectedRunKey ? "执行中..." : selectedReviewState?.label || "执行复评"}
+            </button>
           </div>
         </div>
-        <div className="pv2-form-grid">
-          <label className="pv2-field">交易日<input className="pv2-input" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></label>
-          <label className="pv2-field">选股运行 ID（可选）<input className="pv2-input" value={selectionRunId} onChange={(event) => setSelectionRunId(event.target.value)} placeholder="留空时由服务按任务策略包生成当日候选" /></label>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+          <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{reviewTradeDate || "-"}</span></strong>
+          <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
         </div>
         {reviewResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
