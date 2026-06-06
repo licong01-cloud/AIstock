@@ -1151,39 +1151,29 @@ class MultiAlphaResultCollector:
 
         失败抛异常，不静默跳过。
         """
+        validated_groups = []
         for g in groups:
             g_name = g["group_name"]
             gm = group_metrics.get(g_name)
             if gm is None:
-                raise RuntimeError(f"group_metrics 缺失组: {g_name}")
+                raise RuntimeError(f"group_metrics missing for group: {g_name}")
             weight = meta_weights.get(g_name)
             if weight is None:
-                raise RuntimeError(f"meta_weight 缺失组: {g_name}")
+                raise RuntimeError(f"meta_weight missing for group: {g_name}")
+
+            # Validate metrics before opening a DB connection; fail-fast tests can
+            # exercise the protocol without requiring a live database.
             g_ic = gm.get("ic") if gm.get("ic") is not None else gm.get("IC")
             g_icir = gm.get("icir") if gm.get("icir") is not None else gm.get("ICIR")
             g_sharpe = gm.get("sharpe") if gm.get("sharpe") is not None else gm.get("information_ratio")
             if g_ic is None or g_icir is None or g_sharpe is None:
-                raise RuntimeError(f"group_metrics 缺少关键指标: {g_name}")
+                raise RuntimeError(f"group_metrics missing key metrics for group: {g_name}")
+            validated_groups.append((g, g_name, g_ic, g_icir, g_sharpe, weight))
 
         results = []
         with get_conn() as conn:
             with conn.cursor() as cur:
-                for g in groups:
-                    g_name = g["group_name"]
-                    gm = group_metrics.get(g_name)
-                    if gm is None:
-                        raise RuntimeError(f"group_metrics 缺失组: {g_name}")
-                    weight = meta_weights.get(g_name)
-                    if weight is None:
-                        raise RuntimeError(f"meta_weight 缺失组: {g_name}")
-
-                    # 安全取值：支持 meta_model_runner.py 输出的两种键名格式
-                    g_ic = gm.get("ic") if gm.get("ic") is not None else gm.get("IC")
-                    g_icir = gm.get("icir") if gm.get("icir") is not None else gm.get("ICIR")
-                    g_sharpe = gm.get("sharpe") if gm.get("sharpe") is not None else gm.get("information_ratio")
-                    if g_ic is None or g_icir is None or g_sharpe is None:
-                        raise RuntimeError(f"group_metrics 缺少关键指标: {g_name}")
-
+                for g, g_name, g_ic, g_icir, g_sharpe, weight in validated_groups:
                     cur.execute(
                         """UPDATE qe_multi_alpha_groups
                            SET group_ic = %s, group_icir = %s, group_sharpe = %s,

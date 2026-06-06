@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1412,7 +1413,7 @@ class TestMultiAlphaResultCollectorFailFast:
         # _update_group_records path instead.
         collector = MultiAlphaResultCollector()
 
-        with pytest.raises(RuntimeError, match="group_metrics 缺失组"):
+        with pytest.raises(RuntimeError, match="group_metrics"):
             collector._update_group_records(
                 "exp_1",
                 [{"group_name": "g1", "model_id": "m1", "factor_names": []}],
@@ -1423,7 +1424,7 @@ class TestMultiAlphaResultCollectorFailFast:
     def test_update_group_records_requires_non_empty_group_metrics(self):
         collector = MultiAlphaResultCollector()
 
-        with pytest.raises(RuntimeError, match="group_metrics 缺少关键指标"):
+        with pytest.raises(RuntimeError, match="group_metrics"):
             collector._update_group_records(
                 "exp_1",
                 [{"group_name": "g1", "model_id": "m1", "factor_names": []}],
@@ -1512,7 +1513,7 @@ class TestMultiAlphaPhase2ArtifactValidation:
         assert exc.value.status_code == 409
         assert "artifact-ready" in str(exc.value.detail)
 
-    def test_run_status_marks_artifact_collection_failure_explicitly(self):
+    def test_run_status_keeps_runtime_completed_when_artifact_collection_fails(self):
         collector_instance = SimpleNamespace(
             collect_and_persist=AsyncMock(side_effect=RuntimeError("missing multi_alpha_results.json"))
         )
@@ -1538,8 +1539,27 @@ class TestMultiAlphaPhase2ArtifactValidation:
 
             result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
 
-        assert result["status"] == "failed"
+        assert result["status"] == "completed"
         assert result["multi_alpha_stage"] == "failed_artifact"
         assert result["artifact_status"] == "failed"
+        assert result["multi_alpha"]["runtime_status"] == "completed"
+        assert result["multi_alpha"]["collection_status"] == "failed"
         assert "missing multi_alpha_results.json" in result["error"]
         mark_failed.assert_called_once()
+
+    def test_artifact_failure_persists_runtime_completed_lifecycle(self):
+        with patch.object(quantevolver_router, "get_conn") as mock_get_conn:
+            conn = mock_get_conn.return_value.__enter__.return_value
+            cur = conn.cursor.return_value.__enter__.return_value
+
+            quantevolver_router._mark_multi_alpha_artifact_failure(
+                "exp_1", "missing multi_alpha_results.json"
+            )
+
+        sql = cur.execute.call_args.args[0]
+        payload = json.loads(cur.execute.call_args.args[1][0])
+        assert "SET status = 'completed'" in sql
+        assert payload["multi_alpha_lifecycle"]["runtime_status"] == "completed"
+        assert payload["multi_alpha_lifecycle"]["collection_status"] == "failed"
+        assert payload["multi_alpha_lifecycle"]["artifact_status"] == "failed"
+        conn.commit.assert_called_once()

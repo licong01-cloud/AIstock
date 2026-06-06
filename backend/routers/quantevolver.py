@@ -5710,10 +5710,17 @@ def _load_multi_alpha_status_payload(experiment_id: str, experiment_status: str)
 
 
 def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -> None:
-    """Persist a top-level artifact validation failure without faking metrics."""
+    """Persist artifact collection failure without downgrading runtime success.
+
+    RD-Agent has already reported every group loop as completed before this
+    helper is called.  The authoritative experiment status must therefore stay
+    completed while the artifact lifecycle records the collection failure.
+    """
     lifecycle = {
         "multi_alpha_lifecycle": {
             "stage": "failed_artifact",
+            "runtime_status": "completed",
+            "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
         }
@@ -5722,7 +5729,31 @@ def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'failed',
+                   SET status = 'completed',
+                       result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
+                       completed_at = NOW()
+                   WHERE experiment_id = %s""",
+                (json.dumps(lifecycle, ensure_ascii=False), experiment_id),
+            )
+        conn.commit()
+
+
+def _mark_experiment_collection_failure(experiment_id: str, error_message: str) -> None:
+    """Persist single-loop artifact collection failure after runtime completion."""
+    lifecycle = {
+        "qe_completion_lifecycle": {
+            "stage": "artifact_collection_failed",
+            "runtime_status": "completed",
+            "collection_status": "failed",
+            "artifact_status": "failed",
+            "errors": [error_message],
+        }
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE qe_experiments
+                   SET status = 'completed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -6570,12 +6601,14 @@ async def get_experiment_run_status(experiment_id: str):
                         error_msg = f"Multi-Alpha result collection failed: {me}"
                         logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
                         _mark_multi_alpha_artifact_failure(experiment_id, error_msg)
-                        result["status"] = "failed"
+                        result["status"] = "completed"
                         result["error"] = error_msg
                         result["multi_alpha_stage"] = "failed_artifact"
                         result["artifact_status"] = "failed"
                         if "multi_alpha" in result:
                             result["multi_alpha"]["stage"] = "failed_artifact"
+                            result["multi_alpha"]["runtime_status"] = "completed"
+                            result["multi_alpha"]["collection_status"] = "failed"
                             result["multi_alpha"]["artifact_status"] = "failed"
                             result["multi_alpha"]["artifact_errors"] = [error_msg]
                 elif rd_status == "failed":
@@ -6610,9 +6643,12 @@ async def get_experiment_run_status(experiment_id: str):
                             result["result_metrics"] = {k: v for k, v in metrics.items() if k != "_raw_json"}
                         except Exception as me:
                             logger.error(f"Auto-sync metrics failed for {experiment_id}: {me}", exc_info=True)
-                            _update_experiment_status(experiment_id, "failed")
-                            result["status"] = "failed"
-                            result["error"] = f"Auto-sync metrics failed: {me}"
+                            error_msg = f"Auto-sync metrics failed: {me}"
+                            _mark_experiment_collection_failure(experiment_id, error_msg)
+                            result["status"] = "completed"
+                            result["artifact_status"] = "failed"
+                            result["collection_status"] = "failed"
+                            result["error"] = error_msg
                     elif rd_status in ("failed", "error"):
                         _update_experiment_status(experiment_id, "failed")
                         result["status"] = "failed"
