@@ -1,7 +1,13 @@
 {
   "allowed_write_scope": [
-    "rdagent/app/fin_factor/multi_alpha_scheduler.py",
-    "rdagent/scenarios/qlib/factor_experiment/multi_alpha_runner.py"
+    "backend/services/quantevolver/multi_alpha_result_collector.py",
+    "backend/services/quantevolver/multi_alpha_diagnostics.py",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/components/MultiAlphaProgress.tsx",
+    "frontend/src/app/quantevolver/multi-alpha/diagnostics/[expId]/page.tsx",
+    "frontend/src/app/quantevolver/multi-alpha/diagnostics/*/page.tsx",
+    "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+    "tests/aistock_validation/bugs/20260421_BUG-015-multi-alpha-no-master-backtest.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-015",
@@ -18,6 +24,26 @@
       "actor": "claude_code",
       "note": "Multi-alpha master-slave architecture commissioning",
       "timestamp": "2026-04-21T00:00:00Z"
+    },
+    {
+      "action": "scope_corrected",
+      "actor": "codex",
+      "timestamp": "2026-05-28T17:20:48Z",
+      "note": "BUG-015 legacy RD-Agent paths were superseded by current AIstock QuantEvolver multi-alpha collector/router/UI paths; scope updated before code changes so workflow PR checks remain accurate. Added glob-compatible dynamic route pattern for issue_flow fnmatch, because literal [expId] is interpreted as a character class.",
+      "old_scope": [
+        "rdagent/app/fin_factor/multi_alpha_scheduler.py",
+        "rdagent/scenarios/qlib/factor_experiment/multi_alpha_runner.py"
+      ],
+      "new_scope": [
+        "backend/services/quantevolver/multi_alpha_result_collector.py",
+        "backend/services/quantevolver/multi_alpha_diagnostics.py",
+        "backend/routers/quantevolver.py",
+        "frontend/src/app/quantevolver/components/MultiAlphaProgress.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/diagnostics/[expId]/page.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/diagnostics/*/page.tsx",
+        "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+        "tests/aistock_validation/bugs/20260421_BUG-015-multi-alpha-no-master-backtest.json"
+      ]
     }
   ],
   "evidence_uris": [
@@ -36,7 +62,10 @@
   "module": "rdagent",
   "reproduce_command": "rdagent app fin_factor --multi-alpha --strategy_id <new>  # remote completes, master does not trigger backtest",
   "required_verification": [
-    "End-to-end multi-alpha run with artifact-sync → master-backtest evidence in UI logs"
+    "End-to-end multi-alpha run with artifact-sync → master-backtest evidence in UI logs",
+    "python -m pytest backend/tests/unified_engine/test_multi_alpha_command_generation.py -q -p no:cacheprovider",
+    "python -m py_compile backend/services/quantevolver/multi_alpha_result_collector.py backend/services/quantevolver/multi_alpha_diagnostics.py backend/routers/quantevolver.py",
+    "git diff --check"
   ],
   "risk_area": "feature_gap",
   "schema_version": "aistock_validation_bug_v1",
@@ -44,8 +73,9 @@
   "status": "open",
   "submitted_at": null,
   "suspected_modules": [
-    "rdagent/app/fin_factor/",
-    "rdagent/scenarios/qlib/factor_experiment/"
+    "backend/services/quantevolver/",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/"
   ],
   "title": "多Alpha 回测未在主节点执行 — 远端训练完成但无回测数据",
   "trigger_condition": {

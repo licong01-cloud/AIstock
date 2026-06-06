@@ -69,6 +69,13 @@ interface DiagnosticsData {
   data_availability?: Record<string, any>;
   ic_quality?: Record<string, any>;
   optimization_guidance?: OptimizationGuidance[];
+  unified_backtest?: {
+    loop_id?: string | null;
+    primary_node_id?: string | null;
+    elapsed_seconds?: number | null;
+    artifact_status?: string | null;
+    metrics_source?: string | null;
+  };
 }
 
 // ── Styles ─────────────────────────────────────────────────────────
@@ -152,6 +159,7 @@ export default function MultiAlphaDiagnosticsPage() {
   const availability = data?.data_availability || {};
   const portfolio = data?.portfolio_diagnostics || {};
   const diversification = data?.diversification || {};
+  const unifiedBacktest = data?.unified_backtest || {};
   const icQualityEntries = Object.entries(data?.ic_quality || {});
   const optimizationGuidance = data?.optimization_guidance || [];
 
@@ -202,8 +210,34 @@ export default function MultiAlphaDiagnosticsPage() {
           实验 {expId} | Meta: {data.meta_method || "-"} | 执行:{" "}
           {data.execution_mode || "-"} | Combined IC:{" "}
           {data.combined_ic != null ? data.combined_ic.toFixed(4) : "-"}
+          {unifiedBacktest.loop_id ? ` | 统一回测 run-id: ${unifiedBacktest.loop_id}` : ""}
         </p>
       </div>
+
+      {unifiedBacktest.loop_id && (
+        <div style={{ ...cardStyle, marginBottom: "24px" }}>
+          <div style={headerStyle}>
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#047857" }}>
+              统一回测执行证据
+            </h2>
+          </div>
+          <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            {[
+              ["run-id", unifiedBacktest.loop_id],
+              ["主节点", unifiedBacktest.primary_node_id || "-"],
+              ["产物状态", unifiedBacktest.artifact_status || "-"],
+              ["耗时", typeof unifiedBacktest.elapsed_seconds === "number" ? `${unifiedBacktest.elapsed_seconds}s` : "-"],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: "1px solid #d1fae5", borderRadius: 8, padding: "10px", backgroundColor: "#ecfdf5" }}>
+                <div style={{ fontSize: 12, color: "#047857" }}>{label}</div>
+                <div style={{ marginTop: 4, fontSize: 13, fontWeight: 700, color: "#064e3b", fontFamily: "monospace" }}>
+                  {value}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 0. 统一分析覆盖率 + 组合回测诊断 */}
       <div
