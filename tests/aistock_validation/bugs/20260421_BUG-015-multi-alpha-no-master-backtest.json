@@ -28,12 +28,6 @@
     {
       "action": "scope_corrected",
       "actor": "codex",
-      "timestamp": "2026-05-28T17:20:48Z",
-      "note": "BUG-015 legacy RD-Agent paths were superseded by current AIstock QuantEvolver multi-alpha collector/router/UI paths; scope updated before code changes so workflow PR checks remain accurate. Added glob-compatible dynamic route pattern for issue_flow fnmatch, because literal [expId] is interpreted as a character class.",
-      "old_scope": [
-        "rdagent/app/fin_factor/multi_alpha_scheduler.py",
-        "rdagent/scenarios/qlib/factor_experiment/multi_alpha_runner.py"
-      ],
       "new_scope": [
         "backend/services/quantevolver/multi_alpha_result_collector.py",
         "backend/services/quantevolver/multi_alpha_diagnostics.py",
@@ -43,7 +37,13 @@
         "frontend/src/app/quantevolver/multi-alpha/diagnostics/*/page.tsx",
         "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
         "tests/aistock_validation/bugs/20260421_BUG-015-multi-alpha-no-master-backtest.json"
-      ]
+      ],
+      "note": "BUG-015 legacy RD-Agent paths were superseded by current AIstock QuantEvolver multi-alpha collector/router/UI paths; scope updated before code changes so workflow PR checks remain accurate. Added glob-compatible dynamic route pattern for issue_flow fnmatch, because literal [expId] is interpreted as a character class.",
+      "old_scope": [
+        "rdagent/app/fin_factor/multi_alpha_scheduler.py",
+        "rdagent/scenarios/qlib/factor_experiment/multi_alpha_runner.py"
+      ],
+      "timestamp": "2026-05-28T17:20:48Z"
     }
   ],
   "evidence_uris": [
@@ -54,12 +54,16 @@
   "fingerprint": "rdagent::multi_alpha::no_master_backtest_after_remote_training",
   "first_seen_at": "2026-04-21T00:00:00Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7958f6a728c7343fe2eeba93f1129777f34e3df6",
+  "fixed_at": "2026-06-06T08:52:00.057585Z",
   "github_issue_number": 11,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/11",
   "last_seen_at": "2026-05-13T07:03:20Z",
   "module": "rdagent",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/307",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "rdagent app fin_factor --multi-alpha --strategy_id <new>  # remote completes, master does not trigger backtest",
   "required_verification": [
     "End-to-end multi-alpha run with artifact-sync → master-backtest evidence in UI logs",
@@ -70,7 +74,7 @@
   "risk_area": "feature_gap",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "submitted_at": null,
   "suspected_modules": [
     "backend/services/quantevolver/",
@@ -81,5 +85,8 @@
   "trigger_condition": {
     "scenario": "multi_alpha_remote_training_completes_no_master_backtest"
   },
+  "validation_evidence": [
+    "PR #307 CI green; targeted pytest 63 passed; l0 passed; production gates noop"
+  ],
   "verification_run_id": null
 }
