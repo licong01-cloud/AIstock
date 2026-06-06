@@ -1,0 +1,106 @@
+{
+  "actual": "当前 main 不包含 a6eb772f 的 EvolutionTrajectory/MetricTrajectoryChart 改动，页面没有 Loop 目标说明，也没有 loop label/description hover。",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+    "tests/aistock_validation/bugs/20260606_BUG-281-qe-evolution-trajectory-lost-loop-summaries.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-281",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-06T13:27:32.204711Z",
+  "description": "当前 main 不包含 a6eb772f 的 EvolutionTrajectory/MetricTrajectoryChart 改动，页面没有 Loop 目标说明，也没有 loop label/description hover。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-157cf0a97c97",
+      "timestamp": "2026-06-06T13:27:32.204707Z"
+    }
+  ],
+  "evidence_uris": [
+    "local commit a6eb772f fix(qe): show custom loop labels in trajectory was not ancestor of main and had no PR"
+  ],
+  "expected": "演进轨迹页面在指标图附近展示每个 loop 的简介/目标说明，并在图表 hover 中显示 label 与 description；功能通过标准 BUG/PR 流程合入 main。",
+  "first_seen_at": "2026-06-06T13:27:32.204711Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 816,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/816",
+  "last_seen_at": "2026-06-06T13:27:32.204711Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 /quantevolver/evolution 的任务轨迹页面，查看指标演进区，缺少 Loop 目标说明和每个 loop 的 label/loop_desc",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "qe_archive_l3",
+    "qe_data_contract_backend",
+    "validation_center_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE evolution trajectory lost loop summaries",
+  "trigger_condition": {
+    "fingerprint": "157cf0a97c97c3dc953e0db9",
+    "source_event_id": "FE-20260606-157cf0a97c97"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/loop_desc",
+    "ui_routes": [
+      "/loop_desc"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
