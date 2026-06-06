@@ -238,7 +238,7 @@ QE/RD-Agent/Qlib 产物不得只保存文件路径。manifest 至少应包含：
 项目根目录只允许放稳定入口和顶层配置，例如：
 
 - 一级业务目录：`backend/`、`frontend/`、`docs/`、`scripts/`、`tests/`、`configs/`、`monitoring/`、`debug_tools/`、`.codex/`。
-- 顶层入口和配置：`README.md`、`pyproject.toml`、`noxfile.py`、`.gitignore`、`.gitattributes`、`package`/workspace 类配置。
+- 顶层入口和配置：`README.md`、`pyproject.toml`、`noxfile.py`、`.mcp.json`、`.gitignore`、`.gitattributes`、`package`/workspace 类配置。
 - 经 review 确认必须在根目录的构建、工具或版本文件。
 
 禁止在根目录新增一次性脚本、临时数据、诊断报告、压缩包、日志、模型、pickle、parquet、CSV、JSON 输出。历史根目录污染作为技术债分批清理，不在普通功能提交中混入大规模搬迁。

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 from .pg_pool import get_conn
 
@@ -170,6 +171,12 @@ DDL: List[str] = [
     """,
     "INSERT INTO app.sync_meta (key, value) VALUES ('rdagent_last_sync_time', '2000-01-01T00:00:00Z') ON CONFLICT DO NOTHING;"
 ]
+
+_ADVISORY_PROGRAM_LIFECYCLE_DDL = (
+    Path(__file__).resolve().parent / "migrations" / "add_advisory_program_lifecycle_20260604.sql"
+)
+if _ADVISORY_PROGRAM_LIFECYCLE_DDL.exists():
+    DDL.append(_ADVISORY_PROGRAM_LIFECYCLE_DDL.read_text(encoding="utf-8"))
 
 
 def init_watchlist_schema() -> None:

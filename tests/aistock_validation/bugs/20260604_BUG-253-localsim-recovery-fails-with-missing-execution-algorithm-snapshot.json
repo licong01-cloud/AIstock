@@ -1,0 +1,73 @@
+{
+  "actual": "After BUG-252 merge and backend restart on 2026-06-04, MiniQMT recovered stale runs successfully, but the two AIstock LocalSim strategy runs remained FAILED_RETRYABLE. Manual scheduler tick returned AttributeError: 'NoneType' object has no attribute 'algo_code' for both local_sim bindings, blocking unattended dual-strategy LocalSim validation.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-253-localsim-recovery-fails-with-missing-execution-algorithm-snapshot.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-253",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T04:47:02.584227Z",
+  "description": "After BUG-252 merge and backend restart on 2026-06-04, MiniQMT recovered stale runs successfully, but the two AIstock LocalSim strategy runs remained FAILED_RETRYABLE. Manual scheduler tick returned AttributeError: 'NoneType' object has no attribute 'algo_code' for both local_sim bindings, blocking unattended dual-strategy LocalSim validation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-89829276d4c6",
+      "timestamp": "2026-06-04T04:47:02.584222Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "LocalSim production recovery uses the validated execution policy snapshot from Paper v2 portfolio state and fails fast if it is missing; no AttributeError and no silent default algo fallback.",
+  "first_seen_at": "2026-06-04T04:47:02.584227Z",
+  "fix_branch": null,
+  "fix_commit": "9af09a79b0c2caca09d6e76b986f0f46cfb6ff45",
+  "fixed_at": "2026-06-04T05:34:34.386100Z",
+  "github_issue_number": 712,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/712",
+  "last_seen_at": "2026-06-04T04:47:02.584227Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/716",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/simulation-runtime/scheduler/tick after BUG-252; LocalSim bindings return AttributeError: 'NoneType' object has no attribute 'algo_code'",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSim recovery fails with missing execution algorithm snapshot",
+  "trigger_condition": {
+    "fingerprint": "89829276d4c6f8b9104235b9",
+    "source_event_id": "FE-20260604-89829276d4c6"
+  },
+  "validation_evidence": [
+    "C:\\Users\\lc999\\miniconda3\\Scripts\\ruff.exe check backend/services/paper_trading_v2/broker/localsim.py backend/services/simulation_runtime/scheduler.py backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "PYTHONPATH=. C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 49 passed",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s l0 -> passed",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s paper_v2_l3 -> passed (paper_v2_l3, l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep)",
+    "C:\\Users\\lc999\\miniconda3\\envs\\aistock\\python.exe -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

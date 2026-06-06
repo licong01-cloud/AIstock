@@ -21,6 +21,8 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 
 from .models import (
     BUY_ORDER_TYPE,
+    MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE,
+    MINIQMT_STRATEGY_SLOT_METADATA_KEY,
     SELL_ORDER_TYPE,
     BindingStatus,
     CashEntryType,
@@ -37,6 +39,8 @@ from .models import (
     PositionLotStatus,
     ReconciliationIssueRecord,
     ReconciliationRunRecord,
+    MiniQmtAccountGroup,
+    MiniQmtStrategySlot,
     StrategyBindingSelectionEvidence,
     StrategyPackageBinding,
     TradeLedgerRecord,
@@ -121,6 +125,63 @@ class QmtStrategyLedgerRepository:
             with conn.cursor() as cur:
                 self._update_virtual_account_with_cursor(cur, account)
         return account
+
+    def create_account_group_slots(self, group: MiniQmtAccountGroup) -> MiniQmtAccountGroup:
+        existing_accounts = self.list_virtual_accounts(group.broker_account_id)
+        _validate_account_group_slots(group, existing_accounts=existing_accounts)
+        for slot in group.slots:
+            self.create_virtual_account(slot.to_virtual_account(group))
+        return group
+
+    def list_account_group_slots(
+        self,
+        account_group_id: str,
+        *,
+        broker_account_id: str | None = None,
+    ) -> list[MiniQmtStrategySlot]:
+        accounts = self.list_virtual_accounts(broker_account_id)
+        return _slots_from_accounts(accounts, account_group_id)
+
+    def get_account_group(
+        self,
+        account_group_id: str,
+        *,
+        broker_account_id: str | None = None,
+    ) -> MiniQmtAccountGroup:
+        slots = self.list_account_group_slots(account_group_id, broker_account_id=broker_account_id)
+        if not slots:
+            raise DataUnavailableError(
+                "MiniQMT account group does not exist",
+                context={"account_group_id": account_group_id, "broker_account_id": broker_account_id},
+            )
+        return _group_from_slots(slots)
+
+    def set_account_group_slot_status(
+        self,
+        *,
+        account_group_id: str,
+        strategy_slot_id: str,
+        status: VirtualAccountStatus,
+    ) -> MiniQmtStrategySlot:
+        slots = self.list_account_group_slots(account_group_id)
+        for slot in slots:
+            if slot.strategy_slot_id != strategy_slot_id:
+                continue
+            account = self.get_virtual_account(slot.strategy_id)
+            updated_metadata = dict(account.metadata)
+            slot_meta = dict(updated_metadata.get(MINIQMT_STRATEGY_SLOT_METADATA_KEY) or {})
+            slot_meta["status"] = status.value
+            updated_metadata[MINIQMT_STRATEGY_SLOT_METADATA_KEY] = slot_meta
+            self.update_virtual_account(replace(account, status=status, metadata=updated_metadata, updated_at=datetime.now(UTC)))
+            updated = self.get_virtual_account(slot.strategy_id)
+            mapped = MiniQmtStrategySlot.from_virtual_account(updated)
+            if mapped is None:
+                raise ValueError("updated slot metadata became invalid")
+            return mapped
+        raise DataUnavailableError(
+            "MiniQMT strategy slot does not exist",
+            context={"account_group_id": account_group_id, "strategy_slot_id": strategy_slot_id},
+        )
 
     def _update_virtual_account_with_cursor(self, cur: Any, account: VirtualAccount) -> None:
         cur.execute(
@@ -823,11 +884,11 @@ class QmtStrategyLedgerRepository:
         return entry, inserted
 
     def apply_cash_entry_once(self, entry: CashLedgerEntry, account: VirtualAccount) -> tuple[CashLedgerEntry, bool]:
-        _validate_virtual_account(account)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
                 if inserted:
+                    _validate_virtual_account(account)
                     self._update_virtual_account_with_cursor(cur, account)
         return entry, inserted
 
@@ -839,7 +900,6 @@ class QmtStrategyLedgerRepository:
     ) -> tuple[CashLedgerEntry, bool]:
         """Apply a cash event, account update, and lot updates as one DB transaction."""
 
-        _validate_virtual_account(account)
         with self._conn_factory() as conn:
             previous_autocommit = getattr(conn, "autocommit", None)
             if previous_autocommit is not None:
@@ -848,6 +908,7 @@ class QmtStrategyLedgerRepository:
                 with conn.cursor() as cur:
                     inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
                     if inserted:
+                        _validate_virtual_account(account)
                         self._update_virtual_account_with_cursor(cur, account)
                         for lot in lots:
                             if lot.available_quantity > lot.remaining_quantity:
@@ -870,6 +931,10 @@ class QmtStrategyLedgerRepository:
                 return self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=ignore_conflict)
 
     def _insert_cash_entry_with_cursor(self, cur: Any, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
+        if ignore_conflict:
+            cur.execute("SELECT 1 FROM qmt_strategy.cash_ledger WHERE cash_id = %s", (entry.cash_id,))
+            if cur.fetchone() is not None:
+                return False
         conflict_clause = "ON CONFLICT (cash_id) DO NOTHING RETURNING cash_id" if ignore_conflict else "RETURNING cash_id"
         cur.execute(
             f"""
@@ -972,6 +1037,26 @@ class QmtStrategyLedgerRepository:
                 )
         return run
 
+    def complete_reconciliation_run(self, run: ReconciliationRunRecord) -> ReconciliationRunRecord:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qmt_strategy.reconciliation_run
+                    SET status = %s,
+                        completed_at = %s,
+                        summary_json = %s
+                    WHERE run_id = %s
+                    """,
+                    (
+                        run.status,
+                        run.completed_at,
+                        _json(run.summary_json),
+                        run.run_id,
+                    ),
+                )
+        return run
+
     def append_reconciliation_issue(self, issue: ReconciliationIssueRecord) -> ReconciliationIssueRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1070,6 +1155,17 @@ class QmtStrategyLedgerRepository:
                 rows = cur.fetchall()
         return [_row_to_unattributed_order(row) for row in rows]
 
+    def delete_unattributed_order(self, *, account_id: str, trade_date: date, qmt_order_id: str) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qmt_strategy.unattributed_order
+                    WHERE account_id = %s AND trade_date = %s AND qmt_order_id = %s
+                    """,
+                    (account_id, trade_date, qmt_order_id),
+                )
+
     def upsert_unattributed_trade(self, record: UnattributedTradeRecord) -> UnattributedTradeRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1129,6 +1225,17 @@ class QmtStrategyLedgerRepository:
                 rows = cur.fetchall()
         return [_row_to_unattributed_trade(row) for row in rows]
 
+    def delete_unattributed_trade(self, *, account_id: str, trade_date: date, trade_id: str) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qmt_strategy.unattributed_trade
+                    WHERE account_id = %s AND trade_date = %s AND trade_id = %s
+                    """,
+                    (account_id, trade_date, trade_id),
+                )
+
 
 class InMemoryQmtStrategyLedgerRepository:
     """Local repository with database-like uniqueness semantics for tests."""
@@ -1187,6 +1294,63 @@ class InMemoryQmtStrategyLedgerRepository:
             raise ValueError("account_id and strategy_name are immutable for virtual account updates")
         self._virtual_accounts[account.strategy_id] = account
         return account
+
+    def create_account_group_slots(self, group: MiniQmtAccountGroup) -> MiniQmtAccountGroup:
+        existing_accounts = self.list_virtual_accounts(group.broker_account_id)
+        _validate_account_group_slots(group, existing_accounts=existing_accounts)
+        for slot in group.slots:
+            self.create_virtual_account(slot.to_virtual_account(group))
+        return group
+
+    def list_account_group_slots(
+        self,
+        account_group_id: str,
+        *,
+        broker_account_id: str | None = None,
+    ) -> list[MiniQmtStrategySlot]:
+        accounts = self.list_virtual_accounts(broker_account_id)
+        return _slots_from_accounts(accounts, account_group_id)
+
+    def get_account_group(
+        self,
+        account_group_id: str,
+        *,
+        broker_account_id: str | None = None,
+    ) -> MiniQmtAccountGroup:
+        slots = self.list_account_group_slots(account_group_id, broker_account_id=broker_account_id)
+        if not slots:
+            raise DataUnavailableError(
+                "MiniQMT account group does not exist",
+                context={"account_group_id": account_group_id, "broker_account_id": broker_account_id},
+            )
+        return _group_from_slots(slots)
+
+    def set_account_group_slot_status(
+        self,
+        *,
+        account_group_id: str,
+        strategy_slot_id: str,
+        status: VirtualAccountStatus,
+    ) -> MiniQmtStrategySlot:
+        slots = self.list_account_group_slots(account_group_id)
+        for slot in slots:
+            if slot.strategy_slot_id != strategy_slot_id:
+                continue
+            account = self.get_virtual_account(slot.strategy_id)
+            updated_metadata = dict(account.metadata)
+            slot_meta = dict(updated_metadata.get(MINIQMT_STRATEGY_SLOT_METADATA_KEY) or {})
+            slot_meta["status"] = status.value
+            updated_metadata[MINIQMT_STRATEGY_SLOT_METADATA_KEY] = slot_meta
+            self.update_virtual_account(replace(account, status=status, metadata=updated_metadata, updated_at=datetime.now(UTC)))
+            updated = self.get_virtual_account(slot.strategy_id)
+            mapped = MiniQmtStrategySlot.from_virtual_account(updated)
+            if mapped is None:
+                raise ValueError("updated slot metadata became invalid")
+            return mapped
+        raise DataUnavailableError(
+            "MiniQMT strategy slot does not exist",
+            context={"account_group_id": account_group_id, "strategy_slot_id": strategy_slot_id},
+        )
 
     def create_package_binding(self, binding: StrategyPackageBinding) -> StrategyPackageBinding:
         _validate_package_binding(binding)
@@ -1490,6 +1654,12 @@ class InMemoryQmtStrategyLedgerRepository:
         self._reconciliation_runs[run.run_id] = run
         return run
 
+    def complete_reconciliation_run(self, run: ReconciliationRunRecord) -> ReconciliationRunRecord:
+        if run.run_id not in self._reconciliation_runs:
+            raise ValueError(f"reconciliation run does not exist: {run.run_id}")
+        self._reconciliation_runs[run.run_id] = run
+        return run
+
     def append_reconciliation_issue(self, issue: ReconciliationIssueRecord) -> ReconciliationIssueRecord:
         if issue.issue_id in self._reconciliation_issues:
             raise ValueError(f"reconciliation issue already exists: {issue.issue_id}")
@@ -1517,6 +1687,9 @@ class InMemoryQmtStrategyLedgerRepository:
             records = [record for record in records if record.trade_date == trade_date]
         return sorted(records, key=lambda record: (record.trade_date, record.qmt_order_id))
 
+    def delete_unattributed_order(self, *, account_id: str, trade_date: date, qmt_order_id: str) -> None:
+        self._unattributed_orders.pop((account_id, trade_date, qmt_order_id), None)
+
     def upsert_unattributed_trade(self, record: UnattributedTradeRecord) -> UnattributedTradeRecord:
         key = (record.account_id, record.trade_date, record.trade_id)
         self._unattributed_trades[key] = record
@@ -1534,6 +1707,9 @@ class InMemoryQmtStrategyLedgerRepository:
             records = [record for record in records if record.trade_date == trade_date]
         return sorted(records, key=lambda record: (record.trade_date, record.trade_id))
 
+    def delete_unattributed_trade(self, *, account_id: str, trade_date: date, trade_id: str) -> None:
+        self._unattributed_trades.pop((account_id, trade_date, trade_id), None)
+
 
 def _validate_virtual_account(account: VirtualAccount) -> None:
     _require_text(account.strategy_id, "strategy_id")
@@ -1546,6 +1722,104 @@ def _validate_virtual_account(account: VirtualAccount) -> None:
         raise ValueError("initial_cash must be positive")
     if account.cash < Decimal("0") or account.frozen_cash < Decimal("0"):
         raise ValueError("cash and frozen_cash must be non-negative")
+
+
+def _validate_account_group_slots(
+    group: MiniQmtAccountGroup,
+    *,
+    existing_accounts: list[VirtualAccount],
+) -> None:
+    _require_text(group.account_group_id, "account_group_id")
+    _require_text(group.broker_account_id, "broker_account_id")
+    _require_text(group.broker_backend, "broker_backend")
+    _require_text(group.broker_mode, "broker_mode")
+    if group.allocation_mode != MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE:
+        raise ValueError("MiniQMT account group allocation_mode must be account_group_slots")
+    if not group.slots:
+        raise ValueError("MiniQMT account group must include at least one strategy slot")
+    if group.cash_limit is not None and group.cash_limit <= Decimal("0"):
+        raise ValueError("MiniQMT account group cash_limit must be positive")
+
+    existing_slots = _slots_from_accounts(existing_accounts, group.account_group_id)
+    existing_strategy_names = {
+        account.strategy_name: account.strategy_id
+        for account in existing_accounts
+        if account.account_id == group.broker_account_id
+    }
+    existing_slot_ids = {slot.strategy_slot_id: slot.strategy_id for slot in existing_slots}
+    existing_prefixes = {slot.order_remark_prefix: slot.strategy_id for slot in existing_slots}
+    seen_slot_ids: set[str] = set()
+    seen_strategy_names: set[str] = set()
+    seen_prefixes: set[str] = set()
+    active_cash_total = Decimal("0")
+
+    for slot in group.slots:
+        _require_text(slot.account_group_id, "slot.account_group_id")
+        _require_text(slot.strategy_slot_id, "slot.strategy_slot_id")
+        _require_text(slot.strategy_id, "slot.strategy_id")
+        _require_text(slot.strategy_name, "slot.strategy_name")
+        _require_text(slot.display_name, "slot.display_name")
+        _require_text(slot.account_id, "slot.account_id")
+        _require_text(slot.order_remark_prefix, "slot.order_remark_prefix")
+        if slot.account_group_id != group.account_group_id:
+            raise ValueError("strategy slot account_group_id must match group")
+        if slot.account_id != group.broker_account_id:
+            raise ValueError("strategy slot account_id must match MiniQMT broker_account_id")
+        if slot.broker_backend != group.broker_backend or slot.broker_mode.upper() != group.broker_mode.upper():
+            raise ValueError("strategy slot broker backend/mode must match group")
+        if slot.allocated_cash <= Decimal("0"):
+            raise ValueError("strategy slot allocated_cash must be positive")
+        if slot.strategy_slot_id in seen_slot_ids or (
+            slot.strategy_slot_id in existing_slot_ids and existing_slot_ids[slot.strategy_slot_id] != slot.strategy_id
+        ):
+            raise ValueError(f"strategy_slot_id already exists in account group: {slot.strategy_slot_id}")
+        if slot.strategy_name in seen_strategy_names or (
+            slot.strategy_name in existing_strategy_names and existing_strategy_names[slot.strategy_name] != slot.strategy_id
+        ):
+            raise ValueError(f"strategy_name already exists in MiniQMT account: {slot.strategy_name}")
+        if slot.order_remark_prefix in seen_prefixes or (
+            slot.order_remark_prefix in existing_prefixes and existing_prefixes[slot.order_remark_prefix] != slot.strategy_id
+        ):
+            raise ValueError(f"order_remark_prefix already exists in account group: {slot.order_remark_prefix}")
+        seen_slot_ids.add(slot.strategy_slot_id)
+        seen_strategy_names.add(slot.strategy_name)
+        seen_prefixes.add(slot.order_remark_prefix)
+        if slot.status != VirtualAccountStatus.DISABLED:
+            active_cash_total += slot.allocated_cash
+
+    for existing_slot in existing_slots:
+        if existing_slot.status != VirtualAccountStatus.DISABLED:
+            active_cash_total += existing_slot.allocated_cash
+    if group.cash_limit is not None and active_cash_total > group.cash_limit:
+        raise ValueError(
+            f"MiniQMT account group allocated_cash_total exceeds cash_limit: {active_cash_total} > {group.cash_limit}"
+        )
+
+
+def _slots_from_accounts(accounts: list[VirtualAccount], account_group_id: str) -> list[MiniQmtStrategySlot]:
+    slots = []
+    for account in accounts:
+        slot = MiniQmtStrategySlot.from_virtual_account(account)
+        if slot is not None and slot.account_group_id == account_group_id:
+            slots.append(slot)
+    return sorted(slots, key=lambda slot: (slot.strategy_slot_id, slot.strategy_id))
+
+
+def _group_from_slots(slots: list[MiniQmtStrategySlot]) -> MiniQmtAccountGroup:
+    first = slots[0]
+    for slot in slots:
+        if slot.account_group_id != first.account_group_id:
+            raise ValueError("all slots must belong to the same account group")
+        if slot.account_id != first.account_id:
+            raise ValueError("all slots must belong to the same MiniQMT account")
+    return MiniQmtAccountGroup(
+        account_group_id=first.account_group_id,
+        broker_account_id=first.account_id,
+        broker_backend=first.broker_backend,
+        broker_mode=first.broker_mode,
+        cash_limit=first.account_group_cash_limit,
+        slots=tuple(slots),
+    )
 
 
 def _validate_package_binding(binding: StrategyPackageBinding) -> None:

@@ -58,6 +58,14 @@
       "actor": "claude_code",
       "action": "partial_fix",
       "note": "T14b PaperV2ArchiveHandler synthesize_data_quality implemented + unit tested. Mapping: actual=NULL -> 'missing'; actual >= expected -> 'ok'; actual >= expected*0.5 -> 'partial'; otherwise -> 'low_coverage'. Caveat (per dw-foundation drawer e943f994b1225e6016f9ed8a): the 'derived actual' is computed via COUNT(*) on intraday_snapshots, which under-reports on sparse-capture days and overestimates data_quality categories. KEEPING STATUS=OPEN until source schema gains a proper actual_bar_count column or the derivation is tightened with a tick-level data feed. dw-foundation commit bd098f8"
+    },
+    {
+      "timestamp": "2026-06-06T06:26:19Z",
+      "actor": "codex",
+      "action": "github_sync",
+      "note": "Linked existing open BUG-008 to GitHub Issue #801 after verifying current code still keeps sparse actual_bar_count caveat open."
     }
-  ]
+  ],
+  "github_issue_number": 801,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/801"
 }

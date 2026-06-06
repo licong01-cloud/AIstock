@@ -1,0 +1,80 @@
+{
+  "actual": "DR snapshot fails with Error response from daemon: No such container: aistock-pg.",
+  "allowed_write_scope": [
+    "scripts/dr_snapshot_prod_db.py",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_dr_snapshot_prod_db.py",
+    "backend/tests/dr/test_dump_schema_diff.py",
+    "tests/aistock_validation/bugs/20260603_BUG-234-dr-snapshot-uses-stale-aistock-pg-container-name-and-blocks-nightly.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-234",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "DR snapshot uses an explicit production container configuration and does not fall back to dev DB 5433.",
+    "pg_dump custom-format snapshots must not use invalid parallel --jobs.",
+    "Dump validation must stream the local dump into pg_restore without a bare pg_restore --list call.",
+    "DR validation must parse pg_restore --list table entries emitted by the current pg_restore version.",
+    "Dev DB schema drift should remain visible but must not block DR dump validity unless DR_SCHEMA_DIFF_STRICT=1 is set.",
+    "Add targeted regression coverage for DR_PG_CONTAINER handling.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T13:05:38.674237Z",
+  "description": "DR snapshot fails with Error response from daemon: No such container: aistock-pg.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-6acd08c6a043",
+      "timestamp": "2026-06-03T13:05:38.674230Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issue #636; Nightly run 26883168947; DR job 79288239822; docker ps shows timescaledb on host 5432 and aistock-pg-dev on 5433."
+  ],
+  "expected": "DR snapshot should resolve the canonical production DB container safely from DR_PG_CONTAINER or the running container mapped to prod port 5432, then complete without using dev DB 5433.",
+  "first_seen_at": "2026-06-03T13:05:38.674237Z",
+  "fix_branch": null,
+  "fix_commit": "a695642b05a229d13e25449f967bfcaf6303dddc",
+  "fixed_at": "2026-06-03T14:50:48.777256Z",
+  "github_issue_number": 636,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/636",
+  "last_seen_at": "2026-06-03T13:05:38.674237Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/655",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 26883168947 --repo licong01-cloud/AIstock --job 79288239822 --log",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "dr_validate",
+    "backend/tests/dr/test_dump_schema_diff.py",
+    "validation_catalog_integrity",
+    "backend/tests/scripts/test_dr_snapshot_prod_db.py",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "DR snapshot uses stale aistock-pg container name and blocks Nightly",
+  "trigger_condition": {
+    "fingerprint": "6acd08c6a0435d79a22ee5c7",
+    "source_event_id": "FE-20260603-6acd08c6a043"
+  },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed; python -m pytest backend/tests/scripts/test_dr_snapshot_prod_db.py backend/tests/dr/test_dump_schema_diff.py::test_pg_restore_table_line_regex_accepts_catalog_oid_format -q -> 6 passed; python -m ruff check scripts/dr_snapshot_prod_db.py backend/tests/scripts/test_dr_snapshot_prod_db.py backend/tests/dr/test_dump_schema_diff.py -> passed; python -m nox -s dr_validate -> passed (10 passed, 2 xfailed); python -m nox -s l0 guardrail_changed_files validation_center_backend validation_catalog_integrity validation_module_registry_l0 -> passed (validation_center_backend 355 passed); PR #655 CI -> all required checks passed; DR_PG_CONTAINER=timescaledb dry-run -> passed; read-only prod pg_dump snapshot created E:\\DEV backup\\aistock_pg_snapshots\\aistock_pg_20260603.dump size=12673939186."
+  ],
+  "verification_run_id": null
+}

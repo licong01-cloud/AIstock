@@ -1,7 +1,8 @@
 from __future__ import annotations
 import logging
 
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from ..repositories.watchlist_repo_impl import watchlist_repo
@@ -98,7 +99,206 @@ def _get_entry_price_strict(ts_code: str) -> float:
     raise ValueError(f"行情价格无效: {ts_code}")
 
 
-def _compute_realtime_fields(q: Dict[str, Any], entry_price: Optional[float] = None) -> Dict[str, Optional[float]]:
+def _optional_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return None
+    value_float = float(value)
+    return value_float if value_float > 0 else None
+
+
+def _parse_entry_date(value: Any) -> Optional[date]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_adjustment_code(code: Any) -> Optional[str]:
+    text = str(code or "").strip().upper()
+    if not text:
+        return None
+    if "." in text:
+        return text
+    converted = data_source_manager._convert_to_ts_code(text)  # type: ignore[attr-defined]
+    return str(converted).strip().upper() if converted else None
+
+
+def _qfq_adjust_entry_price(
+    entry_price: Optional[float],
+    *,
+    entry_adj_factor: Any,
+    latest_adj_factor: Any,
+) -> Optional[float]:
+    price = _optional_float(entry_price)
+    entry_factor = _optional_float(entry_adj_factor)
+    latest_factor = _optional_float(latest_adj_factor)
+    if price is None or entry_factor is None or latest_factor is None:
+        return None
+    return price * entry_factor / latest_factor
+
+
+def _fetch_qfq_entry_adjustments(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Fetch per-item qfq entry-price adjustment factors from local DB.
+
+    The calculation keeps current realtime prices on the latest raw basis and
+    converts the stored entry price to the same qfq basis:
+    entry_price_qfq = entry_price_raw * entry_adj_factor / latest_adj_factor.
+    """
+
+    normalized: Dict[str, tuple[str, date, float, str]] = {}
+    for item in items:
+        original_code = str(item.get("code") or "")
+        code = _normalize_adjustment_code(original_code)
+        entry_price = _optional_float(item.get("entry_price"))
+        entry_date = _parse_entry_date(item.get("entry_as_of")) or _parse_entry_date(item.get("created_at"))
+        task_id = str(item.get("entry_task_id") or "")
+        if code and entry_price is not None and entry_date:
+            normalized[code] = (original_code, entry_date, entry_price, task_id)
+    if not normalized:
+        return {}
+
+    codes = list(normalized.keys())
+    dates = [normalized[code][1] for code in codes]
+    task_ids = [normalized[code][3] for code in codes]
+    sql = """
+        WITH input AS (
+            SELECT *
+            FROM unnest(%s::text[], %s::date[], %s::text[]) AS t(ts_code, entry_date, task_id)
+        )
+        SELECT
+            input.ts_code,
+            input.entry_date,
+            COALESCE(selection_basis.entry_basis_date, input.entry_date) AS factor_entry_date,
+            CASE
+                WHEN selection_basis.entry_basis_date IS NOT NULL THEN 'selection_reference_date'
+                ELSE 'entry_as_of'
+            END AS entry_price_basis_source,
+            entry_factor.adj_factor AS entry_adj_factor,
+            entry_factor.trade_date AS entry_adj_factor_date,
+            latest_factor.adj_factor AS latest_adj_factor,
+            latest_factor.trade_date AS latest_adj_factor_date
+        FROM input
+        LEFT JOIN LATERAL (
+            SELECT
+                CASE
+                    WHEN raw_basis_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN substring(raw_basis_date from 1 for 10)::date
+                    ELSE NULL
+                END AS entry_basis_date
+            FROM (
+                SELECT COALESCE(
+                    NULLIF(ar.explanation #>> '{selection_result_display,selection_entry_price_time}', ''),
+                    NULLIF(ar.explanation #>> '{selection_result_display,reference_price_trade_date}', ''),
+                    NULLIF(ar.explanation #>> '{reference_price_trade_date}', '')
+                ) AS raw_basis_date
+                FROM selection.aggregate_result ar
+                WHERE ar.run_id = NULLIF(input.task_id, '') AND ar.symbol = input.ts_code
+                LIMIT 1
+            ) basis
+        ) selection_basis ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT adj_factor, trade_date
+            FROM market.adj_factor
+            WHERE ts_code = input.ts_code AND trade_date <= COALESCE(selection_basis.entry_basis_date, input.entry_date)
+            ORDER BY trade_date DESC
+            LIMIT 1
+        ) entry_factor ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT adj_factor, trade_date
+            FROM market.adj_factor
+            WHERE ts_code = input.ts_code
+            ORDER BY trade_date DESC
+            LIMIT 1
+        ) latest_factor ON TRUE
+    """
+    try:
+        from ..db.pg_pool import get_conn
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (codes, dates, task_ids))
+                rows = cur.fetchall()
+    except Exception as exc:
+        logger.warning("watchlist qfq entry adjustment query failed: %s", exc)
+        return {
+            original_code: {
+                "entry_price_basis": "raw_fallback_adjustment_query_failed",
+                "entry_price_adjusted": None,
+                "entry_adjustment_factor": None,
+                "entry_price_basis_date": None,
+                "entry_price_basis_source": None,
+                "entry_adj_factor_date": None,
+                "latest_adj_factor_date": None,
+            }
+            for original_code, _, _, _ in normalized.values()
+        }
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        (
+            ts_code,
+            _,
+            factor_entry_date,
+            entry_price_basis_source,
+            entry_adj_factor,
+            entry_factor_date,
+            latest_adj_factor,
+            latest_factor_date,
+        ) = row
+        original_code, _, entry_price, _ = normalized.get(str(ts_code), (str(ts_code), date.today(), 0.0, ""))
+        adjusted = _qfq_adjust_entry_price(
+            entry_price,
+            entry_adj_factor=entry_adj_factor,
+            latest_adj_factor=latest_adj_factor,
+        )
+        if adjusted is None:
+            out[original_code] = {
+                "entry_price_basis": "raw_fallback_missing_adj_factor",
+                "entry_price_adjusted": None,
+                "entry_adjustment_factor": None,
+                "entry_price_basis_date": factor_entry_date.isoformat() if factor_entry_date else None,
+                "entry_price_basis_source": entry_price_basis_source,
+                "entry_adj_factor_date": entry_factor_date.isoformat() if entry_factor_date else None,
+                "latest_adj_factor_date": latest_factor_date.isoformat() if latest_factor_date else None,
+            }
+            continue
+        adjustment_factor = float(entry_adj_factor) / float(latest_adj_factor)
+        out[original_code] = {
+            "entry_price_basis": "qfq_adjusted",
+            "entry_price_adjusted": adjusted,
+            "entry_adjustment_factor": adjustment_factor,
+            "entry_price_basis_date": factor_entry_date.isoformat() if factor_entry_date else None,
+            "entry_price_basis_source": entry_price_basis_source,
+            "entry_adj_factor_date": entry_factor_date.isoformat() if entry_factor_date else None,
+            "latest_adj_factor_date": latest_factor_date.isoformat() if latest_factor_date else None,
+        }
+    for original_code, _, _, _ in normalized.values():
+        out.setdefault(
+            original_code,
+            {
+                "entry_price_basis": "raw_fallback_missing_adj_factor",
+                "entry_price_adjusted": None,
+                "entry_adjustment_factor": None,
+                "entry_price_basis_date": None,
+                "entry_price_basis_source": None,
+                "entry_adj_factor_date": None,
+                "latest_adj_factor_date": None,
+            },
+        )
+    return out
+
+
+def _compute_realtime_fields(
+    q: Dict[str, Any],
+    entry_price: Optional[float] = None,
+    entry_price_for_return: Optional[float] = None,
+) -> Dict[str, Optional[float]]:
     price = q.get("price")
     pre_close = q.get("pre_close")
     open_ = q.get("open")
@@ -123,9 +323,10 @@ def _compute_realtime_fields(q: Dict[str, Any], entry_price: Optional[float] = N
 
     # 计算加入以来涨幅
     pct_since_entry = None
-    if effective_price is not None and isinstance(entry_price, (int, float)) and entry_price > 0:
+    basis_entry_price = _optional_float(entry_price_for_return) or _optional_float(entry_price)
+    if effective_price is not None and basis_entry_price is not None:
         try:
-            pct_since_entry = (effective_price - entry_price) / entry_price * 100.0
+            pct_since_entry = (effective_price - basis_entry_price) / basis_entry_price * 100.0
         except Exception:
             pct_since_entry = None
 
@@ -228,16 +429,28 @@ def list_items_with_quotes(
     items: List[Dict[str, Any]] = base.get("items", [])
     codes = [str(it.get("code")) for it in items if it.get("code")]
     quotes_raw = _fetch_quotes(codes)
+    entry_adjustments = _fetch_qfq_entry_adjustments(items)
 
     enriched: List[Dict[str, Any]] = []
     for it in items:
         code = str(it.get("code"))
         entry_price = it.get("entry_price")
+        entry_adjustment = entry_adjustments.get(code) or {}
+        entry_price_for_return = entry_adjustment.get("entry_price_adjusted")
         q = quotes_raw.get(code, {})
-        rt = _compute_realtime_fields(q, entry_price=entry_price)
+        rt = _compute_realtime_fields(q, entry_price=entry_price, entry_price_for_return=entry_price_for_return)
         row = dict(it)
         for k, v in rt.items():
             row[k] = v
+        row["entry_price_basis"] = entry_adjustment.get("entry_price_basis") or (
+            "raw_fallback_missing_adj_factor" if entry_price else "missing_entry_price"
+        )
+        row["entry_price_adjusted"] = entry_adjustment.get("entry_price_adjusted")
+        row["entry_adjustment_factor"] = entry_adjustment.get("entry_adjustment_factor")
+        row["entry_price_basis_date"] = entry_adjustment.get("entry_price_basis_date")
+        row["entry_price_basis_source"] = entry_adjustment.get("entry_price_basis_source")
+        row["entry_adj_factor_date"] = entry_adjustment.get("entry_adj_factor_date")
+        row["latest_adj_factor_date"] = entry_adjustment.get("latest_adj_factor_date")
         enriched.append(row)
 
     return {"total": base.get("total", len(enriched)), "items": enriched}
@@ -368,7 +581,8 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     remaining_base_codes = []
 
     for c in ts_codes:
-        if not c: continue
+        if not c:
+            continue
         base = c
         if "." in c:
             try:

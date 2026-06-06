@@ -257,7 +257,7 @@ modules:
     api_routes: [/api/v1/research-assistant/*]
     test_plans:
       required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept]
-      recommended: [research_assistant_ui]
+      recommended: [mcp_gateway_phase5_assistant, research_assistant_ui]
   - module_id: research_assistant.memory_tree
     display_name: Research Assistant Memory Tree
     parent_module: research_assistant
@@ -523,6 +523,16 @@ modules:
     description_zh: 覆盖共享后端、API、数据库、调度、配置、监控和跨模块基础设施。
     test_plans:
       required_on_change: [l0]
+  - module_id: platform.mcp_gateway
+    display_name: MCP Gateway
+    parent_module: platform
+    module_type: cross_cutting
+    risk_level: high
+    description: Unified MCP gateway, profile registry, tool manifest, and client-facing MCP configuration.
+    description_zh: 覆盖统一 MCP gateway、profile 注册表、工具清单和客户端侧 MCP 配置。
+    test_plans:
+      required_on_change: [l0]
+      recommended: [mcp_gateway_manifest_quality, mcp_gateway_phase5_assistant, mcp_gateway_phase6_resource_monitor, qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
   - module_id: platform.api
     display_name: Platform API
     parent_module: platform

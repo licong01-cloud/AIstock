@@ -310,13 +310,22 @@ class FakeHMMSnapshotProvider:
         return self.snapshots.get(snapshot_id)
 
 
-def _backend(*, client: FakeQMTClient | None = None, auto_connect: bool = True) -> MiniQMTSimBackend:
+def _backend(
+    *,
+    client: FakeQMTClient | None = None,
+    auto_connect: bool = True,
+    account_mode: str = "exclusive_account",
+    account_group_id: str | None = None,
+    strategy_slot_id: str | None = "slot_alpha",
+) -> MiniQMTSimBackend:
     return MiniQMTSimBackend(
         portfolio_id="paper_mq_1",
         package_id="pkg_mq_1",
         data_source=MinuteDataSource.MINIQMT_REALTIME,
         qmt_client=client or FakeQMTClient(),
-        strategy_slot_id="slot_alpha",
+        strategy_slot_id=strategy_slot_id,
+        account_group_id=account_group_id,
+        account_mode=account_mode,
         auto_connect=auto_connect,
     )
 
@@ -363,7 +372,7 @@ def test_minqmtsim_init_connect_failure_is_connectivity_error() -> None:
     assert exc_info.value.context["message"] == "connect failed"
 
 
-def test_minqmtsim_rejects_non_exclusive_account_mode() -> None:
+def test_minqmtsim_rejects_unsupported_account_mode() -> None:
     with pytest.raises(BrokerSubmitError) as exc_info:
         MiniQMTSimBackend(
             portfolio_id="paper_mq_1",
@@ -372,7 +381,7 @@ def test_minqmtsim_rejects_non_exclusive_account_mode() -> None:
             qmt_client=FakeQMTClient(),
             account_mode="shared_account_attribution",
         )
-    assert exc_info.value.context["supported"] == ["exclusive_account"]
+    assert "account_group_slots" in exc_info.value.context["supported"]
 
 
 def test_minqmtsim_rejects_non_sim_qmt_mode() -> None:
@@ -424,6 +433,49 @@ def test_submit_rejects_cross_portfolio_and_cross_package() -> None:
     with pytest.raises(BrokerSubmitError) as package_exc:
         backend.submit_order_intent(_intent(package_id="pkg_other"))
     assert package_exc.value.context["backend_package_id"] == "pkg_mq_1"
+
+
+def test_account_group_slots_mode_uses_slot_attribution_and_allows_cross_portfolio_package() -> None:
+    client = FakeQMTClient()
+    backend = _backend(
+        client=client,
+        account_mode="account_group_slots",
+        account_group_id="ag_minqmt_62266303_sim",
+        strategy_slot_id=None,
+    )
+    capacity = backend.bind_capacity()
+    intent = _intent(
+        portfolio_id="paper_other",
+        package_id="pkg_other",
+        metadata={
+            "account_group_id": "ag_minqmt_62266303_sim",
+            "strategy_slot_id": "slot_alpha",
+            "strategy_name": "UnifiedAlpha",
+            "order_remark_prefix": "ag622-alpha",
+            "order_remark": "ag622-alpha:intent-1",
+        },
+    )
+
+    handle = backend.submit_order_intent(intent)
+
+    assert capacity.max_concurrent_packages > 1
+    call = client.place_calls[-1]
+    assert call["strategy_name"] == "UnifiedAlpha"
+    assert call["order_remark"] == "ag622-alpha:intent-1"
+    context = backend.order_context(handle)
+    assert context["account_group_id"] == "ag_minqmt_62266303_sim"
+    assert context["strategy_slot_id"] == "slot_alpha"
+
+
+def test_account_group_slots_mode_requires_explicit_slot_attribution_without_qmt_call() -> None:
+    client = FakeQMTClient()
+    backend = _backend(client=client, account_mode="account_group", account_group_id="ag_minqmt_62266303_sim")
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        backend.submit_order_intent(_intent(metadata={"account_group_id": "ag_minqmt_62266303_sim"}))
+
+    assert exc_info.value.context["missing_metadata_key"] == "strategy_slot_id"
+    assert client.place_calls == []
 
 
 def test_submit_rejects_duplicate_intent_without_second_order() -> None:

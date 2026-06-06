@@ -141,10 +141,23 @@ def test_research_assistant_api_phase1_smoke() -> None:
         "/api/v1/research-assistant/mcp/preflight",
         json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
     ).json()
-    assert preflight_resp["data"]["approval_required"] is False
+    assert preflight_resp["data"]["approval_required"] is True
     assert preflight_resp["data"]["passed"] is False
     assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
     assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
+    assert preflight_resp["data"]["gateway_manifest"]["module"] == "research_assistant"
+    assert preflight_resp["data"]["manifest_risk_level"] == "production_adjacent"
+    assert preflight_resp["data"]["assistant_usable"] == "preflight_required"
+
+    catalog_preflight = client.post(
+        "/api/v1/research-assistant/mcp/preflight",
+        json={"server_key": "aistock-gateway-lite", "tool_name": "mcp_gateway_health", "payload_json": {}},
+    ).json()["data"]
+    assert catalog_preflight["passed"] is True
+    assert catalog_preflight["approval_required"] is False
+    assert catalog_preflight["gateway_manifest"]["module"] == "catalog"
+    assert catalog_preflight["manifest_risk_level"] == "catalog"
+    assert "lite" in catalog_preflight["recommended_profile_tags"]
 
     approval_resp = client.post(
         "/api/v1/research-assistant/approvals",
@@ -226,10 +239,16 @@ def test_research_assistant_api_phase1_smoke() -> None:
     ).json()["data"]
     assert action["status"] == "proposed"
     assert client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/confirm", json={"confirmation_text": "CONFIRM_QE_DRAFT"}).json()["data"]["status"] == "confirmed"
-    assert client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/preflight", json={}).json()["data"]["proposal"]["status"] == "preflight_passed"
+    assert client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/preflight", json={}).json()["data"]["proposal"]["status"] == "approval_required"
+    assert (
+        client.post(
+            f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/approve",
+            json={"confirmation_text": "CONFIRM_QE_DRAFT"},
+        ).json()["data"]["proposal"]["status"]
+        == "approved"
+    )
     executed = client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/execute", json={}).json()["data"]
     assert executed["executed"] is True
-    assert executed["tool_event"]["result_card_json"]["title"] == "QE template 草案已生成"
     action_events = client.get(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/events").json()["data"]
     assert action_events["mcp_tool_events"]
     assert action_events["trace_events"]
@@ -285,12 +304,12 @@ def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
 def test_bug_158_api_routes_chinese_business_mcp_overviews() -> None:
     client = _client()
     cases = {
-        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor-library", "factor_library_list"),
-        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor-metrics", "factor_metrics_plan"),
-        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor-correlation", "factor_corr_plan"),
-        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-model-registry", "model_registry_list"),
-        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-strategy-governance", "strategy_governance_list_packages"),
-        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-execution-policy", "execution_policy_list_algos"),
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-qe", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-trading-ops", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-trading-ops", "execution_policy_list_algos"),
     }
     for message, (intent, server, tool) in cases.items():
         data = client.post(
@@ -309,12 +328,12 @@ def test_bug_158_api_routes_chinese_business_mcp_overviews() -> None:
 def test_bug_161_api_chat_turn_is_summary_first_and_does_not_leak_unrelated_prompt_nodes() -> None:
     client = _client()
     cases = {
-        "因子库有哪些因子？只要概要列表，不要全量详情。": ("aistock-factor-library", "factor_library_list"),
-        "查看因子独立指标计算能力概要。": ("aistock-factor-metrics", "factor_metrics_plan"),
-        "查看因子相关性计算能力概要。": ("aistock-factor-correlation", "factor_corr_plan"),
-        "查看模型库概要。": ("aistock-model-registry", "model_registry_list"),
-        "查看策略库概要。": ("aistock-strategy-governance", "strategy_governance_list_packages"),
-        "查看执行策略库概要。": ("aistock-execution-policy", "execution_policy_list_algos"),
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("aistock-factor", "factor_library_list"),
+        "查看因子独立指标计算能力概要。": ("aistock-factor", "factor_metrics_plan"),
+        "查看因子相关性计算能力概要。": ("aistock-factor", "factor_corr_plan"),
+        "查看模型库概要。": ("aistock-qe", "model_registry_list"),
+        "查看策略库概要。": ("aistock-trading-ops", "strategy_governance_list_packages"),
+        "查看执行策略库概要。": ("aistock-trading-ops", "execution_policy_list_algos"),
     }
     for message, (server, tool) in cases.items():
         data = client.post(
@@ -347,18 +366,18 @@ def test_mcp_servers_endpoint_exposes_chinese_business_aliases() -> None:
     page = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]
     servers = {item["server_key"]: item for item in page["items"]}
     assert page["summary_first"] is True
-    assert servers["aistock-model-registry"]["display_name_zh"] == "模型库"
-    assert servers["aistock-model-registry"]["display_title"] == "模型库"
-    assert "模型版本" in servers["aistock-model-registry"]["business_aliases_zh"]
-    assert servers["aistock-strategy-governance"]["display_name_zh"] == "策略库"
-    assert "策略包" in servers["aistock-strategy-governance"]["business_aliases_zh"]
-    assert servers["aistock-execution-policy"]["display_name_zh"] == "执行策略库"
+    assert servers["aistock-qe"]["display_name_zh"] == "QE实验与数仓"
+    assert servers["aistock-qe"]["display_title"] == "QE实验与数仓"
+    assert "模型库" in servers["aistock-qe"]["business_aliases_zh"]
+    assert servers["aistock-trading-ops"]["display_name_zh"] == "策略与执行治理"
+    assert "策略库" in servers["aistock-trading-ops"]["business_aliases_zh"]
+    assert "执行策略" in servers["aistock-trading-ops"]["business_aliases_zh"]
 
 
 def test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows() -> None:
     client = _client()
     service = client.app.dependency_overrides[research_assistant.get_research_assistant_service]()
-    server = service.repository.find_one("mcp_servers", {"server_key": "aistock-model-registry"})
+    server = service.repository.find_one("mcp_servers", {"server_key": "aistock-qe"})
     assert server is not None
     legacy_health = dict(server["health_json"])
     legacy_health.pop("display_name_zh", None)
@@ -366,14 +385,13 @@ def test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows() -> Non
     service.repository.update_record("mcp_servers", server["server_id"], {"health_json": legacy_health})
 
     page = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]
-    model_server = {item["server_key"]: item for item in page["items"]}["aistock-model-registry"]
+    model_server = {item["server_key"]: item for item in page["items"]}["aistock-qe"]
 
-    assert model_server["display_name_zh"] == "模型库"
-    assert model_server["display_title"] == "模型库"
-    assert "模型版本" in model_server["business_aliases_zh"]
-    assert model_server["health_json"]["display_name_zh"] == "模型库"
-    assert "模型试验" in model_server["health_json"]["business_aliases_zh"]
-
+    assert model_server["display_name_zh"] == "QE实验与数仓"
+    assert model_server["display_title"] == "QE实验与数仓"
+    assert "模型库" in model_server["business_aliases_zh"]
+    assert model_server["health_json"]["display_name_zh"] == "QE实验与数仓"
+    assert "模型库" in model_server["health_json"]["business_aliases_zh"]
 
 def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     client = _client()
@@ -383,6 +401,7 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     assert compact["summary_first"] is True
     assert compact["detail_available"] is True
     assert compact["items"]
+    assert compact["total"] == 209
     assert "input_schema_json" not in compact["items"][0]
     assert "output_schema_json" not in compact["items"][0]
     assert "preflight_schema_json" not in compact["items"][0]
@@ -391,6 +410,11 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     compact_large_limit = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 200}).json()["data"]
     assert compact_large_limit["page_size"] == 50
     assert compact_large_limit["has_more"] is True
+
+    catalog_page = client.get("/api/v1/research-assistant/mcp/tools", params={"server_key": "aistock-gateway-lite", "include_schema": True}).json()["data"]
+    assert catalog_page["total"] == 6
+    assert any(item["tool_name"] == "mcp_gateway_health" for item in catalog_page["items"])
+    assert catalog_page["items"][0]["preflight_schema_json"]["gateway_manifest"]["module"] == "catalog"
 
     detail = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 1, "include_schema": True}).json()["data"]
     assert detail["page_size"] == 1

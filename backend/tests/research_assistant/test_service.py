@@ -264,9 +264,10 @@ def test_preflight_high_risk_requires_approval_and_records_event() -> None:
     )
 
     assert result["passed"] is False
-    assert result["approval_required"] is False
+    assert result["approval_required"] is True
     assert result["failed_checks"][0]["check"] == "input_schema"
     assert result["preflight_checks"] == ["dedupe_key", "evidence_refs", "draft_only", "github_formal_issue_blocked"]
+    assert result["assistant_usable"] == "preflight_required"
     detail = svc.get_task(task["task_id"])
     assert any(event["event_type"] == "mcp_preflight_failed" for event in detail["events"])
 
@@ -278,7 +279,8 @@ def test_preflight_high_risk_requires_approval_and_records_event() -> None:
             payload_json={"title": "P1", "problem_statement": "problem"},
         )
     )
-    assert ok_result["passed"] is True
+    assert ok_result["passed"] is False
+    assert ok_result["approval_required"] is True
 
     tool = svc.repository.find_one("mcp_tools", {"server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate"})
     svc.repository.update_record("mcp_tools", tool["tool_id"], {"status": "disabled"})
@@ -558,12 +560,12 @@ def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> Non
         assert "prompt.local_data_management" not in keys
 
     bug_158_cases = {
-        "因子库有哪些因子？只要概要列表，不要全量详情。": ("factor_library_request", "domain.factor_library", "aistock-factor-library"),
-        "查看因子独立指标计算能力概要。": ("factor_metrics_request", "domain.factor_metrics", "aistock-factor-metrics"),
-        "查看因子相关性计算能力概要。": ("factor_correlation_request", "domain.factor_correlation", "aistock-factor-correlation"),
-        "查看模型库概要。": ("model_registry_request", "domain.model_registry", "aistock-model-registry"),
-        "查看策略库概要。": ("strategy_governance_request", "domain.strategy_governance", "aistock-strategy-governance"),
-        "查看执行策略库概要。": ("execution_policy_request", "domain.execution_policy", "aistock-execution-policy"),
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("factor_library_request", "domain.factor_library", "aistock-factor"),
+        "查看因子独立指标计算能力概要。": ("factor_metrics_request", "domain.factor_metrics", "aistock-factor"),
+        "查看因子相关性计算能力概要。": ("factor_correlation_request", "domain.factor_correlation", "aistock-factor"),
+        "查看模型库概要。": ("model_registry_request", "domain.model_registry", "aistock-qe"),
+        "查看策略库概要。": ("strategy_governance_request", "domain.strategy_governance", "aistock-trading-ops"),
+        "查看执行策略库概要。": ("execution_policy_request", "domain.execution_policy", "aistock-trading-ops"),
     }
     for message, (expected_intent, expected_prompt, expected_server) in bug_158_cases.items():
         bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
@@ -582,12 +584,12 @@ def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> Non
 def test_bug_160_utf8_business_overviews_keep_specific_mcp_cards() -> None:
     svc = _chat_service()
     cases = {
-        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor-library", "factor_library_list"),
-        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor-metrics", "factor_metrics_plan"),
-        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor-correlation", "factor_corr_plan"),
-        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-model-registry", "model_registry_list"),
-        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-strategy-governance", "strategy_governance_list_packages"),
-        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-execution-policy", "execution_policy_list_algos"),
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-qe", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-trading-ops", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-trading-ops", "execution_policy_list_algos"),
     }
     for message, (intent, server, tool) in cases.items():
         result = svc.chat_turn(ChatTurnRequest(message=message, allow_execute=False))
@@ -752,8 +754,9 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "HTTP requests" not in text
     assert "no direct warehouse tool" not in text
     catalog = result["cards"]["runtime_mcp_catalog"]
-    assert catalog["source"] == "assistant_mcp_tools_runtime_catalog"
-    assert catalog["tool_count"] == len(svc.repository.list_records("mcp_tools", limit=100)["items"])
+    assert catalog["source"] == "gateway_manifest_derived_catalog"
+    assert catalog["manifest_tool_count"] == 209
+    assert catalog["tool_count"] == 209
     assert result["mode_decision"]["intent_type"] == "capability_inquiry"
     assert result["cards"]["action_proposals"] == []
 
@@ -776,7 +779,7 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
 
     text = result["assistant_message"]["content_text"]
     assert "10 个已注册因子" not in text
-    assert "aistock-factor-library/factor_library_list" in text
+    assert "aistock-factor/factor_library_list" in text
     assert "summary-first" in text
     assert result["mode_decision"]["intent_type"] == "factor_library_request"
     assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
@@ -803,11 +806,11 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     text = result["assistant_message"]["content_text"]
     assert "999 factors" not in text
-    assert "aistock-factor-library/factor_library_list" in text
+    assert "aistock-factor/factor_library_list" in text
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["status"] == "succeeded"
-    assert execution["route"] == "aistock-factor-library/factor_library_list"
+    assert execution["route"] == "aistock-factor/factor_library_list"
     assert execution["summary_first"] is True
     assert execution["response_summary"]["returned_count"] >= 1
     assert result["cards"]["mcp_tool_event"]["transport"] == "research_assistant_catalog_summary_adapter"
@@ -855,7 +858,7 @@ def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt
     assert "cards" not in result["assistant_message"]["content_json"]
     assert "payload_json" not in body
     assert len(body.encode("utf-8")) < 20000
-    assert result["cards"]["mcp_route_decision"]["server_key"] == "aistock-factor-library"
+    assert result["cards"]["mcp_route_decision"]["server_key"] == "aistock-factor"
     assert result["cards"]["mcp_route_decision"]["tool_name"] == "factor_library_list"
     assert result["cards"]["mcp_summary_result"]["items_truncated"] >= 0
 
@@ -897,7 +900,7 @@ def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() 
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["status"] == "succeeded"
-    assert execution["route"] == "aistock-factor-library/factor_library_list"
+    assert execution["route"] == "aistock-factor/factor_library_list"
     route = result["cards"]["mcp_route_decision"]
     assert route["tool_name"] == "factor_library_list"
     assert route["auto_execute"]["eligible"] is True
@@ -924,7 +927,7 @@ def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> Non
     result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
 
     text = result["assistant_message"]["content_text"]
-    assert "aistock-execution-policy/execution_policy_list_algos" in text
+    assert "aistock-trading-ops/execution_policy_list_algos" in text
     assert "execution_policy_validate_for_strategy" not in text
     assert "只读工具" in text
     assert result["mode_decision"]["intent_type"] == "execution_policy_request"

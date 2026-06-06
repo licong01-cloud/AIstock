@@ -1,39 +1,21 @@
 {
-  "_comment": "项目级 MCP server 注册文件。所有 AIstock MCP server 统一使用本机生产后端 8001；各客户端仍需显式启用。QE/Research MCP 只能使用 loopback 地址。",
+  "_comment": "AIstock MCP servers use the unified gateway on local backend 8001. Prefer aistock-gateway-lite by default; enable task profiles explicitly. Legacy standalone validation/qe scripts are no longer registered here.",
   "mcpServers": {
-    "aistock-validation": {
+    "aistock-gateway-lite": {
       "command": "python",
       "args": [
-        "scripts/aistock_mcp_server.py"
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=lite"
       ],
       "env": {
-        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation",
-        "GITHUB_REPOSITORY": "licong01-cloud/AIstock"
-      }
-    },
-    "aistock-qe-experiment": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_qe_experiment_mcp_server.py"
-      ],
-      "env": {
-        "AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8001/api/v1"
-      }
-    },
-    "aistock-qe-archive": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_qe_archive_mcp_server.py"
-      ],
-      "env": {
-        "AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8001/api/v1/qe-archive"
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
     "aistock-research": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--modules=research"
+        "--profile=research"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
@@ -43,77 +25,48 @@
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=local_data"
+        "--profile=data"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
-    "research-assistant": {
+    "aistock-validation": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=research_assistant"
+        "--profile=validation"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1",
+        "GITHUB_REPOSITORY": "licong01-cloud/AIstock"
+      }
+    },
+    "aistock-qe": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=qe"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
-    "aistock-factor-library": {
+    "aistock-factor": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=factor_library"
+        "--profile=factor"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
-    "aistock-factor-metrics": {
+    "aistock-trading-ops": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=factor_metrics"
-      ],
-      "env": {
-        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
-      }
-    },
-    "aistock-factor-correlation": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_mcp_gateway.py",
-        "--profile=factor_correlation"
-      ],
-      "env": {
-        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
-      }
-    },
-    "aistock-model-registry": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_mcp_gateway.py",
-        "--profile=model_registry"
-      ],
-      "env": {
-        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
-      }
-    },
-    "aistock-strategy-governance": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_mcp_gateway.py",
-        "--profile=strategy_governance"
-      ],
-      "env": {
-        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
-      }
-    },
-    "aistock-execution-policy": {
-      "command": "python",
-      "args": [
-        "scripts/aistock_mcp_gateway.py",
-        "--profile=execution_policy"
+        "--profile=trading_ops"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
@@ -124,6 +77,16 @@
       "args": [
         "scripts/aistock_mcp_gateway.py",
         "--profile=external_research"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    },
+    "research-assistant": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=assistant"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"

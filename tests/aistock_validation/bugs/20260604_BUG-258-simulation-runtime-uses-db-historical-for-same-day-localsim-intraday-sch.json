@@ -1,0 +1,77 @@
+{
+  "actual": "Manual scheduler tick during the 2026-06-04 execution window reports data_source=DB_HISTORICAL and LocalSim BrokerConnectivityError: historical DB returned no minute bars for current-day symbols.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260604_BUG-258-simulation-runtime-uses-db-historical-for-same-day-localsim-intraday-sch.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-258",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T06:31:44.940739Z",
+  "description": "Manual scheduler tick during the 2026-06-04 execution window reports data_source=DB_HISTORICAL and LocalSim BrokerConnectivityError: historical DB returned no minute bars for current-day symbols.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-8110a3cf4425",
+      "timestamp": "2026-06-04T06:31:44.940733Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/dual_strategy_paper_validation_20260604_after_bug253/07_scheduler_tick_after_bug253.json"
+  ],
+  "expected": "During same-day execution window, LocalSim scheduler submissions use TDX_REALTIME regardless of a DB_HISTORICAL historical/replay default; MiniQMT bindings keep MiniQMT realtime/broker semantics and are not resubmitted if an execution plan already exists.",
+  "first_seen_at": "2026-06-04T06:31:44.940739Z",
+  "fix_branch": null,
+  "fix_commit": "a3decc02054af8aa6867e270577a5dbd8ded1b31",
+  "fixed_at": "2026-06-04T07:21:17.994912Z",
+  "github_issue_number": 724,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/724",
+  "last_seen_at": "2026-06-04T06:31:44.940739Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/728",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/simulation-runtime/scheduler/tick during 2026-06-04 execution window with SIMULATION_RUNTIME_SCHEDULER_DATA_SOURCE=DB_HISTORICAL",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "simulation runtime uses DB_HISTORICAL for same-day LocalSim intraday scheduler",
+  "trigger_condition": {
+    "fingerprint": "8110a3cf44259371b1b40b9d",
+    "source_event_id": "FE-20260604-8110a3cf4425"
+  },
+  "validation_evidence": [
+    "after rebase: python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "after rebase: python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 27 passed",
+    "python -m nox -s localsim_unattended_l3 -> 37 passed",
+    "python -m nox -s miniqmt_sim_stub_l3 -> 50 passed",
+    "python -m nox -s simulation_dual_backend_l4 -> 97 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 602 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan mapped=12",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
+  "verification_run_id": null
+}

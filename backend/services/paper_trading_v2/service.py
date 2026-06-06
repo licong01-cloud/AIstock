@@ -407,7 +407,7 @@ class PaperTradingV2PortfolioService:
                 broker_account_id=account_id,
                 portfolio_id=portfolio.portfolio_id,
                 binding_status=BrokerAccountBindingStatus.ACTIVE,
-                allocation_mode="exclusive_account",
+                allocation_mode="account_group_slots",
                 initial_cash=initial_cash,
                 created_by=created_by,
             )
@@ -489,7 +489,7 @@ class PaperTradingV2PortfolioService:
                 },
             )
         if existing is None:
-            allocation_mode = "exclusive_account" if broker_backend == "minqmt_sim" else "virtual_portfolio"
+            allocation_mode = "account_group_slots" if broker_backend == "minqmt_sim" else "virtual_portfolio"
             binding = self.repository.create_broker_account_binding(
                 PaperBrokerAccountBinding(
                     broker_backend=broker_backend,
@@ -1349,6 +1349,7 @@ class PaperTradingV2PortfolioService:
             daily_strategy_profile_version_id=daily_strategy_profile_version_id,
             execution_policy_version_id=execution_activation.policy_id,
             execution_policy_sha256=execution_activation.policy_sha256,
+            execution_policy_json=execution_activation.policy_json,
             tail_policy_version_id=tail_policy["tail_policy_id"],
             tail_policy_sha256=tail_policy_sha256,
             validation_evidence={

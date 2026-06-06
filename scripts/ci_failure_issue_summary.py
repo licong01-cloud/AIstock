@@ -110,34 +110,45 @@ def _logs_not_ready_error(value: Any) -> bool:
     return "run" in text and "still in progress" in text and "log" in text
 
 
+def _diagnostic_retry_command(run_id: str) -> str:
+    run_arg = run_id or "<run-id>"
+    return (
+        f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_arg} "
+        "--wait-for-completion --wait-attempts 2 --wait-seconds 15 "
+        "--log-attempts 3 --log-wait-seconds 10 "
+        "--output tmp/validation/ci_failure_issue/summary.json "
+        "--markdown-output tmp/validation/ci_failure_issue/body.md "
+        "--context-output tmp/validation/ci_failure_issue/context-pack.json "
+        "--context-markdown-output tmp/validation/ci_failure_issue/context-pack.md "
+        "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json "
+        "--stdout-format compact"
+    )
+
+
 def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     diagnostic_status = summary.get("diagnostic_status") or "partial"
     errors = summary.get("extraction_errors") or []
     failed_jobs = summary.get("failed_jobs") or []
     has_actionable_failure = any(job.get("failed_tests") or job.get("error_signature") for job in failed_jobs)
+    has_manual_summary = bool(str(summary.get("manual_summary") or "").strip())
     run_id = str(summary.get("run_id") or "").strip()
     if diagnostic_status == "deferred":
-        next_command = (
-            f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
-            "--output tmp/validation/ci_failure_issue/summary.json "
-            "--markdown-output tmp/validation/ci_failure_issue/body.md "
-            "--context-output tmp/validation/ci_failure_issue/context-pack.json "
-            "--context-markdown-output tmp/validation/ci_failure_issue/context-pack.md "
-            "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json"
-        )
         return {
             "allowed": False,
             "reason": LOGS_NOT_READY_REASON if any(_logs_not_ready_error(error) for error in errors) else "diagnostics_not_actionable",
-            "next_command": next_command,
+            "next_command": _diagnostic_retry_command(run_id),
+        }
+    if diagnostic_status == "partial" and has_manual_summary:
+        return {
+            "allowed": True,
+            "reason": "manual_summary_triage",
+            "next_command": None,
         }
     if diagnostic_status == "partial" and not has_actionable_failure:
         return {
             "allowed": False,
             "reason": "diagnostics_not_actionable",
-            "next_command": (
-                f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
-                "--output tmp/validation/ci_failure_issue/summary.json"
-            ),
+            "next_command": _diagnostic_retry_command(run_id),
         }
     return {
         "allowed": True,
@@ -189,6 +200,20 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
                     "Rerun the failed workflow after infrastructure is healthy.",
                 ],
             },
+        }
+    issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
+    if summary.get("diagnostic_status") != "complete" and issue_policy.get("allowed") is False:
+        return {
+            "mode": "triage_only",
+            "needs_bug_json": False,
+            "reason": issue_policy.get("reason") or "triage_required_before_bug_promotion",
+        }
+    suspected_files = summary.get("suspected_files") or []
+    if summary.get("diagnostic_status") != "complete" and not suspected_files:
+        return {
+            "mode": "triage_only",
+            "needs_bug_json": False,
+            "reason": "triage_required_before_bug_promotion",
         }
     return {"mode": "bug_promotion", "needs_bug_json": True, "reason": "code_or_test_failure"}
 
@@ -618,7 +643,10 @@ def build_agent_handoff(
     if not suspected_files:
         stop_conditions.append("No suspected files were extracted; run triage before editing code.")
     if not handoff_mode["needs_bug_json"]:
-        stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+        if handoff_mode["mode"] == "infra_action_only":
+            stop_conditions.append("Infrastructure-only issue: do not run promote-ci-issue or edit code unless triage changes classification.")
+        else:
+            stop_conditions.append("Triage-only CI issue: do not run promote-ci-issue or edit code until triage identifies a concrete code/test failure.")
     workflow_entrypoints = {
         "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
     }
@@ -924,6 +952,10 @@ def _nightly_failed_keys(statuses: dict[str, str]) -> list[str]:
     return failed
 
 
+def _nightly_actionable_failed_keys(statuses: dict[str, str]) -> list[str]:
+    return [key for key in _nightly_failed_keys(statuses) if key != "code_intelligence"]
+
+
 def _nightly_fingerprint(statuses: dict[str, str]) -> str:
     if statuses.get("runner_preflight") == "failure":
         return "runner-preflight-unavailable"
@@ -978,6 +1010,8 @@ def summarize_nightly_status(
     fingerprint = _nightly_fingerprint(statuses)
     runner_failed = statuses.get("runner_preflight") == "failure"
     failed_keys = _nightly_failed_keys(statuses)
+    actionable_failed_keys = _nightly_actionable_failed_keys(statuses)
+    code_intelligence_only = bool(failed_keys) and not actionable_failed_keys
     title = (
         "P1 Nightly blocked: self-hosted Windows runner unavailable"
         if runner_failed
@@ -1006,10 +1040,15 @@ def summarize_nightly_status(
             "commit": effective_commit,
             "manual_summary": title,
             "failed_jobs": [job] if failed_keys else [],
-            "extraction_errors": [] if failed_keys else ["nightly status payload did not include a failing stage"],
+            "extraction_errors": (
+                ["code intelligence warning-only stage failed; no actionable Nightly issue payload required"]
+                if code_intelligence_only
+                else ([] if failed_keys else ["nightly status payload did not include a failing stage"])
+            ),
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,
             "nightly_failed_stages": failed_keys,
+            "defer_issue_creation": code_intelligence_only,
         }
     )
     summary["fingerprint_source"] = fingerprint

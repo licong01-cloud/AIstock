@@ -327,6 +327,99 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: mcp_gateway_manifest_quality
+    title: MCP Gateway manifest quality and import-boundary validation
+    module: platform.mcp_gateway
+    level: L2
+    command_key: nox_mcp_gateway_manifest_quality
+    nox_session: mcp_gateway_manifest_quality
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor]
+  - plan_key: mcp_gateway_phase5_assistant
+    title: MCP Gateway Phase 5 Research Assistant manifest catalog UI and audit gate
+    module: research_assistant
+    level: L4
+    command_key: nox_mcp_gateway_phase5_assistant
+    nox_session: mcp_gateway_phase5_assistant
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: [8011, 8012]
+    allowed_frontend_ports: [3011, 3012]
+    forbidden_ports: [8001, 3000, 19080]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    runner_enabled_l3_exception: workspace_scoped_design_gate
+    max_duration_seconds: 2400
+    evidence_kinds: [pytest, compileall, mcp_self_check, mcp_doctor, playwright, frontend_lint, frontend_build, catalog_integrity, ownership]
+    manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate, live_smoke_boundary]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 2400
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/mcp_gateway/20260604_ra_phase5_assistant_completion_report.md]
+      required_fields: [run_id, g1, g2_design_compliance, g3_gateway_doc, production_gates, playwright_b08]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 8000
+    resource_policy:
+      resource_mode: readonly
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      forbidden_ports: [8001, 3000, 19080]
+      production_ddl_gate: noop
+    phase_boundary: Phase 5 backend slice only; UI, task audit, Playwright B-08, and final Phase 5 completion stay in 5b.
+  - plan_key: mcp_gateway_phase6_resource_monitor
+    title: MCP Gateway Phase 6 resource monitor and no-background-token gate
+    module: platform.mcp_gateway
+    level: L2
+    command_key: nox_mcp_gateway_phase6_resource_monitor
+    nox_session: mcp_gateway_phase6_resource_monitor
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    forbidden_ports: [8001, 3000, 19080]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 600
+    evidence_kinds: [pytest, compileall, mcp_startup_summary, mcp_self_check, mcp_doctor, resource_inventory]
+    manual_review_controls: [DESIGN-COMPLIANCE-001, production_ddl_gate, production_dependency_gate]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 600
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/mcp_gateway/20260604_mcp_gateway_phase6_resource_monitor_completion_report.md]
+      required_fields: [run_id, g1, g2_design_compliance, g3_gateway_doc, production_gates, process_inventory]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 8000
+    resource_policy:
+      resource_mode: readonly
+      allowed_db_targets: []
+      forbidden_db_targets: [prod_db]
+      forbidden_ports: [8001, 3000, 19080]
+      production_ddl_gate: noop
   - plan_key: ra_phase0_baseline
     title: Research Assistant Phase 0 baseline lock and scaffold gate
     module: research_assistant

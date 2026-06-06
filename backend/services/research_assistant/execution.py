@@ -1,4 +1,4 @@
-"""Execution-closure helpers for the Research Assistant service.
+﻿"""Execution-closure helpers for the Research Assistant service.
 
 This mixin keeps MCP/Skill execution gates explicit while the service remains
 the owner of repositories, task events, trace events, and runtime config.
@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import timedelta
 from time import perf_counter
 from typing import Any
+
+from backend.services.research_assistant.mcp_catalog_sync import canonicalize_server_key
 
 from backend.services.mcp_payload_budget import artifact_ref, assert_summary_payload, summary_envelope
 
@@ -157,6 +159,8 @@ class ResearchAssistantExecutionMixin:
             if not isinstance(item, dict):
                 return
             server_key = str(item.get("server_key") or item.get("server") or "").strip()
+            if server_key:
+                server_key = canonicalize_server_key(server_key)
             tool_name = str(item.get("tool_name") or item.get("tool") or "").strip()
             if server_key or tool_name:
                 candidates.append({"server_key": server_key, "tool_name": tool_name})
@@ -414,10 +418,26 @@ class ResearchAssistantExecutionMixin:
                     idempotency_key=data.idempotency_key or proposal["idempotency_key"],
                 )
             )
+            if effective_profile["requires_approval"] and not result.get("approval_required"):
+                result = dict(result)
+                result["requires_approval"] = True
+                result["approval_required"] = True
+                result["passed"] = False
+                result["capability_policy_requires_approval"] = True
+                result["missing_confirmations"] = list(effective_profile["required_confirmations"])
+                checks = list(result.get("preflight_checks") or [])
+                if "capability_policy" not in checks:
+                    checks.append("capability_policy")
+                result["preflight_checks"] = checks
             self.repository.update_record(
                 "mcp_tool_events",
                 result["tool_event_id"],
-                {"action_proposal_id": action_proposal_id, "plan_digest": proposal["plan_digest"], "transport": "research_assistant_preflight"},
+                {
+                    "action_proposal_id": action_proposal_id,
+                    "plan_digest": proposal["plan_digest"],
+                    "transport": "research_assistant_preflight",
+                    "response_json": result,
+                },
             )
         else:
             result = {
@@ -780,25 +800,15 @@ class ResearchAssistantExecutionMixin:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         if tool_name == "assistant_list_mcp_tools":
-            tools = [
-                item
-                for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
-                if str(item.get("status") or "") in {"enabled", "ready", "approved"}
-            ]
-            if args.get("server_key"):
-                tools = [item for item in tools if str(item.get("server_key")) == str(args["server_key"])]
-            if args.get("risk_level"):
-                tools = [item for item in tools if str(item.get("risk_level")) == str(args["risk_level"])]
             search = str(args.get("search") or args.get("q") or "").strip().lower()
-            if search:
-                tools = [
-                    item
-                    for item in tools
-                    if search in str(item.get("server_key") or "").lower()
-                    or search in str(item.get("tool_name") or "").lower()
-                    or search in str(item.get("description") or "").lower()
-                ]
-            window = tools[offset : offset + limit]
+            page = self.list_mcp_tools(
+                server_key=str(args["server_key"]) if args.get("server_key") else None,
+                risk_level=str(args["risk_level"]) if args.get("risk_level") else None,
+                search=search or None,
+                limit=limit,
+                offset=offset,
+            )
+            window = list(page["items"])
             return [
                 {
                     "server_key": item.get("server_key"),
@@ -810,7 +820,7 @@ class ResearchAssistantExecutionMixin:
                     "status": item.get("status"),
                 }
                 for item in window
-            ], len(tools)
+            ], int(page["total"])
         if server_key == "aistock-external-research":
             query = str(args.get("query") or args.get("q") or "external research").strip()
             as_of = utc_now().date().isoformat()

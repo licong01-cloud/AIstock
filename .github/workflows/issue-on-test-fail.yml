@@ -80,17 +80,26 @@ jobs:
               --output tmp/validation/ci_failure_issue/summary.json \
               --markdown-output tmp/validation/ci_failure_issue/body.md \
               --context-output tmp/validation/ci_failure_issue/context-pack.json \
-              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
+              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
+              --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json \
+              --stdout-format compact
           else
             python scripts/ci_failure_issue_summary.py \
               --repo "${{ github.repository }}" \
               --run-id "${{ github.event.workflow_run.id }}" \
               --run-url "${{ github.event.workflow_run.html_url }}" \
               --severity "P1" \
+              --wait-for-completion \
+              --wait-attempts 2 \
+              --wait-seconds 15 \
+              --log-attempts 3 \
+              --log-wait-seconds 10 \
               --output tmp/validation/ci_failure_issue/summary.json \
               --markdown-output tmp/validation/ci_failure_issue/body.md \
               --context-output tmp/validation/ci_failure_issue/context-pack.json \
-              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
+              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
+              --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json \
+              --stdout-format compact
           fi
 
       - name: Upload failure issue context
@@ -113,6 +122,14 @@ jobs:
             const repo = context.repo.repo;
             const isManual = context.eventName === 'workflow_dispatch';
             const dryRun = isManual && String(process.env.INPUT_DRY_RUN || '').toLowerCase() === 'true';
+            const issuePayloadPath = 'tmp/validation/ci_failure_issue/github-issue-payload.json';
+            if (!fs.existsSync(issuePayloadPath)) {
+              const summary = JSON.parse(fs.readFileSync('tmp/validation/ci_failure_issue/summary.json', 'utf8'));
+              const policy = summary.issue_creation_policy || {};
+              core.info(`No actionable issue created. policy.allowed=${policy.allowed} reason=${policy.reason || 'unknown'}`);
+              return;
+            }
+            const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
             const summary = JSON.parse(fs.readFileSync('tmp/validation/ci_failure_issue/summary.json', 'utf8'));
             const severity = summary.severity || 'P1';
             if (!['P0', 'P1'].includes(severity)) {
@@ -121,74 +138,20 @@ jobs:
             }
             const runId = String(summary.run_id || context.runId);
             const runUrl = summary.run_url || `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
-            const fingerprint = summary.fingerprint || `run-${runId}`;
-            const marker = `<!-- aistock-ci-failure-fingerprint:${fingerprint} -->`;
-            const runMarker = `<!-- aistock-issue-on-test-fail:${runId} -->`;
-            const title = summary.issue_title || `[${severity}] ${summary.workflow || 'AIstock CI'} failed on ${summary.branch || 'unknown'}`;
-            const query = `repo:${owner}/${repo} is:issue in:body ${marker}`;
+            const fingerprint = payload.dedupe?.fingerprint || summary.fingerprint || `run-${runId}`;
+            const marker = payload.dedupe?.marker || `<!-- aistock-ci-failure-fingerprint:${fingerprint} -->`;
+            const title = payload.title || summary.issue_title || `[${severity}] ${summary.workflow || 'AIstock CI'} failed on ${summary.branch || 'unknown'}`;
+            const query = payload.dedupe?.search_query || `repo:${owner}/${repo} is:issue in:body ${marker}`;
             const existing = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
             const failedJobs = summary.failed_jobs || [];
-            const moduleLabelAllowlist = new Set([
-              'module:validation',
-              'module:validation.center',
-              'module:paper_v2',
-              'module:paper_v2_selection_center',
-              'module:qe_archive',
-              'module:qe',
-              'module:quantevolver',
-              'module:strategy_package',
-              'module:research_assistant',
-              'module:simulation_runtime',
-              'module:rl_execution',
-              'module:scripts',
-            ]);
-            const moduleLabels = (summary.suspected_modules || [])
-              .map((module) => `module:${module}`)
-              .filter((label) => moduleLabelAllowlist.has(label));
-            const detailBody = [
-              marker,
-              runMarker,
-              `<!-- aistock-ci-diagnostic-status:${summary.diagnostic_status || 'partial'} -->`,
-              '',
-              fs.readFileSync('tmp/validation/ci_failure_issue/body.md', 'utf8').trimEnd(),
-            ].join('\n');
-            const body = [
-              detailBody,
-              '',
-              '---',
-              '',
-              marker,
-              runMarker,
-              '## Automated AIstock test failure issue',
-              '',
-              `Severity: ${severity}`,
-              `Workflow/source: ${summary.workflow || 'unknown'}`,
-              `Run: ${runUrl}`,
-              `Branch: ${summary.branch || 'unknown'}`,
-              `Commit: ${summary.commit || 'unknown'}`,
-              `Diagnostic status: ${summary.diagnostic_status || 'partial'}`,
-              `Fingerprint: ${fingerprint}`,
-              '',
-              'This workflow auto-files P0/P1 only for default-branch failures or explicit manual dispatch. The GitHub Issue is a workflow layer; `tests/aistock_validation/bugs/` remains the canonical bug registry when a BUG-NNN record is required.',
-              '',
-              '### Triage checklist',
-              '',
-              '- [ ] Confirm whether this is a real regression or infrastructure-only failure.',
-              '- [ ] If real, mirror or link a BUG-NNN entry under `tests/aistock_validation/bugs/`.',
-              '- [ ] Confirm the extracted failed job/session/test/error details above.',
-              '- [ ] If diagnostic_status is partial, inspect the linked run log before assigning fix scope.',
-              '- [ ] Link the fixing PR with `Fixes #NNN` or `Closes #NNN`.',
-              '',
-              '### Safety',
-              '',
-              '- No production service restart is requested by this issue.',
-              '- No production DB write is requested by this issue.',
-              '- This issue was created with `GITHUB_TOKEN` from a guarded workflow event.',
-            ].join('\n');
+            const renderBody = (issueNumber) => payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`);
+            const labels = [
+              ...(payload.labels || []),
+            ];
 
             if (dryRun) {
               core.info(`[dry-run] Would create or update issue: ${title}`);
-              core.info(body);
+              core.info(payload.body);
               return;
             }
 
@@ -209,25 +172,30 @@ jobs:
                 issue_number: issue.number,
                 body: recurrenceBody,
               });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                title,
+                body: renderBody(issue.number),
+              });
               core.info(`Existing issue #${issue.number} already tracks fingerprint ${fingerprint}.`);
               return;
             }
 
-            const labels = [
-              'bug',
-              'ci',
-              'auto-filed',
-              severity,
-              summary.diagnostic_status === 'complete' ? 'status:open' : 'risk:observability',
-              ...moduleLabels,
-            ];
             try {
               const created = await github.rest.issues.create({
                 owner,
                 repo,
                 title,
-                body,
+                body: 'Preparing actionable CI diagnostics...',
                 labels,
+              });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: created.data.number,
+                body: renderBody(created.data.number),
               });
               core.info(`Created issue #${created.data.number}.`);
             } catch (error) {
@@ -239,7 +207,13 @@ jobs:
                 owner,
                 repo,
                 title,
-                body,
+                body: 'Preparing actionable CI diagnostics...',
+              });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: created.data.number,
+                body: renderBody(created.data.number),
               });
               core.info(`Created issue #${created.data.number} without labels.`);
             }

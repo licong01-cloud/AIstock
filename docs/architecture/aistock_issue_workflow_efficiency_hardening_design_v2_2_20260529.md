@@ -120,6 +120,7 @@ Workflow and CI/CD hardening PRs should not pay the full business backend matrix
 
 - `ci_change_classifier.py` must classify a conservative allowlist as `workflow_validation_only`.
 - `workflow_validation_only` must set `backend_required=false` and `workflow_validation_required=true`.
+- Same-task workflow BUG metadata must not break this lane: an open/in-progress BUG JSON and `.bug_id_allocator.json` may stay in `workflow_validation_only` only when the BUG module is `validation` and its allowed scope contains only workflow fast-lane files plus BUG registry metadata.
 - GitHub Actions must still run static gate, PR Quality, Semgrep, CodeQL, and a focused workflow validation test job.
 - Any backend router/service, business module, Paper v2, QE, Research Assistant, or production-adjacent file must keep `classification=full_ci_required`.
 - Close-sync metadata-only behavior remains a separate lane and must not be weakened.

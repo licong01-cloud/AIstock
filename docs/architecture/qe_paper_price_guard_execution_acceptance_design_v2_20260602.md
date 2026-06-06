@@ -679,6 +679,75 @@ for each enabled advisory_program:
 - **审核 checklist**：parity 一致、★8 实时差异已验证并文档化、override 拒绝、WAITING 语义、审计链完整。
 - **门槛**：上述 + 我签核。
 
+### 6.6 全功能验收矩阵（禁止简化版交付）
+
+本节是代码开发与合入前的强制验收索引。允许分阶段交付，但每个阶段声明完成时，必须满足对应功能的完整定义、功能验证方案和客观验收标准；不得以“先做最小版 / 子集版 / 占位版 / mock-only / 仅后端无 UI / 仅 UI 不接真实 API / 只支持单策略包 / 只支持一个荐股任务 / 暂不处理失败态”等方式宣称完成。
+
+**全局硬性验收（所有功能共同适用）**：
+
+- 所有新增 UI 必须接真实 API；禁止用静态 JSON、mock 数据或只读占位卡片冒充功能完成。
+- 所有新增 API/Job 必须有真实持久化或明确的只读派生口径；禁止用空数组、默认成功、默认价格、默认 rank、默认 policy hash 伪装成功。
+- 所有业务失败必须结构化返回 `WAITING_DATA` / `REVIEW_FAILED` / `*_DATA_ERROR` / `*_CONFIG_ERROR` 等可审计状态；禁止 silent fallback。
+- 所有新增表/字段若进入 DDL，必须有 PostgreSQL comment、幂等 migration、回滚/重跑语义和生产 DDL gate 记录。
+- 所有每日/历史复评必须 PIT：不得读取未来价格、未来 rank、未来 evidence 决定当日荐股或退出。
+- Advisory 层永不写 Paper v2 ledger、永不调用 OMS/broker、永不产生模拟/真实成交；如触碰 ledger/订单路径，本阶段验收失败。
+- 每个功能完成前必须产出“设计条款 -> 实现位置 -> 测试/截图/API/DB 证据 -> 结论”的验收矩阵；缺一项不得合入 main。
+
+| 主功能 | 完整功能定义（不得简化） | 功能验证方案 | 可合入验收标准 |
+| --- | --- | --- | --- |
+| Advisory Center 独立 UI | `/paper-v2/advisory` 是独立荐股中心，包含 program 列表、设置、排行榜、当前荐股池、复评记录、收益/胜率、质量报告和回放入口；Selection Center 只能作为候选/快捷创建入口 | Playwright 或等价 E2E：打开 Advisory 页面，创建/查看 program，进入详情各 tab；截图或 DOM 断言覆盖真实 API 数据 | UI 非 mock，导航存在，至少一个真实 program 可完整展示；Selection 页面快捷入口只预填 Advisory Program，不直接维护 lifecycle 状态 |
+| Advisory Program 设置 | 支持 `program_name`、启用/暂停/归档、target_count、review_schedule、entry/exit price basis、review/exit policy、package_mode、package_set/version；配置变更生成新 version | API 单测 + DB/Repo 测试 + UI 表单测试；验证配置变更不覆盖历史 version | 可创建、编辑、暂停、克隆、归档 program；历史 review/episode 引用旧 version 不漂移；StrategyPackage manifest 不被修改 |
+| 单策略包荐股 | 每个 program 可选择且仅选择 1 个 StrategyPackage，按单包 rank 生成 Top20、active_pool、review evidence 和收益统计 | 后端单测构造单包 run；API smoke 返回单包 evidence；UI 显示 single_package 模式 | 单包 program 可从创建到每日复评闭环；`fusion_policy_sha256` 为空或为单包 policy hash；不依赖多包代码路径伪装 |
+| 多策略包融合荐股 | 每个 program 可选择 2+ StrategyPackage，使用 `weighted_rank_fusion` 生成唯一 `fusion_rank`，保留每包 raw score/rank/rank_score/presence/support/dispersion | 后端融合单测、API 集成测试、UI 权重编辑测试；构造 rank 冲突、缺包 evidence、单包缺失场景 | raw score 不直接平均；Top20/Top40/alpha decay 均使用 `fusion_rank`；per-package evidence 可展开审计 |
+| 多 program 并行运行 | 多个 enabled program 可同日独立复评；program 失败不能阻断其他 program；同一股票可在不同 program 中独立 episode | Job/service 集成测试同时运行 2 个 single + 1 个 fusion program；故意让一个缺数据 | 每个 program 的 active_pool、review、returns、status 均按 `program_id` 隔离；失败 program 标 `WAITING_DATA` 或 `REVIEW_FAILED`，其他 program 正常完成 |
+| 顶部排行榜 | Advisory Center 顶部展示所有执行中 program，默认按胜率，可按平均涨幅/中位涨幅/启用时间/累计荐股数/最大回撤切换；只自动保留 `last_review_status`，不记录 `eligible_episode_count` / `data_excluded_count` | API/selector 测试 + UI 排序测试；构造不同胜率、涨幅、启用时间、失败状态 | 列包含启用时间、累计荐股数、当前持有数、止盈数、止损数、胜率、平均涨幅、last_review_status；排序稳定可复现；无 LOW_SAMPLE 自动记录字段 |
+| Top20 生命周期复评 | 每日重跑 Selection Center，但不得全量覆盖旧荐股；使用 `active_pool ∪ topK`、hysteresis、replacement_budget | 单元测试覆盖 rank=19/21/41、连续确认、replacement_budget、active_pool 不在 top20 | 旧荐股不会因单日跌出 Top20 被无理由替换；rank 缺失 fail-fast 或 WAITING_DATA；每日 review append-only 且幂等 |
+| 状态机 | `CANDIDATE -> ENTERED -> HOLDING -> EXITED` 全迁移；同 code 重新入选生成新 episode | 状态机单测覆盖合法/非法迁移、重复 enter、exit 后重入 | 非法迁移被拒绝并给出 reason；episode_id 可追溯；状态更新不覆盖每日事实 |
+| ExitGuard 退出 | 覆盖 hard/soft stop、trailing take profit、alpha decay take profit/rank drop、time stop、eligibility/ST/delist、T+1 deferred | ExitGuard 纯函数测试 + lifecycle 集成测试 + T+1 场景 | 每种退出 reason 均可触发并落库；当日入选当日止损仅标 deferred；退出不写 ledger/订单 |
+| 买入区间/止损/止盈展示 | 展示 entry band、stop/take/trailing 区间、guidance_status、policy_sha256、reason；未验证不得标 `qe_validated` | API contract 测试 + UI 展示测试 + 缺字段 fail-fast | 缺 price/limit/suspend/pre_close 不显示默认成功；UI 明示 rule_default/bucket/qe_validated；不会修改下单行为 |
+| 每日 evidence 持久化 | `selection.daily_selection_evidence` 覆盖 `topK + active_pool`，包含单包/多包 evidence、fusion hash、feature availability | DB/repo 测试 + 重跑幂等测试 | evidence 不可变或带 version；active item 缺 evidence 不静默 HOLD；policy/hash 可复核 |
+| Replay 回放 | 从任意历史交易日逐日 PIT 运行选股、复评、退出、补位，输出每日快照、episode 收益和 program 汇总 | 固定 fixture 回放 1 个月交易日；断言无未来日期读取；重复运行结果一致 | 可选择 start/end date、单包/多包 program、价格口径；未退出 episode 与已退出分开展示；不写 ledger |
+| 收益记录 | 每个 episode 记录 entry/exit/mark price basis、return_bps、is_win、flat/loss、MFE/MAE、holding days、exit reason；同股票重入独立计算 | 后端收益计算单测：next open、next close sensitivity、停牌/涨跌停、复权 | 默认 entry/exit 使用 `next_open_executable`；复权一致；缺价不伪装收益；胜率分母内部派生不进入排行榜记录字段 |
+| 质量报告 | 输出 post-decision diagnostics：entry zone hit/fillable、stop saved/whipsaw、reward-risk、win rate、avg/median return、max drawdown、bucket 统计 | API 测试拒绝未来 outcome 字段作为 decision input；固定输入固定输出；桶样本不足收缩 | 报告明确标注非 validated PnL；支持 package/fusion_policy/entry_basis 分桶；结论可复现 |
+| Price basis | 信号日 `T`，默认 `effective_entry_date=T+1`、`entry_price_basis=next_open_executable`；`signal_close`/`next_close` 只作敏感性 | 单测覆盖 T/T+1、停牌顺延、缺开盘价、涨跌停不可成交 | 2 日收盘价不得作为默认可执行收益基准；3 日开盘为默认；所有口径在报告中明示 |
+| 公司行动/停牌/ST/涨跌停 | 复权因子调整 entry/stop/take；停牌 WAITING；ST/delist/eligibility 退出；涨跌停不可成交不能伪装 fill | fixture 覆盖除权、停牌、ST、limit up/down、缺 factor | 价格和收益口径不失真；不可成交状态可审计；缺关键数据 fail-fast |
+| API 契约 | program CRUD、package binding、daily review run/preview、leaderboard、active pool、episode returns、quality report、replay run 均有 schema | FastAPI route tests + OpenAPI schema/contract tests | HTTP 状态码、错误 payload、字段名稳定；无 mock-only route；权限/参数校验完整 |
+| DB/持久化 | 新表/字段 append-only 优先，program 配置版本化，daily_review/return/replay 可追溯 | migration dry-run + repo tests + idempotency tests | DDL 有 comment；重跑不重复污染；历史记录不被 UPDATE 覆盖；生产 DDL gate 明确 |
+| 前端错误态 | UI 展示 `WAITING_DATA`、`REVIEW_FAILED`、`STALE`、缺包 evidence、缺价、无 program、无运行记录等状态 | E2E/组件测试覆盖错误态和空态 | 不把空表展示为成功；错误原因可读；可重试/刷新；不会诱导用户以为已完成复评 |
+| 无成交边界 | Advisory 全路径不写 Paper ledger、不创建订单、不触发 broker/QMT | 代码搜索 + 单元测试 monkeypatch ledger/order repo 抛错 + 集成测试 | advisory API/job 即使运行 replay/review 也不触碰订单/ledger；任何触碰视为 P0 |
+| 合入前验证链 | 变更文件 lint、单测、API 测试、UI E2E、module registry、L0、paper_v2_backend、guardrails、CI | 本地命令记录 + PR CI + 设计验收矩阵 | 所有必须项 green；未覆盖项必须明示 blocked 并不得请求代码合入 main |
+
+**开发分阶段但不简化的执行规则**：
+
+1. Phase 2 可优先交付 Advisory Program、单包/多包复评、排行榜、状态机、退出和真实 UI；但这些功能一旦声明完成，必须满足上表对应完整验收，不得只交付子集。
+2. Phase 3 可在 Phase 2 后交付 replay、收益/胜率、质量报告和回放 UI；但不得把“只计算平均收益、没有 episode 明细/价格口径/失败态”的版本视为完成。
+3. Phase 4/5 enforced 不属于 advisory UI 合入门；但 advisory 代码不得预埋会改变 Paper/QE 行为的默认启用路径。
+4. 若实现过程中发现任一矩阵项当前阶段不能完成，必须更新 Issue scope 和 PR 说明为 `blocked/not implemented`，不得隐藏为“后续优化”。
+
+
+
+### 6.7 BUG-240 实现验收证据矩阵（代码合入前必填）
+
+本节用于把 §6.6 的全功能验收要求映射到 BUG-240 的实际实现、自动化验证与合入门槛。它不是降低范围的“阶段说明”：若任一行没有真实实现或验证证据，代码不得请求合入 `main`。本轮代码合入前仍需保持 `production_ddl_gate=pending`，不得在未获授权时应用生产 DDL。
+
+| 设计条款 / 主功能 | 实现位置 | 必须验证证据 | 合入结论口径 |
+| --- | --- | --- | --- |
+| 独立 Advisory Center UI 与 Selection 快捷入口 | `frontend/src/app/paper-v2/advisory/page.tsx`、`frontend/src/app/paper-v2/selection/page.tsx`、`frontend/src/app/paper-v2/layout.tsx`、`frontend/src/app/watchlist/page.tsx`、`frontend/src/lib/api/advisory.ts` | 前端 TypeScript；UI 打开后真实调用 `/api/v1/advisory/*`；Selection 只通过 URL 预填 `selection_run_id/package_ids`；Watchlist 行展示 `entry_source` 以保留 StrategyPackage 来源可见性 | 页面存在排行榜、任务设置、复评、荐股池、复评记录、收益、回放、质量报告；无 mock 行冒充结果；Selection 导入 Watchlist 后仍可在 `/watchlist` 看到来源策略包 |
+| Advisory Program 设置与版本化 | `backend/services/advisory_program.py`、`backend/routers/advisory.py`、`app.advisory_program`、`app.advisory_program_package` | API 测试覆盖 create/update/enable/pause/archive/clone；版本变更测试；package binding 删除仅限当前 version | 支持并行 program；状态变更不覆盖历史 review/episode；StrategyPackage manifest 不被修改 |
+| 单策略包荐股 | `AdvisoryProgramService.create_program/run_review_from_selection`、`SelectionMode.SINGLE_PACKAGE` | 单元测试构造 `single_package`，验证正好 1 个 package、单包 rank、active_pool、review、leaderboard | 单包从创建到每日复评闭环可运行，且不依赖融合路径伪装 |
+| 多策略包融合荐股 | `fusion_pool`、`weighted_rank_fusion`、`fusion_policy_sha256`、`component_scores` / `fusion_evidence_json` | 选择中心融合测试 + Advisory API 测试覆盖 `fusion_pool`、权重、per-package rank/score evidence | raw score 不直接平均；生命周期 canonical rank 使用融合 rank，per-package evidence 可审计 |
+| Top20 生命周期复评 | `_evaluate_review` 的 `active_pool ∪ candidates`、`rank_enter_threshold/rank_exit_threshold`、`rank_exit_confirm_days`、`daily_replacement_budget` | 单测覆盖 rank hysteresis、连续确认、replacement budget、旧荐股不在 Top20 仍参与复评 | 每日 Top20 不全量覆盖旧荐股；普通替换受预算限制；缺 rank/price 进入 WAITING_DATA |
+| ExitGuard 与 T+1 | `_exit_reason`、`_episode_exited`、`STOP_LOSS_DEFERRED_T1`、take-profit、trailing、rank-drop、time-stop | 单测覆盖 stop-loss、trailing/fixed take-profit、rank drop、time stop、当日入选当日止损 deferred | 退出只改变 advisory episode/review，不写 ledger/order；T 日信号默认 T+1 生效，T+1 前硬止损只标记 deferred |
+| Price basis 与收益记录 | `entry_price_basis=next_open_executable`、`_price_for_basis`、`app.advisory_episode_return` | 单测覆盖 `next_open_executable` 默认、不回退到 `reference_price/mark_price`、episode return、win rate | 2 日收盘价不得作为默认可执行收益基准；缺 next open 不伪装成功；缺价进入 WAITING_DATA |
+| Replay 回放 | `/programs/{id}/replay`、`run_replay`、`app.advisory_replay_run` | 单测覆盖 fixture replay 与无 fixture 时调用 Selection Center；重复运行输出 replay metadata/summary | 回放是 advisory retrospective，不写账户/Paper ledger；默认 PIT，每日按 program package 运行 |
+| 排行榜与统计字段 | `/advisory/leaderboard`、`compute_program_metrics`、`app.advisory_program_metric_snapshot` | API/单测断言 enabled_since、entered/active、take_profit/stop_loss、win_rate、avg/median/max_drawdown、last_review_status | 只自动保留 `last_review_status`；不持久化或展示 `eligible_episode_count`、`data_excluded_count`、`LOW_SAMPLE` |
+| 质量报告 | `/advisory/quality-report`、`backend/services/advisory_quality.py` | API 测试拒绝 decision input 中未来 outcome 字段；固定输入可复现 bucket/metrics | 输出 post-decision diagnostics，明确不是 validated PnL；不足样本只在报告上下文处理，不写排行榜字段 |
+| DB/DDL 与审计链 | `backend/db/migrations/add_advisory_program_lifecycle_20260604.sql`、`backend/db/init_watchlist_schema.py` | schema contract 测试；DDL comment 检查；append-only trigger 检查；生产 DDL gate 记录 | 新表/字段均有 comment；episode_return append-only；生产 DDL 未授权前保持 pending |
+| 无交易副作用边界 | `backend/services/advisory_program.py`、`backend/routers/advisory.py` | 源码禁词测试与 API/job 测试；代码搜索 `create_order/submit_order/broker/position_ledger/paper_v2` | Advisory 层不创建订单、不调用 broker/QMT、不写 Paper v2 ledger；触碰交易路径即 P0 失败 |
+| 合入前验证链 | issue workflow、nox、pytest、ruff、py_compile、frontend TypeScript | 必跑：`py_compile`、`ruff changed files`、targeted pytest、`npx tsc --noEmit`、`guardrail_changed_files`、`l0`、`paper_v2_backend`、`validation_module_registry_l0`、`paper_v2_l3`、`validation_center_backend`、`qe_archive_l3` | 全部 green 后才可创建/更新 PR；代码合入 main 前仍需用户确认 |
+
+**BUG-240 最终验收记录要求**：PR 描述和 Issue workflow evidence 必须逐条列出命令、结果、提交 hash、PR URL、生产 gate、以及“生产 runtime/DB 未触碰”。若前端 E2E 或生产 DDL 需要人工环境，必须标为 `pending_user_confirmation`，不得把 pending 项写成已完成。
+
 ---
 
 ## 7. rule vs ML（一次预留，后期不重写）

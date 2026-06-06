@@ -73,6 +73,7 @@ jobs:
         shell: powershell
     env:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+      DR_PG_CONTAINER: 'timescaledb'
     steps:
       - name: Prepare local workspace (no GitHub checkout)
         timeout-minutes: 2
@@ -90,6 +91,11 @@ jobs:
             Write-Host "::error::docker not on PATH on this self-hosted runner"
             exit 1
           }
+          $containers = docker ps --format "{{.Names}}"
+          if ($containers -notcontains $env:DR_PG_CONTAINER) {
+            Write-Host "::error::DR postgres container $env:DR_PG_CONTAINER is not running on this self-hosted runner"
+            exit 1
+          }
           if (-not (Test-Path -LiteralPath $env:DR_TARGET_DIR -PathType Container)) {
             Write-Host "::error::DR target dir $env:DR_TARGET_DIR missing on this runner"
             exit 1
@@ -97,7 +103,7 @@ jobs:
 
       - name: Run dr_snapshot_prod_db.py
         run: |
-          conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR"
+          conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR" --container "$env:DR_PG_CONTAINER"
 
       - name: Run dr_cleanup_old_snapshots.py (apply)
         run: |
@@ -141,6 +147,7 @@ jobs:
         shell: powershell
     env:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+      DR_PG_CONTAINER: 'timescaledb'
     steps:
       - name: Prepare local workspace (no GitHub checkout)
         timeout-minutes: 2
@@ -300,15 +307,13 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
-      - name: Build weekly Understand Anything summaries
+      - name: Build Understand Anything readiness summaries
         run: |
-          # Equivalent to the previous bash weekly guard: date -u +%u.
-          if ($env:GITHUB_EVENT_NAME -eq "schedule" -and (Get-Date).ToUniversalTime().DayOfWeek -ne "Sunday") {
-            Write-Host "Skipping weekly Understand Anything summary outside Sunday UTC."
-            exit 0
-          }
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
+            --language zh `
+            --output "$outDir/ua-configure.stdout.json"
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
             --output-dir $outDir `
             --output "$outDir/ua-summary-manifest.stdout.json"
@@ -320,6 +325,32 @@ jobs:
             Get-ChildItem -LiteralPath "tmp/validation/code-intelligence" -Recurse -File |
               Select-Object -First 100 -ExpandProperty FullName
           }
+
+      - name: Build code intelligence upload manifest
+        if: always()
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/code_intelligence_adapter.py run-manifest `
+            --output-dir $outDir `
+            --artifact-name "code-intelligence-${{ github.run_id }}" `
+            --run-id "${{ github.run_id }}" `
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" `
+            --branch "${{ github.ref_name }}" `
+            --commit "${{ github.sha }}" `
+            --output "$outDir/code-intelligence-run-manifest.stdout.json"
+          if (Test-Path -LiteralPath "$outDir/code-intelligence-run-manifest.md") {
+            Get-Content -LiteralPath "$outDir/code-intelligence-run-manifest.md"
+          }
+
+      - name: Upload code intelligence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-intelligence-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}/
+          if-no-files-found: warn
+          retention-days: 14
 
   full-summary:
     name: Nightly summary + auto-bug on failure
@@ -425,7 +456,14 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const payload = JSON.parse(fs.readFileSync('tmp/validation/nightly_failure_issue/github-issue-payload.json', 'utf8'));
+            const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';
+            if (!fs.existsSync(issuePayloadPath)) {
+              const summary = JSON.parse(fs.readFileSync('tmp/validation/nightly_failure_issue/summary.json', 'utf8'));
+              const policy = summary.issue_creation_policy || {};
+              core.info(`No actionable Nightly issue created. policy.allowed=${policy.allowed} reason=${policy.reason || 'unknown'}`);
+              return;
+            }
+            const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner,

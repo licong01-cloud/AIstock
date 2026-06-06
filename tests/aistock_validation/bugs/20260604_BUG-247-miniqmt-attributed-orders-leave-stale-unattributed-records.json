@@ -1,0 +1,67 @@
+{
+  "actual": "Stale qmt_strategy.unattributed_order/unattributed_trade rows survive even after qmt_strategy.order_ledger has authoritative intent and strategy attribution; reconciliation reads the stale rows and emits UNATTRIBUTED_ORDER/UNATTRIBUTED_TRADE issues.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "tests/aistock_validation/bugs/20260604_BUG-247-miniqmt-attributed-orders-leave-stale-unattributed-records.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-247",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T02:38:04.572769Z",
+  "description": "Stale qmt_strategy.unattributed_order/unattributed_trade rows survive even after qmt_strategy.order_ledger has authoritative intent and strategy attribution; reconciliation reads the stale rows and emits UNATTRIBUTED_ORDER/UNATTRIBUTED_TRADE issues.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-375a1b3e195a",
+      "timestamp": "2026-06-04T02:38:04.572764Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-04 10:34 read-only production DB: order_ledger 58 attributed rows; unattributed_order UNKNOWN_STRATEGY_NAME=50; unattributed_trade UNKNOWN_STRATEGY_NAME=1"
+  ],
+  "expected": "When a later read-only MiniQMT sync safely attributes an order or trade to an authoritative intent/strategy, any prior unattributed record for the same account/date/order or trade must be removed idempotently before reconciliation.",
+  "first_seen_at": "2026-06-04T02:38:04.572769Z",
+  "fix_branch": null,
+  "fix_commit": "1aaa923595edeae8c87d0509fda8ae874a39641d",
+  "fixed_at": "2026-06-04T02:48:10.083811Z",
+  "github_issue_number": 693,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/693",
+  "last_seen_at": "2026-06-04T02:38:04.572769Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/695",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Seed an unattributed MiniQMT order/trade, then run QmtStrategyLedgerSyncService with a matching order_remark intent; list_unattributed_* still returns stale rows.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT attributed orders leave stale unattributed records",
+  "trigger_condition": {
+    "fingerprint": "375a1b3e195aa15d691612c2",
+    "source_event_id": "FE-20260604-375a1b3e195a"
+  },
+  "validation_evidence": [
+    "local validation passed; gh pr checks 695 passed 16 checks failed=0; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
+  "verification_run_id": null
+}

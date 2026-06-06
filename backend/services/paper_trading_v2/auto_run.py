@@ -23,6 +23,8 @@ from .repository import PaperTradingV2Repository
 
 AUTO_RUN_TZ = ZoneInfo(os.getenv("PAPER_V2_AUTO_RUN_TIMEZONE", "Asia/Shanghai"))
 AUTO_RUN_SCHEMA_VERSION = "paper_v2_auto_run_v1"
+MINIQMT_ACCOUNT_GROUP_BINDING_MODE = "account_group_slots"
+MINIQMT_LEGACY_BINDING_MODES = frozenset({"exclusive_account", "exclusive_account_phase1", "exclusive_account_legacy"})
 DEFAULT_TRADE_WINDOW_POLICY: dict[str, Any] = {
     "prepare_start": "08:50",
     "submit_windows": [
@@ -43,7 +45,7 @@ AUTO_RUN_BROKER_DEFAULTS: dict[str, dict[str, str]] = {
     "minqmt_sim": {
         "live_data_source": MinuteDataSource.MINIQMT_REALTIME.value,
         "authority_source": "MINIQMT_QUERY",
-        "account_binding_mode": "exclusive_account_phase1",
+        "account_binding_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     },
 }
 
@@ -67,6 +69,13 @@ def canonical_auto_run_json(config: dict[str, Any]) -> str:
 
 def compute_auto_run_config_sha256(config: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_auto_run_json(config).encode("utf-8")).hexdigest()
+
+
+def normalize_account_binding_mode(*, broker_backend: str, account_binding_mode: str | None) -> str:
+    mode = str(account_binding_mode or "").strip()
+    if str(broker_backend or "").strip().lower() == "minqmt_sim" and mode in MINIQMT_LEGACY_BINDING_MODES:
+        return MINIQMT_ACCOUNT_GROUP_BINDING_MODE
+    return mode
 
 
 def normalize_auto_run_config(
@@ -145,6 +154,10 @@ def normalize_auto_run_config(
     broker["live_data_source"] = expected_live_data_source
     broker.setdefault("authority_source", broker_defaults["authority_source"])
     broker.setdefault("account_binding_mode", broker_defaults["account_binding_mode"])
+    broker["account_binding_mode"] = normalize_account_binding_mode(
+        broker_backend=effective_broker_backend,
+        account_binding_mode=broker["account_binding_mode"],
+    )
     broker.setdefault("strategy_name_template", "paper_{portfolio_id_short}")
     broker.setdefault("order_remark_schema", "aistock_paper_v2_json_v1")
 

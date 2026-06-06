@@ -12,6 +12,8 @@ from backend.services.qmt_strategy_ledger.models import (
     OrderIntentRecord,
     PositionLotRecord,
     PositionLotStatus,
+    UnattributedOrderRecord,
+    UnattributedTradeRecord,
     VirtualAccount,
     VirtualAccountStatus,
 )
@@ -247,6 +249,85 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
     assert idempotent.lots_created == 0
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
+
+
+def test_sync_service_attributes_truncated_strategy_name_by_managed_order_remark() -> None:
+    repo = _repo_with_strategy()
+    repo.upsert_unattributed_order(
+        UnattributedOrderRecord(
+            unattributed_id="uo_stale",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            qmt_order_id="order_truncated",
+            symbol="300604.SZ",
+            reason="UNKNOWN_STRATEGY_NAME",
+            order_remark="remark_a",
+        )
+    )
+    repo.upsert_unattributed_trade(
+        UnattributedTradeRecord(
+            unattributed_id="ut_stale",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            trade_id="trade_truncated",
+            qmt_order_id="order_truncated",
+            symbol="300604.SZ",
+            reason="UNKNOWN_STRATEGY_NAME",
+            order_remark="remark_a",
+        )
+    )
+    _apply_buy_freeze(repo, amount=Decimal("10005"))
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_truncated",
+                "order_sysid": "sys_truncated",
+                "stock_code": "300604.SZ",
+                "order_type": 23,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10,
+                "traded_volume": 1000,
+                "traded_price": 10,
+                "order_status": 56,
+                "strategy_name": "poc_strategy",
+                "order_remark": "remark_a",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_truncated",
+                "stock_code": "300604.SZ",
+                "order_type": 23,
+                "traded_time": "102000",
+                "traded_price": 10,
+                "traded_volume": 1000,
+                "traded_amount": 10000,
+                "commission": 5,
+                "order_id": "order_truncated",
+                "strategy_name": "poc_strategy",
+                "order_remark": "remark_a",
+            }
+        ],
+        positions=[{"stock_code": "300604.SZ", "quantity": 1000, "can_sell": 0}],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_upserted == 1
+    assert summary.trades_inserted == 1
+    assert summary.unattributed_orders == 0
+    assert summary.unattributed_trades == 0
+    lots = repo.list_position_lots("strat_a", symbol="300604.SZ")
+    assert [lot.open_trade_id for lot in lots] == ["trade_truncated"]
+    assert repo.list_unattributed_orders(account_id=ACCOUNT_ID, trade_date=TRADE_DATE) == []
+    assert repo.list_unattributed_trades(account_id=ACCOUNT_ID, trade_date=TRADE_DATE) == []
 
 
 def test_sync_service_settles_unmanaged_buy_fill_against_cash_without_freeze() -> None:

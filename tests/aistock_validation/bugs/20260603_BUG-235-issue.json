@@ -60,6 +60,12 @@
       "actor": "codex",
       "note": "Recorded implementation commit 4bb9e628d570bb18b343f0d7d4249f4099c033e3 for BUG-235 before PR creation.",
       "timestamp": "2026-06-03T14:37:23Z"
+    },
+    {
+      "timestamp": "2026-06-06T06:28:48Z",
+      "actor": "codex",
+      "action": "registry_sync_import_to_main",
+      "note": "Imported open BUG registry record from active branch bug/BUG-235-issue-20260603 so local main and GitHub Issue remain discoverable while PR https://github.com/licong01-cloud/AIstock/pull/656 is still open."
     }
   ],
   "evidence_uris": [
@@ -106,5 +112,6 @@
     "rtk python -m nox -s paper_v2_backend -> 597 passed, 1 skipped, 2 xfailed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed"
   ],
-  "verification_run_id": "targeted pytest; py_compile; diff-check; nox:l0; nox:paper_v2_backend; nox:validation_module_registry_l0"
+  "verification_run_id": "targeted pytest; py_compile; diff-check; nox:l0; nox:paper_v2_backend; nox:validation_module_registry_l0",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/656"
 }

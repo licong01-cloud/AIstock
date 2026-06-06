@@ -1,0 +1,90 @@
+{
+  "actual": "Current main still exposes MiniQMTSim exclusive_account and max_concurrent_packages=1 constraints; Phase 3 account group / slots / ledger convergence has not been implemented as a code-scoped issue.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/auto_run.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/paper_trading_v2/models.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/tests/qmt_strategy_ledger/test_account_group_slots.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified",
+    "tests/aistock_validation/bugs/20260603_BUG-233-paper-v2-miniqmt-unified-phase-3-account-group-strategy-slots-ledger-con.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "codex-cli",
+  "bug_id": "BUG-233",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T12:29:14.476024Z",
+  "description": "Current main still exposes MiniQMTSim exclusive_account and max_concurrent_packages=1 constraints; Phase 3 account group / slots / ledger convergence has not been implemented as a code-scoped issue.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-ebb701ee58e6",
+      "timestamp": "2026-06-03T12:29:14.476021Z"
+    },
+    {
+      "action": "fixed_pending_review",
+      "actor": "codex-cli",
+      "note": "Implemented MiniQMT account_group_slots in qmt_strategy_ledger metadata/repository, QmtManagedOrderService batch account-group cash preflight, MiniQMTSim unified attribution/capacity, Paper v2 account_binding_mode default, and simulation_runtime group/slot binding fields. Validation passed: targeted 67 passed; focused 107 passed; qmt_strategy_ledger 105 passed; validation_module_registry_l0, l0, paper_v2_backend, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, validation_center_backend, py_compile, and git diff --check passed. Production gates noop.",
+      "timestamp": "2026-06-03T13:58:35Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md",
+    "file:tests/aistock_validation/history/paper_v2_miniqmt_unified/20260603_215310_l3_bug-233-account-group-strategy-slots-ledger-convergence.md",
+    "git:e8ed7db32512b1376e0ebcf1a728db99c9c21a5f"
+  ],
+  "expected": "Same broker_account_id can host N=1 and N=2 strategy slots through one account group; allocated cash totals, strategy_name, order_remark, duplicate slot constraints, broker raw positions versus virtual lots reconciliation, and legacy exclusive read/disable compatibility are implemented and tested. BUG-204 fill idempotency/no-overfill remains inherited in slot ledger. No legacy exclusive path is deleted before Phase 7 user confirmation.",
+  "first_seen_at": "2026-06-03T12:29:14.476024Z",
+  "fix_branch": "bug/BUG-233-paper-v2-miniqmt-unified-phase-3-account-group-s-20260603",
+  "fix_commit": "bee935906d5c05f6bb74a97424b29bc3a07781c9",
+  "fixed_at": "2026-06-03T14:59:33.486554Z",
+  "github_issue_number": 652,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/652",
+  "last_seen_at": "2026-06-03T13:58:35Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/654",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'exclusive_account|max_concurrent_packages|account_group|strategy_slot' backend/services/paper_trading_v2 backend/services/qmt_strategy_ledger backend/tests -S and compare docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md Phase 3 acceptance.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT unified Phase 3 account group strategy slots ledger convergence",
+  "trigger_condition": {
+    "fingerprint": "ebb701ee58e6754f041ad3db",
+    "source_event_id": "FE-20260603-ebb701ee58e6"
+  },
+  "validation_evidence": [
+    "PR #654 checks all successful; no DDL files changed -> production_ddl_gate=noop; local required validation passed before PR"
+  ],
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_miniqmt_unified/20260603_215310_l3_bug-233-account-group-strategy-slots-ledger-convergence.md"
+}

@@ -1,0 +1,81 @@
+{
+  "actual": "Auto-filed CI/Nightly issues such as GitHub Issue #683 can be triaged as infra_flaky/infra_blocker with needs_bug_json=false and infra_action_required_no_code_bug, but ci-issue-janitor only closes superseded_by_later_main_success issues. This leaves infrastructure noise open even after the workflow has enough information to close it without creating BUG JSON. Expected: ci-issue-janitor dry-run/apply should support infra_flaky/infra_blocker auto-filed issues when triage returns needs_bug_json=false and infra_action.workflow_gate=infra_action_required, add a clear close comment with runner/infrastructure next actions, and never promote BUG JSON for these issues. Acceptance: targeted tests cover dry-run and apply for infra issues, existing superseded behavior is unchanged, and Issue #683 can be safely closed as infra without root pollution. Production gates noop.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-255-ci-issue-janitor-cannot-close-infra-classified-auto-filed-issues.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-255",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T05:20:24.040158Z",
+  "description": "Auto-filed CI/Nightly issues such as GitHub Issue #683 can be triaged as infra_flaky/infra_blocker with needs_bug_json=false and infra_action_required_no_code_bug, but ci-issue-janitor only closes superseded_by_later_main_success issues. This leaves infrastructure noise open even after the workflow has enough information to close it without creating BUG JSON. Expected: ci-issue-janitor dry-run/apply should support infra_flaky/infra_blocker auto-filed issues when triage returns needs_bug_json=false and infra_action.workflow_gate=infra_action_required, add a clear close comment with runner/infrastructure next actions, and never promote BUG JSON for these issues. Acceptance: targeted tests cover dry-run and apply for infra issues, existing superseded behavior is unchanged, and Issue #683 can be safely closed as infra without root pollution. Production gates noop.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-f0ba41ddbea6",
+      "timestamp": "2026-06-04T05:20:24.040154Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex_issue_workflow",
+      "note": "Added workflow CLI, tests, and quickstart docs to implement infra-classified CI issue janitor support.",
+      "timestamp": "2026-06-04T05:23:09.721679Z"
+    },
+    {
+      "action": "validation_passed_pending_pr",
+      "actor": "codex_issue_workflow",
+      "note": "Implemented infra-classified CI issue janitor closure path; closed GitHub Issue #683 as infra-only without BUG JSON promotion.",
+      "timestamp": "2026-06-04T05:31:28.031133Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-04T05:20:24.040158Z",
+  "fix_branch": "bug/BUG-255-ci-issue-janitor-cannot-close-infra-classified-a-20260604",
+  "fix_commit": "6aaca81231135a335a40c4ec5f7d78a6f0547897",
+  "fixed_at": "2026-06-04T05:40:10.106567Z",
+  "github_issue_number": 715,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/715",
+  "last_seen_at": "2026-06-04T05:20:24.040158Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/717",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k \"ci_issue_janitor or infra\" -p no:cacheprovider",
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation --output-format compact",
+    "python -m nox -s l0 validation_center_backend validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI issue janitor cannot close infra-classified auto-filed issues",
+  "trigger_condition": {
+    "fingerprint": "f0ba41ddbea678d2797c05da",
+    "source_event_id": "FE-20260604-f0ba41ddbea6"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k ci_issue_janitor_or_infra -> 7 passed; ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed; git diff --check -> passed; workflow-smoke changed-file scripts/aistock_issue_workflow.py module validation -> passed; ci-issue-janitor --issue 683 dry-run/apply -> closed; nox -s l0 validation_center_backend validation_module_registry_l0 -> passed; watch-ci PR #717 -> checks_passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr"
+}

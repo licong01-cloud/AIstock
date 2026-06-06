@@ -26,6 +26,7 @@ from .models import (
     CashEntryType,
     CashLedgerEntry,
     IntentSubmitStatus,
+    MiniQmtStrategySlot,
     OrderLedgerRecord,
     OrderStatusEventRecord,
     PositionLotRecord,
@@ -124,10 +125,10 @@ class QmtStrategyLedgerSyncService:
         trades = self._qmt_client.get_trades()
         positions = self._qmt_client.get_positions()
 
-        strategy_id_by_name = {
-            account.strategy_name: account.strategy_id
-            for account in self._repository.list_virtual_accounts(account_id=self._account_id)
-        }
+        accounts = self._repository.list_virtual_accounts(account_id=self._account_id)
+        strategy_id_by_name = {account.strategy_name: account.strategy_id for account in accounts}
+        strategy_name_by_id = {account.strategy_id: account.strategy_name for account in accounts}
+        strategy_id_by_remark_prefix = _strategy_id_by_remark_prefix(accounts)
         lots_unlocked = self._unlock_tplus1_lots(strategy_id_by_name.values())
 
         orders_by_id = {RawQmtOrder.from_dict(payload).order_id: RawQmtOrder.from_dict(payload) for payload in orders}
@@ -142,7 +143,15 @@ class QmtStrategyLedgerSyncService:
         terminal_buy_orders: list[tuple[RawQmtOrder, str, str]] = []
         for payload in orders:
             order = RawQmtOrder.from_dict(payload)
-            strategy_id = strategy_id_by_name.get(order.strategy_name)
+            intent = self._repository.get_order_intent_by_remark(self._account_id, order.order_remark) if order.order_remark else None
+            strategy_id = _resolve_strategy_id(
+                strategy_name=order.strategy_name,
+                order_remark=order.order_remark,
+                intent=intent,
+                strategy_id_by_name=strategy_id_by_name,
+                strategy_name_by_id=strategy_name_by_id,
+                strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+            )
             reason = _order_unattributed_reason(order, strategy_id, seen_remarks)
             if reason is not None:
                 self._repository.upsert_unattributed_order(
@@ -160,7 +169,6 @@ class QmtStrategyLedgerSyncService:
                 unattributed_orders += 1
                 continue
 
-            intent = self._repository.get_order_intent_by_remark(self._account_id, order.order_remark)
             if intent is None:
                 self._repository.upsert_unattributed_order(
                     UnattributedOrderRecord(
@@ -177,11 +185,12 @@ class QmtStrategyLedgerSyncService:
                 unattributed_orders += 1
                 continue
 
+            canonical_strategy_name = strategy_name_by_id.get(strategy_id, intent.strategy_name)
             self._repository.upsert_order_ledger(
                 OrderLedgerRecord(
                     intent_id=intent.intent_id,
                     strategy_id=strategy_id,
-                    strategy_name=order.strategy_name,
+                    strategy_name=canonical_strategy_name,
                     qmt_order_id=order.order_id,
                     qmt_order_sysid=order.order_sysid,
                     symbol=order.stock_code,
@@ -198,6 +207,11 @@ class QmtStrategyLedgerSyncService:
                     order_remark=order.order_remark,
                     raw_json=payload,
                 )
+            )
+            self._repository.delete_unattributed_order(
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                qmt_order_id=order.order_id,
             )
             self._repository.append_order_status_event(
                 OrderStatusEventRecord(
@@ -241,8 +255,15 @@ class QmtStrategyLedgerSyncService:
         for payload in trades:
             trade = RawQmtTrade.from_dict(payload)
             order = orders_by_id.get(trade.order_id)
-            strategy_id = strategy_id_by_name.get(trade.strategy_name)
             intent = self._repository.get_order_intent_by_remark(self._account_id, trade.order_remark)
+            strategy_id = _resolve_strategy_id(
+                strategy_name=trade.strategy_name,
+                order_remark=trade.order_remark,
+                intent=intent,
+                strategy_id_by_name=strategy_id_by_name,
+                strategy_name_by_id=strategy_name_by_id,
+                strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+            )
             reason = _trade_unattributed_reason(trade, order, strategy_id, intent is not None)
             if reason is not None:
                 self._repository.upsert_unattributed_trade(
@@ -280,6 +301,11 @@ class QmtStrategyLedgerSyncService:
                     order_remark=trade.order_remark,
                     raw_json=payload,
                 )
+            )
+            self._repository.delete_unattributed_trade(
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                trade_id=trade.traded_id,
             )
             if inserted:
                 trades_inserted += 1
@@ -608,15 +634,55 @@ class QmtStrategyLedgerSyncService:
         return True
 
 
+def _resolve_strategy_id(
+    *,
+    strategy_name: str,
+    order_remark: str,
+    intent: Any | None,
+    strategy_id_by_name: dict[str, str],
+    strategy_name_by_id: dict[str, str],
+    strategy_id_by_remark_prefix: dict[str, str],
+) -> str | None:
+    if strategy_name and strategy_name in strategy_id_by_name:
+        return strategy_id_by_name[strategy_name]
+    if intent is not None and getattr(intent, "strategy_id", None) in strategy_name_by_id:
+        return str(intent.strategy_id)
+    if order_remark:
+        for prefix, strategy_id in strategy_id_by_remark_prefix.items():
+            if order_remark.startswith(f"{prefix}-"):
+                return strategy_id
+    return None
+
+
+def _strategy_id_by_remark_prefix(accounts: list[Any]) -> dict[str, str]:
+    candidates: dict[str, set[str]] = {}
+    for account in accounts:
+        prefixes: set[str] = set()
+        slot = MiniQmtStrategySlot.from_virtual_account(account)
+        if slot is not None:
+            prefixes.add(slot.order_remark_prefix)
+        prefixes.add(account.strategy_name)
+        prefixes.add(account.strategy_id)
+        for prefix in prefixes:
+            normalized = str(prefix or "").strip()[:20]
+            if normalized:
+                candidates.setdefault(normalized, set()).add(account.strategy_id)
+    return {
+        prefix: next(iter(strategy_ids))
+        for prefix, strategy_ids in candidates.items()
+        if len(strategy_ids) == 1
+    }
+
+
 def _order_unattributed_reason(order: RawQmtOrder, strategy_id: str | None, remark_counts: dict[str, int]) -> str | None:
-    if not order.strategy_name:
-        return "BLANK_STRATEGY_NAME"
-    if strategy_id is None:
-        return "UNKNOWN_STRATEGY_NAME"
     if not order.order_remark:
         return "BLANK_ORDER_REMARK"
     if remark_counts.get(order.order_remark, 0) > 1:
         return "DUPLICATE_ORDER_REMARK"
+    if strategy_id is None:
+        if not order.strategy_name:
+            return "BLANK_STRATEGY_NAME"
+        return "UNKNOWN_STRATEGY_NAME"
     return None
 
 
@@ -626,9 +692,9 @@ def _trade_unattributed_reason(
     strategy_id: str | None,
     has_intent: bool,
 ) -> str | None:
-    if not trade.strategy_name:
-        return "BLANK_STRATEGY_NAME"
     if strategy_id is None:
+        if not trade.strategy_name:
+            return "BLANK_STRATEGY_NAME"
         return "UNKNOWN_STRATEGY_NAME"
     if order is None:
         return "TRADE_WITHOUT_ORDER"

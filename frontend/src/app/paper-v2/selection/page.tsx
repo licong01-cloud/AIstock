@@ -403,7 +403,7 @@ export default function PaperV2SelectionPage() {
 
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
-      <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
+      <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<div className="pv2-row-actions"><a className="pv2-button-ghost" data-testid="selection-create-advisory" href={run ? `/paper-v2/advisory?selection_run_id=${encodeURIComponent(run.run_id)}&package_ids=${encodeURIComponent(run.package_ids.join(","))}` : "/paper-v2/advisory"}>创建荐股任务</a><button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button></div>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
           <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" data-testid="selection-watchlist-name" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
           <div className="pv2-field"><label>目标交易日</label><div className="pv2-chip">{run?.trade_date || tradeDate}</div></div>

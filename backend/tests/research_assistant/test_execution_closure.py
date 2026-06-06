@@ -84,8 +84,9 @@ def test_action_proposal_digest_preflight_and_dry_run_boundaries() -> None:
     assert confirmed["status"] == "confirmed"
 
     preflight = svc.preflight_action_proposal(proposal["action_proposal_id"], ActionProposalPreflightRequest())
-    assert preflight["proposal"]["status"] == "preflight_passed"
-    assert preflight["preflight"]["passed"] is True
+    assert preflight["proposal"]["status"] == "approval_required"
+    assert preflight["preflight"]["approval_required"] is True
+    assert preflight["preflight"]["assistant_usable"] == "preflight_required"
 
     capability = svc.repository.find_one("capabilities", {"capability_key": proposal["capability_key"]})
     svc.repository.update_record("capabilities", capability["capability_id"], {"checksum": "stale-checksum"})
@@ -98,6 +99,7 @@ def test_execution_gateway_writes_mcp_task_and_trace_events() -> None:
     proposal = _proposal(svc)
     svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "CONFIRM_QE_DRAFT"})
     svc.preflight_action_proposal(proposal["action_proposal_id"], {})
+    svc.approve_action_proposal(proposal["action_proposal_id"], ActionProposalApprovalRequest(confirmation_text="CONFIRM_QE_DRAFT"))
 
     result = svc.execute_action_proposal(proposal["action_proposal_id"], {})
     assert result["status"] == "succeeded"
@@ -209,6 +211,7 @@ def test_execution_gateway_uses_runtime_retry_policy_for_retryable_errors(monkey
     proposal = _proposal(svc)
     svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "CONFIRM_QE_DRAFT"})
     svc.preflight_action_proposal(proposal["action_proposal_id"], {})
+    svc.approve_action_proposal(proposal["action_proposal_id"], ActionProposalApprovalRequest(confirmation_text="CONFIRM_QE_DRAFT"))
     calls = {"count": 0}
 
     def flaky_tool(tool: dict[str, object], payload: dict[str, object]) -> dict[str, object]:
@@ -248,6 +251,7 @@ def test_execution_gateway_does_not_retry_non_retryable_errors(monkeypatch: pyte
     proposal = _proposal(svc)
     svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "CONFIRM_QE_DRAFT"})
     svc.preflight_action_proposal(proposal["action_proposal_id"], {})
+    svc.approve_action_proposal(proposal["action_proposal_id"], ActionProposalApprovalRequest(confirmation_text="CONFIRM_QE_DRAFT"))
     calls = {"count": 0}
 
     def schema_failure(tool: dict[str, object], payload: dict[str, object]) -> dict[str, object]:
@@ -334,7 +338,7 @@ def test_routed_read_only_mcp_tool_executes_summary_first_without_confirmation()
 
     result = svc.execute_action_proposal(proposal["action_proposal_id"], ActionProposalExecuteRequest())
     assert result["executed"] is True
-    assert result["tool_event"]["server_key"] == "aistock-factor-library"
+    assert result["tool_event"]["server_key"] == "aistock-factor"
     assert result["tool_event"]["tool_name"] == "factor_library_list"
     assert result["tool_event"]["transport"] == "research_assistant_catalog_summary_adapter"
     _assert_summary_response(result["tool_event"]["response_json"])
@@ -407,8 +411,8 @@ def test_route_selected_confirmed_tool_still_requires_confirmation_and_approval(
         )
     )
 
-    assert proposal["risk_level"] == "production_sensitive"
-    assert proposal["side_effect_level"] == "production_sensitive"
+    assert proposal["risk_level"] == "high"
+    assert proposal["side_effect_level"] == "high_cost_compute"
     with pytest.raises(ValueError, match="confirmation_text"):
         svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "WRONG"})
     svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "BIND_EXECUTION_POLICY"})
@@ -416,4 +420,4 @@ def test_route_selected_confirmed_tool_still_requires_confirmation_and_approval(
     assert preflight["proposal"]["status"] == "approval_required"
     result = svc.execute_action_proposal(proposal["action_proposal_id"], {})
     assert result["executed"] is False
-    assert result["error"]["code"] == "production_boundary_blocked"
+    assert result["error"]["code"] == "approval_missing"

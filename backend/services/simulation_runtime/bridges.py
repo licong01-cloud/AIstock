@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
-from backend.execution_algos.vnpy_style import VnpyAction, is_vnpy_style_algo
+from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, VnpyAction, is_vnpy_style_algo
 from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle
 from backend.services.qmt_strategy_ledger.order_service import (
     BUY_ORDER_TYPE,
@@ -53,6 +53,7 @@ class LocalSimExecutionBridge:
     """Submit a shared ``ExecutionPlan`` to a LocalSim-compatible broker."""
 
     def build_order_intents(self, plan: ExecutionPlan) -> list[OrderIntent]:
+        _reject_vnpy_style_for_localsim(plan)
         return [self._to_order_intent(intent, plan=plan) for intent in plan.intents]
 
     def submit_plan(self, *, plan: ExecutionPlan, broker: BrokerBackend) -> LocalSimPlanSubmitResult:
@@ -452,6 +453,18 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
         return None
     policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
     algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip().upper()
+    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(plan=plan, policy_container=policy_container, payload=payload)
+    if not algo_code and inferred_algo_code:
+        raise RuntimeConfigInvalidError(
+            "MiniQMT vn.py-style execution plan requires a full policy_json snapshot",
+            context=_policy_error_context(
+                plan=plan,
+                policy_container=policy_container,
+                payload=payload,
+                inferred_algo_code=inferred_algo_code,
+                broker_backend="minqmt_sim",
+            ),
+        )
     if not is_vnpy_style_algo(algo_code):
         return None
     policy_json = {**dict(policy_json), "algo_code": algo_code}
@@ -471,6 +484,99 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
         "policy_json": policy_json,
         "source": "simulation_runtime_execution_plan",
     }
+
+
+def _reject_vnpy_style_for_localsim(plan: ExecutionPlan) -> None:
+    policy_container = plan.plan_payload_json.get("execution_policy")
+    if not isinstance(policy_container, dict):
+        return
+    payload = policy_container.get("payload")
+    if not isinstance(payload, dict):
+        return
+    policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
+    algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip().upper()
+    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(plan=plan, policy_container=policy_container, payload=payload)
+    effective_algo_code = algo_code or inferred_algo_code
+    if not is_vnpy_style_algo(effective_algo_code):
+        return
+    raise RuntimeConfigInvalidError(
+        "LocalSim cannot execute MiniQMT vn.py-style execution policy",
+        context=_policy_error_context(
+            plan=plan,
+            policy_container=policy_container,
+            payload=payload,
+            inferred_algo_code=effective_algo_code,
+            broker_backend="local_sim",
+            required_action="activate a LocalSim-compatible minute execution policy snapshot or bind this release only to MiniQMT",
+        ),
+    )
+
+
+def _infer_vnpy_algo_code_from_policy_ids(
+    *,
+    plan: ExecutionPlan,
+    policy_container: dict[str, Any],
+    payload: dict[str, Any],
+) -> str | None:
+    candidates = (
+        payload.get("validated_execution_policy_id"),
+        payload.get("policy_id"),
+        payload.get("policy_version_id"),
+        policy_container.get("version_id"),
+        plan.execution_policy_version_id,
+    )
+    for value in candidates:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        inferred = _infer_vnpy_algo_code_from_text(text)
+        if inferred:
+            return inferred
+    return None
+
+
+def _infer_vnpy_algo_code_from_text(value: str) -> str | None:
+    normalized = str(value or "").strip().upper()
+    if is_vnpy_style_algo(normalized):
+        return normalized
+    for segment in normalized.split(":"):
+        if is_vnpy_style_algo(segment):
+            return segment
+    for algo_code in VNPY_STYLE_ASSETS:
+        if algo_code in normalized:
+            return algo_code
+    return None
+
+
+def _policy_error_context(
+    *,
+    plan: ExecutionPlan,
+    policy_container: dict[str, Any],
+    payload: dict[str, Any],
+    inferred_algo_code: str | None,
+    broker_backend: str,
+    required_action: str | None = None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "plan_id": plan.plan_id,
+        "plan_hash": plan.plan_hash,
+        "release_id": plan.release_id,
+        "binding_id": plan.binding_id,
+        "strategy_id": plan.strategy_id,
+        "package_id": plan.package_id,
+        "broker_backend": broker_backend,
+        "execution_policy_version_id": plan.execution_policy_version_id,
+        "execution_policy_sha256": plan.execution_policy_sha256,
+        "policy_container_version_id": policy_container.get("version_id"),
+        "policy_container_sha256": policy_container.get("sha256"),
+        "payload_policy_id": payload.get("validated_execution_policy_id") or payload.get("policy_id") or payload.get("policy_version_id"),
+        "payload_policy_sha256": payload.get("policy_sha256"),
+        "payload_has_policy_json": isinstance(payload.get("policy_json"), dict),
+        "inferred_algo_code": inferred_algo_code,
+    }
+    if required_action:
+        context["required_action"] = required_action
+    return context
 
 
 def _quote_provider(

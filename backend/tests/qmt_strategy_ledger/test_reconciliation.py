@@ -75,6 +75,8 @@ def test_reconciliation_accepts_overlap_strategy_lots_when_broker_quantity_match
     )
 
     assert report.run.status == "SUCCEEDED"
+    assert report.run.completed_at is not None
+    assert report.run.summary_json["issue_count"] == 0
     assert report.issues == ()
     assert report.overlap_symbols == ("001358.SZ",)
     assert report.strategy_lot_quantities["poc_strategy_a"]["001358.SZ"] == 7600
@@ -104,6 +106,8 @@ def test_reconciliation_reports_position_mismatch_and_unattributed_trade() -> No
 
     issue_types = [issue.issue_type for issue in report.issues]
     assert report.run.status == "WARNING"
+    assert report.run.completed_at is not None
+    assert report.run.summary_json["issue_count"] == 2
     assert issue_types == ["POSITION_MISMATCH", "UNATTRIBUTED_TRADE"]
     mismatch = report.issues[0]
     assert mismatch.context == {"strategy_quantity": 14200, "broker_quantity": 13200}

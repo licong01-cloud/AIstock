@@ -60,6 +60,7 @@ from .routers import (
     quantevolver_evolution,
     strategies,
     strategy_packages,
+    advisory,
     selection_center,
     paper_trading_v2,
     trading_calendar,
@@ -540,6 +541,7 @@ def create_app() -> FastAPI:
     app.include_router(research_assistant.router, prefix="/api/v1")
     app.include_router(research_pipeline.router, prefix="/api/v1")
     app.include_router(strategy_packages.router, prefix="/api/v1")
+    app.include_router(advisory.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
     app.include_router(trading_calendar.router, prefix="/api/v1")
