@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,18 @@ DEFAULT_HISTORY_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "history"
 RUN_SCHEMA = "aistock_validation_run_v1"
 COVERAGE_SCHEMA = "aistock_validation_coverage_snapshot_v1"
 EVIDENCE_SCHEMA = "aistock_validation_evidence_manifest_v1"
+CODE_INTELLIGENCE_SCHEMAS = {
+    "aistock_codegraph_freshness_v1": "codegraph_freshness",
+    "aistock_code_intelligence_summary_v1": "code_intelligence_summary",
+    "aistock_code_intelligence_context_v1": "codegraph_context",
+    "aistock_codegraph_affected_tests_v1": "codegraph_affected_tests",
+    "aistock_understand_anything_summary_v1": "understand_anything_summary",
+    "aistock_understand_anything_summary_manifest_v1": "understand_anything_manifest",
+}
+CODE_INTELLIGENCE_ARTIFACT_ROOTS = (
+    Path("tmp") / "validation" / "code-intelligence",
+    Path("tests") / "aistock_validation" / "history" / "code-intelligence",
+)
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_MARKDOWN_BYTES = 512 * 1024
 ARTIFACT_MARKDOWN_SUFFIXES = (
@@ -197,7 +209,78 @@ class ValidationHistoryStore:
             "modules": sorted(by_module.values(), key=lambda item: item["module"]),
             "latest_runs": runs[:10],
             "latest_coverage": latest_coverage,
+            "code_intelligence": self.code_intelligence_summary(),
         }
+
+    def code_intelligence_summary(self) -> dict[str, Any]:
+        artifacts = self.list_code_intelligence_artifacts(limit=10000)["items"]
+        latest_codegraph = next(
+            (item for item in artifacts if item.get("artifact_type") == "codegraph_freshness"),
+            None,
+        )
+        latest_manifest = next(
+            (item for item in artifacts if item.get("artifact_type") == "understand_anything_manifest"),
+            None,
+        )
+        ua_summaries = [
+            item for item in artifacts if item.get("artifact_type") == "understand_anything_summary"
+        ]
+        warnings: list[str] = []
+        if not artifacts:
+            warnings.append("No code-intelligence artifacts found under tmp/validation/code-intelligence.")
+        if latest_codegraph is None:
+            warnings.append("CodeGraph freshness artifact is missing.")
+        elif latest_codegraph.get("freshness") != "fresh":
+            warnings.append(f"CodeGraph freshness is {latest_codegraph.get('freshness') or 'unknown'}.")
+        if latest_manifest is None and not ua_summaries:
+            warnings.append("Understand Anything summary artifacts are missing; this is non-blocking.")
+        data_state = "complete" if artifacts and latest_codegraph else ("partial" if artifacts else "missing")
+        return {
+            "schema_version": "aistock_validation_code_intelligence_summary_v1",
+            "data_state": data_state,
+            "blocking_for_issue_workflow": False,
+            "artifact_count": len(artifacts),
+            "artifact_roots": [
+                self._repo_path((self.repo_root / root).resolve())
+                for root in CODE_INTELLIGENCE_ARTIFACT_ROOTS
+            ],
+            "codegraph": latest_codegraph,
+            "understand_anything": {
+                "manifest": latest_manifest,
+                "summary_count": len(ua_summaries),
+                "latest_summaries": ua_summaries[:10],
+            },
+            "artifacts": artifacts[:20],
+            "warnings": warnings,
+            "reason_codes": [self._reason_code(item) for item in warnings],
+        }
+
+    def list_code_intelligence_artifacts(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for root in self._code_intelligence_roots():
+            for path in self._json_files_under(root):
+                payload, parse_error = self._read_json(path)
+                if parse_error:
+                    continue
+                schema = payload.get("schema_version")
+                artifact_type = CODE_INTELLIGENCE_SCHEMAS.get(str(schema))
+                if not artifact_type:
+                    continue
+                items.append(self._code_intelligence_artifact_summary(path, payload, artifact_type))
+        items.sort(
+            key=lambda item: (str(item.get("generated_at") or ""), str(item.get("modified_at") or ""), item["artifact_id"]),
+            reverse=True,
+        )
+        if limit is not None:
+            items = items[:limit]
+            return {"items": items, "total": len(items), "page": 1, "page_size": limit, "has_more": False}
+        return self._page(items, page=page, page_size=page_size)
 
     def _markdown_files(self) -> list[Path]:
         if not self.history_root.exists():
@@ -217,6 +300,15 @@ class ValidationHistoryStore:
         if not self.history_root.exists():
             return []
         return sorted(path for path in self.history_root.rglob("*.json") if path.is_file())
+
+    def _code_intelligence_roots(self) -> list[Path]:
+        return [(self.repo_root / root).resolve() for root in CODE_INTELLIGENCE_ARTIFACT_ROOTS]
+
+    @staticmethod
+    def _json_files_under(root: Path) -> list[Path]:
+        if not root.exists():
+            return []
+        return sorted(path for path in root.rglob("*.json") if path.is_file())
 
     def _run_summary_from_markdown(self, markdown_path: Path) -> dict[str, Any]:
         metadata, metadata_error = self._read_json(self._metadata_path(markdown_path))
@@ -408,8 +500,47 @@ class ValidationHistoryStore:
             "missing": payload.get("missing") or [],
         }
 
+    def _code_intelligence_artifact_summary(
+        self,
+        path: Path,
+        payload: dict[str, Any],
+        artifact_type: str,
+    ) -> dict[str, Any]:
+        stat = path.stat()
+        summary_ref = payload.get("summary_ref")
+        summary_path = self.repo_root / str(summary_ref) if summary_ref else None
+        return {
+            "artifact_id": self._id_for_repo_path(path),
+            "schema_version": payload.get("schema_version"),
+            "artifact_type": artifact_type,
+            "provider": payload.get("provider") or payload.get("graph_provider"),
+            "status": payload.get("status") or payload.get("workflow_gate"),
+            "freshness": payload.get("freshness"),
+            "module": payload.get("module"),
+            "generated_at": payload.get("generated_at"),
+            "git_commit": payload.get("git_commit") or payload.get("graph_commit"),
+            "artifact_path": self._repo_path(path),
+            "summary_ref": str(summary_ref) if summary_ref else None,
+            "summary_exists": bool(summary_path and summary_path.exists()),
+            "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
+            "warnings": payload.get("warnings") or [],
+            "index_summary": payload.get("index_summary") or {},
+            "summary_refs": payload.get("summary_refs") or [],
+            "node_count": payload.get("node_count"),
+            "edge_count": payload.get("edge_count"),
+            "nodes_used": payload.get("nodes_used"),
+            "edges_used": payload.get("edges_used"),
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(timespec="seconds"),
+        }
+
     def _id_for_path(self, path: Path) -> str:
         relative = self._relative_to_history(path)
+        digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:10]
+        readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(relative).with_suffix("").as_posix())
+        return f"{readable}__{digest}"
+
+    def _id_for_repo_path(self, path: Path) -> str:
+        relative = self._repo_path(path)
         digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:10]
         readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(relative).with_suffix("").as_posix())
         return f"{readable}__{digest}"
@@ -426,6 +557,11 @@ class ValidationHistoryStore:
             return resolved.relative_to(self.repo_root).as_posix()
         except ValueError:
             return str(resolved)
+
+    @staticmethod
+    def _reason_code(warning: str) -> str:
+        text = re.sub(r"[^a-z0-9]+", "_", warning.lower()).strip("_")
+        return text[:80] or "code_intelligence_warning"
 
     @staticmethod
     def _page(items: list[dict[str, Any]], *, page: int, page_size: int) -> dict[str, Any]:

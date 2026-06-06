@@ -9,6 +9,7 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
+from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, get_vnpy_style_asset, is_vnpy_style_algo
 from backend.services.strategy_package.execution_policy import (
     ValidatedExecutionPolicy,
     compute_execution_policy_sha256,
@@ -46,7 +47,6 @@ from backend.services.strategy_package.backtest_contract import (
 )
 
 from .market_data import (
-    ALLOWED_MARKET_SOURCES,
     MinuteDataSource,
     assert_broker_market_source_match,
 )
@@ -68,12 +68,13 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
-from .auto_run import compute_auto_run_config_sha256, normalize_auto_run_config
+from .auto_run import auto_run_live_source_for_broker, compute_auto_run_config_sha256, normalize_auto_run_config
 
 # Allowed broker_backend values at the Paper v2 portfolio creation API.
 # minqmt_live is intentionally excluded - live admission goes through main
 # design section 11 flow, not the Paper v2 router.
 PAPER_V2_CREATABLE_BROKER_BACKENDS: frozenset[str] = frozenset({"local_sim", "minqmt_sim"})
+VNPY_STYLE_TEMPLATE_POLICY_PREFIX = "vnpy_asset:"
 
 
 RUNTIME_PROFILE_INPUT_KEYS = {
@@ -406,7 +407,7 @@ class PaperTradingV2PortfolioService:
                 broker_account_id=account_id,
                 portfolio_id=portfolio.portfolio_id,
                 binding_status=BrokerAccountBindingStatus.ACTIVE,
-                allocation_mode="exclusive_account",
+                allocation_mode="account_group_slots",
                 initial_cash=initial_cash,
                 created_by=created_by,
             )
@@ -459,40 +460,44 @@ class PaperTradingV2PortfolioService:
         create_session: bool = True,
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
-        if portfolio.broker_backend != "minqmt_sim":
-            raise RuntimeConfigInvalidError(
-                "Paper v2 auto-run enable currently supports MiniQMT SIM portfolios only",
-                context={"portfolio_id": portfolio_id, "broker_backend": portfolio.broker_backend},
-            )
+        broker_backend: BrokerBackendId = portfolio.broker_backend
+        account_id = str(broker_account_id or "").strip()
+        if not account_id:
+            account_id = f"{broker_backend}:{portfolio_id}"
         normalized = normalize_auto_run_config(
             config or portfolio.auto_run_config,
             package_id=portfolio.package_id,
-            broker_account_id=broker_account_id,
+            broker_account_id=account_id,
+            broker_backend=broker_backend,
             initial_cash=portfolio.initial_cash,
         )
+        broker_mode = str((normalized.get("broker") or {}).get("broker_mode") or "SIM").upper()
         existing = self.repository.get_active_broker_account_binding(
-            broker_backend="minqmt_sim",
-            broker_mode="SIM",
-            broker_account_id=str(broker_account_id),
+            broker_backend=broker_backend,
+            broker_mode=broker_mode,
+            broker_account_id=account_id,
         )
         if existing is not None and existing.portfolio_id != portfolio_id:
             raise InvalidStateTransitionError(
-                "MiniQMT account already has an active Paper v2 auto-run binding",
+                "Paper v2 auto-run account already has an active binding",
                 context={
-                    "broker_account_id": broker_account_id,
+                    "broker_backend": broker_backend,
+                    "broker_mode": broker_mode,
+                    "broker_account_id": account_id,
                     "existing_portfolio_id": existing.portfolio_id,
                     "portfolio_id": portfolio_id,
                 },
             )
         if existing is None:
+            allocation_mode = "account_group_slots" if broker_backend == "minqmt_sim" else "virtual_portfolio"
             binding = self.repository.create_broker_account_binding(
                 PaperBrokerAccountBinding(
-                    broker_backend="minqmt_sim",
-                    broker_mode="SIM",
-                    broker_account_id=str(broker_account_id),
+                    broker_backend=broker_backend,
+                    broker_mode=broker_mode,
+                    broker_account_id=account_id,
                     portfolio_id=portfolio_id,
                     binding_status=BrokerAccountBindingStatus.ACTIVE,
-                    allocation_mode="exclusive_account",
+                    allocation_mode=allocation_mode,
                     initial_cash=portfolio.initial_cash,
                     created_by=updated_by,
                 )
@@ -521,7 +526,7 @@ class PaperTradingV2PortfolioService:
                 portfolio_id=portfolio_id,
                 mode=PaperSessionMode.LIVE_ONLY,
                 start_date=portfolio.start_date,
-                live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+                live_data_source=auto_run_live_source_for_broker(broker_backend),
                 runtime_config=session_config,
                 created_by=updated_by or "auto_run_enable",
             )
@@ -572,7 +577,7 @@ class PaperTradingV2PortfolioService:
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
         merged = self._deep_merge(dict(portfolio.auto_run_config or {}), patch)
-        normalized = normalize_auto_run_config(merged, package_id=portfolio.package_id)
+        normalized = normalize_auto_run_config(merged, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
         config_sha256 = compute_auto_run_config_sha256(normalized)
         portfolio = self.repository.update_portfolio_auto_run(
             portfolio_id,
@@ -595,7 +600,7 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         sessions = self.repository.list_active_sessions(portfolio_id)
         bindings = self.repository.list_active_broker_account_bindings(portfolio_id)
-        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id)
+        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
         return {
             "portfolio_id": portfolio_id,
             "enabled": portfolio.auto_run_enabled,
@@ -813,6 +818,7 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         default_policy_id = str(portfolio.execution_policy.get("validated_execution_policy_id") or "")
         rows: list[dict[str, Any]] = []
+        seen_policy_ids: set[str] = set()
         for policy in self.package_repository.list_execution_policies(portfolio.package_id):
             payload = self._paper_execution_policy_payload(policy)
             payload["is_portfolio_default"] = policy.policy_id == default_policy_id
@@ -821,6 +827,27 @@ class PaperTradingV2PortfolioService:
             payload["runtime_diagnostics"] = [
                 "execution policy is runtime configuration; platform checks happen when the run starts"
             ]
+            rows.append(payload)
+            seen_policy_ids.add(policy.policy_id)
+        for policy in self._vnpy_style_template_policies_for_portfolio(portfolio):
+            if policy.policy_id in seen_policy_ids:
+                continue
+            payload = self._paper_execution_policy_payload(policy)
+            spec = get_vnpy_style_asset(policy.algo_code)
+            payload.update(
+                {
+                    "is_portfolio_default": policy.policy_id == default_policy_id,
+                    "matches_portfolio_manifest": policy.manifest_sha256 == portfolio.manifest_sha256,
+                    "runtime_selectable": True,
+                    "activation_policy_source": "vnpy_style_asset_template",
+                    "source_attribution": spec.metadata()["source_attribution"],
+                    "asset_version": spec.version,
+                    "runtime_diagnostics": [
+                        "vn.py-style MiniQMT asset template; broker quote/order/trade state is authoritative",
+                        "no TWAP/default fallback is allowed when the selected asset cannot run",
+                    ],
+                }
+            )
             rows.append(payload)
         return rows
 
@@ -855,6 +882,7 @@ class PaperTradingV2PortfolioService:
                     "existing_status": existing_run.status.value,
                 },
             )
+        policy = self._resolve_activation_execution_policy(portfolio=portfolio, policy_id=policy_id)
         existing_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if existing_activation is not None:
             if not replace_existing:
@@ -887,18 +915,12 @@ class PaperTradingV2PortfolioService:
                 created_by=activated_by,
             )
 
-        policy = self.package_repository.get_execution_policy(portfolio.package_id, policy_id)
-        if policy.manifest_sha256 != portfolio.manifest_sha256:
-            raise PackageAssetInvalidError(
-                "validated execution policy manifest hash does not match paper portfolio manifest",
-                context={
-                    "portfolio_id": portfolio_id,
-                    "package_id": portfolio.package_id,
-                    "policy_id": policy.policy_id,
-                    "policy_manifest_sha256": policy.manifest_sha256,
-                    "portfolio_manifest_sha256": portfolio.manifest_sha256,
-                },
-            )
+        activation_context = self._execution_policy_activation_context(
+            portfolio=portfolio,
+            policy=policy,
+            requested_policy_id=policy_id,
+            replace_existing=replace_existing,
+        )
         activation = PaperExecutionPolicyActivation(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -908,13 +930,7 @@ class PaperTradingV2PortfolioService:
             policy_json=policy.policy_json,
             activated_by=activated_by,
             reason=reason,
-            context={
-                "package_id": portfolio.package_id,
-                "manifest_sha256": portfolio.manifest_sha256,
-                "source_backtest_id": policy.source_backtest_id,
-                "source_backtest_status": policy.source_backtest_status,
-                "replace_existing": replace_existing,
-            },
+            context=activation_context,
         )
         saved = self.repository.save_execution_policy_activation(activation)
         self._save_config_audit(
@@ -929,6 +945,99 @@ class PaperTradingV2PortfolioService:
             created_by=activated_by,
         )
         return saved
+
+    @staticmethod
+    def _vnpy_style_policy_id(algo_code: str) -> str:
+        return f"{VNPY_STYLE_TEMPLATE_POLICY_PREFIX}{str(algo_code or '').strip().upper()}"
+
+    @staticmethod
+    def _vnpy_style_algo_code_from_policy_id(policy_id: str) -> str | None:
+        normalized = str(policy_id or "").strip()
+        if not normalized:
+            return None
+        if normalized.lower().startswith(VNPY_STYLE_TEMPLATE_POLICY_PREFIX):
+            return normalized.split(":", 1)[1].strip().upper() or None
+        upper = normalized.upper()
+        return upper if is_vnpy_style_algo(upper) else None
+
+    def _vnpy_style_template_policies_for_portfolio(self, portfolio: PaperPortfolio) -> list[ValidatedExecutionPolicy]:
+        if str(portfolio.broker_backend).strip().lower() != "minqmt_sim":
+            return []
+        return [self._vnpy_style_template_policy(portfolio, algo_code) for algo_code in sorted(VNPY_STYLE_ASSETS)]
+
+    def _vnpy_style_template_policy(self, portfolio: PaperPortfolio, algo_code: str) -> ValidatedExecutionPolicy:
+        spec = get_vnpy_style_asset(algo_code)
+        policy_json = normalize_execution_policy_json(spec.execution_policy_json())
+        digest = compute_execution_policy_sha256(policy_json)
+        return ValidatedExecutionPolicy(
+            policy_id=self._vnpy_style_policy_id(spec.algo_code),
+            package_id=portfolio.package_id,
+            manifest_sha256=portfolio.manifest_sha256,
+            policy_name=f"{spec.display_name} (vn.py-style MiniQMT asset)",
+            policy_json=policy_json,
+            policy_sha256=digest,
+            source_backtest_id=f"vnpy_style_asset:{spec.algo_code}:{spec.version}",
+            source_backtest_status="BACKTEST_VALIDATED",
+            paper_enabled=False,
+        )
+
+    def _resolve_activation_execution_policy(self, *, portfolio: PaperPortfolio, policy_id: str) -> ValidatedExecutionPolicy:
+        vnpy_algo_code = self._vnpy_style_algo_code_from_policy_id(policy_id)
+        if vnpy_algo_code:
+            if str(portfolio.broker_backend).strip().lower() != "minqmt_sim":
+                raise RuntimeConfigInvalidError(
+                    "vn.py-style execution asset templates require a MiniQMT simulated broker portfolio",
+                    context={
+                        "portfolio_id": portfolio.portfolio_id,
+                        "package_id": portfolio.package_id,
+                        "policy_id": policy_id,
+                        "broker_backend": portfolio.broker_backend,
+                        "required_broker_backend": "minqmt_sim",
+                    },
+                )
+            return self._vnpy_style_template_policy(portfolio, vnpy_algo_code)
+        policy = self.package_repository.get_execution_policy(portfolio.package_id, policy_id)
+        if policy.manifest_sha256 != portfolio.manifest_sha256:
+            raise PackageAssetInvalidError(
+                "validated execution policy manifest hash does not match paper portfolio manifest",
+                context={
+                    "portfolio_id": portfolio.portfolio_id,
+                    "package_id": portfolio.package_id,
+                    "policy_id": policy.policy_id,
+                    "policy_manifest_sha256": policy.manifest_sha256,
+                    "portfolio_manifest_sha256": portfolio.manifest_sha256,
+                },
+            )
+        return policy
+
+    def _execution_policy_activation_context(
+        self,
+        *,
+        portfolio: PaperPortfolio,
+        policy: ValidatedExecutionPolicy,
+        requested_policy_id: str,
+        replace_existing: bool,
+    ) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "package_id": portfolio.package_id,
+            "manifest_sha256": portfolio.manifest_sha256,
+            "source_backtest_id": policy.source_backtest_id,
+            "source_backtest_status": policy.source_backtest_status,
+            "replace_existing": replace_existing,
+            "requested_policy_id": requested_policy_id,
+        }
+        algo_code = str(policy.algo_code or "").strip().upper()
+        if is_vnpy_style_algo(algo_code):
+            spec = get_vnpy_style_asset(algo_code)
+            context.update(
+                {
+                    "activation_policy_source": "vnpy_style_asset_template",
+                    "asset_version": spec.version,
+                    "broker_backend_supported": list(spec.broker_backend_supported),
+                    "source_attribution": spec.metadata()["source_attribution"],
+                }
+            )
+        return context
 
     def list_execution_policy_activations(
         self,
@@ -1240,6 +1349,7 @@ class PaperTradingV2PortfolioService:
             daily_strategy_profile_version_id=daily_strategy_profile_version_id,
             execution_policy_version_id=execution_activation.policy_id,
             execution_policy_sha256=execution_activation.policy_sha256,
+            execution_policy_json=execution_activation.policy_json,
             tail_policy_version_id=tail_policy["tail_policy_id"],
             tail_policy_sha256=tail_policy_sha256,
             validation_evidence={
@@ -1867,6 +1977,7 @@ class PaperTradingV2PortfolioService:
     @staticmethod
     def _paper_execution_policy_payload(policy: ValidatedExecutionPolicy) -> dict[str, Any]:
         return {
+            "policy_id": policy.policy_id,
             "validated_execution_policy_id": policy.policy_id,
             "policy_sha256": policy.policy_sha256,
             "policy_name": policy.policy_name,

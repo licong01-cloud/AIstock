@@ -114,12 +114,14 @@ class SimulationRuntimeRepository:
                         """
                         INSERT INTO paper_v2.simulation_release_binding (
                             binding_id, strategy_id, release_id, release_hash, package_id, manifest_sha256,
-                            broker_backend, broker_account_id, capital_allocation, strategy_name,
+                            broker_backend, broker_account_id, account_group_id, strategy_slot_id,
+                            capital_allocation, strategy_name,
                             order_remark_prefix, effective_from, effective_to, approval_state,
                             binding_config_json, binding_hash, created_by, created_reason, created_at, updated_at
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s
                         )
                         """,
                         (
@@ -131,6 +133,8 @@ class SimulationRuntimeRepository:
                             binding.manifest_sha256,
                             binding.broker_backend.value,
                             binding.broker_account_id,
+                            binding.account_group_id,
+                            binding.strategy_slot_id,
                             binding.capital_allocation,
                             binding.strategy_name,
                             binding.order_remark_prefix,
@@ -366,7 +370,8 @@ class SimulationRuntimeRepository:
         if existing is not None:
             return existing
         self.get_strategy_runtime_release(run.release_id)
-        self.get_simulation_release_binding(run.binding_id)
+        binding = self.get_simulation_release_binding(run.binding_id)
+        run = self._daily_run_with_binding_slots(run, binding)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 try:
@@ -375,11 +380,12 @@ class SimulationRuntimeRepository:
                         INSERT INTO paper_v2.simulation_daily_run (
                             run_id, trade_date, strategy_id, broker_backend, package_id, manifest_sha256,
                             release_id, release_hash, binding_id, binding_hash,
+                            account_group_id, strategy_slot_id,
                             selection_evidence_id, selection_artifact_hash, execution_plan_id,
                             execution_plan_hash, status, run_payload_json, created_at, updated_at
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         """,
                         (
@@ -393,6 +399,8 @@ class SimulationRuntimeRepository:
                             run.release_hash,
                             run.binding_id,
                             run.binding_hash,
+                            run.account_group_id,
+                            run.strategy_slot_id,
                             run.selection_evidence_id,
                             run.selection_artifact_hash,
                             run.execution_plan_id,
@@ -487,9 +495,12 @@ class SimulationRuntimeRepository:
         selection_evidence: DailySelectionEvidence | None = None,
         execution_plan: ExecutionPlan | None = None,
         payload_patch: dict[str, Any] | None = None,
+        payload_unset: Iterable[str] | None = None,
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        for key in payload_unset or ():
+            merged_payload.pop(str(key), None)
         updated = current.model_copy(
             update={
                 "status": status or current.status,
@@ -531,6 +542,25 @@ class SimulationRuntimeRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, params)
                 return [dict(row) for row in cur.fetchall()]
+
+    @staticmethod
+    def _daily_run_with_binding_slots(
+        run: SimulationDailyRun,
+        binding: SimulationReleaseBinding,
+    ) -> SimulationDailyRun:
+        updates: dict[str, Any] = {}
+        if run.account_group_id is None and binding.account_group_id is not None:
+            updates["account_group_id"] = binding.account_group_id
+        if run.strategy_slot_id is None and binding.strategy_slot_id is not None:
+            updates["strategy_slot_id"] = binding.strategy_slot_id
+        if not updates:
+            return run
+        payload = {
+            **run.run_payload_json,
+            "account_group_id": updates.get("account_group_id", run.account_group_id),
+            "strategy_slot_id": updates.get("strategy_slot_id", run.strategy_slot_id),
+        }
+        return run.model_copy(update={**updates, "run_payload_json": payload})
 
     @staticmethod
     def _release_from_row(row: dict[str, Any]) -> StrategyRuntimeRelease:
@@ -592,6 +622,8 @@ class SimulationRuntimeRepository:
             manifest_sha256=row["manifest_sha256"],
             broker_backend=SimulationBrokerBackend(row["broker_backend"]),
             broker_account_id=row.get("broker_account_id"),
+            account_group_id=row.get("account_group_id"),
+            strategy_slot_id=row.get("strategy_slot_id"),
             capital_allocation=float(row["capital_allocation"]),
             strategy_name=row.get("strategy_name"),
             order_remark_prefix=row.get("order_remark_prefix"),
@@ -693,6 +725,8 @@ class SimulationRuntimeRepository:
             release_hash=row["release_hash"],
             binding_id=row["binding_id"],
             binding_hash=row["binding_hash"],
+            account_group_id=row.get("account_group_id"),
+            strategy_slot_id=row.get("strategy_slot_id"),
             selection_evidence_id=row.get("selection_evidence_id"),
             selection_artifact_hash=row.get("selection_artifact_hash"),
             execution_plan_id=row.get("execution_plan_id"),
@@ -856,7 +890,8 @@ class InMemorySimulationRuntimeRepository:
         if existing is not None:
             return existing
         self.get_strategy_runtime_release(run.release_id)
-        self.get_simulation_release_binding(run.binding_id)
+        binding = self.get_simulation_release_binding(run.binding_id)
+        run = SimulationRuntimeRepository._daily_run_with_binding_slots(run, binding)
         if run.run_id in self.daily_runs:
             existing_by_id = self.daily_runs[run.run_id]
             if (
@@ -920,8 +955,12 @@ class InMemorySimulationRuntimeRepository:
         selection_evidence: DailySelectionEvidence | None = None,
         execution_plan: ExecutionPlan | None = None,
         payload_patch: dict[str, Any] | None = None,
+        payload_unset: Iterable[str] | None = None,
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
+        merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        for key in payload_unset or ():
+            merged_payload.pop(str(key), None)
         updated = current.model_copy(
             update={
                 "status": status or current.status,
@@ -929,7 +968,7 @@ class InMemorySimulationRuntimeRepository:
                 "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
                 "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
                 "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
-                "run_payload_json": {**current.run_payload_json, **(payload_patch or {})},
+                "run_payload_json": merged_payload,
             }
         )
         self.daily_runs[run_id] = updated

@@ -7,6 +7,8 @@ rebalance, execution-plan or broker-specific logic runs.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -364,6 +366,100 @@ class StrategyPackageSelectionService:
         )
 
     @staticmethod
+    def release_selection_runtime_config(runtime_release: StrategyRuntimeRelease) -> dict[str, Any]:
+        """Return the broker-neutral selection config persisted with a runtime release."""
+
+        release_config = runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        metadata = release_config.get("metadata") if isinstance(release_config.get("metadata"), dict) else {}
+        candidate = StrategyPackageSelectionService._first_release_selection_config(
+            (
+                ("release_config_json.selection_runtime_config", release_config.get("selection_runtime_config")),
+                ("release_config_json.metadata.selection_runtime_config", metadata.get("selection_runtime_config")),
+            ),
+            runtime_release=runtime_release,
+        )
+        if candidate is None:
+            candidate = StrategyPackageSelectionService._first_release_selection_artifact_config(
+                (
+                    ("release_config_json.selection_artifact_config", release_config.get("selection_artifact_config")),
+                    ("release_config_json.selection_artifact", release_config.get("selection_artifact")),
+                    ("release_config_json.metadata.selection_artifact_config", metadata.get("selection_artifact_config")),
+                    ("release_config_json.metadata.selection_artifact", metadata.get("selection_artifact")),
+                ),
+                runtime_release=runtime_release,
+            )
+        if candidate is None:
+            return {}
+        assert_selection_only_payload_boundary(
+            candidate,
+            context={
+                "release_id": runtime_release.release_id,
+                "package_id": runtime_release.package_id,
+                "path": "strategy_runtime_release.selection_runtime_config",
+            },
+        )
+        return candidate
+
+    @staticmethod
+    def _first_release_selection_config(
+        candidates: tuple[tuple[str, Any], ...],
+        *,
+        runtime_release: StrategyRuntimeRelease,
+    ) -> dict[str, Any] | None:
+        for source, value in candidates:
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise RuntimeConfigInvalidError(
+                    "StrategyRuntimeRelease selection_runtime_config must be an object",
+                    context={
+                        "release_id": runtime_release.release_id,
+                        "package_id": runtime_release.package_id,
+                        "source": source,
+                        "selection_runtime_config_type": type(value).__name__,
+                    },
+                )
+            return deepcopy(value)
+        return None
+
+    @staticmethod
+    def _first_release_selection_artifact_config(
+        candidates: tuple[tuple[str, Any], ...],
+        *,
+        runtime_release: StrategyRuntimeRelease,
+    ) -> dict[str, Any] | None:
+        for source, value in candidates:
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise RuntimeConfigInvalidError(
+                    "StrategyRuntimeRelease selection_artifact_config must be an object",
+                    context={
+                        "release_id": runtime_release.release_id,
+                        "package_id": runtime_release.package_id,
+                        "source": source,
+                        "selection_artifact_config_type": type(value).__name__,
+                    },
+                )
+            return {"selection_artifact_config": deepcopy(value)}
+        return None
+
+    @staticmethod
+    def _merge_selection_runtime_config(
+        release_config: dict[str, Any],
+        request_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = deepcopy(release_config)
+        for key, value in request_config.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                nested = deepcopy(merged[key])
+                nested.update(deepcopy(value))
+                merged[key] = nested
+            else:
+                merged[key] = deepcopy(value)
+        return merged
+
+    @staticmethod
     def _attach_runtime_release_binding(
         runtime_config: dict[str, Any],
         runtime_release: StrategyRuntimeRelease,
@@ -374,8 +470,12 @@ class StrategyPackageSelectionService:
             raise RuntimeConfigInvalidError(
                 "StrategyRuntimeRelease can only bind selection for its own single StrategyPackage",
                 context={"release_package_id": runtime_release.package_id, "package_ids": package_ids},
-            )
-        config = dict(runtime_config)
+                )
+        release_selection_config = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
+        config = StrategyPackageSelectionService._merge_selection_runtime_config(
+            release_selection_config,
+            dict(runtime_config),
+        )
         existing = config.get(RUNTIME_PROFILE_BINDING_KEY)
         if isinstance(existing, dict):
             existing_version = str(existing.get("profile_version_id") or "")
@@ -689,16 +789,19 @@ class StrategyPackageSelectionService:
 
     def _apply_point_in_time_selection_config(self, config: dict[str, Any], *, trade_date: date) -> dict[str, Any]:
         artifact_config = self.selection_artifact_config(config)
-        raw_mode = artifact_config.get("pit_mode") or artifact_config.get("cutoff_policy") or config.get("pit_mode")
-        if raw_mode is None:
-            raw_mode = "NONE"
-        pit_mode = self._normalize_pit_mode(str(raw_mode))
+        pit_mode = self.selection_pit_mode(config, artifact_config=artifact_config)
         if pit_mode == "NONE":
             cutoff = artifact_config.get("cutoff_date")
             if cutoff:
                 self.parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
             return config
-        explicit_cutoff = self.parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
+        explicit_cutoff = None
+        if self.is_fixed_cutoff_replay_config(config, artifact_config=artifact_config):
+            explicit_cutoff = self.parse_selection_cutoff_date(
+                artifact_config,
+                trade_date=trade_date,
+                strict_before=True,
+            )
         context = self.resolve_point_in_time_context(
             trade_date=trade_date,
             pit_mode=pit_mode,
@@ -706,6 +809,10 @@ class StrategyPackageSelectionService:
         )
         updated = dict(config)
         updated_artifact = dict(artifact_config)
+        requested_cutoff = artifact_config.get("cutoff_date")
+        if requested_cutoff and explicit_cutoff is None and str(requested_cutoff) != context["cutoff_date"]:
+            context["requested_cutoff_date"] = str(requested_cutoff)
+            context["cutoff_override_reason"] = "daily_previous_trading_day_resolution"
         updated_artifact["pit_mode"] = context["pit_mode"]
         updated_artifact["cutoff_date"] = context["cutoff_date"]
         updated["selection_artifact_config"] = updated_artifact
@@ -727,6 +834,59 @@ class StrategyPackageSelectionService:
                 context={"selection_artifact_config_type": type(artifact_config).__name__},
             )
         return artifact_config
+
+    @staticmethod
+    def selection_pit_mode(config: dict[str, Any], artifact_config: dict[str, Any] | None = None) -> str:
+        artifact = artifact_config or StrategyPackageSelectionService.selection_artifact_config(config)
+        raw_mode = artifact.get("pit_mode") or config.get("pit_mode")
+        if raw_mode is None:
+            cutoff_policy = artifact.get("cutoff_policy")
+            if cutoff_policy is not None and not StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+                config,
+                artifact_config=artifact,
+            ):
+                raw_mode = cutoff_policy
+        if raw_mode is None and artifact.get("cutoff_date") and StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+            config,
+            artifact_config=artifact,
+        ):
+            raw_mode = "PREVIOUS_TRADING_DAY_CLOSE"
+        if raw_mode is None:
+            raw_mode = "NONE"
+        return StrategyPackageSelectionService._normalize_pit_mode(str(raw_mode))
+
+    @staticmethod
+    def is_fixed_cutoff_replay_config(
+        config: dict[str, Any],
+        *,
+        artifact_config: dict[str, Any] | None = None,
+    ) -> bool:
+        artifact = artifact_config or StrategyPackageSelectionService.selection_artifact_config(config)
+        policy_values = (
+            artifact.get("cutoff_policy"),
+            artifact.get("cutoff_mode"),
+            artifact.get("selection_cutoff_policy"),
+            config.get("cutoff_policy"),
+        )
+        fixed_policies = {
+            "PINNED",
+            "FIXED",
+            "FIXED_CUTOFF",
+            "FIXED_REPLAY",
+            "HISTORICAL_REPLAY",
+            "FIXED_HISTORICAL_REPLAY",
+            "PINNED_HISTORICAL_REPLAY",
+        }
+        if any(str(value or "").strip().upper() in fixed_policies for value in policy_values):
+            return True
+        fixed_flags = (
+            "fixed_cutoff",
+            "fixed_replay",
+            "allow_fixed_cutoff",
+            "historical_replay",
+            "pinned_cutoff",
+        )
+        return any(bool(artifact.get(flag) or config.get(flag)) for flag in fixed_flags)
 
     @staticmethod
     def _normalize_pit_mode(pit_mode: str) -> str:
@@ -1053,6 +1213,16 @@ class StrategyPackageSelectionService:
     ) -> list[SelectionCandidate]:
         total_weight = sum(package_weights.values())
         normalized_weights = {package_id: weight / total_weight for package_id, weight in package_weights.items()}
+        package_ids = list(package_results)
+        fusion_policy_sha256 = _canonical_sha256(
+            {
+                "method": "weighted_rank_fusion",
+                "package_weights": package_weights,
+                "normalized_package_weights": normalized_weights,
+                "candidate_top_k": None,
+                "missing_rank_policy": "not_selected_zero_score",
+            }
+        )
         rows_by_symbol: dict[str, list[tuple[str, SelectionCandidate, float]]] = {}
         for package_id, rows in package_results.items():
             candidate_count = len(rows)
@@ -1070,8 +1240,16 @@ class StrategyPackageSelectionService:
             source_package_ids = [package_id for package_id, _, _ in rows]
             package_scores = {package_id: row.score for package_id, row, _ in rows}
             package_ranks = {package_id: row.rank for package_id, row, _ in rows}
-            rank_scores = {package_id: rank_score for package_id, _, rank_score in rows}
-            fusion_score = sum(normalized_weights[package_id] * rank_score for package_id, _, rank_score in rows)
+            rank_scores = {package_id: 0.0 for package_id in package_ids}
+            rank_scores.update({package_id: rank_score for package_id, _, rank_score in rows})
+            package_presence = {
+                package_id: ("selected_topK" if package_id in package_ranks else "not_selected_in_full_evidence")
+                for package_id in package_ids
+            }
+            support_count = len(source_package_ids)
+            rank_values = list(package_ranks.values())
+            rank_dispersion = max(rank_values) - min(rank_values) if len(rank_values) > 1 else 0
+            fusion_score = sum(normalized_weights[package_id] * rank_scores.get(package_id, 0.0) for package_id in package_ids)
             aggregate.append(
                 SelectionCandidate(
                     symbol=symbol,
@@ -1086,12 +1264,28 @@ class StrategyPackageSelectionService:
                         "package_ranks": package_ranks,
                         "package_raw_scores": package_scores,
                         "package_rank_scores": rank_scores,
+                        "package_presence": package_presence,
                         "package_weights": package_weights,
                         "normalized_package_weights": normalized_weights,
+                        "support_count": support_count,
+                        "rank_dispersion": rank_dispersion,
+                        "fusion_policy_sha256": fusion_policy_sha256,
                         "fusion_score": fusion_score,
                     },
                     reason="weighted_fusion_aggregate",
                 )
             )
-        aggregate.sort(key=lambda item: (-item.score, item.rank, item.symbol))
+        aggregate.sort(
+            key=lambda item: (
+                -item.score,
+                -int(item.component_scores.get("support_count") or 0),
+                item.rank,
+                item.symbol,
+            )
+        )
         return [item.model_copy(update={"rank": idx}) for idx, item in enumerate(aggregate, start=1)]
+
+
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

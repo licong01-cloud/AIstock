@@ -1,0 +1,121 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "research_assistant.qe_autonomy",
+  "module_slug": "research-assistant-qe-autonomy",
+  "level": "L4",
+  "title": "Runner ra_phase6_qe_autonomy passed",
+  "status": "passed",
+  "git_commit": "610de29e",
+  "operator": "codex-cli-g1-central-final-rebase-20260602",
+  "workspace": {
+    "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602",
+    "branch": "codex/ra-qe-autonomy-20260602",
+    "commit": "610de29e",
+    "commit_full": "610de29e213a0a53dac00ef97d29988285b0f188",
+    "is_root": false,
+    "scope": "worktree",
+    "expected_branch": "codex/ra-qe-autonomy-20260602",
+    "expected_commit": "610de29e213a0a53dac00ef97d29988285b0f188",
+    "git": {
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602",
+      "branch": "codex/ra-qe-autonomy-20260602",
+      "commit": "610de29e",
+      "commit_full": "610de29e213a0a53dac00ef97d29988285b0f188",
+      "upstream": "origin/main",
+      "upstream_commit": "236fe370",
+      "ahead": 2,
+      "behind": 0,
+      "dirty": false,
+      "dirty_count": 0,
+      "detached": false,
+      "status_header": "## codex/ra-qe-autonomy-20260602...origin/main [ahead 2]",
+      "changed_file_count": 0,
+      "changed_files": [],
+      "changed_files_truncated": false
+    }
+  },
+  "started_at": "2026-06-02T06:15:41.547851+00:00",
+  "finished_at": "2026-06-02T06:15:54.289506+00:00",
+  "runner_job_id": "valjob_20260602_061541_363eede3",
+  "runner_plan_key": "ra_phase6_qe_autonomy",
+  "runner_nox_session": "ra_phase6_qe_autonomy",
+  "runner_archive": {
+    "status": "archived",
+    "run_id": "research-assistant-qe-autonomy_20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-validation__f155954f61",
+    "history_root": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history",
+    "run_record_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-validation.md",
+    "metadata_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-validation.json",
+    "evidence_manifest_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-evidence.json",
+    "runner_job_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-runner-job.json",
+    "runner_log_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-runner-log.txt",
+    "runner_evidence_archive_path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-runner-evidence.json",
+    "coverage_snapshot_path": null,
+    "artifact_paths": []
+  },
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "not_collected",
+    "line": null,
+    "branch": null,
+    "diff_line": null,
+    "diff_branch": null,
+    "snapshot_path": null,
+    "quality_gates": []
+  },
+  "quality_gates": [
+    {
+      "metric": "runner_return_code",
+      "status": "passed",
+      "actual": 0,
+      "threshold": 0
+    },
+    {
+      "metric": "production_8001_touched",
+      "status": "passed",
+      "actual": false,
+      "threshold": false
+    },
+    {
+      "metric": "arbitrary_shell_allowed",
+      "status": "passed",
+      "actual": false,
+      "threshold": false
+    },
+    {
+      "metric": "runner_archive",
+      "status": "passed",
+      "actual": "archived",
+      "threshold": "archived"
+    }
+  ],
+  "pass_scope": {
+    "level": "L4",
+    "real_backend": false,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": false,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": false,
+    "controlled_runner_post_enabled": true,
+    "arbitrary_shell_allowed": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Run allowlisted validation plan ra_phase6_qe_autonomy",
+    "evidence": {
+      "runner_job": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-runner-job.json",
+      "runner_log": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-runner-log.txt",
+      "evidence_manifest": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_061554_l4_ra-phase6-qe-autonomy_363eede3_runner-evidence.json",
+      "coverage_snapshot": null
+    },
+    "unresolved_blockers": [
+      "This runner proof validates the test plan execution infrastructure, not a trading business success path."
+    ]
+  },
+  "evidence": [],
+  "residual_risks": []
+}

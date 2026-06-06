@@ -3,7 +3,10 @@ import json
 import sys
 import asyncio
 import base64
+import importlib.util
 import inspect
+import pickle
+import types
 from pathlib import Path
 import yaml
 
@@ -62,6 +65,34 @@ DATA_SPLIT = {
     "test_end": "2021-12-31",
     "backtest_end": "2021-12-31",
 }
+
+
+def _load_qrun_minute_module(monkeypatch):
+    qlib = types.ModuleType("qlib")
+    qlib_model = types.ModuleType("qlib.model")
+    qlib_model_trainer = types.ModuleType("qlib.model.trainer")
+    qlib_model_trainer.task_train = lambda *args, **kwargs: None
+    qlib_workflow = types.ModuleType("qlib.workflow")
+    qlib_workflow_cli = types.ModuleType("qlib.workflow.cli")
+    qlib_workflow_cli.sys_config = lambda *args, **kwargs: None
+    qlib_config = types.ModuleType("qlib.config")
+    qlib_config.C = {"exp_manager": {"kwargs": {}}}
+    for name, module in {
+        "qlib": qlib,
+        "qlib.model": qlib_model,
+        "qlib.model.trainer": qlib_model_trainer,
+        "qlib.workflow": qlib_workflow,
+        "qlib.workflow.cli": qlib_workflow_cli,
+        "qlib.config": qlib_config,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    module_path = SCRIPTS_DIR / "qrun_limit_minute.py"
+    spec = importlib.util.spec_from_file_location("qrun_limit_minute_seed_ensemble_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(autouse=True)
@@ -1066,6 +1097,78 @@ def test_score_weighted_v2_filters_archive_seed_metadata_from_strategy_kwargs():
     assert parsed["qe_runtime"]["seed_policy"] == "fixed"
 
 
+def test_seed_ensemble_day_backtest_packages_minute_runner(monkeypatch):
+    composer = ConfigComposer()
+    monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=["Alpha001"],
+        model_id="__seed_LSTM_10D_hs64_d02__",
+        strategy_id="score_weighted_topk_v2",
+        data_split=DATA_SPLIT,
+        custom_params={
+            "random_seed": 42,
+            "_seed_ensemble_config": {
+                "enabled": True,
+                "seeds": [42, 2026],
+                "level": "score",
+                "agg": "mean",
+            },
+        },
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    assert result["experiment_files"]["conf.yaml"].find("ensemble:") >= 0
+    assert "qrun_limit_minute.py" in result["experiment_files"]
+    assert "python qrun_limit_minute.py conf.yaml" in result["wsl_command"]
+
+
+def test_seed_ensemble_runtime_metadata_stays_out_of_strategy_kwargs():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+        },
+        custom_params={
+            "topk": 12,
+            "random_seed": 42,
+            "_seed_ensemble_config": {
+                "enabled": True,
+                "seeds": [42, 2026, 12345],
+                "level": "score",
+                "agg": "mean",
+            },
+        },
+    )
+
+    parsed = yaml.safe_load(yaml_text)
+    strategy_kwargs = parsed["port_analysis_config"]["strategy"]["kwargs"]
+    assert "_seed_ensemble_config" not in strategy_kwargs
+    assert parsed["qe_runtime"]["random_seed"] == 42
+    assert parsed["qe_runtime"]["ensemble"] == {
+        "enabled": True,
+        "level": "score",
+        "agg": "mean",
+        "seeds": [42, 2026, 12345],
+    }
+
+
 def test_suspend_runtime_flags_reject_nested_conflicts():
     merged = _merge_strategy_runtime_flags({"topk": 10}, True, False)
     assert merged["filter_suspended_on_signal"] is True
@@ -1251,3 +1354,104 @@ def test_remote_stock_pool_sync_fails_fast_when_local_cache_missing(monkeypatch,
                 "qlib_data_path": "/home/lc999/data/qlib_bin",
             },
         )
+
+
+def test_qrun_seed_prediction_aggregation_is_deterministic(monkeypatch):
+    runner = _load_qrun_minute_module(monkeypatch)
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-01-02", "2024-01-03"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    seed_a = pd.Series([0.1, 0.4, 0.8, 0.2], index=idx)
+    seed_b = pd.Series([0.3, 0.2, 0.4, 0.6], index=idx)
+
+    mean_df = runner._aggregate_seed_predictions([(42, seed_a), (2026, seed_b)], "mean")
+    rank_df = runner._aggregate_seed_predictions([(42, seed_a), (2026, seed_b)], "rank_mean")
+
+    assert mean_df["score"].tolist() == pytest.approx([0.2, 0.3, 0.6, 0.4])
+    assert rank_df.loc[(pd.Timestamp("2024-01-02"), "000002.SZ"), "score"] == pytest.approx(0.75)
+    assert rank_df.loc[(pd.Timestamp("2024-01-03"), "000001.SZ"), "score"] == pytest.approx(0.75)
+
+
+def test_qrun_seed_ensemble_config_rejects_duplicate_seeds(monkeypatch):
+    runner = _load_qrun_minute_module(monkeypatch)
+
+    with pytest.raises(ValueError, match="duplicate seeds"):
+        runner._get_seed_ensemble_config(
+            {
+                "qe_runtime": {
+                    "ensemble": {
+                        "enabled": True,
+                        "seeds": [42, 42],
+                        "level": "score",
+                        "agg": "mean",
+                    }
+                }
+            }
+        )
+
+
+def test_qrun_optional_recorder_artifact_load_fails_fast_on_corruption(monkeypatch):
+    runner = _load_qrun_minute_module(monkeypatch)
+
+    class BrokenRecorder:
+        def load_object(self, name):
+            raise pickle.UnpicklingError(f"corrupt optional artifact: {name}")
+
+    with pytest.raises(RuntimeError, match="optional recorder artifact load failed"):
+        runner._load_recorder_object(
+            BrokenRecorder(),
+            "portfolio_analysis/indicators_normal_1day.pkl",
+            seed=42,
+            required=False,
+        )
+
+
+def test_qrun_portfolio_seed_aggregation_matches_offline_equal_weight_proxy(monkeypatch):
+    runner = _load_qrun_minute_module(monkeypatch)
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    seed_1_positions = {
+        dates[0]: {
+            "cash": 400.0,
+            "now_account_value": 1000.0,
+            "000001.SZ": {"amount": 60.0, "price": 10.0},
+        },
+        dates[1]: {
+            "cash": 450.0,
+            "now_account_value": 1100.0,
+            "000001.SZ": {"amount": 65.0, "price": 10.0},
+        },
+    }
+    seed_2_positions = {
+        dates[0]: {
+            "cash": 700.0,
+            "now_account_value": 1000.0,
+            "000002.SZ": {"amount": 15.0, "price": 20.0},
+        },
+        dates[1]: {
+            "cash": 610.0,
+            "now_account_value": 1000.0,
+            "000002.SZ": {"amount": 19.5, "price": 20.0},
+        },
+    }
+    report_1 = pd.DataFrame({"account": [1000.0, 1100.0], "cash": [400.0, 450.0], "value": [600.0, 650.0], "bench": [0, 0]}, index=dates)
+    report_2 = pd.DataFrame({"account": [1000.0, 1000.0], "cash": [700.0, 610.0], "value": [300.0, 390.0], "bench": [0, 0]}, index=dates)
+
+    merged_positions = runner._aggregate_seed_positions(
+        [(1, seed_1_positions), (2, seed_2_positions)],
+        [(1, report_1), (2, report_2)],
+    )
+    merged_report = runner._aggregate_seed_reports([(1, report_1), (2, report_2)], merged_positions)
+
+    first = merged_positions[dates[0]]
+    second = merged_positions[dates[1]]
+    assert first["now_account_value"] == pytest.approx(1000.0)
+    assert first["cash"] == pytest.approx(550.0)
+    assert first["000001.SZ"]["weight"] == pytest.approx(0.30)
+    assert first["000002.SZ"]["weight"] == pytest.approx(0.15)
+    assert second["now_account_value"] == pytest.approx(1050.0)
+    assert second["cash"] == pytest.approx(535.022727)
+    assert second["000001.SZ"]["weight"] == pytest.approx(0.2954545)
+    assert second["000002.SZ"]["weight"] == pytest.approx(0.195)
+    assert merged_report.loc[dates[1], "account"] == pytest.approx(1050.0)
+    assert merged_report.loc[dates[1], "return"] == pytest.approx(0.05)

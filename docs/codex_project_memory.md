@@ -69,6 +69,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Do not write production DB data or apply DDL without explicit approval.
 - Local validation ports are owned by `noxfile.py`, environment variables, and the active standard; use the workflow-provided defaults instead of hardcoding ad hoc ports here.
 - Runtime activation and code merge are separate steps.
+- When the user explicitly authorizes merging a PR or branch into `main`, complete the aftercare loop before reporting done: merge/persist close-sync if required, fast-forward `F:\Dev\AIstock` so local `main` equals `origin/main`, clean only safe task branches/worktrees, and apply plus verify any committed production DDL required by the merged change.
 - Every completion report must state:
   - `production_ddl_gate`: `noop`, `applied_and_verified`, or `pending`.
   - `production_frontend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.

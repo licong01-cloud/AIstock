@@ -111,6 +111,66 @@ function firstBoolean(sources: Array<AnyRecord | undefined>, keys: string[]): bo
   return undefined;
 }
 
+function tradeAction(value: any): "buy" | "sell" | undefined {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return undefined;
+  if (["buy", "b", "open", "long", "entry"].includes(text) || text.includes("buy")) return "buy";
+  if (["sell", "s", "close", "exit"].includes(text) || text.includes("sell")) return "sell";
+  return undefined;
+}
+
+function curveDates(enhanced: AnyRecord): string[] {
+  const curves = asRecord(enhanced.return_curves);
+  const dates = Array.isArray(curves?.dates) ? curves?.dates : [];
+  return dates.map((item) => String(item).slice(0, 10)).filter(Boolean);
+}
+
+function derivePositionFromStockTrades(enhanced: AnyRecord): LoopPositionDiagnostics {
+  const stockTrades = asRecord(enhanced.stock_trades);
+  if (!stockTrades) return {};
+
+  const events: Record<string, Array<{ action: "buy" | "sell"; symbol: string }>> = {};
+  Object.entries(stockTrades).forEach(([symbol, trades]) => {
+    if (!Array.isArray(trades)) return;
+    trades.forEach((trade) => {
+      const row = asRecord(trade);
+      if (!row) return;
+      const date = row.date ?? row.datetime ?? row.trade_date;
+      const action = tradeAction(row.type ?? row.side ?? row.action);
+      if (!date || !action) return;
+      const key = String(date).slice(0, 10);
+      events[key] = events[key] || [];
+      events[key].push({ action, symbol });
+    });
+  });
+
+  const eventDates = Object.keys(events);
+  if (eventDates.length === 0) return {};
+
+  const orderedCurveDates = curveDates(enhanced);
+  const countDates = orderedCurveDates.length > 0 ? orderedCurveDates : eventDates.sort();
+  const active = new Set<string>();
+  const counts: number[] = [];
+  Array.from(new Set([...countDates, ...eventDates])).sort().forEach((date) => {
+    (events[date] || []).forEach(({ action, symbol }) => {
+      if (action === "buy") active.add(symbol);
+      if (action === "sell") active.delete(symbol);
+    });
+    if (countDates.includes(date) || events[date]) counts.push(active.size);
+  });
+
+  if (counts.length === 0) return {};
+  const sorted = [...counts].sort((a, b) => a - b);
+  const p95Index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * 0.95) - 1));
+  return {
+    minCount: Math.min(...counts),
+    avgCount: counts.reduce((sum, value) => sum + value, 0) / counts.length,
+    maxCount: Math.max(...counts),
+    p95Count: sorted[p95Index],
+    finalStockCount: counts[counts.length - 1],
+  };
+}
+
 function toText(value: any): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value === "string") return value;
@@ -306,6 +366,7 @@ export function extractLoopDiagnostics(loop: LoopLike, overrideEnhanced?: AnyRec
     hmmEnabled = true;
   }
 
+  const derivedPosition = derivePositionFromStockTrades(enhanced);
   const positionSources = [holdingSummary, absoluteReturns, enhanced, metrics];
   const finalTotalValue = firstNumber(positionSources, [
     "final_total_value",
@@ -314,15 +375,15 @@ export function extractLoopDiagnostics(loop: LoopLike, overrideEnhanced?: AnyRec
     "final_account",
     "final_nav_value",
   ]);
-  const finalCash = firstNumber(positionSources, ["final_cash", "final_cash_amount", "cash"]);
+  const finalCash = firstNumber(positionSources, ["final_cash", "final_cash_amount", "ending_cash", "end_cash", "cash"]);
   const position: LoopPositionDiagnostics = {
-    minCount: firstNumber(positionSources, ["position_count_min", "min_position_count", "holding_count_min", "min_holding_count"]),
-    avgCount: firstNumber(positionSources, ["position_count_avg", "avg_position_count", "holding_count_avg", "avg_holding_count"]),
-    maxCount: firstNumber(positionSources, ["position_count_max", "max_position_count", "holding_count_max", "max_holding_count"]),
-    p95Count: firstNumber(positionSources, ["position_count_p95", "p95_position_count", "holding_count_p95", "p95_holding_count"]),
-    finalStockCount: firstNumber(positionSources, ["final_stock_count", "final_position_count", "end_position_count"]),
+    minCount: firstNumber(positionSources, ["position_count_min", "min_position_count", "holding_count_min", "min_holding_count", "min_holdings"]) ?? derivedPosition.minCount,
+    avgCount: firstNumber(positionSources, ["position_count_avg", "avg_position_count", "holding_count_avg", "avg_holding_count", "average_holding_count", "avg_holdings", "average_holdings"]) ?? derivedPosition.avgCount,
+    maxCount: firstNumber(positionSources, ["position_count_max", "max_position_count", "holding_count_max", "max_holding_count", "max_holdings"]) ?? derivedPosition.maxCount,
+    p95Count: firstNumber(positionSources, ["position_count_p95", "p95_position_count", "holding_count_p95", "p95_holding_count"]) ?? derivedPosition.p95Count,
+    finalStockCount: firstNumber(positionSources, ["final_stock_count", "final_position_count", "end_position_count"]) ?? derivedPosition.finalStockCount,
     finalCash,
-    finalStockValue: firstNumber(positionSources, ["final_stock_value", "final_stock_market_value", "final_value", "stock_market_value"]),
+    finalStockValue: firstNumber(positionSources, ["final_stock_value", "final_stock_market_value", "ending_stock_market_value", "end_stock_market_value", "final_value", "stock_market_value"]),
     finalTotalValue,
     finalCashRatio: firstNumber(positionSources, ["final_cash_ratio"]) ?? (
       finalCash !== undefined && finalTotalValue !== undefined && finalTotalValue !== 0 ? finalCash / finalTotalValue : undefined

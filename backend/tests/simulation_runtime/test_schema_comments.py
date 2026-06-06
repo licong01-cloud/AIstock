@@ -4,6 +4,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRADING_CORE_MIGRATION = REPO_ROOT / "backend" / "migrations" / "trading_core_v2_schema.sql"
+ACCOUNT_SLOT_MIGRATION = REPO_ROOT / "backend" / "migrations" / "add_simulation_runtime_account_slots_20260604.sql"
 TRADING_CORE_INIT = REPO_ROOT / "backend" / "db" / "init_trading_core_v2_schema.py"
 
 
@@ -42,6 +43,8 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "manifest_sha256",
             "broker_backend",
             "broker_account_id",
+            "account_group_id",
+            "strategy_slot_id",
             "capital_allocation",
             "strategy_name",
             "order_remark_prefix",
@@ -107,6 +110,8 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "release_hash",
             "binding_id",
             "binding_hash",
+            "account_group_id",
+            "strategy_slot_id",
             "selection_evidence_id",
             "selection_artifact_hash",
             "execution_plan_id",
@@ -118,10 +123,13 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
         ],
     }
 
-    for ddl in (
-        TRADING_CORE_MIGRATION.read_text(encoding="utf-8"),
-        TRADING_CORE_INIT.read_text(encoding="utf-8"),
-    ):
+    migration_ddl = "\n".join(
+        [
+            TRADING_CORE_MIGRATION.read_text(encoding="utf-8"),
+            ACCOUNT_SLOT_MIGRATION.read_text(encoding="utf-8"),
+        ]
+    )
+    for ddl in (migration_ddl, TRADING_CORE_INIT.read_text(encoding="utf-8")):
         for table, columns in expected.items():
             assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
             assert f"COMMENT ON TABLE {table}" in ddl

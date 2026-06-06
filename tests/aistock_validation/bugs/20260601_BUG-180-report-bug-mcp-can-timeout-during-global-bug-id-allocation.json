@@ -1,0 +1,67 @@
+{
+  "actual": "report_bug timed out after 120s, preventing reliable bug registration from Claude Code/Codex clients.",
+  "allowed_write_scope": [
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "tests/aistock_validation/bugs/20260601_BUG-180-report-bug-mcp-can-timeout-during-global-bug-id-allocation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-180",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-31T17:49:53.260294Z",
+  "description": "report_bug timed out after 120s, preventing reliable bug registration from Claude Code/Codex clients.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-ba775e310861",
+      "timestamp": "2026-05-31T17:49:53.260290Z"
+    }
+  ],
+  "evidence_uris": [
+    "Claude Code report_bug tool call timed out after 120s while trying to register the VC workspace catalog defect"
+  ],
+  "expected": "MCP BUG reporting should return promptly with deterministic id allocation, avoid long live scans inside report_bug, and direct agents to the GitHub-linked issue workflow for mergeable BUG records.",
+  "first_seen_at": "2026-05-31T17:49:53.260294Z",
+  "fix_branch": null,
+  "fix_commit": "5a33bff8f5f2ce4fc0126284988b84827ca0173e",
+  "fixed_at": "2026-05-31T18:19:41.186418Z",
+  "github_issue_number": 441,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/441",
+  "last_seen_at": "2026-05-31T17:49:53.260294Z",
+  "module": "validation_mcp",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "validation.report_bug(...) on a workstation with many AIstock worktrees and GitHub issue sync enabled",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_mcp"
+  ],
+  "title": "report_bug MCP can timeout during global BUG ID allocation",
+  "trigger_condition": {
+    "fingerprint": "ba775e310861cc58c7b0e359",
+    "source_event_id": "FE-20260601-ba775e310861"
+  },
+  "verification_run_id": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/442",
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -k report_bug -> passed",
+    "python -m nox -s validation_center_backend guardrail_changed_files -> passed"
+  ]
+}

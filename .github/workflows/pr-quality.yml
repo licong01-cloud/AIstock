@@ -38,26 +38,35 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: .github/requirements/pr-quality.txt
 
       - name: Install quality tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyyaml ruff semgrep
+          python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
 
       - name: Build AIstock PR quality summary
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+          AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          AISTOCK_PR_BODY: ${{ github.event.pull_request.body || '' }}
+          AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
           mkdir -p tmp/validation/pr_quality
           # Keep base history available for three-dot diffs on branches that merge main.
           git fetch origin "${BASE_REF}" --no-tags || true
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          ENFORCE_ARGS=()
+          if [ "${AISTOCK_PR_QUALITY_ENFORCE_P0P1}" = "true" ]; then
+            ENFORCE_ARGS+=(--enforce-p0-p1-evidence)
+          fi
           python scripts/issue_flow.py pr-check \
             --base "${BASE_COMMIT}" \
             --head HEAD \
             --output-json tmp/validation/pr_quality/summary.json \
-            --output-md tmp/validation/pr_quality/summary.md
+            --output-md tmp/validation/pr_quality/summary.md \
+            "${ENFORCE_ARGS[@]}"
           cat tmp/validation/pr_quality/summary.md
 
       - name: Build code intelligence PR artifact
@@ -91,8 +100,17 @@ jobs:
 
       - name: Semgrep AIstock guardrails (report-only phase)
         continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
-          semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json .
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/semgrep_changed_files.txt
+          if [ -s tmp/validation/pr_quality/semgrep_changed_files.txt ]; then
+            xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json
+          else
+            printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/pr_quality/semgrep.json
+          fi
 
       - name: Comment PR summary
         if: github.event_name == 'pull_request'

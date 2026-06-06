@@ -1,0 +1,76 @@
+{
+  "actual": "Postmortem exists but is not yet sufficient as the default phase-cost decision artifact, and CodeGraph/Understand Anything readiness is still mostly warning/fallback without a concise recovery command in the normal issue workflow.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/20260601_BUG-189-issue-workflow-h6-h7-telemetry-and-codegraph-readiness-gaps.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-189",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T07:11:44.341875Z",
+  "description": "Postmortem exists but is not yet sufficient as the default phase-cost decision artifact, and CodeGraph/Understand Anything readiness is still mostly warning/fallback without a concise recovery command in the normal issue workflow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-fcc0b1554a3e",
+      "timestamp": "2026-06-01T07:11:44.341871Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/aistock_issue_workflow_hardening_plan_v2_1_20260526.md Phase H6/H7 and docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md deferred v2.4/v2.5 items."
+  ],
+  "expected": "Workflow should expose compact H6 timing/context telemetry in postmortem and PR/final outputs, and H7 CodeGraph readiness should be discoverable from doctor/context without blocking issue repair. Missing or stale CodeGraph should produce a short next command/fallback reason; available graph context should reduce broad code scanning.",
+  "first_seen_at": "2026-06-01T07:11:44.341875Z",
+  "fix_branch": null,
+  "fix_commit": "925114f23ce210fdc63543e6fbefd9a8bedbc8b8",
+  "fixed_at": "2026-06-01T07:44:37.635120Z",
+  "github_issue_number": 469,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/469",
+  "last_seen_at": "2026-06-01T07:11:44.341875Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/472",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run python scripts/aistock_issue_workflow.py postmortem --bug-id <recent BUG> and python scripts/aistock_issue_workflow.py doctor --output-format compact after CodeGraph is missing/stale; compare output with H6/H7 acceptance criteria.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow H6/H7 telemetry and CodeGraph readiness gaps",
+  "trigger_condition": {
+    "fingerprint": "fcc0b1554a3e8b3033c29344",
+    "source_event_id": "FE-20260601-fcc0b1554a3e"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k 'doctor or postmortem' -> 7 passed, 85 deselected",
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --changed-file docs/standards/aistock_issue_workflow_quickstart.md --module validation --output-format compact -> workflow_gate=passed, unexpected_dirty_paths=[]",
+    "python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-189 --worktree F:\\Dev\\AIstock_worktrees\\BUG-189-issue-workflow-h6-h7-telemetry-and-codegraph-rea-20260601 --output-format compact -> h6_summary and h7_code_intelligence present"
+  ],
+  "verification_run_id": null
+}

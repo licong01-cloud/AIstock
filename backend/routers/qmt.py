@@ -255,7 +255,8 @@ def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
         if price_type is None:
             raise HTTPException(status_code=400, detail="报价类型不能为空")
 
-        order_id, message = _get_client().place_order(
+        client = _get_client()
+        order_id, message = client.place_order(
             stock_code=stock_code,
             order_type=int(order_type),
             order_volume=int(order_volume),
@@ -264,11 +265,14 @@ def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
             strategy_name=strategy_name,
             order_remark=order_remark,
         )
+        diagnostic_getter = getattr(client, "get_last_order_diagnostic", None)
+        diagnostic = diagnostic_getter() if callable(diagnostic_getter) else None
 
         return {
             "success": order_id > 0,
             "order_id": order_id,
             "message": message,
+            "diagnostic": diagnostic,
             "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
         }
     except HTTPException:
@@ -363,16 +367,20 @@ def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
         market = payload.get("market")
         order_sysid = payload.get("order_sysid")
 
+        client = _get_client()
         if order_id:
-            success, message = _get_client().cancel_order(str(order_id))
+            success, message = client.cancel_order(str(order_id))
         elif market is not None and order_sysid:
-            success, message = _get_client().cancel_order_by_sysid(int(market), str(order_sysid))
+            success, message = client.cancel_order_by_sysid(int(market), str(order_sysid))
         else:
             raise HTTPException(status_code=400, detail="请提供 order_id 或 (market, order_sysid)")
+        diagnostic_getter = getattr(client, "get_last_cancel_diagnostic", None)
+        diagnostic = diagnostic_getter() if callable(diagnostic_getter) else None
 
         return {
             "success": success,
             "message": message,
+            "diagnostic": diagnostic,
         }
     except QMTNotAvailableError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1185,5 +1193,4 @@ def get_task_progress_detail(task_id: str) -> Dict[str, Any]:
         import logging
         logging.getLogger(__name__).error(f"获取任务进度失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
 

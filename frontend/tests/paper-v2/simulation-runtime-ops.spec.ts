@@ -34,6 +34,13 @@ const schedulerPayload = {
     },
     approval_states: ["SIM_VALIDATING", "SIM_PASSED"],
     restart_recovery_mode: "persisted_state_only",
+    account_slot_persistence: {
+      enabled: true,
+      release_binding_columns: ["account_group_id", "strategy_slot_id"],
+      daily_run_columns: ["account_group_id", "strategy_slot_id"],
+      status_api_exposes_slots: true,
+      miniqmt_unified_binding_mode: "account_group_slots",
+    },
     schedule_windows: [
       { window_id: "pre_open", label: "pre-open", start: "08:50", end: "09:10", action: "readiness", state: "COMPLETED" },
       { window_id: "selection", label: "selection", start: "09:10", end: "09:20", action: "selection_evidence", state: "COMPLETED" },
@@ -59,6 +66,8 @@ const localRun = {
   release_hash: "release_local_hash_1234567890",
   binding_id: "simbind_local_ops",
   binding_hash: "binding_local_hash_1234567890",
+  account_group_id: null,
+  strategy_slot_id: null,
   selection_evidence_id: "dse_local_ops",
   selection_artifact_hash: "selection_hash_shared_1234567890",
   execution_plan_id: LOCAL_PLAN_ID,
@@ -85,6 +94,8 @@ const qmtRun = {
   release_hash: "release_qmt_hash_1234567890",
   binding_id: "simbind_qmt_ops",
   binding_hash: "binding_qmt_hash_1234567890",
+  account_group_id: "ag_minqmt_62266303_sim",
+  strategy_slot_id: "slot_strategy_miniqmt_ops",
   selection_evidence_id: "dse_qmt_ops",
   selection_artifact_hash: "selection_hash_shared_1234567890",
   execution_plan_id: QMT_PLAN_ID,
@@ -266,19 +277,22 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("ENABLED");
   await expect(page.getByTestId("sim-runtime-provider-mode")).toContainText("production");
 
-  await expect(page.getByText("strategy_local_ops")).toBeVisible();
-  await expect(page.getByText("strategy_miniqmt_ops")).toBeVisible();
+  await expect(page.getByText("strategy_local_ops", { exact: true })).toBeVisible();
+  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("ag_minqmt_62266303_sim");
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("slot_strategy_miniqmt_ops");
   await page.getByTestId(`sim-runtime-run-detail-${LOCAL_RUN_ID}`).click();
   await expect(page.getByTestId("sim-runtime-selected-run-id")).toContainText(LOCAL_RUN_ID);
   await expect(page.getByTestId("sim-runtime-selected-evidence-id")).toContainText("dse_local_ops");
   await expect(page.getByTestId("sim-runtime-selected-plan-id")).toContainText(LOCAL_PLAN_ID);
   await expect(page.getByTestId("sim-runtime-selected-intent-counts")).toContainText("BUY 1 / SELL 1 / total 2");
+  await expect(page.getByTestId("sim-runtime-selected-account-slot")).toContainText("- / -");
   await expect(page.getByTestId("sim-runtime-selected-nav")).toContainText("1");
   await expect(page.getByTestId("sim-runtime-selected-order-fill-errors")).toContainText("orders");
 
   await page.getByTestId("sim-runtime-backend-filter").selectOption("minqmt_sim");
-  await expect(page.getByText("strategy_miniqmt_ops")).toBeVisible();
-  await expect(page.getByText("strategy_local_ops")).toHaveCount(0);
+  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
+  await expect(page.getByText("strategy_local_ops", { exact: true })).toHaveCount(0);
 
   expect(writeMethods).toEqual([]);
   expect(pageErrors).toEqual([]);

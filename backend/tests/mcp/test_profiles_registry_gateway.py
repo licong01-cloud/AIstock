@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -66,8 +68,8 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
 
 def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
-    assert resolve_modules(profile="research_assistant") == ["research_assistant"]
-    assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
+    assert resolve_modules(profile="research_assistant") == ["catalog", "research_assistant"]
+    assert resolve_modules(profile="research_with_assistant") == ["catalog", "research", "research_assistant"]
 
 
 @pytest.mark.parametrize(
@@ -79,10 +81,11 @@ def test_research_profile_is_only_current_module() -> None:
         ("model_registry", ["model_registry"]),
         ("strategy_governance", ["strategy_governance"]),
         ("execution_policy", ["execution_policy"]),
+        ("external_research", ["external_research"]),
         ("factor_research", ["factor_library", "factor_metrics", "factor_correlation"]),
         ("strategy_ops", ["strategy_governance", "execution_policy"]),
-        ("research_full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
-        ("full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
+        ("research_full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
+        ("full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research", "validation", "qe_experiment", "qe_archive"]),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -105,6 +108,40 @@ def test_registry_client_applies_path_prefix_and_tracks_tool_count() -> None:
     assert registry.tool_count("research") == 16
     assert registry.total_tool_count() == 16
     assert _registry_tool_counts(registry)["research"] == 16
+
+
+def test_gateway_default_base_url_uses_production_loopback_port() -> None:
+    from backend.mcp import gateway
+
+    assert gateway.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1"
+    assert ":8011" not in gateway.DEFAULT_BASE_URL
+
+
+def test_gateway_uses_production_port_when_env_override_is_missing(monkeypatch) -> None:
+    from backend.mcp import gateway
+
+    monkeypatch.delenv("AISTOCK_MCP_BASE_URL", raising=False)
+
+    _mcp, registry = gateway.create_gateway(
+        profile="research_assistant",
+        env_name="AISTOCK_MCP_BASE_URL",
+    )
+
+    assert registry.base_url == "http://127.0.0.1:8001/api/v1"
+    assert ":8011" not in registry.base_url
+
+
+def test_repo_aistock_mcp_config_uses_production_port_only() -> None:
+    config = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
+    for name, server in config["mcpServers"].items():
+        if not name.startswith("aistock") and name != "research-assistant":
+            continue
+        env_values = server.get("env", {}).values()
+        base_urls = [value for value in env_values if isinstance(value, str) and "127.0.0.1" in value]
+        assert base_urls, f"{name} must define an explicit loopback backend URL"
+        for value in base_urls:
+            assert ":8001" in value, f"{name} must target production backend port 8001"
+            assert ":8011" not in value, f"{name} must not target test backend port 8011"
 
 
 def test_registry_exposes_common_sanitize_and_confirm_helpers() -> None:
@@ -173,8 +210,9 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
+    assert registry.tool_count("catalog") == 6
     assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
-    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT + 6
 
 
 
@@ -192,6 +230,20 @@ def test_gateway_loads_local_data_tools() -> None:
     assert registry.total_tool_count() == local_data.TOOL_COUNT
 
 
+def test_gateway_loads_external_research_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import external_research
+
+    _mcp, registry = gateway.create_gateway(
+        profile="external_research",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("external_research") == external_research.TOOL_COUNT
+    assert registry.total_tool_count() == external_research.TOOL_COUNT
+
+
 def test_gateway_loads_research_full_profile() -> None:
     from backend.mcp import gateway
 
@@ -201,6 +253,7 @@ def test_gateway_loads_research_full_profile() -> None:
         env_name="test",
     )
 
+    assert registry.tool_count("catalog") == 6
     assert registry.tool_count("research") == 16
     assert registry.tool_count("research_assistant") == 13
     assert registry.tool_count("local_data") == 47
@@ -210,4 +263,5 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("model_registry") == 9
     assert registry.tool_count("strategy_governance") == 9
     assert registry.tool_count("execution_policy") == 7
-    assert registry.total_tool_count() == 126
+    assert registry.tool_count("external_research") == 4
+    assert registry.total_tool_count() == 136

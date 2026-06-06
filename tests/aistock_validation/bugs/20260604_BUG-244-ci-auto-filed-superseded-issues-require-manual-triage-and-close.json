@@ -1,0 +1,68 @@
+{
+  "actual": "#642 and #557 required manual triage-ci-issue plus manual gh issue close even though the workflow could classify both as superseded by later successful main CI.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-244-ci-auto-filed-superseded-issues-require-manual-triage-and-close.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-244",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Add safe dry-run/apply janitor coverage for superseded auto-filed CI issues.",
+    "Do not close real regressions, module-specific unresolved issues, or issues that still need BUG JSON promotion."
+  ],
+  "created_at": "2026-06-04T00:49:46.506907Z",
+  "description": "#642 and #557 required manual triage-ci-issue plus manual gh issue close even though the workflow could classify both as superseded by later successful main CI.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-22563f7a70a2",
+      "timestamp": "2026-06-04T00:49:46.506903Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A workflow command can safely dry-run and apply closure for open auto-filed CI issues classified as superseded_by_later_main_success, leaving real regressions and module-specific issues open.",
+  "first_seen_at": "2026-06-04T00:49:46.506907Z",
+  "fix_branch": null,
+  "fix_commit": "c1f7350c8e46d8701d3a557209e47617d14f6a05",
+  "fixed_at": "2026-06-04T02:18:17.116817Z",
+  "github_issue_number": 685,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/685",
+  "last_seen_at": "2026-06-04T00:49:46.506907Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/687",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 642",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI auto-filed superseded issues require manual triage and close",
+  "trigger_condition": {
+    "fingerprint": "22563f7a70a2e11c968ffefa",
+    "source_event_id": "FE-20260604-22563f7a70a2"
+  },
+  "validation_evidence": [
+    "pytest targeted ci_issue_janitor/triage_ci_issue -> passed; ruff changed files -> passed; workflow-smoke validation -> passed; nox l0 guardrail_changed_files validation_center_backend validation_module_registry_l0 -> passed; nox validation_catalog_integrity -> passed; PR #687 GitHub checks -> passed"
+  ],
+  "verification_run_id": null
+}

@@ -25,7 +25,7 @@ from scripts.aistock_mcp_common import LoopbackApiClient, require_confirm, sanit
 from backend.services.quantevolver.seed_contract import ensure_loop_fixed_seed, ensure_template_fixed_seeds
 from backend.services.qe_templates.validator import validate_template_payload
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8011/api/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
 QE_EXPERIMENT_STOP_CONFIRM = "QE_EXPERIMENT_STOP"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"

@@ -1,0 +1,60 @@
+{
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "generated_at": "2026-06-02T06:09:04.890816+00:00",
+  "module": "research_assistant.qe_autonomy",
+  "level": "L4",
+  "title": "Runner evidence for ra_phase6_qe_autonomy",
+  "run_id": "research-assistant-qe-autonomy_20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation__16f1f4ace9",
+  "git_commit": "c40561e9",
+  "operator": "codex-cli-g1-central-post-rebase-20260602",
+  "runner_job_id": "valjob_20260602_060848_0027fa39",
+  "evidence": [
+    {
+      "kind": "run_metadata",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 5686,
+      "child_count": null,
+      "sha256": "8a90a2339a24c1001d0e7a551edf05255fccae53420a2be96af659aa4fa8129d"
+    },
+    {
+      "kind": "run_record",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-validation.md",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 1375,
+      "child_count": null,
+      "sha256": "265c55bc9963cf9effe7273ef3b8772487d3d8a115c4b43523b9b734c8e6020e"
+    },
+    {
+      "kind": "runner_job",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-job.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 4034,
+      "child_count": null,
+      "sha256": "4ab6cc154e9ba08b72cfac84d6d02cf7400772ea2c81abda952c3c7b143679eb"
+    },
+    {
+      "kind": "runner_log",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-log.txt",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 5327,
+      "child_count": null,
+      "sha256": "4df12709cf3ba915208c59e6a8e1f5b8dcc255f177c1f7f3ca183786ab623f9f"
+    },
+    {
+      "kind": "runner_evidence",
+      "path": "F:\\Dev\\AIstock_worktrees\\ra-qe-autonomy-20260602\\tests\\aistock_validation\\history\\research-assistant-qe-autonomy\\20260602_060904_l4_ra-phase6-qe-autonomy_0027fa39_runner-runner-evidence.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 2631,
+      "child_count": null,
+      "sha256": "c54ed6f10df6c57c58c5e4bb167f09ebf952fd3367f876ebe44ecea386b4a8da"
+    }
+  ],
+  "missing_count": 0,
+  "missing": []
+}

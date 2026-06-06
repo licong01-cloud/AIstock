@@ -721,7 +721,7 @@ CREATE TABLE qe_archive.paper_v2_config_change_audit (
     audit_pk             BIGSERIAL PRIMARY KEY,
     audit_id             TEXT NOT NULL UNIQUE,
     portfolio_id         UUID,
-    change_type          TEXT,                  -- 'runtime_profile' / 'execution_policy' / 'fee_policy' / 'risk_policy'
+    change_type          TEXT,                  -- source action enum: CREATE / ACTIVATE / DEACTIVATE / MODIFY
     old_value_json       JSONB,
     new_value_json       JSONB,
     changed_by           TEXT,
@@ -729,6 +729,9 @@ CREATE TABLE qe_archive.paper_v2_config_change_audit (
     captured_at          TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+
+
+Decision (BUG-010): keep <code>change_type</code> as the source action enum (<code>CREATE</code>, <code>ACTIVATE</code>, <code>DEACTIVATE</code>, <code>MODIFY</code>). Subject/category queries must inspect <code>old_value_json</code> / <code>new_value_json</code>; adding <code>subject_type</code> requires a separate approved migration.
 
 ### §5.19 paper_v2_reset_audit (append-only)
 
@@ -1140,3 +1143,19 @@ M5（M4 完成 → 1 周）：联调点 2 + 上线
 ---
 
 **结束**。文档 v2.0（D1=a 修订）。下次会话或 cross-tool 协商基于本文档。
+
+---
+
+## Appendix 2026-05-29: Handler-Derived Fields Design Pass
+
+The handler-derived field decisions for `PaperV2ArchiveHandler` are recorded in
+`docs/design/handler_derived_fields_design_pass_20260511.md`.
+
+This appendix is the architecture-level pointer for BUG-011 and related BUG-009 / BUG-010 decisions:
+
+- Source `paper_v2.*` rows are read-only for archive handlers.
+- Archive-only fields must be deterministic, replayable, and testable.
+- Missing data must remain visible as `NULL`, `missing`, or low-quality status.
+- BIGINT source event/audit ids canonicalize to raw decimal TEXT strings.
+- `paper_v2_config_change_audit.change_type` remains the source action enum; subject/type queries must inspect JSON payloads unless a future migration explicitly adds a `subject_type` column.
+- BUG-008 remains open for stronger `actual_bar_count` truth; current `intraday_snapshots` counting is documented as a coverage heuristic.

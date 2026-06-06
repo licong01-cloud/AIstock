@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.broker.base import OrderHandle
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
@@ -33,6 +33,7 @@ from backend.services.simulation_runtime import (
     SimulationRunContext,
     StaticSimulationRunContextProvider,
     StrategyPackageSelectionResult,
+    StrategyPackageSelectionService,
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
@@ -49,14 +50,14 @@ from backend.services.strategy_package.models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
-from backend.services.trading_core.errors import DataUnavailableError
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 
 
 TRADE_DATE = date(2026, 5, 21)
 
 
-def _release_and_bindings(*, qmt_only: bool = False):
+def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | None = None):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
     release = service.create_release(
@@ -70,6 +71,7 @@ def _release_and_bindings(*, qmt_only: bool = False):
         execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
+        release_metadata=release_metadata,
         created_by="unit-test",
         created_reason="scheduler test",
     )
@@ -146,11 +148,18 @@ def _candidate_rows() -> list[SelectionCandidate]:
     ]
 
 
-def _evidence(release, *, candidates: list[SelectionCandidate], valid_no_candidate: bool = False) -> DailySelectionEvidence:
+def _evidence(
+    release,
+    *,
+    candidates: list[SelectionCandidate],
+    valid_no_candidate: bool = False,
+    target_trade_date: date = TRADE_DATE,
+    cutoff_date: date = date(2026, 5, 20),
+) -> DailySelectionEvidence:
     payload = {
         "schema_version": "daily_selection_evidence_v1",
-        "target_trade_date": TRADE_DATE.isoformat(),
-        "cutoff_date": "2026-05-20",
+        "target_trade_date": target_trade_date.isoformat(),
+        "cutoff_date": cutoff_date.isoformat(),
         "package_id": release.package_id,
         "manifest_sha256": release.manifest_sha256,
         "release_id": release.release_id,
@@ -167,8 +176,8 @@ def _evidence(release, *, candidates: list[SelectionCandidate], valid_no_candida
     digest = canonical_json_sha256(payload)
     return DailySelectionEvidence(
         evidence_id=f"dse_{digest[:16]}",
-        target_trade_date=TRADE_DATE,
-        cutoff_date=date(2026, 5, 20),
+        target_trade_date=target_trade_date,
+        cutoff_date=cutoff_date,
         package_id=release.package_id,
         manifest_sha256=release.manifest_sha256,
         release_id=release.release_id,
@@ -336,6 +345,63 @@ class FakePaperRepository:
         return self.cash
 
 
+class FakeLocalSimMarketDataProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def load_symbol_input(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        min_bars: int,
+        require_suspend_status: bool = False,
+        require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "source": source,
+                "min_bars": min_bars,
+                "require_suspend_status": require_suspend_status,
+                "require_day_features": require_day_features,
+            }
+        )
+        start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
+        minute_bars = [
+            MinuteBar(
+                symbol=symbol,
+                bar_time=start + timedelta(minutes=offset),
+                open=10.0,
+                high=10.2,
+                low=9.9,
+                close=10.1,
+                volume=100_000,
+                amount=1_000_000.0,
+                limit_up=11.0,
+                limit_down=9.0,
+            )
+            for offset in range(max(1, min_bars))
+        ]
+        return MinuteExecutionMarketInput(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=minute_bars,
+            market_context={
+                "stock_id": symbol,
+                "trade_date": trade_date.isoformat(),
+                "data_source": source.value,
+                "prev_close": 10.0,
+                "limit_up": 11.0,
+                "limit_down": 9.0,
+                "suspend_status": {"is_suspended": False},
+            },
+        )
+
+
 def _frozen_manifest(package_id: str = "pkg_scheduler", manifest_sha256: str | None = None) -> StrategyPackageManifest:
     manifest = StrategyPackageManifest(
         manifest_version="alpha_core_v1",
@@ -374,6 +440,31 @@ def _frozen_manifest(package_id: str = "pkg_scheduler", manifest_sha256: str | N
     return frozen
 
 
+def _score_weighted_manifest(release, *, topk: int = 2, n_drop: int = 1) -> StrategyPackageManifest:
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    return manifest.model_copy(
+        update={
+            "backtest_context": {
+                "daily_strategy": {
+                    "strategy_id": "score_weighted_topk_v2",
+                    "topk": topk,
+                    "n_drop": n_drop,
+                    "custom_params": {
+                        "strategy_class": "score_weighted_topk_v2",
+                        "topk": topk,
+                        "n_drop": n_drop,
+                        "max_n_drop": max(n_drop, 1),
+                        "min_n_drop": 0,
+                        "weight_method": "equal",
+                        "max_position_ratio": 0.95,
+                    },
+                }
+            },
+            "manifest_sha256": release.manifest_sha256,
+        }
+    )
+
+
 def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_evidence() -> None:
     release, local_binding, qmt_binding, repo = _release_and_bindings()
     assert local_binding is not None
@@ -404,6 +495,93 @@ def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_e
     ]
     assert normalized_intents[0] == normalized_intents[1]
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_intents[0]
+
+
+def test_scheduler_persists_no_rebalance_evidence_when_targets_match_current_positions() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id=qmt_binding.strategy_id,
+                    current_positions={
+                        "000001.SZ": PositionLot(
+                            portfolio_id=qmt_binding.strategy_id,
+                            symbol="000001.SZ",
+                            quantity=1000,
+                            available_quantity=1000,
+                            avg_cost=10.0,
+                            trade_date=date(2026, 5, 20),
+                        ),
+                        "688001.SH": PositionLot(
+                            portfolio_id=qmt_binding.strategy_id,
+                            symbol="688001.SH",
+                            quantity=201,
+                            available_quantity=201,
+                            avg_cost=20.0,
+                            trade_date=date(2026, 5, 20),
+                        ),
+                    },
+                    current_prices={"000001.SZ": 10.0, "688001.SH": 20.0},
+                )
+            }
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+
+    assert result.planned_count == 1
+    run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    evidence = run.run_payload_json["no_rebalance_evidence"]
+    assert evidence["reason_code"] == "TOP_LIST_AND_QUANTITY_MATCH"
+    assert evidence["selected_symbols"] == ["000001.SZ", "688001.SH"]
+    assert evidence["target_symbols"] == ["000001.SZ", "688001.SH"]
+    assert all(row["delta_quantity"] == 0 for row in evidence["rows"])
+
+
+def test_scheduler_passes_release_selection_runtime_config_to_selection_service() -> None:
+    release_selection_config = {
+        "selection_artifact_config": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2026-05-20",
+            "include_reference_price": True,
+            "artifact_reuse": "same_trade_date_config_hash",
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    release, local_binding, _, repo = _release_and_bindings(
+        release_metadata={"selection_runtime_config": release_selection_config}
+    )
+    assert local_binding is not None
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_release_config")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert result.planned_count == 1
+    assert len(fake_selection.calls) == 1
+    assert fake_selection.calls[0]["runtime_config"] == release_selection_config
 
 
 def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resubmit() -> None:
@@ -484,6 +662,50 @@ def test_scheduler_submits_existing_local_plan_after_restart_when_broker_was_not
     ]
     assert restarted.results[0].run.run_payload_json["broker_called"] is True
     assert restarted.results[0].run.run_payload_json["broker_order_handles"][0]["backend_id"] == "local_sim"
+
+
+def test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared")}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    interrupted = repo.update_simulation_daily_run(
+        planned.results[0].run.run_id,
+        status=SimulationDailyRunStatus.SUBMITTING,
+        payload_patch={"last_stage": "SUBMITTING"},
+    )
+    assert interrupted.run_payload_json.get("broker_called") is None
+
+    broker = FakeLocalSimBroker()
+    scheduler.context_provider = CountingContextProvider(
+        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared", local_broker=broker)}
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    assert recovered.results[0].status == "SUBMITTED"
+    assert recovered.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert [intent.intent_id for intent in broker.submitted] == [
+        intent.intent_id for intent in planned.results[0].execution_plan.intents
+    ]
+    assert recovered.results[0].run.run_payload_json["broker_called"] is True
+    assert recovered.results[0].run.run_payload_json["last_stage"] == "SUCCEEDED"
 
 
 def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
@@ -675,6 +897,225 @@ def test_scheduler_miniqmt_restart_syncs_before_submit_and_reconciles_after_subm
     assert len(broker.place_order_payloads) == 2
 
 
+def test_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    broker = FakeManagedOrderBroker(order_ids=[1082130454])
+    broker.positions = []
+    snapshot_client = FakeQmtSnapshotClient(orders=[], trades=[], positions=[])
+    managed_order_service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
+    context = SimulationRunContext(
+        portfolio_id="portfolio_qmt",
+        current_positions={},
+        current_prices={"301369.SZ": 180.08},
+        managed_order_service=managed_order_service,
+        qmt_ledger_repository=qmt_repo,
+        qmt_sync_service=QmtStrategyLedgerSyncService(
+            repository=qmt_repo,
+            qmt_client=snapshot_client,
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            trade_date=TRADE_DATE,
+            calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        ),
+        qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(
+            release,
+            candidates=[
+                SelectionCandidate(
+                    symbol="301369.SZ",
+                    score=0.99,
+                    rank=1,
+                    target_quantity=200,
+                    target_weight=0.10,
+                    reference_price=180.08,
+                    reason="daily_strategy_buy_or_retain",
+                )
+            ],
+        ),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={qmt_binding.binding_id: context}),
+    )
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    first_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    assert first_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert first_run.run_payload_json["broker_called"] is True
+    assert first_run.run_payload_json["sync_after_submit"]["trades_seen"] == 0
+    assert qmt_repo.list_position_lots(qmt_binding.strategy_id, symbol="301369.SZ") == []
+    assert len(broker.place_order_payloads) == 1
+
+    order_remark = broker.place_order_payloads[0]["order_remark"]
+    snapshot_client._orders = [
+        {
+            "order_id": "1082130454",
+            "order_sysid": "91",
+            "stock_code": "301369.SZ",
+            "order_type": 23,
+            "order_volume": 200,
+            "price_type": 5,
+            "price": 180.08,
+            "traded_volume": 200,
+            "traded_price": 186.2,
+            "order_status": 56,
+            "strategy_name": qmt_binding.strategy_name,
+            "order_remark": order_remark,
+        }
+    ]
+    snapshot_client._trades = [
+        {
+            "traded_id": "1010000032502320",
+            "stock_code": "301369.SZ",
+            "order_type": 23,
+            "traded_time": "092935",
+            "traded_price": 186.2,
+            "traded_volume": 200,
+            "traded_amount": 37240,
+            "order_id": "1082130454",
+            "order_sysid": "91",
+            "commission": 0,
+            "strategy_name": qmt_binding.strategy_name,
+            "order_remark": order_remark,
+        }
+    ]
+    broker.positions = [{"stock_code": "301369.SZ", "quantity": 200, "can_sell": 0}]
+
+    reconciled = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(first_run.run_id)
+    lots = qmt_repo.list_position_lots(qmt_binding.strategy_id, symbol="301369.SZ")
+    assert reconciled.reused_count == 1
+    assert reconciled.results[0].sync_result["trades_inserted"] == 1
+    assert reconciled.results[0].reconciliation_result["run"]["status"] == "SUCCEEDED"
+    assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest_run.run_payload_json["sync_before_submit"]["trades_inserted"] == 1
+    assert latest_run.run_payload_json["reconcile_after_submit"]["run"]["summary_json"]["sync_summary"]["trades_existing"] == 1
+    assert [(lot.open_trade_id, lot.remaining_quantity) for lot in lots] == [("1010000032502320", 200)]
+    assert len(broker.place_order_payloads) == 1
+
+
+def test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_scheduler_qmt_recover_called",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_scheduler_qmt_recover_called",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker()
+    snapshot_client = FakeQmtSnapshotClient(
+        positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
+    )
+    managed_order_service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
+
+    def context_with_positions(quantity: int) -> SimulationRunContext:
+        return SimulationRunContext(
+            portfolio_id="portfolio_qmt",
+            current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
+            current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+            managed_order_service=managed_order_service,
+            qmt_ledger_repository=qmt_repo,
+            qmt_sync_service=QmtStrategyLedgerSyncService(
+                repository=qmt_repo,
+                qmt_client=snapshot_client,
+                account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+                trade_date=TRADE_DATE,
+                calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+            ),
+            qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+            broker_positions=[{"stock_code": "000003.SZ", "quantity": quantity, "can_sell": quantity}],
+        )
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={qmt_binding.binding_id: context_with_positions(1)}
+        ),
+    )
+    failed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    placed_count = len(broker.place_order_payloads)
+    failed_run = repo.get_simulation_daily_run(failed.results[0].run.run_id)
+    assert failed.results[0].status == "RECONCILIATION_WARNING"
+    assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert failed_run.run_payload_json["broker_called"] is True
+    assert failed_run.run_payload_json["qmt_batch_status"] == "SUCCEEDED"
+
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={qmt_binding.binding_id: context_with_positions(77)}
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    recovered_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered.results[0].status == "RECONCILED"
+    assert recovered_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert recovered_run.run_payload_json["reconcile_after_submit"]["run"]["status"] == "SUCCEEDED"
+    assert len(broker.place_order_payloads) == placed_count
+
+
 def test_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -791,7 +1232,9 @@ def test_scheduler_reports_unattended_trading_windows_without_submitting_orders(
     assert result.schedule_windows[3]["state"] == "UPCOMING"
 
 
-def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default() -> None:
+def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     release, local_binding, qmt_binding, repo = _release_and_bindings()
     assert local_binding is not None
     lifecycle = SimulationLifecycleScheduler(
@@ -804,6 +1247,7 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
             }
         ),
     )
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
     background = SimulationLifecycleBackgroundScheduler(lifecycle_scheduler=lifecycle)
 
     result = background.run_once(as_of_time=datetime(2026, 5, 21, 9, 22, tzinfo=UTC))
@@ -843,6 +1287,48 @@ def test_scheduler_no_rebalance_submission_marks_success_without_broker() -> Non
     assert result.results[0].status == "NO_REBALANCE"
     assert result.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
     assert result.results[0].run.run_payload_json["broker_called"] is False
+
+
+def test_scheduler_marks_existing_zero_intent_plan_success_when_submit_window_reuses_it() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    fake_selection = FakeSelectionService(release, candidates=[], valid_no_candidate=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_empty_qmt",
+                    current_positions={},
+                )
+            }
+        ),
+    )
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    resumed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    assert planned.planned_count == 1
+    assert planned.results[0].execution_plan.intents == []
+    assert resumed.submitted_count == 1
+    assert resumed.reused_count == 0
+    assert resumed.results[0].status == "NO_REBALANCE"
+    assert len(fake_selection.calls) == 1
+    latest = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest.run_payload_json["no_rebalance_required"] is True
+    assert latest.run_payload_json["broker_called"] is False
+    assert latest.run_payload_json["last_stage"] == "SUCCEEDED"
 
 
 def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_restart_idempotency() -> None:
@@ -1061,6 +1547,14 @@ def test_production_context_provider_loads_positions():
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     paper_repo = FakePaperRepository(portfolio, positions=positions, cash=999_000)
 
@@ -1100,6 +1594,14 @@ def test_production_context_provider_fails_fast_on_position_failure():
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
     provider = ProductionSimulationRunContextProvider(
@@ -1134,6 +1636,8 @@ def test_production_context_provider_miniqmt_context():
             status=VirtualAccountStatus.ENABLED,
         )
     )
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
     provider = ProductionSimulationRunContextProvider(
         position_loader=lambda strategy_id, trade_date: positions,
         price_loader=lambda symbols, trade_date: {symbol: 12.6 for symbol in symbols},
@@ -1141,12 +1645,13 @@ def test_production_context_provider_miniqmt_context():
         qmt_sync_service_factory=lambda: "fake_sync",
         qmt_reconciliation_service_factory=lambda: "fake_recon",
         qmt_ledger_repository=qmt_repo,
+        package_manifest_loader=lambda package_id: manifest,
     )
-    release = _make_test_release()
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
     assert ctx.current_positions == positions
     assert ctx.current_prices == {"000001.XSHE": 12.6}
+    assert ctx.manifest == manifest
     assert ctx.managed_order_service == "fake_mos"
     assert ctx.qmt_sync_service == "fake_sync"
     assert ctx.qmt_reconciliation_service == "fake_recon"
@@ -1188,19 +1693,22 @@ def test_production_context_provider_loads_miniqmt_positions_from_virtual_ledger
         )
     )
     qmt_client = FakeManagedOrderBroker(positions=[{"stock_code": "000001.SZ", "quantity": 1000, "can_sell": 1000}])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
     provider = ProductionSimulationRunContextProvider(
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
         qmt_ledger_repository=qmt_repo,
         qmt_client_factory=lambda: qmt_client,
+        package_manifest_loader=lambda package_id: manifest,
         enable_miniqmt_submit=False,
     )
-    release = _make_test_release()
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
 
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
     assert ctx.current_positions["000001.SZ"].quantity == 1000
     assert ctx.current_prices == {"000001.SZ": 10.5}
+    assert ctx.manifest == manifest
     assert ctx.cash == 900000
     assert ctx.frozen_cash == 123
     assert ctx.realized_pnl == 45
@@ -1243,16 +1751,19 @@ def test_production_context_provider_miniqmt_preview_checks_broker_can_sell_with
         )
     )
     broker = FakeManagedOrderBroker(positions=[{"stock_code": "000001.SZ", "quantity": 1000, "can_sell": 100}])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
     provider = ProductionSimulationRunContextProvider(
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
         qmt_ledger_repository=qmt_repo,
         qmt_client_factory=lambda: broker,
         qmt_calendar_provider_factory=lambda: StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        package_manifest_loader=lambda package_id: manifest,
         enable_miniqmt_submit=False,
     )
-    release = _make_test_release()
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.manifest == manifest
 
     result = ctx.managed_order_service.submit_batch([
         ManagedOrderRequest(
@@ -1314,6 +1825,7 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
     snapshot_client = FakeQmtSnapshotClient(
         positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
     )
+    manifest = _score_weighted_manifest(release)
     provider = ProductionSimulationRunContextProvider(
         price_loader=lambda symbols, trade_date: {symbol: {"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0}[symbol] for symbol in symbols},
         qmt_ledger_repository=qmt_repo,
@@ -1327,6 +1839,7 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
             calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
         ),
         qmt_reconciliation_service_factory=lambda: QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+        package_manifest_loader=lambda package_id: manifest,
         enable_miniqmt_submit=False,
     )
     scheduler = SimulationLifecycleScheduler(
@@ -1362,6 +1875,9 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
     assert batch.metadata["preview_only"] is True
     assert batch.result_json["broker_called"] is False
     preview_intents = qmt_repo.list_order_intents_by_batch(payload["qmt_batch_id"])
+    quantity_by_symbol = {intent.symbol: intent.quantity for intent in preview_intents}
+    assert quantity_by_symbol["000001.SZ"] == 4700
+    assert quantity_by_symbol["688001.SH"] == 2375
     assert [intent.submit_status for intent in preview_intents] == [
         IntentSubmitStatus.CREATED,
         IntentSubmitStatus.CREATED,
@@ -1391,6 +1907,14 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
         initial_cash=1_000_000,
         start_date=TRADE_DATE,
         data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
     )
     positions = {
         "000001.SZ": PositionLot(
@@ -1412,8 +1936,214 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
     assert ctx.local_broker is not None
+    assert ctx.local_broker.data_source == MinuteDataSource.DB_HISTORICAL
+    assert ctx.market_data_source == MinuteDataSource.DB_HISTORICAL.value
     assert ctx.local_broker.query_account().cash == Decimal("980000")
     assert ctx.local_broker.query_positions()["000001.SZ"].quantity == 1000
+
+
+def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -> None:
+    """Same-day unattended LocalSim must not depend on post-market DB minute sync."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    trade_date = date.today()
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim same-day prod context",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=trade_date,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    positions = {
+        "000001.SZ": PositionLot(
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            quantity=1000,
+            available_quantity=1000,
+            avg_cost=10.0,
+            trade_date=trade_date,
+        )
+    }
+    paper_repo = FakePaperRepository(portfolio, positions=positions, cash=980_000)
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=trade_date)
+
+    assert ctx.local_broker is not None
+    assert ctx.local_broker.data_source == MinuteDataSource.TDX_REALTIME
+    assert ctx.market_data_source == MinuteDataSource.TDX_REALTIME.value
+
+
+def test_production_context_provider_rejects_stale_portfolio_policy_when_release_policy_is_vnpy_id_only() -> None:
+    """LocalSim must not fall back to stale portfolio V25 when the runtime release points to vn.py."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
+    release = _make_test_release(
+        execution_policy_version_id=policy_id,
+        execution_policy_sha256="sha_vnpy_release",
+        execution_policy={"policy_version_id": policy_id, "policy_sha256": "sha_vnpy_release"},
+    )
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim stale V25 guard",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_v25_1_small_cap",
+            "policy_sha256": "sha_portfolio_v25",
+            "policy_json": {
+                "algo_code": "V25_1_SMALL_CAP",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    with pytest.raises(RuntimeConfigInvalidError, match="snapshot is missing full policy_json") as exc_info:
+        provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    assert exc_info.value.context["release_execution_policy_version_id"] == policy_id
+    assert exc_info.value.context["portfolio_policy_algo_code"] == "V25_1_SMALL_CAP"
+    assert "LocalSim-compatible execution policy" in exc_info.value.context["required_action"]
+
+
+def test_production_context_provider_uses_runtime_release_policy_snapshot_over_portfolio_default() -> None:
+    """Runtime release policy_json is authoritative when present."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release(
+        execution_policy_version_id="exec_policy_runtime_close",
+        execution_policy_sha256="sha_runtime_close",
+        execution_policy={
+            "policy_version_id": "exec_policy_runtime_close",
+            "policy_sha256": "sha_runtime_close",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim release policy authority",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_v25_1_small_cap",
+            "policy_sha256": "sha_portfolio_v25",
+            "policy_json": {
+                "algo_code": "V25_1_SMALL_CAP",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    market_data = FakeLocalSimMarketDataProvider()
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.execution_policy_payload == release.release_config_json["execution_policy"]
+    assert ctx.local_broker is not None
+    ctx.local_broker._market_data_provider = market_data
+    handle = ctx.local_broker.submit_order_intent(
+        OrderIntent(
+            package_id=release.package_id,
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            order_type=OrderType.MARKET,
+            target_trade_date=TRADE_DATE,
+        )
+    )
+
+    assert ctx.local_broker.query_status(handle).state == "filled"
+    assert market_data.calls[-1]["require_day_features"] is False
+
+
+def test_production_context_provider_uses_portfolio_execution_policy_for_alpha_core_localsim_recovery():
+    """Alpha-core LocalSim recovery must use the Paper v2 validated policy snapshot, not manifest.minute_execution_policy."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim alpha-core recovery",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
+    market_data = FakeLocalSimMarketDataProvider()
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    assert ctx.local_broker is not None
+    ctx.local_broker._market_data_provider = market_data
+    handle = ctx.local_broker.submit_order_intent(
+        OrderIntent(
+            package_id=release.package_id,
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            order_type=OrderType.MARKET,
+            target_trade_date=TRADE_DATE,
+        )
+    )
+
+    assert ctx.local_broker.query_status(handle).state == "filled"
+    assert market_data.calls[-1]["require_day_features"] is False
 
 
 def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
@@ -1452,6 +2182,86 @@ def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
     assert "stale daily selection evidence" in result.results[0].error["message"]
 
 
+def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
+    stale_runtime_config = {
+        "selection_artifact_config": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2026-05-19",
+        },
+        "point_in_time_context": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "trade_date": TRADE_DATE.isoformat(),
+            "requested_trade_date": TRADE_DATE.isoformat(),
+            "effective_trade_date": TRADE_DATE.isoformat(),
+            "cutoff_date": "2026-05-19",
+            "score_trade_date": "2026-05-19",
+            "reference_price_trade_date": "2026-05-19",
+        },
+    }
+    release, local_binding, _, repo = _release_and_bindings(
+        qmt_only=False,
+        release_metadata={"selection_runtime_config": stale_runtime_config},
+    )
+    stale_evidence = _evidence(
+        release,
+        candidates=_candidate_rows(),
+        cutoff_date=date(2026, 5, 19),
+    )
+    stale_selection = StrategyPackageSelectionResult(
+        runtime_config=stale_runtime_config,
+        package_results={release.package_id: _candidate_rows()},
+        aggregate_results=_candidate_rows(),
+        excluded_results={release.package_id: []},
+        manifest_sha256_by_package={release.package_id: release.manifest_sha256},
+        evidence_by_package={release.package_id: stale_evidence},
+    )
+
+    class RollingCalendar:
+        def ensure_trading_day(self, trade_date: date) -> None:
+            if trade_date != TRADE_DATE:
+                raise DataUnavailableError("not a trading day", context={"trade_date": trade_date.isoformat()})
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            return [
+                item
+                for item in (date(2026, 5, 19), date(2026, 5, 20), TRADE_DATE)
+                if start_date <= item <= end_date
+            ]
+
+    class StaleCutoffSelectionService:
+        def __init__(self) -> None:
+            self.resolver = StrategyPackageSelectionService(calendar_provider=RollingCalendar())
+
+        def run_selection(self, **kwargs):
+            return stale_selection
+
+        def resolve_point_in_time_context(self, **kwargs):
+            return self.resolver.resolve_point_in_time_context(**kwargs)
+
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=StaleCutoffSelectionService(),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id=local_binding.strategy_id)}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+
+    context = result.results[0].error["context"]
+    assert result.failed_count == 1
+    assert result.results[0].status == "FAILED"
+    assert result.results[0].error["type"] == "DataUnavailableError"
+    assert "cutoff_date" in context["reasons"]
+    assert context["cutoff_date"] == "2026-05-19"
+    assert context["expected_cutoff_date"] == "2026-05-20"
+
+
 def test_scheduler_status_reports_provider_and_controlled_tick_capability():
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
@@ -1479,20 +2289,29 @@ def test_fail_fast_provider_still_rejects():
         assert 'requires an explicit run context provider' in str(exc)
 
 
-def _make_test_release():
+def _make_test_release(
+    *,
+    execution_policy_version_id: str = "exec_policy_close_price",
+    execution_policy_sha256: str = "policy_sha256",
+    execution_policy: dict[str, Any] | None = None,
+):
     from backend.services.simulation_runtime.models import StrategyRuntimeRelease
+    policy_payload = execution_policy or {
+        "policy_version_id": execution_policy_version_id,
+        "policy_sha256": execution_policy_sha256,
+    }
     return StrategyRuntimeRelease(
         package_id="pkg", manifest_sha256="aa",
         runtime_profile_id="rp", runtime_profile_version_id="rpv", runtime_profile_sha256="rps",
-        daily_strategy_profile_version_id="dsp", execution_policy_version_id="epv",
-        execution_policy_sha256="eps", tail_policy_version_id="tpv", tail_policy_sha256="tps",
+        daily_strategy_profile_version_id="dsp", execution_policy_version_id=execution_policy_version_id,
+        execution_policy_sha256=execution_policy_sha256, tail_policy_version_id="tpv", tail_policy_sha256="tps",
         release_config_json={
             "schema_version": "strategy_runtime_release_v1",
             "package_id": "pkg",
             "manifest_sha256": "aa",
             "runtime_profile": {"profile_id": "rp", "profile_version_id": "rpv", "config_sha256": "rps"},
             "daily_strategy": {"profile_version_id": "dsp"},
-            "execution_policy": {"policy_version_id": "epv", "policy_sha256": "eps"},
+            "execution_policy": policy_payload,
             "tail_policy": {"policy_version_id": "tpv", "policy_sha256": "tps"},
             "validation_state": "DRAFT",
             "validation_evidence": {},

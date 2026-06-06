@@ -1616,8 +1616,13 @@ class AutoEvolutionScheduler:
             return None
 
         if task.get("task_type") == "custom_evo":
-            next_loop_index = (task["current_loop"] or 0) + 1
-            return await self.submit_custom_evo_loop(task_id, next_loop_index)
+            logger.info(
+                "Task %s is custom_evo; continuing through submit_custom_evo_all_loops "
+                "to preserve strategy_evo_execution_mode and node_parallelism",
+                task_id,
+            )
+            await self.submit_custom_evo_all_loops(task_id)
+            return None
 
         current_loop = task['current_loop']
         max_loops = task['max_loops']
@@ -2263,10 +2268,17 @@ class AutoEvolutionScheduler:
             # 判断是否还有剩余 Loop → 提交下一轮
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT current_loop, max_loops, status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                    cur.execute("SELECT current_loop, max_loops, status, task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                     task = cur.fetchone()
 
-            if task and task['status'] == 'running' and task['current_loop'] < task['max_loops']:
+            if task and task.get("task_type") == "custom_evo":
+                logger.info(
+                    "Custom evolution task %s is managed by submit_custom_evo_all_loops; "
+                    "skip generic submit_next_loop after Loop %s",
+                    task_id,
+                    loop_index,
+                )
+            elif task and task['status'] == 'running' and task['current_loop'] < task['max_loops']:
                 _next_task = asyncio.create_task(self.submit_next_loop(task_id))
                 _next_task.add_done_callback(
                     lambda t: logger.error(f"submit_next_loop failed: {t.exception()}") if t.exception() else None
@@ -2459,29 +2471,36 @@ class AutoEvolutionScheduler:
                     raise RuntimeError(f"Failed to mark loop/task as failed: {db_err}") from db_err
                 return
 
-    async def get_all_tasks(self, detail: str = "summary", status: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_all_tasks(
+        self,
+        detail: str = "summary",
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 where_clause = "WHERE status = %s" if status else ""
                 params: list = [status] if status else []
                 if detail == "full":
                     cur.execute(
-                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s",
-                        params + [limit],
+                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                        params + [limit, offset],
                     )
                 else:
                     cur.execute(
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
-                               task_type, source_type, strategy_id, execution_algo,
+                               task_type, source_type, strategy_id, strategy_params,
+                               strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at
                         FROM qe_evolution_tasks
                         {where_clause}
                         ORDER BY created_at DESC
-                        LIMIT %s
+                        LIMIT %s OFFSET %s
                         """,
-                        params + [limit],
+                        params + [limit, offset],
                     )
                 rows = [dict(row) for row in cur.fetchall()]
         return rows if detail == "full" else [compact_task_row(row) for row in rows]
@@ -2750,32 +2769,7 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json->'factor_list' AS factor_list,
-                               config_json->'factor_names' AS factor_names,
-                               config_json->>'model_id' AS model_id,
-                               config_json->>'strategy_id' AS strategy_id,
-                               config_json->>'label_horizon' AS label_horizon,
-                               config_json->>'execution_algo' AS execution_algo,
-                               metrics_json->>'IC' AS ic,
-                               metrics_json->>'ICIR' AS icir,
-                               COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                               COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                               COALESCE(
-                                   metrics_json->>'annualized_return',
-                                   metrics_json->>'excess_return_with_cost_annualized',
-                                   metrics_json#>>'{summary,annualized_return}'
-                               ) AS annualized_return,
-                               COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'excess_return_with_cost_max_drawdown',
-                                   metrics_json#>>'{summary,max_drawdown}'
-                               ) AS max_drawdown,
-                               COALESCE(
-                                   metrics_json->>'information_ratio',
-                                   metrics_json->>'sharpe',
-                                   metrics_json->>'excess_return_with_cost_IR',
-                                   metrics_json#>>'{summary,information_ratio}'
-                               ) AS information_ratio,
+                               config_json, metrics_json,
                                is_sota, status,
                                node_id, experiment_id, created_at, updated_at
                         FROM qe_evolution_loops
@@ -2915,32 +2909,7 @@ class AutoEvolutionScheduler:
                     return None
                 cur.execute("""
                     SELECT loop_id, task_id, loop_index, action_type,
-                           config_json->'factor_list' AS factor_list,
-                           config_json->'factor_names' AS factor_names,
-                           config_json->>'model_id' AS model_id,
-                           config_json->>'strategy_id' AS strategy_id,
-                           config_json->>'label_horizon' AS label_horizon,
-                           config_json->>'execution_algo' AS execution_algo,
-                           metrics_json->>'IC' AS ic,
-                           metrics_json->>'ICIR' AS icir,
-                           COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                           COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           COALESCE(
-                               metrics_json->>'annualized_return',
-                               metrics_json->>'excess_return_with_cost_annualized',
-                               metrics_json#>>'{summary,annualized_return}'
-                           ) AS annualized_return,
-                           COALESCE(
-                               metrics_json->>'max_drawdown',
-                               metrics_json->>'excess_return_with_cost_max_drawdown',
-                               metrics_json#>>'{summary,max_drawdown}'
-                           ) AS max_drawdown,
-                           COALESCE(
-                               metrics_json->>'information_ratio',
-                               metrics_json->>'sharpe',
-                               metrics_json->>'excess_return_with_cost_IR',
-                               metrics_json#>>'{summary,information_ratio}'
-                           ) AS information_ratio,
+                           config_json, metrics_json,
                            is_sota, status,
                            node_id, experiment_id, created_at, updated_at
                     FROM qe_evolution_loops
@@ -5651,15 +5620,18 @@ class AutoEvolutionScheduler:
             requested_seed = runtime_flags.get("random_seed")
             if requested_seed is None and not cfg.backtest_only:
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
+            seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
+            action_type = "ensemble_config" if seed_ensemble else "custom_config"
 
             config_record = {
-                "action_type": "custom_config",
+                "action_type": action_type,
                 "label": loop_config.get("label"),
                 "factor_list": cfg.factor_names,
                 "model_id": cfg.model_id,
                 "strategy_id": cfg.strategy_id,
                 "strategy_params": cfg.build_strategy_params(),
                 "runtime_flags": runtime_flags,
+                "ensemble": seed_ensemble,
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
                 "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
@@ -5714,6 +5686,7 @@ class AutoEvolutionScheduler:
                 "execution_algo_params": cfg.execution_algo_params or {},
                 "runtime_flags": runtime_flags,
                 "random_seed": requested_seed,
+                "ensemble": seed_ensemble,
                 "node_id": effective_node_id,
                 "backtest_only": cfg.backtest_only,
             }
@@ -5721,9 +5694,9 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
+                        UPDATE qe_evolution_loops SET config_json = %s, action_type = %s, updated_at = NOW()
                         WHERE loop_id = %s
-                    """, (json.dumps(config_record), evolution_loop_db_id))
+                    """, (json.dumps(config_record), action_type, evolution_loop_db_id))
                 conn.commit()
 
             # 3. 执行层提交

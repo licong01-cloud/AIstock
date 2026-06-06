@@ -20,15 +20,11 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from typing import Any, Callable, Iterator, Literal
-
-logger = logging.getLogger(__name__)
-
-ModelParamsOrigin = Literal["node", "cache", "unavailable"]
 
 import pandas as pd
 import psycopg2.extras
@@ -51,6 +47,9 @@ from backend.services.trading_core.errors import (
 
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
+logger = logging.getLogger(__name__)
+
+ModelParamsOrigin = Literal["node", "cache", "unavailable"]
 ConnFactory = Callable[[], Iterator[Any]]
 
 AUTHORITATIVE_SELECTION_SOURCE_TYPE = "live_qe_model_inference_v1"
@@ -1940,6 +1939,26 @@ class LocalStrategyPackageInferenceProvider:
         )
 
 
+_MALFORMED_TS_CODE_WITH_DATE_RE = re.compile(
+    r"\b\d{6}\.[A-Z]{1,4}\d{4}-\d{2}-\d{2}T[^\s,;\"'\]\)}]+"
+)
+
+
+def _extract_malformed_ts_code_samples(text: str, *, limit: int = 10) -> list[str]:
+    if not text:
+        return []
+    samples = []
+    seen = set()
+    for match in _MALFORMED_TS_CODE_WITH_DATE_RE.finditer(text):
+        value = match.group(0)
+        if value not in seen:
+            samples.append(value)
+            seen.add(value)
+        if len(samples) >= limit:
+            break
+    return samples
+
+
 class WslStrategyPackageInferenceProvider:
     """Run live inference inside the WSL Qlib environment."""
 
@@ -1997,6 +2016,7 @@ class WslStrategyPackageInferenceProvider:
                 check=False,
             )
             if completed.returncode != 0:
+                combined_output = completed.stdout + "\n" + completed.stderr
                 raise DataUnavailableError(
                     "WSL live QE model inference failed",
                     context={
@@ -2004,15 +2024,24 @@ class WslStrategyPackageInferenceProvider:
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
                         "workspace_path": str(workspace.workspace_path),
+                        "trade_date": trade_date.isoformat(),
+                        "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
+                        "runner_args": args,
+                        "malformed_ts_code_samples": _extract_malformed_ts_code_samples(combined_output),
                     },
                 )
             if not output_path.exists():
+                combined_output = completed.stdout + "\n" + completed.stderr
                 raise DataUnavailableError(
                     "WSL live QE model inference did not write output JSON",
                     context={
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
                         "output_path": str(output_path),
+                        "trade_date": trade_date.isoformat(),
+                        "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
+                        "runner_args": args,
+                        "malformed_ts_code_samples": _extract_malformed_ts_code_samples(combined_output),
                     },
                 )
             payload = json.loads(output_path.read_text(encoding="utf-8"))

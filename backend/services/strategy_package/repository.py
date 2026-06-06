@@ -52,6 +52,21 @@ logger = logging.getLogger("aistock.strategy_package.repository")
 ConnFactory = Callable[[], Iterator[Any]]
 
 
+def _manifest_drift_repair_plan(*, stored_sha256: str | None, computed_sha256: str | None) -> dict[str, Any]:
+    return {
+        "recommended_action": "repair_manifest_hash" if computed_sha256 else "quarantine_manual_review",
+        "mutates_manifest_json": False,
+        "requires_operator_confirmation": True,
+        "confirm_stored_sha256": stored_sha256,
+        "confirm_computed_sha256": computed_sha256,
+        "rollback_restore": {
+            "field": "strategy_pkg.package.manifest_sha256",
+            "restore_value": stored_sha256,
+            "audit_event_reason": "manifest_hash_repaired",
+        },
+    }
+
+
 class StrategyPackageRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,66 +112,124 @@ class StrategyPackageRepository:
                 "manifest_sha256 is required before persistence",
                 context={"package_id": frozen.package_id},
             )
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            return source_existing
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT package_id, manifest_sha256, paper_portfolio_count
+                        FROM strategy_pkg.package
+                        WHERE package_id = %s
+                        """,
+                        (frozen.package_id,),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        if existing["manifest_sha256"] != frozen.manifest_sha256:
+                            raise InvalidStateTransitionError(
+                                "package manifest cannot be silently replaced",
+                                context={
+                                    "package_id": frozen.package_id,
+                                    "existing_manifest_sha256": existing["manifest_sha256"],
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                    "paper_portfolio_count": existing["paper_portfolio_count"],
+                                },
+                            )
+                        return self.get(frozen.package_id)
+
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package (
+                            package_id, package_name, package_version, source_type,
+                            source_id, loop_id, run_id, package_status, manifest_json,
+                            manifest_sha256
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            frozen.package_id,
+                            frozen.package_name,
+                            frozen.package_version,
+                            frozen.source.source_type.value,
+                            frozen.source.source_id,
+                            frozen.source.loop_id,
+                            frozen.source.run_id,
+                            frozen.package_status.value,
+                            psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                            frozen.manifest_sha256,
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            frozen.package_id,
+                            None,
+                            frozen.package_status.value,
+                            "package_created",
+                            psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
+                        ),
+                    )
+        except pg_errors.UniqueViolation as exc:
+            existing_by_source = self.find_by_source_version(
+                source_type=frozen.source.source_type.value,
+                source_id=frozen.source.source_id,
+                loop_id=frozen.source.loop_id,
+                package_version=frozen.package_version,
+            )
+            if existing_by_source:
+                return existing_by_source
+            raise InvalidStateTransitionError(
+                "strategy package unique constraint collision",
+                context={
+                    "package_id": frozen.package_id,
+                    "source_type": frozen.source.source_type.value,
+                    "source_id": frozen.source.source_id,
+                    "loop_id": frozen.source.loop_id,
+                    "package_version": frozen.package_version,
+                },
+            ) from exc
+        return self.get(frozen.package_id)
+
+    def find_by_source_version(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        package_version: str,
+    ) -> StrategyPackageRecord | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT package_id, manifest_sha256, paper_portfolio_count
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
-                    WHERE package_id = %s
+                    WHERE source_type = %s
+                      AND source_id = %s
+                      AND COALESCE(loop_id, '') = COALESCE(%s, '')
+                      AND package_version = %s
+                    ORDER BY created_at DESC, package_id ASC
+                    LIMIT 1
                     """,
-                    (frozen.package_id,),
+                    (source_type, source_id, loop_id, package_version),
                 )
-                existing = cur.fetchone()
-                if existing:
-                    if existing["manifest_sha256"] != frozen.manifest_sha256:
-                        raise InvalidStateTransitionError(
-                            "package manifest cannot be silently replaced",
-                            context={
-                                "package_id": frozen.package_id,
-                                "existing_manifest_sha256": existing["manifest_sha256"],
-                                "new_manifest_sha256": frozen.manifest_sha256,
-                                "paper_portfolio_count": existing["paper_portfolio_count"],
-                            },
-                        )
-                    return self.get(frozen.package_id)
-
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package (
-                        package_id, package_name, package_version, source_type,
-                        source_id, loop_id, run_id, package_status, manifest_json,
-                        manifest_sha256
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        frozen.package_id,
-                        frozen.package_name,
-                        frozen.package_version,
-                        frozen.source.source_type.value,
-                        frozen.source.source_id,
-                        frozen.source.loop_id,
-                        frozen.source.run_id,
-                        frozen.package_status.value,
-                        psycopg2.extras.Json(frozen.model_dump(mode="json")),
-                        frozen.manifest_sha256,
-                    ),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        frozen.package_id,
-                        None,
-                        frozen.package_status.value,
-                        "package_created",
-                        psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
-                    ),
-                )
-        return self.get(frozen.package_id)
+                row = cur.fetchone()
+        if not row:
+            return None
+        return self._record_from_row(dict(row))
 
     def get(self, package_id: str) -> StrategyPackageRecord:
         with self._conn_factory() as conn:
@@ -1279,6 +1352,15 @@ class StrategyPackageRepository:
                     "package_status": record.package_status.value,
                     "stored_sha256": stored,
                     "computed_sha256": computed,
+                    "impact": {
+                        "paper_portfolio_count": record.paper_portfolio_count,
+                        "blocks_detail_endpoint": True,
+                        "excluded_from_package_list": True,
+                    },
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=stored,
+                        computed_sha256=computed,
+                    ),
                 })
             else:
                 clean_count += 1
@@ -1289,7 +1371,14 @@ class StrategyPackageRepository:
             "drifted": drifted,
         }
 
-    def repair_manifest_hash(self, package_id: str, *, operator: str = "repair_manifest_hash") -> StrategyPackageRecord:
+    def repair_manifest_hash(
+        self,
+        package_id: str,
+        *,
+        operator: str = "repair_manifest_hash",
+        confirm_stored_sha256: str | None = None,
+        confirm_computed_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
         """Recompute and persist the correct manifest_sha256 with an audit event.
 
         Only repairs the hash column — the manifest JSON itself is not modified.
@@ -1334,6 +1423,21 @@ class StrategyPackageRepository:
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
+            raise InvalidStateTransitionError(
+                "manifest hash repair requires explicit stored/computed hash confirmation",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "confirm_stored_sha256": confirm_stored_sha256,
+                    "confirm_computed_sha256": confirm_computed_sha256,
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=record.manifest_sha256,
+                        computed_sha256=correct_hash,
+                    ),
+                },
+            )
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1359,6 +1463,10 @@ class StrategyPackageRepository:
                             "operator": operator,
                             "old_manifest_sha256": record.manifest_sha256,
                             "new_manifest_sha256": correct_hash,
+                            "rollback_restore": {
+                                "field": "strategy_pkg.package.manifest_sha256",
+                                "restore_value": record.manifest_sha256,
+                            },
                         }),
                     ),
                 )
@@ -1615,6 +1723,25 @@ class InMemoryStrategyPackageRepository:
         )
         return record
 
+    def find_by_source_version(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        package_version: str,
+    ) -> StrategyPackageRecord | None:
+        loop_key = loop_id or ""
+        for record in self.records.values():
+            if (
+                record.source_type == source_type
+                and record.source_id == source_id
+                and (record.loop_id or "") == loop_key
+                and record.package_version == package_version
+            ):
+                return record
+        return None
+
     def get(self, package_id: str) -> StrategyPackageRecord:
         record = self.records.get(package_id)
         if record is None:
@@ -1732,6 +1859,15 @@ class InMemoryStrategyPackageRepository:
                     "package_status": record.package_status.value,
                     "stored_sha256": record.manifest_sha256,
                     "computed_sha256": computed,
+                    "impact": {
+                        "paper_portfolio_count": record.paper_portfolio_count,
+                        "blocks_detail_endpoint": True,
+                        "excluded_from_package_list": True,
+                    },
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=record.manifest_sha256,
+                        computed_sha256=computed,
+                    ),
                 })
             else:
                 clean_count += 1
@@ -1742,13 +1878,35 @@ class InMemoryStrategyPackageRepository:
             "drifted": drifted,
         }
 
-    def repair_manifest_hash(self, package_id: str, *, operator: str = "repair_manifest_hash") -> StrategyPackageRecord:
+    def repair_manifest_hash(
+        self,
+        package_id: str,
+        *,
+        operator: str = "repair_manifest_hash",
+        confirm_stored_sha256: str | None = None,
+        confirm_computed_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
         record = self.records.get(package_id)
         if record is None:
             raise DataUnavailableError("strategy package does not exist", context={"package_id": package_id})
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
+            raise InvalidStateTransitionError(
+                "manifest hash repair requires explicit stored/computed hash confirmation",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "confirm_stored_sha256": confirm_stored_sha256,
+                    "confirm_computed_sha256": confirm_computed_sha256,
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=record.manifest_sha256,
+                        computed_sha256=correct_hash,
+                    ),
+                },
+            )
         updated = record.model_copy(update={"manifest_sha256": correct_hash, "updated_at": datetime.now(timezone.utc)})
         self.records[package_id] = updated
         self.events.append(
@@ -1761,6 +1919,10 @@ class InMemoryStrategyPackageRepository:
                     "operator": operator,
                     "old_manifest_sha256": record.manifest_sha256,
                     "new_manifest_sha256": correct_hash,
+                    "rollback_restore": {
+                        "field": "strategy_pkg.package.manifest_sha256",
+                        "restore_value": record.manifest_sha256,
+                    },
                 },
             )
         )

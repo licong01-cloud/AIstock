@@ -15,11 +15,27 @@ export type AssistantPage<T> = {
   has_more: boolean;
 };
 
+export type AssistantMcpToolPage<T> = AssistantPage<T> & JsonObject & {
+  source?: string;
+  catalog_source?: string;
+  manifest_tool_count?: number;
+  server_count?: number;
+  risk_distribution?: Record<string, number>;
+  profile_distribution?: Record<string, number>;
+  requested_server_key?: string | null;
+  canonical_server_key?: string | null;
+  backend_health?: JsonObject;
+  recent_smoke?: JsonObject;
+  summary_first?: boolean;
+  detail_hint?: string;
+};
+
 export type AssistantHealth = JsonObject & {
   service?: string;
   status?: string;
   repository?: JsonObject;
   runtime_boundaries?: JsonObject;
+  runtime_code?: JsonObject;
 };
 
 export type AssistantOverview = JsonObject & {
@@ -62,12 +78,15 @@ export type AssistantMemory = JsonObject & {
   memory_type?: string;
   namespace?: string;
   subject_key?: string;
+  tree_path?: string | null;
+  parent_key?: string | null;
+  scope?: string | null;
   title?: string;
   content_text?: string;
   approval_status?: string;
   risk_level?: string;
   source_ref?: string | null;
-  evidence_refs?: string[];
+  evidence_refs?: Array<string | AssistantEvidenceRef>;
   updated_at?: string;
 };
 
@@ -78,6 +97,42 @@ export type AssistantContextPack = JsonObject & {
   token_budget?: number;
   checksum?: string;
   pack_json?: JsonObject;
+};
+
+export type AssistantEvidenceRef = JsonObject & {
+  source?: string;
+  provenance?: JsonObject;
+  as_of?: string;
+  source_ref?: string;
+  confidence?: number;
+  trade_date?: string;
+  report_period?: string;
+};
+
+export type AssistantEvidenceCard = JsonObject & {
+  card_id: string;
+  title: string;
+  summary: string;
+  evidence_refs: AssistantEvidenceRef[];
+  status: "supported" | "insufficient" | "blocked" | string;
+};
+
+export type AssistantBlockerCard = JsonObject & {
+  blocker_id: string;
+  status: "blocked" | "approval_required" | "high_risk_pending" | string;
+  reason: string;
+  next_step: string;
+  provenance?: JsonObject;
+  as_of?: string;
+};
+
+export type AssistantMemoryTreeNode = JsonObject & {
+  node_id: string;
+  tree_path: string;
+  title: string;
+  memory_ids: string[];
+  children: AssistantMemoryTreeNode[];
+  evidence_refs: AssistantEvidenceRef[];
 };
 
 export type AssistantMcpServer = JsonObject & {
@@ -102,16 +157,40 @@ export type AssistantMcpTool = JsonObject & {
   capability?: string | null;
   mcp_module?: string | null;
   module?: string | null;
+  profile?: string | null;
+  profile_tags?: string[];
   category?: string | null;
   phase?: string | null;
   tags?: string[];
   risk_level?: string;
+  manifest_risk_level?: string;
+  assistant_usable?: string;
   side_effect_level?: string;
   requires_approval?: boolean;
+  requires_confirmation?: boolean;
+  backend_endpoint?: string | null;
+  migration_state?: string | null;
+  response_budget?: string | null;
+  catalog_source?: string | null;
+  legacy_server_aliases?: string[];
   input_schema_json?: JsonObject;
   preflight_schema_json?: JsonObject;
   required_confirmations?: string[];
   status?: string;
+};
+
+export type AssistantMcpToolEvent = JsonObject & {
+  tool_event_id: string;
+  task_id?: string | null;
+  server_key?: string;
+  tool_name?: string;
+  event_type?: string;
+  status?: string;
+  request_json?: JsonObject;
+  response_json?: JsonObject;
+  result_card_json?: JsonObject;
+  artifact_refs?: unknown[];
+  created_at?: string;
 };
 
 export type AssistantCapability = JsonObject & {
@@ -460,6 +539,20 @@ export type AssistantTraceEvent = JsonObject & {
   created_at?: string;
 };
 
+export type AssistantAgentRun = JsonObject & {
+  agent_run_id: string;
+  parent_task_id?: string;
+  agent_key?: string;
+  role?: string;
+  status?: string;
+  model_profile_id?: string;
+  trace_id?: string;
+  input_json?: JsonObject;
+  result_json?: JsonObject;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AssistantReport = JsonObject & {
   report_id: string;
   report_type?: string;
@@ -667,6 +760,12 @@ export const researchAssistantApi = {
   addTaskEvent(taskId: string, payload: JsonObject): Promise<AssistantTaskEvent> {
     return post<AssistantTaskEvent>(`/research-assistant/tasks/${encodeURIComponent(taskId)}/events`, payload);
   },
+  agentRuns(params: { parent_task_id?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantAgentRun>> {
+    return unwrap<AssistantPage<AssistantAgentRun>>(appendQuery("/research-assistant/agent-runs", { limit: 100, ...params }));
+  },
+  agentRun(agentRunId: string): Promise<AssistantAgentRun> {
+    return unwrap<AssistantAgentRun>(`/research-assistant/agent-runs/${encodeURIComponent(agentRunId)}`);
+  },
   memories(params: { namespace?: string; memory_type?: string; approval_status?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantMemory>> {
     return unwrap<AssistantPage<AssistantMemory>>(appendQuery("/research-assistant/memories", { limit: 50, ...params }));
   },
@@ -703,11 +802,14 @@ export const researchAssistantApi = {
   mcpServers(): Promise<AssistantPage<AssistantMcpServer>> {
     return unwrap<AssistantPage<AssistantMcpServer>>("/research-assistant/mcp/servers");
   },
-  mcpTools(params: { server_key?: string; risk_level?: string; search?: string; limit?: number; offset?: number; include_schema?: boolean } = {}): Promise<AssistantPage<AssistantMcpTool>> {
+  mcpTools(params: { server_key?: string; risk_level?: string; search?: string; limit?: number; offset?: number; include_schema?: boolean } = {}): Promise<AssistantMcpToolPage<AssistantMcpTool>> {
     const includeSchema = params.include_schema === true;
     const requestedLimit = params.limit ?? 50;
     const compactLimit = Math.min(requestedLimit, 50);
-    return unwrap<AssistantPage<AssistantMcpTool>>(appendQuery("/research-assistant/mcp/tools", { ...params, limit: includeSchema ? requestedLimit : compactLimit, include_schema: includeSchema }));
+    return unwrap<AssistantMcpToolPage<AssistantMcpTool>>(appendQuery("/research-assistant/mcp/tools", { ...params, limit: includeSchema ? requestedLimit : compactLimit, include_schema: includeSchema }));
+  },
+  mcpToolEvents(params: { task_id?: string; server_key?: string; tool_name?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantMcpToolEvent>> {
+    return unwrap<AssistantPage<AssistantMcpToolEvent>>(appendQuery("/research-assistant/mcp/tool-events", { limit: 20, ...params }));
   },
   capabilities(params: { status?: string; risk_level?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantCapability>> {
     return unwrap<AssistantPage<AssistantCapability>>(appendQuery("/research-assistant/capabilities", { limit: 100, ...params }));

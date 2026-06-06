@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -68,6 +68,10 @@ MEMORY_TYPES = {
     "episodic",
     "external",
     "agenda",
+    "user_preference",
+    "directive",
+    "habit",
+    "analysis_note",
 }
 APPROVAL_STATUSES = {"draft", "approved", "rejected", "expired", "superseded"}
 APPROVAL_REQUEST_STATUSES = {"pending", "approved", "rejected", "expired"}
@@ -221,6 +225,17 @@ class MemoryCreate(StrictModel):
     valid_to: str | None = None
     supersedes_id: str | None = None
     contradicts_id: str | None = None
+    tree_path: str | None = None
+    parent_key: str | None = None
+    node_type: str = "fact"
+    scope: str = "project"
+    importance: float = Field(0.5, ge=0, le=1)
+    last_used_at: str | None = None
+    use_count: int = Field(0, ge=0)
+    auto_created: bool = False
+    trust_level: str = "user_stated"
+    provenance_json: dict[str, Any] = Field(default_factory=dict)
+    resident: bool = False
     approval_status: str = "draft"
     risk_level: str = "medium"
     evidence_refs: list[str] = Field(default_factory=list)
@@ -240,6 +255,27 @@ class MemoryCreate(StrictModel):
     def _approval_status(cls, value: str) -> str:
         if value not in APPROVAL_STATUSES:
             raise ValueError(f"approval_status must be one of {sorted(APPROVAL_STATUSES)}")
+        return value
+
+    @field_validator("node_type")
+    @classmethod
+    def _node_type(cls, value: str) -> str:
+        if value not in {"branch", "fact"}:
+            raise ValueError("node_type must be one of ['branch', 'fact']")
+        return value
+
+    @field_validator("scope")
+    @classmethod
+    def _scope(cls, value: str) -> str:
+        if value not in {"project", "personal"}:
+            raise ValueError("scope must be one of ['personal', 'project']")
+        return value
+
+    @field_validator("trust_level")
+    @classmethod
+    def _trust_level(cls, value: str) -> str:
+        if value not in {"user_stated", "assistant_inferred"}:
+            raise ValueError("trust_level must be one of ['assistant_inferred', 'user_stated']")
         return value
 
     @field_validator("risk_level")
@@ -460,6 +496,8 @@ class ContextPackBuildRequest(StrictModel):
     namespace: str = "aistock"
     token_budget: int | None = Field(None, ge=1)
     include_memory_types: list[str] = Field(default_factory=lambda: ["core", "procedural", "architecture", "task_state", "experiment", "roadmap"])
+    user_message: str | None = None
+    dialogue_intent: str | None = None
 
 
 class McpPreflightRequest(StrictModel):

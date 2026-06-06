@@ -1,0 +1,109 @@
+{
+  "actual": "列表区域高度固定，行数较多时出现页面内二级滚动，用户无法一次看到设置页面显示数量的所有列表。",
+  "allowed_write_scope": [
+    "frontend/src/app/watchlist/page.tsx",
+    "frontend/tests/watchlist",
+    "tests/aistock_validation/bugs/20260604_BUG-261-watchlist-table-height-ignores-selected-page-size-and-forces-inner-scrol.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-261",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-04T14:15:29.389538Z",
+  "description": "列表区域高度固定，行数较多时出现页面内二级滚动，用户无法一次看到设置页面显示数量的所有列表。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-57eae5aad00d",
+      "timestamp": "2026-06-04T14:15:29.389533Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "自选股票池列表高度随当前 page size 和行高自动调整，不再固定容器内滚动；设置每页 10/20/50 等数量时，当前页所有行可在页面中完整展示，浏览器负责页面滚动和翻页。",
+  "first_seen_at": "2026-06-04T14:15:29.389538Z",
+  "fix_branch": null,
+  "fix_commit": "ba714d155a372af7f51e1a7509206924c65f35e2",
+  "fixed_at": "2026-06-04T15:23:35.240633Z",
+  "github_issue_number": 755,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/755",
+  "last_seen_at": "2026-06-04T14:15:29.389538Z",
+  "module": "watchlist",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/757",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /watchlist, change page size to a larger value, observe the table container still uses a fixed height/internal scroll instead of expanding to show all rows.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "watchlist"
+  ],
+  "title": "Watchlist table height ignores selected page size and forces inner scrolling",
+  "trigger_condition": {
+    "fingerprint": "57eae5aad00d10100048c4fb",
+    "source_event_id": "FE-20260604-57eae5aad00d"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:watchlist",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/watchlist/page.tsx",
+      "frontend/tests/watchlist"
+    ],
+    "ui_issue": true,
+    "ui_route": "/watchlist",
+    "ui_routes": [
+      "/watchlist"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "ruff check backend/services/watchlist_service.py backend/tests/watchlist/test_realtime_amount_units.py -> passed",
+    "python -m pytest backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> passed (6 passed)",
+    "python -m nox -s l0 -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "npx playwright test tests/watchlist/watchlist-return-height.spec.ts -> passed (1 passed)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from backend.execution_algos import ALGO_REGISTRY, get_algo
+from backend.execution_algos.vnpy_style import is_vnpy_style_algo, validate_vnpy_style_config
 
 from backend.services.trading_core.execution_algo_capabilities import (
     normalize_execution_algo_code,
@@ -82,6 +83,18 @@ class StrategyPackageValidator:
                 "V25_TWO_STAGE allow_default_day_features is diagnostic-only and cannot enter Paper Trading v2",
                 context={"package_id": package_id, "algo_code": algo_code},
             )
+        if is_vnpy_style_algo(algo_code):
+            try:
+                validate_vnpy_style_config(algo_code, algo_config)
+            except Exception as exc:
+                raise RuntimeConfigInvalidError(
+                    f"{algo_code} execution policy config is invalid",
+                    context={
+                        "package_id": package_id,
+                        "algo_code": algo_code,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                ) from exc
         asset_paths = {}
         if require_runtime_assets:
             asset_paths = validate_runtime_asset_paths(

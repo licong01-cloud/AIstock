@@ -93,6 +93,23 @@ def test_scanner_respects_rule_exclude_globs_for_tests(tmp_path: Path) -> None:
     assert not any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
 
 
+def test_trading_fallback_guardrail_ignores_test_file_names(tmp_path: Path) -> None:
+    scanner = _load_module()
+    test_file = tmp_path / "backend" / "tests" / "selection_center" / "test_price_guidance.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "def test_missing_signal_ref_price_degrades_without_default_price():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([test_file], rules=rules, root=tmp_path)
+
+    assert not any(finding.rule_id == "TRADING-FALLBACK-001" for finding in findings)
+
+
 def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
     scanner = _load_module()
     root_script = tmp_path / "one_off_debug.py"
@@ -283,6 +300,56 @@ def test_missing_baseline_marks_findings_as_new() -> None:
     assert scanner.blocking_findings(classified, "P1", fail_new_only=True) == classified
 
 
+def test_guardrail_scope_summary_classifies_repository_areas() -> None:
+    scanner = _load_module()
+
+    assert scanner._finding_scope("backend/services/example.py") == "runtime_or_pipeline"
+    assert scanner._finding_scope("scripts/aistock_guardrail_scan.py") == "runtime_or_pipeline"
+    assert scanner._finding_scope("frontend/src/app/page.tsx") == "frontend_runtime"
+    assert scanner._finding_scope("tests/aistock_validation/catalog/test_plans.yaml") == "config_or_metadata"
+    assert scanner._finding_scope("backend/tests/test_example.py") == "test_or_validation"
+    assert scanner._finding_scope("docs/architecture/legacy.md") == "docs_or_historical"
+
+
+def test_guardrail_summarize_includes_scope_visibility_without_changing_blocking() -> None:
+    scanner = _load_module()
+    findings = [
+        scanner.Finding(
+            rule_id="ERR-FALLBACK-001",
+            title="Broad exception handlers must not return fake success or defaults",
+            severity="P0",
+            category="error_handling",
+            file="backend/services/example.py",
+            line=10,
+            message="Broad exception handlers must not return fake success or defaults",
+            remediation="Fail fast.",
+            baseline_policy="block_new_only",
+            fingerprint="runtime",
+            baseline_status="new",
+        ),
+        scanner.Finding(
+            rule_id="ARCH-WSL-001",
+            title="Historical WSL path reference",
+            severity="P2",
+            category="portability",
+            file="docs/architecture/legacy.md",
+            line=3,
+            message="Historical WSL path reference",
+            remediation="Classify before remediation.",
+            baseline_policy="block_new_only",
+            fingerprint="docs",
+            baseline_status="baseline",
+        ),
+    ]
+
+    summary = scanner.summarize(findings)
+
+    assert summary["by_scope"] == {"docs_or_historical": 1, "runtime_or_pipeline": 1}
+    assert summary["by_scope_and_severity"]["runtime_or_pipeline"]["P0"] == 1
+    assert summary["top_runtime_or_pipeline_rules"] == [{"rule_id": "ERR-FALLBACK-001", "count": 1}]
+    assert scanner.blocking_findings(findings, "P1", fail_new_only=True) == [findings[0]]
+
+
 def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     scanner = _load_module()
     runtime_file = tmp_path / "backend" / "services" / "example.py"
@@ -317,7 +384,10 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
     assert payload["gate"]["status"] == "failed"
     assert payload["summary"]["by_baseline_status"]["new"] >= 1
+    assert payload["summary"]["by_scope"]["runtime_or_pipeline"] >= 1
     assert payload["summary"]["total_findings"] >= 1
     assert "AIstock Guardrail Baseline Scan" in summary
     assert "Summary By Baseline Status" in summary
+    assert "Summary By Scope" in summary
+    assert "Top Runtime Or Pipeline Rules" in summary
     assert "ERR-FALLBACK-001" in summary

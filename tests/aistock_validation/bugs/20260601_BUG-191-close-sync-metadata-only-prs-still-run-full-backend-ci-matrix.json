@@ -1,0 +1,80 @@
+{
+  "actual": "Close-sync PRs such as BUG-189 #473 ran the full backend matrix even though only BUG JSON/status evidence changed.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/20260601_BUG-191-close-sync-metadata-only-prs-still-run-full-backend-ci-matrix.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-191",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T08:34:01.300486Z",
+  "description": "Close-sync PRs such as BUG-189 #473 ran the full backend matrix even though only BUG JSON/status evidence changed.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-11b4f132690f",
+      "timestamp": "2026-06-01T08:34:01.300476Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/standards/aistock_issue_workflow_quickstart.md metadata-only fast lane note",
+    "PR #473 close-sync BUG-189 CI ran backend matrix"
+  ],
+  "expected": "Metadata-only close-sync PRs should keep PR Quality/static registry checks but skip unrelated backend matrix jobs through an auditable CI change classifier.",
+  "first_seen_at": "2026-06-01T08:34:01.300486Z",
+  "fix_branch": null,
+  "fix_commit": "021b0f16bf213b648ad4c47dbbb623427f1e0f50",
+  "fixed_at": "2026-06-01T09:07:52.551354Z",
+  "github_issue_number": 475,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/475",
+  "last_seen_at": "2026-06-01T08:34:01.300486Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/476",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open a close-sync-only PR that changes only tests/aistock_validation/bugs/*.json and observe AIstock CI backend-tests matrix still runs.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Close-sync metadata-only PRs still run full backend CI matrix",
+  "trigger_condition": {
+    "fingerprint": "11b4f132690fa35f4072a19a",
+    "source_event_id": "FE-20260601-11b4f132690f"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 5 passed",
+    "python scripts/ci_change_classifier.py --repo-root <tmp> --changed-file tests/aistock_validation/bugs/20260601_BUG-191-fixed-demo.json -> backend_required=false classification=close_sync_metadata_only",
+    "python -m ruff check scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file .github/workflows/test.yml --changed-file scripts/ci_change_classifier.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --changed-file docs/standards/aistock_issue_workflow_quickstart.md --module validation --output-format compact -> workflow_gate=passed unexpected_dirty_paths=[]",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s guardrail_changed_files -> success",
+    "python -m nox -s validation_catalog_integrity validation_module_registry_l0 -> success",
+    "python -m nox -s validation_center_backend -> 299 passed"
+  ],
+  "verification_run_id": null
+}

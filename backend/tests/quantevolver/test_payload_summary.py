@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 from backend.services.quantevolver.payload_summary import (
+    compact_config_summary,
+    compact_enhanced_metric_summary,
     compact_experiment_row,
     compact_loop_row,
     compact_metric_summary,
+    derive_position_summary_from_enhanced_metrics,
 )
+
+
+def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
+    summary = compact_config_summary(
+        {
+            "model_id": "LGBModel",
+            "strategy_id": "TopkDropoutStrategy",
+            "strategy_params": {
+                "topk": 50,
+                "hold_thresh": 10,
+                "unfilled_handler": "TAIL_SUBSTITUTE",
+                "unfilled_backup_depth": 15,
+                "unfilled_handler_params": {"backup_depth": 15},
+                "candidate_symbols": ["too-large-to-return"],
+            },
+            "factor_list": ["alpha_a", "alpha_b"],
+        }
+    )
+
+    assert summary["strategy_params"]["hold_thresh"] == 10
+    assert summary["strategy_params"]["unfilled_handler"] == "TAIL_SUBSTITUTE"
+    assert summary["strategy_params"]["unfilled_backup_depth"] == 15
+    assert summary["unfilled_handler_params"]["backup_depth"] == 15
+    assert "candidate_symbols" not in summary["strategy_params"]
+    assert "factor_list" not in summary
 
 
 def test_compact_metric_summary_drops_large_enhanced_payloads() -> None:
@@ -31,6 +59,88 @@ def test_compact_metric_summary_drops_large_enhanced_payloads() -> None:
     assert "stock_trades" not in summary
     assert "return_curves" not in summary
     assert "rank_ic_series" not in summary
+
+
+def test_compact_metric_summary_keeps_enhanced_scalars_only() -> None:
+    metrics = {
+        "IC": 0.0412,
+        "enhanced_metrics": {
+            "absolute_returns": {
+                "cagr": 0.42,
+                "sharpe": 2.1,
+                "max_drawdown": -0.13,
+                "final_cash": 1000.0,
+                "final_stock_value": 9000.0,
+                "final_total_value": 10000.0,
+            },
+            "position_summary": {
+                "position_count_avg": 48.5,
+                "position_count_max": 55,
+            },
+            "return_curves": {"dates": ["2026-01-01"], "cumulative_portfolio": [1.1]},
+            "stock_trades": {"000001.SZ": [{"date": "2026-01-01", "type": "buy"}]},
+        },
+    }
+
+    summary = compact_metric_summary(metrics)
+    enhanced = summary["enhanced_metrics"]
+
+    assert enhanced["absolute_returns"]["cagr"] == 0.42
+    assert enhanced["absolute_returns"]["sharpe"] == 2.1
+    assert enhanced["position_summary"]["position_count_avg"] == 48.5
+    assert enhanced["position_summary"]["final_cash"] == 1000.0
+    assert enhanced["position_summary"]["final_stock_value"] == 9000.0
+    assert "return_curves" not in enhanced
+    assert "stock_trades" not in enhanced
+
+
+def test_compact_enhanced_summary_derives_position_counts_from_stock_trades() -> None:
+    metrics = {
+        "enhanced_metrics": {
+            "absolute_returns": {
+                "cagr": 0.35,
+                "sharpe": 1.9,
+                "max_drawdown": -0.11,
+                "final_cash": 500.0,
+                "final_stock_value": 9500.0,
+                "final_total_value": 10000.0,
+            },
+            "return_curves": {"dates": ["2026-01-01", "2026-01-02", "2026-01-03"]},
+            "stock_trades": {
+                "000001.SZ": [
+                    {"date": "2026-01-01", "type": "buy"},
+                    {"date": "2026-01-03", "type": "sell"},
+                ],
+                "000002.SZ": [{"date": "2026-01-02", "type": "buy"}],
+            },
+        }
+    }
+
+    enhanced = compact_enhanced_metric_summary(metrics)
+    position = enhanced["position_summary"]
+
+    assert enhanced["absolute_returns"]["cagr"] == 0.35
+    assert position["position_count_min"] == 1
+    assert position["position_count_avg"] == 4 / 3
+    assert position["position_count_max"] == 2
+    assert position["final_stock_count"] == 1
+    assert position["final_cash"] == 500.0
+    assert position["final_stock_value"] == 9500.0
+
+
+def test_derive_position_summary_from_enhanced_metrics_is_compact() -> None:
+    summary = derive_position_summary_from_enhanced_metrics(
+        {
+            "absolute_returns": {"final_cash": 100.0, "final_total_value": 1000.0},
+            "stock_trades": {
+                "AAA": [{"date": "2026-01-01", "side": "buy"}],
+                "BBB": [{"date": "2026-01-02", "side": "buy"}],
+            },
+        }
+    )
+
+    assert summary["position_count_max"] == 2
+    assert summary["final_cash_ratio"] == 0.1
 
 
 def test_compact_loop_row_projects_factors_and_scalar_metrics_only() -> None:

@@ -1,0 +1,98 @@
+{
+  "actual": "真实 UTF-8 中文提示在 route_request 中返回 general；live 8001 因仍加载旧代码返回 local_data_management_request/aistock-local-data。",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-160-research-assistant-mcp-utf-8.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-160",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T10:27:49.418913Z",
+  "description": "真实 UTF-8 中文提示在 route_request 中返回 general；live 8001 因仍加载旧代码返回 local_data_management_request/aistock-local-data。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-10fd96d6a4b7",
+      "timestamp": "2026-05-29T10:27:49.418910Z"
+    },
+    {
+      "action": "scope_expand_issue_registry_metadata",
+      "actor": "codex",
+      "note": "Added BUG registry JSON and allocator paths to allowed_write_scope so registration and closure metadata can be committed in the same issue workflow branch.",
+      "timestamp": "2026-05-29T10:35:43.135688Z"
+    },
+    {
+      "action": "live_validation_after_restart_request",
+      "actor": "codex",
+      "note": "8001 still reports runtime_loaded_git_commit_short=4b62b7e4 while local/origin main are 3495f109; restart_required_to_activate_main=true. Live behavior cannot prove the merged fix until backend is reloaded from main.",
+      "timestamp": "2026-05-29T10:35:43.135688Z"
+    },
+    {
+      "action": "validation_completed",
+      "actor": "codex",
+      "note": "git diff --check -> passed; python -m json.tool tests\\aistock_validation\\bugs\\.bug_id_allocator.json and tests\\aistock_validation\\bugs\\20260529_BUG-160-research-assistant-mcp-utf-8.json -> passed; python -m pytest -q backend/tests/research_assistant/test_natural_language_mcp_routing.py::test_bug_160_utf8_chinese_business_mcp_overviews_are_routed backend/tests/research_assistant/test_service.py::test_bug_160_utf8_business_overviews_keep_specific_mcp_cards backend/tests/research_assistant/test_api.py::test_bug_158_api_routes_chinese_business_mcp_overviews -> 3 passed; python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (research_assistant_backend 77 passed; research_assistant_mcp_contract 26 passed; l0 succeeded); GET http://127.0.0.1:8001/api/v1/research-assistant/health -> runtime_loaded_git_commit_short=4b62b7e4, current_repo_git_commit_short=3495f109, restart_required_to_activate_main=true before user reload",
+      "timestamp": "2026-05-29T10:42:52.752906Z"
+    },
+    {
+      "action": "validation_extended",
+      "actor": "codex",
+      "note": "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (validation_center_backend 269 passed; validation_module_registry_l0 8 passed)",
+      "timestamp": "2026-05-29T10:47:46.768338Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "真实 UTF-8 中文业务概要查询应映射到对应 MCP domain/server/tool，并保持 summary-first、小 payload、不出现 local_data_management 卡片。",
+  "first_seen_at": "2026-05-29T10:27:49.418913Z",
+  "fix_branch": null,
+  "fix_commit": "19c2eb8071e0c4ef5d0c20aacd8cf7481a11ab30",
+  "fixed_at": "2026-05-29T11:01:40.322824Z",
+  "github_issue_number": 376,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/376",
+  "last_seen_at": "2026-05-29T10:27:49.418913Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/377",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python - <<PY: route_request('因子库有哪些因子？只要概要列表，不要全量详情。') 应返回 aistock-factor-library/factor_library_list；POST http://127.0.0.1:8001/api/v1/research-assistant/chat/turn 同消息不应返回 local_data_management_request。",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant 真实中文 MCP 路由未被 UTF-8 别名覆盖",
+  "trigger_condition": {
+    "fingerprint": "10fd96d6a4b73dafeaacf765",
+    "source_event_id": "FE-20260529-10fd96d6a4b7"
+  },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m json.tool tests\\\\aistock_validation\\\\bugs\\\\.bug_id_allocator.json and tests\\\\aistock_validation\\\\bugs\\\\20260529_BUG-160-research-assistant-mcp-utf-8.json -> passed",
+    "python -m pytest -q backend/tests/research_assistant/test_natural_language_mcp_routing.py::test_bug_160_utf8_chinese_business_mcp_overviews_are_routed backend/tests/research_assistant/test_service.py::test_bug_160_utf8_business_overviews_keep_specific_mcp_cards backend/tests/research_assistant/test_api.py::test_bug_158_api_routes_chinese_business_mcp_overviews -> 3 passed",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (research_assistant_backend 77 passed; research_assistant_mcp_contract 26 passed; l0 succeeded)",
+    "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (validation_center_backend 269 passed; validation_module_registry_l0 8 passed)"
+  ],
+  "verification_run_id": "BUG-160-20260529-utf8-regression-validation"
+}

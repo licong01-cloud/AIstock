@@ -28,6 +28,7 @@ from .routers import (
     cloud_screening,
     config_env,
     execution_policy,
+    external_research,
     strategy_governance,
     model_registry,
     factor_correlation,
@@ -59,6 +60,7 @@ from .routers import (
     quantevolver_evolution,
     strategies,
     strategy_packages,
+    advisory,
     selection_center,
     paper_trading_v2,
     trading_calendar,
@@ -533,11 +535,13 @@ def create_app() -> FastAPI:
     app.include_router(model_registry.router, prefix="/api/v1")
     app.include_router(strategy_governance.router, prefix="/api/v1")
     app.include_router(execution_policy.router, prefix="/api/v1")
+    app.include_router(external_research.router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
     app.include_router(qe_templates.router, prefix="/api/v1")
     app.include_router(research_assistant.router, prefix="/api/v1")
     app.include_router(research_pipeline.router, prefix="/api/v1")
     app.include_router(strategy_packages.router, prefix="/api/v1")
+    app.include_router(advisory.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
     app.include_router(trading_calendar.router, prefix="/api/v1")

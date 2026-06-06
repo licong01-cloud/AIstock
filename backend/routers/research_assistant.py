@@ -35,6 +35,7 @@ from backend.services.research_assistant.models import (
     WorkbenchDryRunExecuteRequest,
 )
 from backend.services.research_assistant.repository import ResearchAssistantSchemaMissingError
+from backend.services.research_assistant.mcp_catalog_sync import enrich_mcp_server_record
 from backend.services.research_assistant.service import ResearchAssistantCatalogNotReadyError, ResearchAssistantService
 
 router = APIRouter(prefix="/research-assistant", tags=["research-assistant"])
@@ -163,6 +164,38 @@ def list_tasks(
 def get_task(task_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.get_task(task_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/agent-runs", response_model=ResearchAssistantResponse)
+def list_agent_runs(
+    parent_task_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(
+            service.list_records(
+                "agent_runs",
+                filters={"parent_task_id": parent_task_id, "status": status},
+                limit=limit or 100,
+                offset=offset,
+            )
+        )
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/agent-runs/{agent_run_id}", response_model=ResearchAssistantResponse)
+def get_agent_run(agent_run_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        row = service.repository.get_record("agent_runs", agent_run_id)
+        if not row:
+            raise KeyError(f"agent_run not found: {agent_run_id}")
+        return _success(row)
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -542,7 +575,7 @@ def list_skill_usage_events(
 @router.get("/mcp/servers", response_model=ResearchAssistantResponse)
 def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        page = service.list_records("mcp_servers", limit_key="router_mcp_servers")
+        page = service.list_mcp_servers()
         page["items"] = [_summarize_mcp_server_record(dict(item)) for item in page["items"]]
         page["summary_first"] = True
         return _success(page)
@@ -551,7 +584,7 @@ def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_as
 
 
 def _summarize_mcp_server_record(server: dict[str, Any]) -> dict[str, Any]:
-    item = dict(server)
+    item = enrich_mcp_server_record(server)
     health = item.get("health_json") if isinstance(item.get("health_json"), dict) else {}
     display_name_zh = health.get("display_name_zh")
     aliases = health.get("business_aliases_zh")
@@ -575,6 +608,17 @@ MCP_TOOL_SUMMARY_FIELDS = {
     "risk_level",
     "side_effect_level",
     "requires_approval",
+    "module",
+    "profile",
+    "profile_tags",
+    "manifest_risk_level",
+    "assistant_usable",
+    "requires_confirmation",
+    "backend_endpoint",
+    "migration_state",
+    "response_budget",
+    "catalog_source",
+    "legacy_server_aliases",
     "status",
     "created_at",
     "updated_at",
@@ -613,7 +657,7 @@ def list_mcp_tools(
         resolved_limit = limit or compact_default_limit
         if not include_schema:
             resolved_limit = min(resolved_limit, compact_default_limit)
-        page = service.list_records("mcp_tools", filters={"server_key": server_key, "risk_level": risk_level}, search=search, limit=resolved_limit, offset=offset)
+        page = service.list_mcp_tools(server_key=server_key, risk_level=risk_level, search=search, limit=resolved_limit, offset=offset)
         page["items"] = [_summarize_mcp_tool_record(dict(item), include_schema=include_schema) for item in page["items"]]
         page["summary_first"] = not include_schema
         page["detail_available"] = True

@@ -7,12 +7,12 @@ from __future__ import annotations
 import pytest
 
 from backend.services.qe_archive.handlers.contract import (
-    ArchiveResult,
     HandlerStatus,
     PayloadValidationError,
 )
 from backend.services.qe_archive.handlers.paper_v2_archive_handler import (
     PaperV2ArchiveHandler,
+    _archive_text_id,
 )
 from backend.services.qe_archive.models import ArchiveJobRecord, ClaimedOutboxEvent
 
@@ -60,6 +60,84 @@ class TestCanHandleAndValidate:
     def test_validate_payload_unknown_schema_version(self):
         with pytest.raises(PayloadValidationError, match="unsupported schema_version"):
             self.h.validate_payload({"schema_version": 999, "routing_class": "archive"})
+
+
+class TestArchiveTextIdPolicy:
+    MAX_INT64 = 9223372036854775807
+
+    def test_bigint_max_archives_as_raw_decimal_text(self):
+        value = _archive_text_id(self.MAX_INT64)
+        assert value == "9223372036854775807"
+        assert isinstance(value, str)
+        assert _archive_text_id(value) == value
+
+    def test_order_event_bigint_id_cast_and_idempotency(self):
+        class FakeCursor:
+            def __init__(self, event_id: int):
+                self.event_id = event_id
+                self.rowcount = 0
+                self._rows = []
+                self.inserted_orders = set()
+                self.inserted_order_events = set()
+                self.order_event_insert_params = []
+
+            def execute(self, sql, params=None):
+                if "SELECT * FROM paper_v2.orders" in sql:
+                    self._rows = [{
+                        "order_id": "order-bigint",
+                        "created_at": None,
+                        "symbol": "000001.SZ",
+                        "side": "BUY",
+                        "order_type": "MARKET",
+                        "quantity": 100,
+                        "limit_price": 10,
+                        "status": "SUBMITTED",
+                    }]
+                    self.rowcount = 0
+                    return
+                if "SELECT * FROM paper_v2.order_events" in sql:
+                    self._rows = [{
+                        "event_id": self.event_id,
+                        "order_id": "order-bigint",
+                        "event_type": "SUBMITTED",
+                        "event_time": None,
+                        "metadata": {"source": "test"},
+                        "fill_json": None,
+                        "reason": None,
+                    }]
+                    self.rowcount = 0
+                    return
+                if "SELECT * FROM paper_v2.order_execution_state" in sql:
+                    self._rows = []
+                    self.rowcount = 0
+                    return
+                if "INSERT INTO qe_archive.paper_v2_order_event" in sql:
+                    self.order_event_insert_params.append(params)
+                    key = params[0]
+                    self.rowcount = 0 if key in self.inserted_order_events else 1
+                    self.inserted_order_events.add(key)
+                    return
+                if "INSERT INTO qe_archive.paper_v2_order " in sql:
+                    key = params[2]
+                    self.rowcount = 0 if key in self.inserted_orders else 1
+                    self.inserted_orders.add(key)
+                    return
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+            def fetchall(self):
+                return self._rows
+
+        cur = FakeCursor(self.MAX_INT64)
+        handler = PaperV2ArchiveHandler()
+
+        first = handler._mirror_orders_for_run(cur, "run-bigint", None)
+        second = handler._mirror_orders_for_run(cur, "run-bigint", None)
+
+        assert first == 2
+        assert second == 0
+        archived_event_id = cur.order_event_insert_params[0][0]
+        assert archived_event_id == "9223372036854775807"
+        assert isinstance(archived_event_id, str)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +207,6 @@ class TestRunCompletedHappyPath:
 
         first = handler.handle(evt, job)
         assert first.status is HandlerStatus.SUCCESS
-        first_inserted = first.rows_inserted
 
         second = handler.handle(evt, job)
         assert second.status is HandlerStatus.SUCCESS

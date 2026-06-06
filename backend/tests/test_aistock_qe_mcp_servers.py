@@ -48,6 +48,26 @@ def _swap(module: Any, client: Any) -> None:
     module._default_client = client
 
 
+def test_qe_mcp_default_base_urls_use_production_loopback_port(monkeypatch):
+    monkeypatch.delenv("AISTOCK_QE_EXPERIMENT_BASE_URL", raising=False)
+    monkeypatch.delenv("AISTOCK_QE_ARCHIVE_BASE_URL", raising=False)
+    sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
+    sys.modules.pop("scripts.aistock_qe_archive_mcp_server", None)
+
+    experiment = importlib.import_module("scripts.aistock_qe_experiment_mcp_server")
+    archive = importlib.import_module("scripts.aistock_qe_archive_mcp_server")
+
+    assert experiment.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1"
+    assert archive.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1/qe-archive"
+    assert experiment._default_client.base_url == "http://127.0.0.1:8001/api/v1"
+    assert archive._default_client.base_url == "http://127.0.0.1:8001/api/v1/qe-archive"
+    assert ":8011" not in experiment.DEFAULT_BASE_URL
+    assert ":8011" not in archive.DEFAULT_BASE_URL
+
+    sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
+    sys.modules.pop("scripts.aistock_qe_archive_mcp_server", None)
+
+
 def test_qe_experiment_mcp_requires_loopback(monkeypatch):
     monkeypatch.setenv("AISTOCK_QE_EXPERIMENT_BASE_URL", "http://example.com/api/v1")
     sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
@@ -337,6 +357,55 @@ def test_qe_archive_query_factor_usage_path(archive_mcp):
     assert captured["query"] == {"limit": "12", "min_runs": "2"}
 
 
+def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append((request.url.path, dict(request.url.params)))
+        return {"status": "success", "data": []}
+
+    _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
+
+    archive_mcp.qe_archive_query_analytics_view_status()
+    archive_mcp.qe_archive_query_run_leaderboard(model_type="LSTM", min_icir=0.5, limit=6, order_by="icir")
+    archive_mcp.qe_archive_query_seed_robustness(min_seed_count=3, stable_only=True, limit=7)
+    archive_mcp.qe_archive_query_factor_performance(factor_name="alpha_001", min_runs=2, limit=8)
+    archive_mcp.qe_archive_query_model_hyperparam_seed_perf(model_type="XGBoost", hyperparam_hash="abc", limit=9)
+    archive_mcp.qe_archive_query_overfit_flags(suspicious_only=True, limit=10)
+    archive_mcp.qe_archive_query_promotion_candidates(min_seed_count=5, limit=11, order_by="ir_mean")
+    archive_mcp.qe_archive_query_evolution_lineage(task_id="task_1", limit=12)
+
+    assert captured[0] == ("/api/v1/qe-archive/analytics/views", {})
+    assert captured[1] == (
+        "/api/v1/qe-archive/analytics/run-leaderboard",
+        {"model_type": "LSTM", "min_icir": "0.5", "limit": "6", "order_by": "icir"},
+    )
+    assert captured[2] == (
+        "/api/v1/qe-archive/analytics/seed-robustness",
+        {"min_seed_count": "3", "stable_only": "true", "limit": "7", "order_by": "cagr_mean"},
+    )
+    assert captured[3] == (
+        "/api/v1/qe-archive/analytics/factor-performance",
+        {"factor_name": "alpha_001", "min_runs": "2", "limit": "8", "order_by": "best_cagr"},
+    )
+    assert captured[4] == (
+        "/api/v1/qe-archive/analytics/model-hyperparam-seed-perf",
+        {"model_type": "XGBoost", "hyperparam_hash": "abc", "limit": "9", "order_by": "cagr"},
+    )
+    assert captured[5] == (
+        "/api/v1/qe-archive/analytics/overfit-flags",
+        {"suspicious_only": "true", "limit": "10"},
+    )
+    assert captured[6] == (
+        "/api/v1/qe-archive/analytics/promotion-candidates",
+        {"min_seed_count": "5", "limit": "11", "order_by": "ir_mean"},
+    )
+    assert captured[7] == (
+        "/api/v1/qe-archive/analytics/evolution-lineage",
+        {"task_id": "task_1", "limit": "12"},
+    )
+
+
 def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
     captured = []
 
@@ -351,12 +420,16 @@ def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
     archive_mcp.qe_archive_query_factor_importance()
     archive_mcp.qe_archive_query_factor_importance_stability()
     archive_mcp.qe_archive_query_seed_trials()
+    archive_mcp.qe_archive_query_run_leaderboard()
+    archive_mcp.qe_archive_query_factor_performance()
 
     assert captured[0][1]["limit"] == "20"
     assert captured[1][1]["limit"] == "20"
     assert captured[2][1]["limit"] == "10"
     assert captured[3][1]["limit"] == "10"
     assert captured[4][1]["limit"] == "20"
+    assert captured[5][1]["limit"] == "20"
+    assert captured[6][1]["limit"] == "20"
 
 
 def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:

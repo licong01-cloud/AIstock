@@ -36,11 +36,11 @@ rules:
     priority: 70
     include:
       - tests/aistock_validation/bugs/**
-    primary_module: validation.center
-    impact_modules: [validation.module_quality, tests.validation_history]
+    primary_module: validation.module_quality
+    impact_modules: [tests.validation_history]
     layer: validation_bug_registry
     risk_level: high
-    ownership_reason: Local bug JSON records are the Validation Center source of truth and GitHub issue mirror input.
+    ownership_reason: Local bug JSON records are workflow metadata; normal BUG registration and close-sync should validate schema/module quality without forcing full Validation Center backend tests.
   - rule_id: validation_services
     priority: 100
     include:
@@ -78,6 +78,7 @@ rules:
       - scripts/aistock_module_ownership_scan.py
       - scripts/aistock_issue_workflow.py
       - scripts/issue_flow.py
+      - scripts/code_intelligence_adapter.py
       - scripts/ci_failure_issue_summary.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
@@ -97,6 +98,7 @@ rules:
   - rule_id: dev_quality_tooling
     priority: 100
     include:
+      - .mcp.json
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/workflows/*.yml
       - .pre-commit-config.yaml
@@ -110,6 +112,18 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: mcp_gateway_platform
+    priority: 90
+    include:
+      - backend/mcp/**
+      - tests/mcp/**
+      - scripts/aistock_mcp_gateway.py
+      - scripts/aistock_mcp_gateway_doctor.py
+    primary_module: platform.mcp_gateway
+    impact_modules: [validation.guardrails, research_pipeline, research_assistant, qe, platform.config]
+    layer: mcp_gateway
+    risk_level: high
+    ownership_reason: Unified MCP gateway code, profiles, manifests, and contract tests control agent-facing access to AIstock tools.
   - rule_id: validation_backend_tests
     priority: 95
     include:
@@ -212,6 +226,21 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: Selection Center produces package-based portfolio candidates.
+  - rule_id: watchlist_services
+    priority: 82
+    include:
+      - backend/core/data_source_manager.py
+      - backend/core/data_source_manager_impl.py
+      - backend/services/watchlist_service.py
+      - backend/routers/watchlist.py
+      - backend/tests/watchlist/**
+      - frontend/src/app/watchlist/**
+      - frontend/tests/watchlist/**
+    primary_module: watchlist
+    impact_modules: [local_data]
+    layer: product_feature
+    risk_level: high
+    ownership_reason: Watchlist realtime quote normalization, import/display APIs, and focused tests must be attributed to watchlist so small data-display fixes use scoped validation instead of generic platform or Validation Center gates.
   - rule_id: strategy_package_services
     priority: 80
     include:
@@ -279,6 +308,283 @@ rules:
     layer: database
     risk_level: high
     ownership_reason: Database schema and migrations affect persisted business state.
+  - rule_id: research_assistant_runtime_config
+    priority: 100
+    include:
+      - configs/research_assistant/runtime_context.yaml
+    primary_module: research_assistant
+    impact_modules: [research_assistant.react_grounding, research_assistant.evidence_guard, research_assistant.qe_autonomy]
+    layer: config
+    risk_level: high
+    ownership_reason: Runtime context config controls assistant dialogue, compaction, and ReAct grounding limits.
+  - rule_id: research_assistant_phase0_docs
+    priority: 95
+    include:
+      - docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md
+      - docs/process/research_assistant_baseline_verification_20260531.md
+      - docs/process/research_assistant_blueprint_execution_runbook_20260531.md
+      - docs/process/research_assistant_phase0_1_execution_pack_20260531.md
+      - docs/process/research_assistant_codex_kickoff_command_20260601.md
+    primary_module: research_assistant
+    impact_modules: [docs.architecture, docs.standards, validation.module_quality]
+    layer: docs
+    risk_level: high
+    ownership_reason: Research Assistant Phase 0 baseline and blueprint process docs define the implementation boundary and closure gates.
+  - rule_id: research_assistant_tests
+    priority: 95
+    include:
+      - backend/tests/research_assistant/**
+    primary_module: research_assistant
+    impact_modules: [tests.backend, validation.runner]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Research Assistant tests prove backend, schema, routing, and phase-gate contracts.
+  - rule_id: research_assistant_migration_namespace
+    priority: 95
+    include:
+      - backend/db/migrations/ra_upgrade/**
+    primary_module: research_assistant.memory_tree
+    impact_modules: [research_assistant, platform.db]
+    layer: database
+    risk_level: high
+    ownership_reason: Research Assistant upgrade migrations add schema objects under phase-specific DDL gates.
+  - rule_id: research_assistant_runtime
+    priority: 90
+    include:
+      - backend/services/research_assistant/**
+      - backend/routers/research_assistant.py
+      - backend/mcp/modules/research_assistant.py
+      - frontend/src/app/research-assistant/**
+      - frontend/tests/research-assistant/**
+    primary_module: research_assistant
+    impact_modules: [research_assistant.react_grounding, research_assistant.evidence_guard, research_assistant.generic_mcp_client]
+    layer: product_feature
+    risk_level: high
+    ownership_reason: Research Assistant runtime, API, MCP, and UI surfaces must stay aligned with the assistant architecture blueprint.
+  - rule_id: research_assistant_phase7_full_accept
+    priority: 115
+    include:
+      - scripts/research_assistant_phase7_crosscheck.py
+      - tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml
+      - backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py
+      - frontend/src/components/research-assistant/**
+      - frontend/src/lib/research-assistant/**
+      - frontend/src/app/research-assistant/**
+      - frontend/tests/research-assistant/phase7-*.spec.ts
+      - tests/aistock_validation/history/research_assistant/*ra_phase7_full_accept*.md
+      - tests/aistock_validation/history/research_assistant/*ra_phase7_live_smoke*.md
+    primary_module: research_assistant
+    impact_modules: [research_assistant.memory_tree, research_assistant.agent_teams, research_assistant.evidence_guard, research_assistant.qe_autonomy, validation.runner]
+    layer: product_feature
+    risk_level: critical
+    ownership_reason: Phase 7 closes the Research Assistant frontend, evidence/blocker UI, full DAI cross-check, and validation runner gate without touching production ports.
+  - rule_id: research_assistant_memory_tree
+    priority: 100
+    include:
+      - backend/services/research_assistant/memory_tree.py
+      - backend/tests/research_assistant/test_memory_tree_retrieval.py
+      - backend/tests/research_assistant/test_memory_tree_ddl_contract.py
+      - backend/tests/research_assistant/test_memory_scoring.py
+    primary_module: research_assistant.memory_tree
+    impact_modules: [research_assistant.memory_curator, research_assistant.graph_context]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Tree memory retrieval feeds context-pack injection and resident preference handling.
+  - rule_id: research_assistant_memory_curator
+    priority: 100
+    include:
+      - backend/services/research_assistant/memory_curator.py
+      - backend/tests/research_assistant/test_memory_autogrow.py
+      - backend/tests/research_assistant/test_memory_dedup_scope.py
+      - backend/tests/research_assistant/test_memory_reflection.py
+    primary_module: research_assistant.memory_curator
+    impact_modules: [research_assistant.memory_tree, research_assistant.reflection_card]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Memory curation controls automatic growth, de-duplication, reflection, and approval-aware memory writes.
+  - rule_id: research_assistant_graph_context
+    priority: 100
+    include:
+      - backend/services/research_assistant/graph_context.py
+      - backend/tests/research_assistant/test_graph_context_expansion.py
+      - backend/tests/research_assistant/test_graph_injected_into_context.py
+    primary_module: research_assistant.graph_context
+    impact_modules: [research_assistant.memory_tree]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Graph context makes knowledge graph relations consumable by assistant reasoning.
+  - rule_id: research_assistant_react_grounding
+    priority: 110
+    include:
+      - backend/services/research_assistant/react_grounding.py
+      - backend/tests/research_assistant/test_react_tool_loop.py
+      - backend/tests/research_assistant/test_tool_catalog_gate.py
+      - backend/tests/research_assistant/test_reflexion_retry.py
+      - backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py
+    primary_module: research_assistant.react_grounding
+    impact_modules: [research_assistant.evidence_guard, research_assistant.generic_mcp_client]
+    layer: backend_service
+    risk_level: critical
+    ownership_reason: ReAct grounding closes the tool-result backfill loop and blocks single-shot hallucinated answers.
+  - rule_id: research_assistant_evidence_guard
+    priority: 100
+    include:
+      - backend/services/research_assistant/evidence_guard.py
+      - backend/tests/research_assistant/test_evidence_guard.py
+    primary_module: research_assistant.evidence_guard
+    impact_modules: [research_assistant.react_grounding, research_assistant.external_research]
+    layer: backend_service
+    risk_level: critical
+    ownership_reason: Evidence guard enforces source references, date freshness, placeholder blocking, and factual downgrade behavior.
+  - rule_id: research_assistant_external_research
+    priority: 100
+    include:
+      - backend/mcp/modules/external_research.py
+      - backend/services/research_assistant/external_research.py
+      - backend/routers/external_research.py
+      - debug_tools/mcp/list_tools_smoke.py
+      - backend/tests/research_assistant/test_external_research_evidence_first.py
+      - backend/tests/research_assistant/test_external_research_provider_contract.py
+      - backend/tests/research_assistant/test_external_research_token_budget.py
+      - backend/tests/research_assistant/test_external_research_react_consumption.py
+      - backend/tests/research_assistant/test_external_research_l4_redline.py
+      - backend/tests/mcp/test_external_research_module.py
+    primary_module: research_assistant.external_research
+    impact_modules: [research_assistant.evidence_guard, research_assistant.generic_mcp_client]
+    layer: mcp_gateway
+    risk_level: high
+    ownership_reason: External research MCP must return compact provenance-first search and paper evidence without flooding tokens.
+  - rule_id: research_assistant_agent_teams
+    priority: 100
+    include:
+      - backend/services/research_assistant/agent_teams/**
+      - backend/db/migrations/ra_upgrade/002_agent_teams.sql
+      - configs/research_assistant/agent_teams.yaml
+      - backend/tests/research_assistant/test_agent_teams_*.py
+      - backend/tests/research_assistant/test_orchestrator_reduce.py
+      - backend/tests/research_assistant/test_worker_tool_isolation.py
+      - tests/aistock_validation/history/research_assistant/*ra_phase5_agent_teams*.md
+    primary_module: research_assistant.agent_teams
+    impact_modules: [research_assistant.product_core, research_assistant.aistock_domain_adapter]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Agent Teams own orchestrator-worker delegation, run ledgers, and worker audit trails.
+  - rule_id: research_assistant_qe_autonomy
+    priority: 100
+    include:
+      - backend/services/research_assistant/qe_autonomy.py
+      - backend/services/research_assistant/qe_autonomy/**
+      - backend/db/migrations/ra_upgrade/003_qe_autonomy.sql
+      - backend/tests/research_assistant/test_qe_autonomy_*.py
+      - backend/tests/research_assistant/test_qe_autonomous_loop.py
+      - tests/aistock_validation/history/research_assistant/*ra_phase6_qe_autonomy*.md
+    primary_module: research_assistant.qe_autonomy
+    impact_modules: [qe.auto_evolution, research_assistant.agent_teams, research_assistant.evidence_guard]
+    layer: backend_service
+    risk_level: critical
+    ownership_reason: QE autonomy must enforce evaluator callbacks, budget guardrails, stop conditions, DDL ledger consumption, worker reduce, and approval boundaries.
+  - rule_id: research_assistant_code_intelligence
+    priority: 100
+    include:
+      - backend/services/research_assistant/code_intelligence.py
+      - backend/tests/research_assistant/test_code_intel_context_injection.py
+    primary_module: research_assistant.code_intelligence
+    impact_modules: [validation.guardrails, research_assistant.graph_context]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Code intelligence consumes CodeGraph context refs and impacted-test evidence inside assistant reasoning.
+  - rule_id: research_assistant_proactive_reports
+    priority: 100
+    include:
+      - backend/services/research_assistant/proactive_reports.py
+      - backend/tests/research_assistant/test_proactive_report_generation.py
+    primary_module: research_assistant.proactive_reports
+    impact_modules: [research_assistant.evidence_guard, research_assistant.qe_autonomy]
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Proactive reports generate evidence-backed morning and experiment reports without touching production runtimes.
+  - rule_id: research_assistant_reflection_card
+    priority: 100
+    include:
+      - backend/services/research_assistant/reflection_card.py
+      - backend/tests/research_assistant/test_reflection_card_loop.py
+    primary_module: research_assistant.reflection_card
+    impact_modules: [research_assistant.memory_curator, research_assistant.prompt_lab]
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Reflection cards store failure learning signals consumed by curation and prompt evaluation loops.
+  - rule_id: research_assistant_prompt_lab
+    priority: 100
+    include:
+      - backend/services/research_assistant/prompt_lab.py
+      - backend/tests/research_assistant/test_prompt_lab_gepa_offline.py
+      - backend/tests/research_assistant/test_prompt_lab_judge_gated.py
+    primary_module: research_assistant.prompt_lab
+    impact_modules: [research_assistant.reflection_card, research_assistant.skill_library]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Prompt Lab may only propose and evaluate prompt candidates; activation changes require approval.
+  - rule_id: research_assistant_skill_library
+    priority: 100
+    include:
+      - backend/services/research_assistant/skill_library.py
+      - backend/tests/research_assistant/test_skill_library.py
+    primary_module: research_assistant.skill_library
+    impact_modules: [research_assistant.qe_autonomy, research_assistant.prompt_lab]
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Skill library and curriculum records feed self-improvement while staying behind promotion gates.
+  - rule_id: research_assistant_product_core
+    priority: 100
+    include:
+      - backend/services/research_assistant/product_core/**
+      - backend/tests/research_assistant/test_core_empty_boot.py
+    primary_module: research_assistant.product_core
+    impact_modules: [research_assistant.core_adapter]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Portable product core must boot without AIstock-specific adapters or private data packages.
+  - rule_id: research_assistant_core_adapter
+    priority: 100
+    include:
+      - backend/services/research_assistant/core_adapter/**
+      - backend/tests/research_assistant/test_core_no_adapter_import.py
+    primary_module: research_assistant.core_adapter
+    impact_modules: [research_assistant.product_core, research_assistant.generic_mcp_client]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Core adapter boundaries define provider interfaces and dependency-direction checks.
+  - rule_id: research_assistant_generic_mcp_client
+    priority: 100
+    include:
+      - backend/services/research_assistant/generic_mcp_client.py
+      - backend/tests/research_assistant/test_generic_mcp_discovery.py
+      - backend/tests/research_assistant/test_quarantine_tool_blocked.py
+    primary_module: research_assistant.generic_mcp_client
+    impact_modules: [research_assistant.core_adapter, research_assistant.aistock_domain_adapter]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Generic MCP client owns discovery, quarantine, capability review, and compact metadata handling.
+  - rule_id: research_assistant_aistock_domain_adapter
+    priority: 100
+    include:
+      - backend/services/research_assistant/aistock_domain_adapter/**
+      - backend/tests/research_assistant/test_aistock_domain_adapter.py
+    primary_module: research_assistant.aistock_domain_adapter
+    impact_modules: [research_assistant.product_core, research_assistant.aistock_knowledge_pack]
+    layer: backend_service
+    risk_level: critical
+    ownership_reason: AIstock domain adapter contains project-specific facade, DB, MCP, QE, validation, and stock-domain bindings.
+  - rule_id: research_assistant_aistock_knowledge_pack
+    priority: 100
+    include:
+      - backend/services/research_assistant/aistock_knowledge_pack/**
+      - backend/tests/research_assistant/test_pack_load_isolation.py
+    primary_module: research_assistant.aistock_knowledge_pack
+    impact_modules: [research_assistant.aistock_domain_adapter]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: AIstock knowledge pack isolates private-domain context and prevents leakage into portable core.
   - rule_id: platform_api
     priority: 60
     include:
@@ -328,11 +634,12 @@ rules:
       - docs/codex_project_memory.md
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
+      - .claude/commands/fix-aistock-issue.md
     primary_module: docs.standards
     impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs
     risk_level: medium
-    ownership_reason: Codex project instructions and validation skills make development standards discoverable to Codex App and CLI sessions.
+    ownership_reason: Codex and Claude project instructions make development standards discoverable to agent sessions.
   - rule_id: docs_architecture
     priority: 50
     include:

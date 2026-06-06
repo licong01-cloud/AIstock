@@ -33,6 +33,53 @@ ALLOWED_POLICY_JSON_KEYS = {
     "quality_report",
     "unfilled_handler",
     "unfilled_handler_params",
+    "price_guard",
+    "exit_guard",
+}
+
+PRICE_GUARD_POLICY_KEYS = {
+    "contract",
+    "enabled",
+    "mode",
+    "price_basis",
+    "signal_ref_price",
+    "buy",
+    "sell",
+    "guidance_status",
+    "policy_sha256",
+}
+EXIT_GUARD_POLICY_KEYS = {
+    "contract",
+    "enabled",
+    "mode",
+    "price_basis",
+    "stop_loss",
+    "take_profit",
+    "alpha_decay_exit",
+    "time_stop",
+    "t1_handling",
+    "guidance_status",
+    "policy_sha256",
+}
+ALGO_CONFIG_GUARD_FORBIDDEN_KEYS = {
+    "price_guard",
+    "exit_guard",
+    "signal_ref_price",
+    "max_open_gap_bps",
+    "yellow_open_gap_bps",
+    "yellow_size_multiplier",
+    "max_chase_bps",
+    "yellow_chase_bps",
+    "near_limit_up_skip_bps",
+    "breakout_addon",
+    "rebalance_max_slippage_bps",
+    "risk_exit_max_slippage_bps",
+    "near_limit_down_rebalance_skip_bps",
+    "stop_loss",
+    "take_profit",
+    "alpha_decay_exit",
+    "time_stop",
+    "t1_handling",
 }
 
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
@@ -62,6 +109,9 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
     normalized.setdefault("algo_config", {})
     if not isinstance(normalized["algo_config"], dict):
         raise RuntimeConfigInvalidError("execution policy algo_config must be an object")
+    _reject_guard_keys_in_algo_config(normalized["algo_config"])
+    _validate_optional_guard_policy(normalized, "price_guard", PRICE_GUARD_POLICY_KEYS)
+    _validate_optional_guard_policy(normalized, "exit_guard", EXIT_GUARD_POLICY_KEYS)
     normalized.setdefault("unfilled_handler_params", {})
     if not isinstance(normalized["unfilled_handler_params"], dict):
         raise RuntimeConfigInvalidError("unfilled_handler_params must be an object")
@@ -73,6 +123,48 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
                 context={"max_participation_rate": normalized["algo_config"]["max_participation_rate"]},
             )
     return normalized
+
+
+def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowed_keys: set[str]) -> None:
+    if key not in normalized:
+        return
+    value = normalized[key]
+    if not isinstance(value, dict):
+        raise RuntimeConfigInvalidError(
+            f"execution policy {key} must be an object",
+            context={"field": key, "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR" if key == "price_guard" else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR"},
+        )
+    unknown = sorted(set(value).difference(allowed_keys))
+    if unknown:
+        raise RuntimeConfigInvalidError(
+            f"execution policy {key} contains unsupported fields",
+            context={"field": key, "unknown_fields": unknown, "allowed_fields": sorted(allowed_keys)},
+        )
+
+
+def _reject_guard_keys_in_algo_config(value: dict[str, Any]) -> None:
+    hits = sorted(_find_forbidden_guard_keys(value))
+    if not hits:
+        return
+    raise RuntimeConfigInvalidError(
+        "execution policy algo_config must not carry PriceGuard/ExitGuard parameters",
+        context={"forbidden_guard_keys": hits, "allowed_fields": sorted(ALLOWED_POLICY_JSON_KEYS)},
+    )
+
+
+def _find_forbidden_guard_keys(value: Any, *, prefix: str = "algo_config") -> set[str]:
+    hits: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}"
+            if key_text in ALGO_CONFIG_GUARD_FORBIDDEN_KEYS:
+                hits.add(path)
+            hits.update(_find_forbidden_guard_keys(child, prefix=path))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            hits.update(_find_forbidden_guard_keys(child, prefix=f"{prefix}[{idx}]"))
+    return hits
 
 
 class ValidatedExecutionPolicy(BaseModel):

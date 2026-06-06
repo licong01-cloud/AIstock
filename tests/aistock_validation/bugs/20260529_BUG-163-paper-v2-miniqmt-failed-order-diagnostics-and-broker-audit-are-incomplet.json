@@ -1,0 +1,106 @@
+{
+  "actual": "MiniQMT read-only validation on 2026-05-29 21:18+08 showed 22 Paper v2 orders: 5 REJECTED, 6 FILLED, 11 SUBMITTED. All 5 rejected orders had null status_msg/error_msg/broker_status_msg, while API/runtime evidence only exposed partial submission/reconciliation events.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/tests/paper_trading_v2/test_symbol_names.py",
+    "tests/aistock_validation/bugs/20260529_BUG-163-paper-v2-miniqmt-failed-order-diagnostics-and-broker-audit-are-incomplet.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-163",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T13:21:39.736973Z",
+  "description": "MiniQMT read-only validation on 2026-05-29 21:18+08 showed 22 Paper v2 orders: 5 REJECTED, 6 FILLED, 11 SUBMITTED. All 5 rejected orders had null status_msg/error_msg/broker_status_msg, while API/runtime evidence only exposed partial submission/reconciliation events.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-04044fa79b3c",
+      "timestamp": "2026-05-29T13:21:39.736969Z"
+    },
+    {
+      "action": "scope_expansion_for_metadata_persistence",
+      "actor": "codex",
+      "note": "Added repository.py because Paper v2 save_order ON CONFLICT did not update metadata, blocking broker diagnostic persistence during native reconciliation.",
+      "timestamp": "2026-05-29T13:32:00Z"
+    },
+    {
+      "action": "scope_expansion_for_api_diagnostic_exposure",
+      "actor": "codex",
+      "note": "Added paper_trading_v2 router to expose persisted broker_status_msg/error_msg/broker_diagnostic as first-class order API fields for operator diagnosis.",
+      "timestamp": "2026-05-29T13:34:00Z"
+    },
+    {
+      "action": "scope_expansion_for_repository_regression_test",
+      "actor": "codex",
+      "note": "Added test_symbol_names.py to assert save_order conflict updates metadata, the persistence path required for broker diagnostics.",
+      "timestamp": "2026-05-29T13:40:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "MiniQMT order diagnostics, broker audit snapshots, API top-level fields, metadata upsert, and broker-authoritative data-quality gates passed locally without touching production runtime or DB.",
+      "timestamp": "2026-05-29T15:58:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "readonly 8001 validation 2026-05-29T21:18+08: scheduler running, qmt connected SIM account 62266303, MiniQMT session LIVE_WAITING_NEXT_TRADING_DAY, orders_by_status={REJECTED:5,FILLED:6,SUBMITTED:11}, rejected_missing_status_msg=5",
+    "python -m ruff check changed Paper v2 diagnostic files -> passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_symbol_names.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -q -> 42 passed",
+    "python -m nox -s paper_v2_backend -> 541 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> 5 sessions passed",
+    "MiniQMT scoped data-quality smoke for paper_1d9b1f03700f4810aef8351124c8ab6c -> passed"
+  ],
+  "expected": "Every MiniQMT order submission and reconciliation must persist broker-authoritative raw order status, status message, reject/error context, order handle/native id, cash/position before-after evidence, reconciliation source and diagnostic package; stale SUBMITTED orders must be reconciled to broker-authoritative terminal/deferred states or explicitly marked unknown with actionable diagnostics.",
+  "first_seen_at": "2026-05-29T13:21:39.736973Z",
+  "fix_branch": "bug/BUG-163-miniqmt-order-diagnostics-20260529-refresh",
+  "fix_commit": "693b7c65fa34dca18bc67f473e0b47a43ef1092d",
+  "fixed_at": "2026-05-29T16:35:28.024007Z",
+  "github_issue_number": 386,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/386",
+  "last_seen_at": "2026-05-29T13:21:39.736973Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/402",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/orders?limit=200; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/run-events?limit=80; GET /api/v1/qmt/orders?cancelable_only=false",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT failed-order diagnostics and broker audit are incomplete",
+  "trigger_condition": {
+    "fingerprint": "04044fa79b3caff608ba047f",
+    "source_event_id": "FE-20260529-04044fa79b3c"
+  },
+  "validation_evidence": [
+    "PR #402 merged at 693b7c65fa34dca18bc67f473e0b47a43ef1092d",
+    "close-sync PR #403 checks green except non-blocking skipped Auto-register CI failures as BUGs"
+  ],
+  "verification_run_id": "BUG-163-local-validation-20260529T2358Z",
+  "workflow_gate": "allowed",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\BUG-163-miniqmt-order-diagnostics-20260529-refresh"
+}

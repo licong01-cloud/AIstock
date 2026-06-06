@@ -33,6 +33,7 @@ from .experiment_config import (
     AlphaGroup, MetaModelConfig, MultiAlphaConfig,
     extract_qe_random_seed,
     normalize_label_horizon,
+    normalize_qe_seed_ensemble_config,
 )
 
 logger = logging.getLogger("aistock.quantevolver.experiment_config_builders")
@@ -576,6 +577,10 @@ def build_config_from_custom_evo_loop(
         strategy_params,
         dict(loop_config),
     )
+    seed_ensemble = normalize_qe_seed_ensemble_config(
+        loop_config.get("ensemble") or runtime_flags.get("ensemble"),
+        context="custom_evo_loop.ensemble",
+    )
     execution_algo: str | None = loop_config.get("execution_algo")
     execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("execution_algo_params") or {})
@@ -654,6 +659,7 @@ def build_config_from_custom_evo_loop(
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=strategy_params or None,
         runtime_flags=runtime_flags or None,
+        seed_ensemble=seed_ensemble,
         backtest_only=backtest_only,
         model_source_task_id=model_source_task_id,
         model_source_loop_index=model_source_loop_index,

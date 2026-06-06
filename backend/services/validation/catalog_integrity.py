@@ -483,15 +483,16 @@ class CatalogIntegrityChecker:
             )
         level = _clean_str(plan.get("level")).upper()
         title_key = f"{plan_key} {_clean_str(plan.get('title'))}".lower()
-        if level in {"L3", "L4", "L5"} or "live" in title_key:
+        l3_exception = _clean_str(plan.get("runner_enabled_l3_exception"))
+        if (level in {"L3", "L4", "L5"} or "live" in title_key) and l3_exception != "workspace_scoped_design_gate":
             self._add_finding(
                 "CATALOG-012",
                 P1,
                 TEST_PLANS_PATH,
                 f"L3/live plan {plan_key} must not be runner_enabled by default",
-                "L3/live or long-running plans default runner_enabled=false",
+                "L3/live or long-running plans default runner_enabled=false unless an audited workspace-scoped design gate exception is declared",
                 "runner_enabled=true",
-                "set runner_enabled=false and run via nightly/manual gate",
+                "set runner_enabled=false and run via nightly/manual gate, or set runner_enabled_l3_exception=workspace_scoped_design_gate with resource_policy guards",
                 subject=plan_key,
             )
 

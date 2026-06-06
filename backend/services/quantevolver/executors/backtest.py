@@ -75,6 +75,9 @@ class BacktestExecutor(BaseExecutor):
             )
         if fixed_seed is not None:
             custom_params["random_seed"] = fixed_seed
+        seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
+        if seed_ensemble:
+            custom_params["_seed_ensemble_config"] = seed_ensemble
         strategy_params = config.build_strategy_params()
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
@@ -157,7 +160,7 @@ class BacktestExecutor(BaseExecutor):
         # 4. 构建传给 RDAgent 的 config 记录
         persisted_model_params = {
             k: v for k, v in custom_params.items()
-            if k != _PRECOMPUTED_HMM_COEFF_JSON_PARAM
+            if k not in {_PRECOMPUTED_HMM_COEFF_JSON_PARAM, "_seed_ensemble_config"}
         }
         if fixed_seed is not None:
             persisted_model_params.setdefault("random_seed", fixed_seed)

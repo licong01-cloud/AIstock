@@ -62,6 +62,15 @@ class SimulationRuntimeOpsService:
             "manual_tick_endpoint_enabled": bool(status.get("manual_tick_endpoint_enabled", False)),
             "context_provider": status.get("context_provider") or {},
             "context_provider_mode": status.get("context_provider_mode"),
+            "data_source": status.get("data_source"),
+            "data_source_policy": status.get("data_source_policy") or {},
+            "account_slot_persistence": {
+                "enabled": True,
+                "release_binding_columns": ["account_group_id", "strategy_slot_id"],
+                "daily_run_columns": ["account_group_id", "strategy_slot_id"],
+                "status_api_exposes_slots": True,
+                "miniqmt_unified_binding_mode": "account_group_slots",
+            },
             "summary": {
                 "label": "simulation lifecycle scheduler",
                 "next_action": "monitor scheduler windows, or use the controlled start/stop/tick APIs",
@@ -173,6 +182,8 @@ class SimulationRuntimeOpsService:
                 "broker_backend": target_broker_backend,
                 "simulation_binding_id": qmt_run.binding_id,
                 "simulation_binding_hash": qmt_run.binding_hash,
+                "account_group_id": qmt_run.account_group_id,
+                "strategy_slot_id": qmt_run.strategy_slot_id,
                 "simulation_release_id": qmt_run.release_id,
                 "simulation_release_hash": qmt_run.release_hash,
                 "miniqmt_sim_run_id": qmt_run.run_id,
@@ -182,6 +193,8 @@ class SimulationRuntimeOpsService:
     def _run_list_summary(self, runs: list[SimulationDailyRun]) -> dict[str, Any]:
         by_status = Counter(run.status.value for run in runs)
         by_backend = Counter(run.broker_backend.value for run in runs)
+        by_account_group = Counter(run.account_group_id for run in runs if run.account_group_id)
+        by_strategy_slot = Counter(run.strategy_slot_id for run in runs if run.strategy_slot_id)
         active = sum(1 for run in runs if run.status not in TERMINAL_RUN_STATUSES)
         return {
             "run_count": len(runs),
@@ -189,6 +202,8 @@ class SimulationRuntimeOpsService:
             "terminal_run_count": len(runs) - active,
             "by_status": dict(sorted(by_status.items())),
             "by_broker_backend": dict(sorted(by_backend.items())),
+            "by_account_group": dict(sorted(by_account_group.items())),
+            "by_strategy_slot": dict(sorted(by_strategy_slot.items())),
         }
 
     def _run_summary(self, run: SimulationDailyRun) -> dict[str, Any]:
@@ -206,6 +221,13 @@ class SimulationRuntimeOpsService:
             "release_hash": run.release_hash,
             "binding_id": run.binding_id,
             "binding_hash": run.binding_hash,
+            "account_group_id": run.account_group_id,
+            "strategy_slot_id": run.strategy_slot_id,
+            "slot_attribution": {
+                "account_group_id": run.account_group_id,
+                "strategy_slot_id": run.strategy_slot_id,
+                "unified_path_active": bool(run.account_group_id and run.strategy_slot_id),
+            },
             "selection_evidence_id": run.selection_evidence_id,
             "selection_artifact_hash": run.selection_artifact_hash,
             "execution_plan_id": run.execution_plan_id,
@@ -277,6 +299,8 @@ class SimulationRuntimeOpsService:
             "runtime_release_sha256": run.release_hash,
             "binding_id": run.binding_id,
             "binding_hash": run.binding_hash,
+            "account_group_id": run.account_group_id,
+            "strategy_slot_id": run.strategy_slot_id,
             "selection_evidence_id": run.selection_evidence_id,
             "selection_artifact_hash": run.selection_artifact_hash,
             "execution_plan_id": run.execution_plan_id,
@@ -299,6 +323,8 @@ class SimulationRuntimeOpsService:
             "release_hash": plan.release_hash,
             "binding_id": plan.binding_id,
             "binding_hash": plan.binding_hash,
+            "account_group_id": plan.account_group_id,
+            "strategy_slot_id": plan.strategy_slot_id,
             "selection_evidence_id": plan.selection_evidence_id,
             "selection_evidence_hash": plan.selection_evidence_hash,
             "target_trade_date": plan.target_trade_date.isoformat(),
@@ -368,6 +394,8 @@ class SimulationRuntimeOpsService:
             "qmt_batch_status": payload.get("qmt_batch_status"),
             "qmt_retry_of_batch_id": payload.get("qmt_retry_of_batch_id"),
             "qmt_batch_result": payload.get("qmt_batch_result"),
+            "account_group_id": run.account_group_id or payload.get("account_group_id"),
+            "strategy_slot_id": run.strategy_slot_id or payload.get("strategy_slot_id"),
             "sync_before_submit": payload.get("sync_before_submit"),
             "reconcile_after_submit": payload.get("reconcile_after_submit"),
             "tail_handling": payload.get("tail_handling"),
@@ -551,6 +579,7 @@ class SimulationRuntimeOpsService:
                     "broker_backend": item.broker_backend.value,
                     "status": item.status,
                     "run_id": item.run.run_id if item.run else None,
+                    "data_source": item.data_source or tick.data_source,
                     "error": item.error,
                 }
                 for item in tick.results

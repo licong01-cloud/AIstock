@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from datetime import date, timedelta
 from math import isfinite
@@ -26,7 +28,6 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-    LiveInferencePreflightError,
     LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.service import StrategyPackageService
@@ -43,6 +44,7 @@ from backend.services.trading_core.errors import (
 
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .package_health import SelectionPackageHealthService
+from .price_guidance import attach_price_guidance
 from .repository import SelectionCenterRepository
 from .result_enrichment import SelectionResultEnrichmentService
 from .risk_policy import StockRiskPolicyService
@@ -59,6 +61,32 @@ from .runtime_profile import (
     validate_runtime_profile_binding,
 )
 from .tradability import TradabilityFilter
+
+
+def _parse_candidate_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _selection_entry_price_basis_date(candidate: SelectionCandidate, *, fallback: date) -> date:
+    display = (candidate.component_scores or {}).get("selection_result_display")
+    display = display if isinstance(display, dict) else {}
+    for raw in (
+        candidate.selection_entry_price_time,
+        display.get("selection_entry_price_time"),
+        display.get("reference_price_trade_date"),
+        (candidate.component_scores or {}).get("reference_price_trade_date"),
+    ):
+        parsed = _parse_candidate_date(raw)
+        if parsed is not None:
+            return parsed
+    return fallback
 
 
 class SelectionCenterService:
@@ -161,15 +189,23 @@ class SelectionCenterService:
                 created_by="selection_center",
             )
             package_results = {
-                package_id: self.result_enrichment_service.enrich_candidates(
-                    candidates,
+                package_id: attach_price_guidance(
+                    self.result_enrichment_service.enrich_candidates(
+                        candidates,
+                        trade_date=trade_date,
+                        runtime_config=selection.runtime_config,
+                    ),
                     trade_date=trade_date,
                     runtime_config=selection.runtime_config,
                 )
                 for package_id, candidates in selection.package_results.items()
             }
-            aggregate_results = self.result_enrichment_service.enrich_candidates(
-                selection.aggregate_results,
+            aggregate_results = attach_price_guidance(
+                self.result_enrichment_service.enrich_candidates(
+                    selection.aggregate_results,
+                    trade_date=trade_date,
+                    runtime_config=selection.runtime_config,
+                ),
                 trade_date=trade_date,
                 runtime_config=selection.runtime_config,
             )
@@ -840,6 +876,11 @@ class SelectionCenterService:
                 )
                 for item in aggregate
             ]
+            aggregate = attach_price_guidance(
+                aggregate,
+                trade_date=run.trade_date,
+                runtime_config=run.runtime_config,
+            )
             if not aggregate:
                 if config.get("valid_no_candidate"):
                     completed = run.model_copy(
@@ -1014,7 +1055,7 @@ class SelectionCenterService:
                 "entry_price": float(candidate.reference_price or 0),
                 "task_id": run.run_id,
                 "loop_id": None,
-                "as_of": run.trade_date.isoformat(),
+                "as_of": _selection_entry_price_basis_date(candidate, fallback=run.trade_date).isoformat(),
                 "entry_source": source_label,
                 "note": (
                     f"Selection Center {run.mode.value}; trade_date={run.trade_date.isoformat()}; "
@@ -1248,6 +1289,15 @@ class SelectionCenterService:
     ) -> list[SelectionCandidate]:
         total_weight = sum(package_weights.values())
         normalized_weights = {package_id: weight / total_weight for package_id, weight in package_weights.items()}
+        package_ids = list(package_results)
+        fusion_policy = {
+            "method": "weighted_rank_fusion",
+            "package_weights": package_weights,
+            "normalized_package_weights": normalized_weights,
+            "candidate_top_k": None,
+            "missing_rank_policy": "not_selected_zero_score",
+        }
+        fusion_policy_sha256 = _canonical_sha256(fusion_policy)
         rows_by_symbol: dict[str, list[tuple[str, SelectionCandidate, float]]] = {}
         for package_id, rows in package_results.items():
             candidate_count = len(rows)
@@ -1265,8 +1315,16 @@ class SelectionCenterService:
             source_package_ids = [package_id for package_id, _, _ in rows]
             package_scores = {package_id: row.score for package_id, row, _ in rows}
             package_ranks = {package_id: row.rank for package_id, row, _ in rows}
-            rank_scores = {package_id: rank_score for package_id, _, rank_score in rows}
-            fusion_score = sum(normalized_weights[package_id] * rank_score for package_id, _, rank_score in rows)
+            rank_scores = {package_id: 0.0 for package_id in package_ids}
+            rank_scores.update({package_id: rank_score for package_id, _, rank_score in rows})
+            package_presence = {
+                package_id: ("selected_topK" if package_id in package_ranks else "not_selected_in_full_evidence")
+                for package_id in package_ids
+            }
+            support_count = len(source_package_ids)
+            rank_values = list(package_ranks.values())
+            rank_dispersion = max(rank_values) - min(rank_values) if len(rank_values) > 1 else 0
+            fusion_score = sum(normalized_weights[package_id] * rank_scores.get(package_id, 0.0) for package_id in package_ids)
             aggregate.append(
                 SelectionCandidate(
                     symbol=symbol,
@@ -1281,12 +1339,28 @@ class SelectionCenterService:
                         "package_ranks": package_ranks,
                         "package_raw_scores": package_scores,
                         "package_rank_scores": rank_scores,
+                        "package_presence": package_presence,
                         "package_weights": package_weights,
                         "normalized_package_weights": normalized_weights,
+                        "support_count": support_count,
+                        "rank_dispersion": rank_dispersion,
+                        "fusion_policy_sha256": fusion_policy_sha256,
                         "fusion_score": fusion_score,
                     },
                     reason="weighted_fusion_aggregate",
                 )
             )
-        aggregate.sort(key=lambda item: (-item.score, item.rank, item.symbol))
+        aggregate.sort(
+            key=lambda item: (
+                -item.score,
+                -int(item.component_scores.get("support_count") or 0),
+                item.rank,
+                item.symbol,
+            )
+        )
         return [item.model_copy(update={"rank": idx}) for idx, item in enumerate(aggregate, start=1)]
+
+
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

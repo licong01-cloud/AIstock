@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Callable
@@ -55,6 +56,11 @@ _ORDER_FILLED = {56}
 _ORDER_REJECTED = {57}
 _ORDER_UNKNOWN = {255}
 _EXCLUSIVE_ACCOUNT = "exclusive_account"
+_EXCLUSIVE_ACCOUNT_LEGACY = "exclusive_account_legacy"
+_ACCOUNT_GROUP_SLOTS = "account_group_slots"
+_ACCOUNT_GROUP_ALIASES = frozenset({_ACCOUNT_GROUP_SLOTS, "account_group", "strategy_slot"})
+_EXCLUSIVE_ACCOUNT_ALIASES = frozenset({_EXCLUSIVE_ACCOUNT, _EXCLUSIVE_ACCOUNT_LEGACY, "exclusive_account_phase1"})
+_SUPPORTED_ACCOUNT_MODES = sorted(_EXCLUSIVE_ACCOUNT_ALIASES | _ACCOUNT_GROUP_ALIASES)
 
 
 class _OrderRecord:
@@ -85,12 +91,21 @@ class _OrderRecord:
         self.status = status
 
 
+@dataclass(frozen=True)
+class _OrderAttribution:
+    strategy_name: str
+    order_remark: str
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
+
+
 class MiniQMTSimBackend(BrokerBackend):
     """BrokerBackend implementation for one MiniQMT simulation account.
 
-    The default ``exclusive_account`` mode accepts exactly one strategy package
-    binding per backend instance. Any future shared-account attribution or soft
-    capital-control mode must be enabled explicitly outside this MVP.
+    Legacy ``exclusive_account`` keeps one strategy package per backend. The
+    unified account-group modes submit broker orders only after the intent
+    carries explicit slot attribution, so MiniQMT remains the broker authority
+    while AIstock can reconcile strategy-level virtual lots.
     """
 
     backend_id: BackendId = _BACKEND_ID
@@ -104,6 +119,7 @@ class MiniQMTSimBackend(BrokerBackend):
         data_source: MinuteDataSource,
         qmt_client: BaseQMTClient | Any | None = None,
         strategy_slot_id: str | None = None,
+        account_group_id: str | None = None,
         account_mode: str = _EXCLUSIVE_ACCOUNT,
         auto_connect: bool = True,
     ) -> None:
@@ -112,19 +128,20 @@ class MiniQMTSimBackend(BrokerBackend):
         if not package_id:
             raise ValueError("package_id is required")
         assert_broker_market_source_match(self.backend_id, data_source)
-        normalized_mode = str(account_mode or _EXCLUSIVE_ACCOUNT).strip()
-        if normalized_mode != _EXCLUSIVE_ACCOUNT:
+        normalized_mode = _normalize_account_mode(account_mode)
+        if normalized_mode not in {_EXCLUSIVE_ACCOUNT, _ACCOUNT_GROUP_SLOTS}:
             raise BrokerSubmitError(
-                "MiniQMTSimBackend MVP supports exclusive_account only",
-                context={"account_mode": normalized_mode, "supported": [_EXCLUSIVE_ACCOUNT]},
+                "MiniQMTSimBackend account_mode is not supported",
+                context={"account_mode": str(account_mode or "").strip(), "supported": _SUPPORTED_ACCOUNT_MODES},
             )
 
         self._portfolio_id = portfolio_id
         self._package_id = package_id
         self._data_source = data_source
         self._qmt_client = qmt_client or get_qmt_client_singleton()
-        self._strategy_slot_id = strategy_slot_id or portfolio_id
         self._account_mode = normalized_mode
+        self._account_group_id = str(account_group_id).strip() if account_group_id else None
+        self._strategy_slot_id = strategy_slot_id or (portfolio_id if self._is_legacy_account_mode else None)
         self._records: dict[str, _OrderRecord] = {}
         self._intent_index: dict[str, str] = {}
         self._subscribers: dict[str, Callable[[FillEvent], None]] = {}
@@ -149,6 +166,10 @@ class MiniQMTSimBackend(BrokerBackend):
     @property
     def account_mode(self) -> str:
         return self._account_mode
+
+    @property
+    def _is_legacy_account_mode(self) -> bool:
+        return self._account_mode == _EXCLUSIVE_ACCOUNT
 
     @property
     def strategy_slot_id(self) -> str:
@@ -202,7 +223,7 @@ class MiniQMTSimBackend(BrokerBackend):
             ) from exc
 
     def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
-        self._ensure_ready_for_order(intent)
+        attribution = self._ensure_ready_for_order(intent)
         with self._lock:
             if intent.intent_id in self._intent_index:
                 raise BrokerSubmitError(
@@ -211,12 +232,8 @@ class MiniQMTSimBackend(BrokerBackend):
                 )
             native_order_type = _native_order_type(intent.side)
             native_price_type, native_price = _native_price(intent)
-            strategy_name = _safe_strategy_name(self._strategy_slot_id)
-            order_remark = _order_remark(
-                portfolio_id=self._portfolio_id,
-                package_id=self._package_id,
-                intent_id=intent.intent_id,
-            )
+            strategy_name = attribution.strategy_name
+            order_remark = attribution.order_remark
             submitted_at = datetime.now(UTC)
             _enforce_submit_deadline(intent, submitted_at)
             try:
@@ -229,7 +246,14 @@ class MiniQMTSimBackend(BrokerBackend):
                     strategy_name=strategy_name,
                     order_remark=order_remark,
                 )
+                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
             except QMTNotAvailableError as exc:
+                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
+                native_probe = _probe_native_order_after_submit_error(
+                    qmt_client=self._qmt_client,
+                    miniqmt_order_id=None,
+                    order_remark=order_remark,
+                )
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
                     context={
@@ -237,7 +261,11 @@ class MiniQMTSimBackend(BrokerBackend):
                         "portfolio_id": self._portfolio_id,
                         "package_id": self._package_id,
                         "symbol": intent.symbol,
+                        "strategy_name": strategy_name,
+                        "order_remark": order_remark,
                         "reason": str(exc),
+                        "native_reconcile": native_probe,
+                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
                     },
                 ) from exc
             except Exception as exc:
@@ -256,6 +284,7 @@ class MiniQMTSimBackend(BrokerBackend):
                     handle_id=f"mqh_{uuid4().hex}",
                     reason=str(message or "MiniQMT rejected the order"),
                     event_at=submitted_at,
+                    diagnostic=submit_diagnostic,
                 )
                 handle = OrderHandle(
                     handle_id=status.handle_id,
@@ -298,6 +327,13 @@ class MiniQMTSimBackend(BrokerBackend):
                 avg_fill_price=None,
                 last_event_at=submitted_at,
                 rejection_reason=None,
+                raw_status="submitted",
+                status_msg=None,
+                raw={
+                    "miniqmt_order_id": str(order_id),
+                    "message": str(message or ""),
+                    **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
+                },
             )
             self._records[handle.handle_id] = _OrderRecord(
                 handle=handle,
@@ -361,6 +397,8 @@ class MiniQMTSimBackend(BrokerBackend):
             "miniqmt_order_id": record.miniqmt_order_id,
             "strategy_name": record.strategy_name,
             "order_remark": record.order_remark,
+            "account_group_id": str(record.intent.metadata.get("account_group_id") or ""),
+            "strategy_slot_id": str(record.intent.metadata.get("strategy_slot_id") or ""),
         }
 
     def query_status_from_native(
@@ -393,6 +431,9 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=None,
             last_event_at=datetime.now(UTC),
             rejection_reason=None,
+            raw_status="reconcile_pending",
+            status_msg=None,
+            raw={"miniqmt_order_id": str(miniqmt_order_id), "order_remark": str(order_remark)},
         )
         record = _OrderRecord(
             handle=handle,
@@ -404,7 +445,15 @@ class MiniQMTSimBackend(BrokerBackend):
         )
         order = self._find_qmt_order(record)
         if order is None:
-            return pending
+            return pending.model_copy(
+                update={
+                    "raw": {
+                        **pending.raw,
+                        "diagnostic_gap": True,
+                        "diagnostic_gap_reason": "native_order_snapshot_not_found",
+                    }
+                }
+            )
         return self._status_from_order(record, order)
 
     def query_trades_from_native(
@@ -473,6 +522,35 @@ class MiniQMTSimBackend(BrokerBackend):
         positions, _prices = self.query_position_marks()
         return positions
 
+    def query_quote(self, symbol: str) -> dict[str, object] | None:
+        """Return L1 quote from the underlying MiniQMT client when available."""
+
+        self._ensure_alive()
+        getter = getattr(self._qmt_client, "get_full_tick", None)
+        if not callable(getter):
+            return None
+        try:
+            data = getter([symbol])
+        except QMTNotAvailableError as exc:
+            raise BrokerConnectivityError("MiniQMT quote query failed", context={"symbol": symbol, "reason": str(exc)}) from exc
+        except Exception as exc:
+            raise BrokerConnectivityError(
+                "MiniQMT quote query failed",
+                context={"symbol": symbol, "reason": f"{type(exc).__name__}: {exc}"},
+            ) from exc
+        if not data:
+            return None
+        row = data.get(symbol) if isinstance(data, dict) else None
+        if row is None and isinstance(data, dict):
+            raw_code = str(symbol).split(".")[0]
+            for key, value in data.items():
+                if str(key).split(".")[0] == raw_code:
+                    row = value
+                    break
+        if not isinstance(row, dict):
+            return None
+        return _normalize_quote_row(symbol, row)
+
     def query_position_marks(self) -> tuple[dict[str, PositionLot], dict[str, float]]:
         """Return MiniQMT-authoritative positions plus mark prices.
 
@@ -523,6 +601,14 @@ class MiniQMTSimBackend(BrokerBackend):
         )
 
     def bind_capacity(self) -> BrokerBindCapacity:
+        if not self._is_legacy_account_mode:
+            return BrokerBindCapacity(
+                backend_id=self.backend_id,
+                max_concurrent_packages=64,
+                rejection_reason_if_exceeded=(
+                    "MiniQMTSim account_group_slots capacity is governed by account-group slot funds and preflight"
+                ),
+            )
         return BrokerBindCapacity(
             backend_id=self.backend_id,
             max_concurrent_packages=1,
@@ -543,10 +629,12 @@ class MiniQMTSimBackend(BrokerBackend):
                 context={"backend_id": self.backend_id, "portfolio_id": self._portfolio_id},
             )
 
-    def _ensure_ready_for_order(self, intent: OrderIntent) -> None:
+    def _ensure_ready_for_order(self, intent: OrderIntent) -> _OrderAttribution:
         self._ensure_alive()
         if not self._connected:
             self.ensure_connected()
+        if not self._is_legacy_account_mode:
+            return self._account_group_attribution(intent)
         if intent.portfolio_id != self._portfolio_id:
             raise BrokerSubmitError(
                 "OrderIntent.portfolio_id does not match MiniQMTSim binding",
@@ -565,6 +653,56 @@ class MiniQMTSimBackend(BrokerBackend):
                     "backend_package_id": self._package_id,
                 },
             )
+        return _OrderAttribution(
+            strategy_name=_safe_strategy_name(self._strategy_slot_id or self._portfolio_id),
+            order_remark=_order_remark(
+                portfolio_id=self._portfolio_id,
+                package_id=self._package_id,
+                intent_id=intent.intent_id,
+            ),
+        )
+
+    def _account_group_attribution(self, intent: OrderIntent) -> _OrderAttribution:
+        metadata = intent.metadata or {}
+        account_group_id = _required_metadata_text(metadata, "account_group_id")
+        strategy_slot_id = _required_metadata_text(metadata, "strategy_slot_id")
+        strategy_name = _required_metadata_text(metadata, "strategy_name")
+        order_remark = _required_metadata_text(metadata, "order_remark")
+        if self._account_group_id is not None and account_group_id != self._account_group_id:
+            raise BrokerSubmitError(
+                "OrderIntent.account_group_id does not match MiniQMTSim account group",
+                context={
+                    "intent_id": intent.intent_id,
+                    "intent_account_group_id": account_group_id,
+                    "backend_account_group_id": self._account_group_id,
+                },
+            )
+        if self._strategy_slot_id is not None and strategy_slot_id != self._strategy_slot_id:
+            raise BrokerSubmitError(
+                "OrderIntent.strategy_slot_id does not match MiniQMTSim strategy slot",
+                context={
+                    "intent_id": intent.intent_id,
+                    "intent_strategy_slot_id": strategy_slot_id,
+                    "backend_strategy_slot_id": self._strategy_slot_id,
+                },
+            )
+        order_remark_prefix = str(metadata.get("order_remark_prefix") or "").strip()
+        if order_remark_prefix and not order_remark.startswith(order_remark_prefix):
+            raise BrokerSubmitError(
+                "OrderIntent.order_remark does not match MiniQMT strategy slot prefix",
+                context={
+                    "intent_id": intent.intent_id,
+                    "strategy_slot_id": strategy_slot_id,
+                    "order_remark_prefix": order_remark_prefix,
+                    "order_remark": order_remark,
+                },
+            )
+        return _OrderAttribution(
+            strategy_name=_safe_strategy_name(strategy_name),
+            order_remark=order_remark,
+            account_group_id=account_group_id,
+            strategy_slot_id=strategy_slot_id,
+        )
 
     def _record_for(self, handle: OrderHandle) -> _OrderRecord:
         if handle.backend_id != self.backend_id:
@@ -652,10 +790,21 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=avg_price,
             last_event_at=datetime.now(UTC),
             rejection_reason=status_msg if state == "rejected" else None,
+            raw_status=raw_status,
+            status_msg=status_msg,
+            raw=dict(raw),
         )
 
     @staticmethod
-    def _rejected_status(*, handle_id: str, reason: str, event_at: datetime) -> OrderHandleStatus:
+    def _rejected_status(
+        *, handle_id: str, reason: str, event_at: datetime, diagnostic: dict[str, Any] | None = None
+    ) -> OrderHandleStatus:
+        raw: dict[str, object] = {"message": reason}
+        if diagnostic:
+            raw["submit_diagnostic"] = diagnostic
+            raw["raw_return_code"] = diagnostic.get("raw_return_code")
+            raw["diagnostic_gap"] = True
+            raw["diagnostic_gap_reason"] = diagnostic.get("classification") or "miniqmt_submit_rejected"
         return OrderHandleStatus(
             handle_id=handle_id,
             state="rejected",
@@ -663,13 +812,16 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=None,
             last_event_at=event_at,
             rejection_reason=reason,
+            raw_status="submit_rejected",
+            status_msg=reason,
+            raw=raw,
         )
 
     def _safe_status(self) -> Any | None:
         try:
             return self._qmt_client.status()
-        except Exception:
-            return None
+        except Exception as exc:  # noqa: BLE001
+            return {"status_error": f"{type(exc).__name__}: {exc}"}
 
 
 def _native_order_type(side: OrderSide) -> int:
@@ -693,9 +845,92 @@ def _native_price(intent: OrderIntent) -> tuple[int, float]:
     )
 
 
+def _safe_last_order_diagnostic(qmt_client: Any) -> dict[str, Any] | None:
+    getter = getattr(qmt_client, "get_last_order_diagnostic", None)
+    if not callable(getter):
+        return None
+    try:
+        diagnostic = getter()
+    except Exception:  # noqa: BLE001
+        return None
+    return dict(diagnostic) if isinstance(diagnostic, dict) else None
+
+
+def _probe_native_order_after_submit_error(
+    *,
+    qmt_client: Any,
+    miniqmt_order_id: str | None,
+    order_remark: str,
+) -> dict[str, Any]:
+    probe: dict[str, Any] = {
+        "schema_version": "miniqmt_submit_error_native_probe_v1",
+        "matched": False,
+        "match_key": None,
+        "order_remark": order_remark,
+        "miniqmt_order_id": miniqmt_order_id,
+        "orders_query_ok": False,
+        "trades_query_ok": False,
+        "matched_order": None,
+        "matched_trades": [],
+        "query_errors": [],
+    }
+    try:
+        orders = qmt_client.get_orders(cancelable_only=False) or []
+        probe["orders_query_ok"] = True
+        for order in orders:
+            if miniqmt_order_id is not None and str(order.get("order_id") or "") == str(miniqmt_order_id):
+                probe["matched"] = True
+                probe["match_key"] = "order_id"
+                probe["matched_order"] = dict(order)
+                break
+            if str(order.get("order_remark") or "") == str(order_remark):
+                probe["matched"] = True
+                probe["match_key"] = "order_remark"
+                probe["matched_order"] = dict(order)
+                break
+    except Exception as exc:  # noqa: BLE001 - diagnostic probe must not hide the original submit error.
+        probe["query_errors"].append({"source": "orders", "reason": f"{type(exc).__name__}: {exc}"})
+    try:
+        trades = qmt_client.get_trades() or []
+        probe["trades_query_ok"] = True
+        matched_trades = []
+        for trade in trades:
+            if miniqmt_order_id is not None and str(trade.get("order_id") or "") == str(miniqmt_order_id):
+                matched_trades.append(dict(trade))
+                continue
+            if str(trade.get("order_remark") or "") == str(order_remark):
+                matched_trades.append(dict(trade))
+        probe["matched_trades"] = matched_trades
+        if matched_trades and not probe["matched"]:
+            probe["matched"] = True
+            probe["match_key"] = "trade_order_remark"
+    except Exception as exc:  # noqa: BLE001
+        probe["query_errors"].append({"source": "trades", "reason": f"{type(exc).__name__}: {exc}"})
+    return probe
+
+
 def _safe_strategy_name(value: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(value or ""))
     return (safe or "aistock_minqmt")[:48]
+
+
+def _normalize_account_mode(value: str | None) -> str:
+    raw = str(value or _EXCLUSIVE_ACCOUNT).strip()
+    if raw in _ACCOUNT_GROUP_ALIASES:
+        return _ACCOUNT_GROUP_SLOTS
+    if raw in _EXCLUSIVE_ACCOUNT_ALIASES:
+        return _EXCLUSIVE_ACCOUNT
+    return raw
+
+
+def _required_metadata_text(metadata: dict[str, Any], key: str) -> str:
+    value = str(metadata.get(key) or "").strip()
+    if value:
+        return value
+    raise BrokerSubmitError(
+        "MiniQMTSim account-group order intent is missing required slot attribution",
+        context={"missing_metadata_key": key, "required_metadata_keys": ["account_group_id", "strategy_slot_id", "strategy_name", "order_remark"]},
+    )
 
 
 def _order_remark(*, portfolio_id: str, package_id: str, intent_id: str) -> str:
@@ -798,3 +1033,33 @@ def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
 
 
 __all__ = ["MiniQMTSimBackend"]
+
+
+def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
+    def first(keys: tuple[str, ...], default: object = None) -> object:
+        for key in keys:
+            value = row.get(key)
+            if value is not None:
+                return value
+        return default
+
+    bid_prices = first(("bidPrice", "bid_price", "bidPrice1", "bid"), [])
+    ask_prices = first(("askPrice", "ask_price", "askPrice1", "ask"), [])
+    bid_volumes = first(("bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
+    ask_volumes = first(("askVol", "ask_volume", "askVol1", "askVolume"), [])
+
+    def level(value: object) -> object:
+        if isinstance(value, (list, tuple)) and value:
+            return value[0]
+        return value
+
+    normalized = {
+        "symbol": symbol,
+        "bid_price_1": level(bid_prices),
+        "ask_price_1": level(ask_prices),
+        "bid_volume_1": level(bid_volumes),
+        "ask_volume_1": level(ask_volumes),
+        "time": first(("time", "timetag", "datetime"), None),
+        "raw": dict(row),
+    }
+    return normalized

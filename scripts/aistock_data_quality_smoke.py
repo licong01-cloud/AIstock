@@ -25,6 +25,13 @@ DEV_DB_KEYS = {
 }
 
 DATASET_CLOSE_READY_AFTER = time(20, 0)
+BROKER_AUTHORITY_BACKENDS = ("minqmt_sim", "minqmt_live")
+PAPER_V2_SUCCESS_RUN_EVENTS = (
+    "RUN_SUCCEEDED",
+    "NO_REBALANCE_REQUIRED",
+    "MINIQMT_RUN_RECONCILED",
+    "MINIQMT_NATIVE_RUN_RECONCILED",
+)
 DATASET_AUDIT_REQUIRED_COLUMNS = {
     "dataset",
     "trade_date",
@@ -742,7 +749,7 @@ class DataQualitySmoke:
                 WHERE NOT EXISTS (
                   SELECT 1 FROM paper_v2.run_events ev
                   WHERE ev.run_id = recent.run_id
-                    AND ev.event_type IN ('RUN_SUCCEEDED', 'NO_REBALANCE_REQUIRED')
+                    AND ev.event_type = ANY(%s)
                 )
                 AND NOT EXISTS (
                   SELECT 1 FROM paper_v2.session_events sev
@@ -757,7 +764,7 @@ class DataQualitySmoke:
               ) AS missing_success_event
             FROM recent
             """,
-            (*params, self.max_recent_runs),
+            (*params, self.max_recent_runs, list(PAPER_V2_SUCCESS_RUN_EVENTS)),
         )
         succeeded, missing_snapshot, missing_success_event = cur.fetchone()
         if succeeded <= 0 or missing_snapshot > 0 or missing_success_event > 0:
@@ -800,7 +807,10 @@ class DataQualitySmoke:
         cur.execute(
             f"""
             WITH recent AS (
-              SELECT r.run_id FROM paper_v2.run r
+              SELECT
+                r.run_id,
+                COALESCE(p.broker_backend, 'local_sim') AS broker_backend
+              FROM paper_v2.run r
               JOIN paper_v2.portfolio p ON p.portfolio_id = r.portfolio_id
               WHERE {filter_sql}
               ORDER BY r.completed_at DESC NULLS LAST, r.started_at DESC
@@ -808,27 +818,38 @@ class DataQualitySmoke:
             )
             SELECT count(*)
             FROM paper_v2.fills f
+            JOIN recent r ON r.run_id = f.run_id
             LEFT JOIN paper_v2.cash_ledger c ON c.fill_id = f.fill_id
-            WHERE f.run_id IN (SELECT run_id FROM recent) AND c.fill_id IS NULL
+            WHERE r.broker_backend <> ALL(%s)
+              AND c.fill_id IS NULL
             """,
-            (*params, self.max_recent_runs),
+            (*params, self.max_recent_runs, list(BROKER_AUTHORITY_BACKENDS)),
         )
         checks["fills_without_cash_ledger"] = cur.fetchone()[0]
         cur.execute(
             f"""
             WITH recent AS (
-              SELECT r.run_id FROM paper_v2.run r
+              SELECT
+                r.run_id,
+                COALESCE(p.broker_backend, 'local_sim') AS broker_backend
+              FROM paper_v2.run r
               JOIN paper_v2.portfolio p ON p.portfolio_id = r.portfolio_id
               WHERE {filter_sql}
               ORDER BY r.completed_at DESC NULLS LAST, r.started_at DESC
               LIMIT %s
             )
             SELECT count(*)
-            FROM paper_v2.daily_snapshots
-            WHERE run_id IN (SELECT run_id FROM recent)
-              AND (nav < 0 OR cash < 0 OR market_value < 0 OR abs(nav - cash - market_value) > 0.01)
+            FROM paper_v2.daily_snapshots ds
+            JOIN recent r ON r.run_id = ds.run_id
+            WHERE ds.nav < 0
+              OR ds.cash < 0
+              OR ds.market_value < 0
+              OR (
+                r.broker_backend <> ALL(%s)
+                AND abs(ds.nav - ds.cash - ds.market_value) > 0.01
+              )
             """,
-            (*params, self.max_recent_runs),
+            (*params, self.max_recent_runs, list(BROKER_AUTHORITY_BACKENDS)),
         )
         checks["invalid_daily_snapshots"] = cur.fetchone()[0]
         cur.execute(

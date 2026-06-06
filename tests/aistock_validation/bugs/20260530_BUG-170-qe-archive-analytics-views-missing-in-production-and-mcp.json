@@ -1,0 +1,126 @@
+{
+  "actual": "SQL exists on main but production qe_archive schema view count is 0; all 8 designed views are missing and unavailable to UI/MCP.",
+  "allowed_write_scope": [
+    "backend/db/migrations/qe_archive_analytics_views_20260529.sql",
+    "backend/routers/qe_archive.py",
+    "backend/services/qe_archive/repository.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260530_BUG-170-qe-archive-analytics-views-missing-in-production-and-mcp.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-170",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-30T09:37:51.397422Z",
+  "description": "SQL exists on main but production qe_archive schema view count is 0; all 8 designed views are missing and unavailable to UI/MCP.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260530-88a2f9747c53",
+      "timestamp": "2026-05-30T09:37:51.397418Z"
+    },
+    {
+      "action": "scope_expansion_for_api_mcp_and_ra_routing",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope after implementation required QE Archive API/repository methods, MCP tests, and Research Assistant catalog/router awareness for the new analytics tools.",
+      "timestamp": "2026-05-30T18:45:00+08:00"
+    },
+    {
+      "action": "production_ddl_applied_and_verified",
+      "actor": "codex",
+      "note": "User authorized production DDL. Applied CREATE OR REPLACE VIEW migration to 127.0.0.1:5432/aistock and verified all eight qe_archive analytics views exist and SELECT count(*) works. Counts: run_leaderboard=112, seed_robustness=49, factor_importance_stability=67, factor_performance=226, model_hyperparam_seed_perf=112, overfit_flags=112, promotion_candidates=0, evolution_lineage=112.",
+      "timestamp": "2026-05-30T18:45:00+08:00"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Targeted pytest, py_compile/compileall, ruff, git diff --check, production DDL verification, repository smoke, and required nox gates passed. UI sub-gates were skipped through supported env toggles because this isolated worktree has no frontend/node_modules; production 8001/3000 were not restarted.",
+      "timestamp": "2026-05-30T18:45:00+08:00"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex",
+      "note": "Created PR #412 from fix branch; BUG JSON records PR URL and production_ddl_gate=applied_and_verified. Final fix_commit will be set during post-merge close-sync.",
+      "timestamp": "2026-05-30T18:55:00+08:00"
+    },
+    {
+      "action": "pr_metadata_synced",
+      "actor": "codex",
+      "note": "Synchronized PR-ready metadata: added validation_module_registry_l0 to required verification and kept fix_commit for post-merge close-sync to avoid self-referential commit drift. PR head commit is tracked by PR #412.",
+      "timestamp": "2026-05-30T19:00:00+08:00"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/issue_workflow/BUG-170/production_ddl_reapply_verify.json",
+    "tmp/issue_workflow/BUG-170/repository_analytics_smoke.json"
+  ],
+  "expected": "Production qe_archive schema has the 8 analytics views and QE archive MCP exposes summary-first query tools for these views.",
+  "first_seen_at": "2026-05-30T09:37:51.397422Z",
+  "fix_branch": "bug/BUG-170-qe-archive-analytics-views-missing-in-production-20260530",
+  "fix_commit": "ba698670c9ef8fb9a5557c11d1c68bd51938a5a6",
+  "fixed_at": "2026-05-30T12:24:02.375648Z",
+  "github_issue_number": 411,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/411",
+  "last_seen_at": "2026-05-30T09:37:51.397422Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/412",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "SELECT table_name FROM information_schema.views WHERE table_schema='qe_archive' AND table_name LIKE 'v_%';",
+  "required_verification": [
+    "l0",
+    "qe_archive_l3",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_center_backend",
+    "qe_data_contract_backend",
+    "qe_read_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE archive analytics views missing in production and MCP",
+  "trigger_condition": {
+    "fingerprint": "88a2f9747c53ec282c76d993",
+    "source_event_id": "FE-20260530-88a2f9747c53"
+  },
+  "validation_evidence": [
+    "Production DDL authorized by user; backend/db/migrations/qe_archive_analytics_views_20260529.sql applied/reapplied to 127.0.0.1:5432/aistock -> all 8 qe_archive views available and SELECT count(*) passed (counts 112/49/67/226/112/112/0/112)",
+    "Direct repository analytics smoke against production DB -> passed; compact samples saved under tmp/issue_workflow/BUG-170/repository_analytics_smoke.json",
+    "python -m pytest -q backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_qe_archive_repository_static.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -p no:cacheprovider -> 81 passed",
+    "python -m ruff check changed BUG-170 Python files/tests -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "with F:\\Dev\\AIstock\\.env DB vars and QE_ARCHIVE_L3_SKIP_UI=1, python -m nox -s qe_archive_l3 -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed",
+    "PAPER_V2_SKIP_REALTIME=1 python -m nox -s paper_v2_backend -> passed (543 passed, 1 skipped, 2 xfailed)",
+    "python -m nox -s validation_center_backend -> passed (278 passed; coverage line=79.64 branch=61.71)",
+    "python -m nox -s qe_data_contract_backend -> passed (17 passed)",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed (qe_read_backend 11 passed)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership mapped=12 unmapped=0 ambiguous=0)"
+  ],
+  "verification_run_id": "BUG-170-20260530-qe-archive-analytics-validation",
+  "workflow_gate": "allowed"
+}

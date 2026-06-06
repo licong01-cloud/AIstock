@@ -1,0 +1,72 @@
+{
+  "actual": "MiniQMT repeatedly attempted WSL StrategyPackage live inference during the submit window, including full-universe daily SQL over thousands of symbols. The DB logged Broken pipe at 2026-06-01 09:59:30 after the client disconnected, and MiniQMT order generation was delayed until 10:12.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/strategy_package/test_live_inference_preflight.py",
+    "tests/aistock_validation/bugs/20260601_BUG-190-paper-v2-repeats-full-universe-live-inference-during-miniqmt-submit-wind.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-190",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T07:58:21.044492Z",
+  "description": "MiniQMT repeatedly attempted WSL StrategyPackage live inference during the submit window, including full-universe daily SQL over thousands of symbols. The DB logged Broken pipe at 2026-06-01 09:59:30 after the client disconnected, and MiniQMT order generation was delayed until 10:12.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-6bea2edd0921",
+      "timestamp": "2026-06-01T07:58:21.044489Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-01 runtime: 40 MINIQMT_LIVE_TICK_STARTED, 39 MINIQMT_LIVE_WAITING_PLATFORM_DATA, PostgreSQL Broken pipe at 09:59:30 on market.kline_daily_raw full-universe query"
+  ],
+  "expected": "Paper v2/MiniQMT should prepare or reuse an as-of previous-trading-day selection artifact before order submission. During submit windows, repeated scheduler ticks must not repeatedly launch full-universe live inference; cache miss or inference failure must persist actionable diagnostics, bounded retry state, and avoid SQL storms.",
+  "first_seen_at": "2026-06-01T07:58:21.044492Z",
+  "fix_branch": null,
+  "fix_commit": "36597c8ecbe6bee1d4332baca3b46c80a96e32f4",
+  "fixed_at": "2026-06-01T14:09:28.025816Z",
+  "github_issue_number": 474,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/474",
+  "last_seen_at": "2026-06-01T07:58:21.044492Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/477",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect paper_v2.session_events for psess_9e6c75cbbaff4449b6d3d4de5964925d on 2026-06-01 09:25-10:00 and backend/logs/aistock.log around 09:59; run Paper v2 MiniQMT scheduler tick with WSL live inference cache miss/failure and assert bounded retry/no duplicate full-universe inference.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 repeats full-universe live inference during MiniQMT submit window",
+  "trigger_condition": {
+    "fingerprint": "6bea2edd092175ddf845c3d5",
+    "source_event_id": "FE-20260601-6bea2edd0921"
+  },
+  "validation_evidence": [
+    "CI checks_passed for PR #477",
+    "close-sync PR #483 checks green"
+  ],
+  "verification_run_id": null
+}

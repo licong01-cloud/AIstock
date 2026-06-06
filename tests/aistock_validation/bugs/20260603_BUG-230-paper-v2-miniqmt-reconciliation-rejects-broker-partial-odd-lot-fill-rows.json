@@ -1,0 +1,73 @@
+{
+  "actual": "GET /api/v1/paper-v2/session-scheduler/status last_result.errors contains ValidationError: fill quantity must follow board-lot rules for 301135.SZ: min_qty=100, increment=100; qmt trades include SELL traded_volume 190 for order 1090535320.",
+  "allowed_write_scope": [
+    "backend/services/trading_core/models.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "tests/aistock_validation/bugs/20260603_BUG-230-paper-v2-miniqmt-reconciliation-rejects-broker-partial-odd-lot-fill-rows.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-230",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T07:36:10.053275Z",
+  "description": "GET /api/v1/paper-v2/session-scheduler/status last_result.errors contains ValidationError: fill quantity must follow board-lot rules for 301135.SZ: min_qty=100, increment=100; qmt trades include SELL traded_volume 190 for order 1090535320.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-53dcf947b661",
+      "timestamp": "2026-06-03T07:36:10.053275Z"
+    }
+  ],
+  "evidence_uris": [
+    "8001 session-scheduler/status 2026-06-03T15:32+08 last_result ValidationError; qmt/trades order_id=1090535320 traded_volume=190"
+  ],
+  "expected": "MiniQMT broker-reported partial fills should be accepted and reconciled as broker authority even when individual trade rows are not 100-share multiples; board-lot checks should apply to submitted order quantities/preflight, not every exchange execution fragment.",
+  "first_seen_at": "2026-06-03T07:36:10.053275Z",
+  "fix_branch": null,
+  "fix_commit": "1b4bf4e34d0f4e3f788c149acad05ede126a4adf",
+  "fixed_at": "2026-06-03T08:11:38.787847Z",
+  "github_issue_number": 638,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/638",
+  "last_seen_at": "2026-06-03T07:36:10.053275Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/640",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status after MiniQMT trade reconciliation, or add a unit test where PaperTradingDayRunner._miniqmt_fills_from_trades receives a 301135.SZ sell trade with traded_volume=190.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 MiniQMT reconciliation rejects broker partial odd-lot fill rows",
+  "trigger_condition": {
+    "fingerprint": "53dcf947b661b818fcd5fa8f",
+    "source_event_id": "FE-20260603-53dcf947b661"
+  },
+  "validation_evidence": [
+    "ruff check backend/services/trading_core/models.py backend/tests/paper_trading_v2/test_day_runner.py -> passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_day_runner.py backend/tests/trading_core/test_oms.py -q -> 33 passed",
+    "python -m nox -s paper_v2_backend -> 590 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed: l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 pytest passed; ownership scan mapped=12 unmapped=0 ambiguous=0"
+  ],
+  "verification_run_id": null
+}

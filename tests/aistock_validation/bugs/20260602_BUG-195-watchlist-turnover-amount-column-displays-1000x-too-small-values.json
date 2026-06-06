@@ -1,0 +1,71 @@
+{
+  "actual": "TDX 分支返回 amount=259653.008，前端按元格式化后显示约 25.97 万；与 volume_hand*100*price 推算的 2.6 亿元相差约 1000 倍。",
+  "allowed_write_scope": [
+    "backend/services/watchlist_service.py",
+    "tests/aistock_validation/bugs/20260602_BUG-195-watchlist-turnover-amount-column-displays-1000x-too-small-values.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/core/data_source_manager_impl.py",
+    "backend/tests/watchlist/test_realtime_amount_units.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-195",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T16:36:18.818232Z",
+  "description": "TDX 分支返回 amount=259653.008，前端按元格式化后显示约 25.97 万；与 volume_hand*100*price 推算的 2.6 亿元相差约 1000 倍。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-ebddd6e3fd5e",
+      "timestamp": "2026-06-01T16:36:18.818227Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "自选股票池 API amount 字段统一为元；前端成交额列按元格式化，000411.SZ 这类样例应显示约 2.60 亿，而不是 25.97 万。",
+  "first_seen_at": "2026-06-01T16:36:18.818232Z",
+  "fix_branch": null,
+  "fix_commit": "a9cb6c518ac5d486a92de6d89906af350ebd3c9b",
+  "fixed_at": "2026-06-01T16:56:35.343111Z",
+  "github_issue_number": 495,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/495",
+  "last_seen_at": "2026-06-01T16:36:18.818232Z",
+  "module": "watchlist",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/496",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod http://127.0.0.1:8001/api/v1/watchlist/items?page=1&page_size=5 | Select items.code,items.last,items.volume_hand,items.amount; compare amount with last*volume_hand*100 and frontend formatAmount(amount)",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Root cause is TDX realtime quote normalization; backend/core/data_source_manager_impl.py must output amount in yuan consistently with Tushare fallback, with a focused unit test.",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "watchlist"
+  ],
+  "title": "Watchlist turnover amount column displays 1000x too small values",
+  "trigger_condition": {
+    "fingerprint": "ebddd6e3fd5e50deb5f7b5fa",
+    "source_event_id": "FE-20260602-ebddd6e3fd5e"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> 2 passed",
+    "python -m ruff check backend/core/data_source_manager_impl.py backend/tests/watchlist/test_realtime_amount_units.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 301 passed"
+  ],
+  "verification_run_id": null
+}

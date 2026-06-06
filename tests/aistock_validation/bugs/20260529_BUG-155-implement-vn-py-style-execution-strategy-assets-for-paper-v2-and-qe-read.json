@@ -1,0 +1,102 @@
+{
+  "actual": "BUG-151 added source inventory and attribution gates, but executable vn.py-derived strategies are not yet assets selectable by Paper v2 simulation and are not exposed through a QE-ready core/adapter boundary.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260529_BUG-155-implement-vn-py-style-execution-strategy-assets-for-paper-v2-and-qe-read.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/architecture/vnpy_execution_source_inventory_20260529.md",
+    "docs/architecture/miniqmt_execution_priority_and_qe_migration_design_20260529.md",
+    "backend/execution_algos/vnpy_style/**",
+    "backend/execution_algos/__init__.py",
+    "backend/services/trading_core/execution_algo_capabilities.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/services/strategy_package/validators.py",
+    "backend/services/paper_trading_v2/execution/**",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/infra/qmt_client.py",
+    "backend/services/paper_trading_v2/broker/base.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/trading_core/**",
+    "backend/tests/paper_trading_v2/**",
+    "tests/aistock_validation/history/paper_v2_execution/**"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-155",
+  "closed_at": null,
+  "closure_requirements": [
+    "Implement vn.py-derived execution strategies as versioned AIstock execution policy assets, not Paper v2 ad-hoc code.",
+    "Do not deliver or label any simplified, subset, POC, placeholder, mock-only, or skeleton implementation as complete; every in-scope module must satisfy DESIGN-COMPLIANCE-001.",
+    "Provide a complete vnpy_style core module with source attribution, lifecycle/status/action/order/tick/trade/timer DTOs, and import-boundary separation from FastAPI, DB, MiniQMT, and vn.py runtime engines.",
+    "Port Sniper, BestLimit, and TWAP_LITE_MINIQMT core semantics from vnpy_algotrading with derived-from evidence, MIT attribution, preserved state variables/branches, and characterization tests for every mapped behavior in BUG-151 source inventory.",
+    "Expose SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, and TWAP_LITE_MINIQMT as validated execution policy assets/capabilities selectable by Paper v2 portfolios/sessions; unsupported modes and missing config must fail fast with structured errors and no fallback.",
+    "Add the MiniQMT Paper v2 adapter path that routes selected execution policy assets to broker submit/cancel/status/trade actions while preserving MiniQMT as broker authority and without introducing vn.py EventEngine, AlgoEngine, MainEngine, or gateway runtime.",
+    "Persist or surface order/fill/cancel/reject diagnostics with policy id/hash, algo code/version, source mapping, child order lineage, broker ids, raw status/status_msg, cash/position snapshot context where available, and explicit terminal/partial/unfilled states.",
+    "Keep QE-ready boundary explicit: core algorithms must be adapter-independent and reusable by future QE shadow/validated execution work; this issue must not mutate QE workspaces, StrategyPackage frozen manifests, model weights, HMM snapshots, or production assets.",
+    "Run targeted trading_core/Paper v2 tests plus l0 and validation_module_registry_l0; include git diff --check, import-boundary checks, and a DESIGN-COMPLIANCE-001 matrix before PR readiness.",
+    "Keep BUG JSON and GitHub Issue synchronized and report production gates; do not restart production runtime services, modify .env, write production DB, or apply DDL without explicit approval."
+  ],
+  "created_at": "2026-05-29T06:45:10.219521Z",
+  "description": "BUG-151 added source inventory and attribution gates, but executable vn.py-derived strategies are not yet assets selectable by Paper v2 simulation and are not exposed through a QE-ready core/adapter boundary.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-93b8ebb123c8",
+      "timestamp": "2026-05-29T06:45:10.219514Z"
+    },
+    {
+      "action": "scope_and_closure_expansion",
+      "actor": "codex",
+      "note": "Expanded BUG-155 into full vn.py-style execution policy asset implementation scope; explicitly prohibits simplified/POC/skeleton delivery.",
+      "timestamp": "2026-05-29T07:05:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "AIstock has complete vn.py-style execution strategy asset infrastructure and complete first asset set: execution policies are versioned/identifiable assets, Paper v2 portfolios/sessions can select a supported execution strategy, MiniQMT simulation receives orders through the selected strategy, order/fill/cancel/reject diagnostics remain traceable, and the algorithm core is reusable by future QE integration without Paper-only semantics.",
+  "first_seen_at": "2026-05-29T06:45:10.219521Z",
+  "fix_branch": null,
+  "fix_commit": "fb620d2cb5fc47e793ba7afdcc79aab52439c0eb",
+  "fixed_at": "2026-05-29T08:54:15.310833Z",
+  "github_issue_number": 357,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/357",
+  "last_seen_at": "2026-05-29T06:45:10.219521Z",
+  "module": "paper_v2.execution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not modify .env.",
+    "Do not write production DB or apply DDL without explicit approval.",
+    "Do not mutate StrategyPackage frozen manifests, model weights, HMM snapshots, QE workspaces, or validated production assets.",
+    "Do not introduce vn.py EventEngine, AlgoEngine, MainEngine, or gateway runtime as a second production engine."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/366",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a: feature implementation from BUG-151 source inventory gate",
+  "required_verification": [
+    "git diff --check",
+    "python -m json.tool BUG-155 JSON",
+    "pytest backend/tests/trading_core backend/tests/paper_trading_v2 -q -p no:cacheprovider",
+    "python -m nox -s l0 validation_module_registry_l0",
+    "DESIGN-COMPLIANCE-001 matrix for BUG-155 closure requirements"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2.execution"
+  ],
+  "title": "Implement vn.py-style execution strategy assets for Paper v2 and QE-ready reuse",
+  "trigger_condition": {
+    "fingerprint": "93b8ebb123c8363ef78ab97b",
+    "source_event_id": "FE-20260529-93b8ebb123c8"
+  },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed",
+    "python -m json.tool tests\\aistock_validation\\bugs\\20260529_BUG-155-implement-vn-py-style-execution-strategy-assets-for-paper-v2-and-qe-read.json -> passed",
+    "python -m pytest backend/tests/trading_core backend/tests/paper_trading_v2 -q -p no:cacheprovider -> 359 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s l0 validation_module_registry_l0 -> success",
+    "ruff check changed Python files -> passed"
+  ],
+  "verification_run_id": null
+}

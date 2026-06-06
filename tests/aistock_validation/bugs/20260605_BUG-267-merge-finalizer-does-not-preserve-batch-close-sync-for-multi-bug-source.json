@@ -1,0 +1,96 @@
+{
+  "actual": "The source PR #766 closed BUG-264 and BUG-265, but initial finalizer output opened PR #767 for BUG-264 only; BUG-265 remained in_progress until a manual close-sync-batch was run.",
+  "allowed_write_scope": [
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    ".github/workflows/test.yml",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260605_BUG-266-ci-classifier-keeps-workflow-only-bug-fix-prs-on-full-backend-matrix.json",
+    "tests/aistock_validation/bugs/20260605_BUG-267-merge-finalizer-does-not-preserve-batch-close-sync-for-multi-bug-source.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-267",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-05T01:24:36.151293Z",
+  "description": "The source PR #766 closed BUG-264 and BUG-265, but initial finalizer output opened PR #767 for BUG-264 only; BUG-265 remained in_progress until a manual close-sync-batch was run.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260605-1742042a2820",
+      "timestamp": "2026-06-05T01:24:36.151289Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "When a merged source PR or batch state contains multiple BUGs, the finalizer should preserve the full BUG set and run batch close-sync/final cleanup with per-issue evidence instead of requiring manual close-sync-batch recovery.",
+  "first_seen_at": "2026-06-05T01:24:36.151293Z",
+  "fix_branch": null,
+  "fix_commit": "cb8f98c9b85f0b5e27d87a2e4088ae2822525818",
+  "fixed_at": "2026-06-05T01:51:23.355373Z",
+  "github_issue_number": 770,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/770",
+  "last_seen_at": "2026-06-05T01:24:36.151293Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/771",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run a batch fix PR with two BUG IDs through run --mode merge --merge; inspect close-sync PR body and BUG JSON statuses.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Merge finalizer does not preserve batch close-sync for multi-BUG source PRs",
+  "trigger_condition": {
+    "fingerprint": "1742042a28201ed61a5d46bf",
+    "source_event_id": "FE-20260605-1742042a2820"
+  },
+  "validation_evidence": [
+    "python -m py_compile scripts/ci_change_classifier.py scripts/aistock_issue_workflow.py backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "ruff check scripts/ci_change_classifier.py scripts/aistock_issue_workflow.py backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 146 passed",
+    "python scripts/ci_change_classifier.py <BUG-266/267 workflow files> -> workflow_validation_only",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --module validation <changed files> -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m nox -s validation_coverage_backend -> passed",
+    "python -m nox -s validation_center_backend -> 383 passed",
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "actual": "After run prun_75fdbb4fc0124bec8345c026683f4cb9 completed SUCCEEDED at 2026-06-02T13:30:59+08, scheduler ticks every 30 seconds create new FAILED sessions with INVALID_STATE_TRANSITION: fill quantity exceeds remaining quantity, order_id ord_06e2308f1138489f8087a4fd616f1ad9, remaining_quantity=29400, fill_quantity=44000.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "tests/aistock_validation/bugs/20260602_BUG-204-paper-v2-miniqmt-reconciliation-overfills-broker-order-and-loops-auto-ru.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-204",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T05:45:43.210521Z",
+  "description": "After run prun_75fdbb4fc0124bec8345c026683f4cb9 completed SUCCEEDED at 2026-06-02T13:30:59+08, scheduler ticks every 30 seconds create new FAILED sessions with INVALID_STATE_TRANSITION: fill quantity exceeds remaining quantity, order_id ord_06e2308f1138489f8087a4fd616f1ad9, remaining_quantity=29400, fill_quantity=44000.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-18aa460964b9",
+      "timestamp": "2026-06-02T05:45:43.210517Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime:8001 2026-06-02 13:31-13:39 Asia/Shanghai scheduler last_result INVALID_STATE_TRANSITION and backend/logs/aistock.log lines around 89338-89350"
+  ],
+  "expected": "Broker-authoritative reconciliation must be idempotent across scheduler retries/sessions: already-reconciled broker trades are skipped or applied only as deltas, local fills never exceed remaining quantity, and auto-run must not repeatedly recreate failed sessions after a completed same-day run.",
+  "first_seen_at": "2026-06-02T05:45:43.210521Z",
+  "fix_branch": null,
+  "fix_commit": "6592e7a80882fb2ac2941b354652b2da2424c65e",
+  "fixed_at": "2026-06-02T06:46:59.467525Z",
+  "github_issue_number": 542,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/542",
+  "last_seen_at": "2026-06-02T05:45:43.210521Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/551",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status; Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/sessions?limit=5; Invoke-RestMethod http://127.0.0.1:8001/api/v1/qmt/orders; Invoke-RestMethod http://127.0.0.1:8001/api/v1/qmt/trades",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 MiniQMT reconciliation overfills broker order and loops auto-run failed sessions",
+  "trigger_condition": {
+    "fingerprint": "18aa460964b960dfe7f8b97e",
+    "source_event_id": "FE-20260602-18aa460964b9"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -q -> passed (6 passed)",
+    "python -m pytest backend/tests/paper_trading_v2/test_live_session.py -q -> passed (24 passed)",
+    "python -m ruff check backend/services/paper_trading_v2/day_runner.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py; git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> passed (568 passed, 1 skipped, 2 xfailed)",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed (l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep); UI sub-session requires dev 8012/3012 service and was not used for production 8001"
+  ],
+  "verification_run_id": null
+}
