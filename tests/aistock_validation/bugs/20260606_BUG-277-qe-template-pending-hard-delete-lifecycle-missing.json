@@ -1,14 +1,4 @@
 {
-  "bug_id": "BUG-277",
-  "title": "QE pending template lifecycle lacks hard delete API, MCP tool, and UI button",
-  "description": "GitHub Issue #114 was originally titled BUG-086, but local BUG-086 is already fixed for a different Paper v2 runtime-config issue. This record preserves the real open QE template hard-delete lifecycle bug under a new unique BUG ID.",
-  "module": "qe",
-  "severity": "P1",
-  "risk_area": "feature_gap",
-  "github_issue_number": 114,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/114",
-  "reproduce_command": "rg -n \"delete.*template|qe_template_delete|supersede\" backend/services/qe_templates backend/routers/qe_templates.py frontend/src -S",
-  "expected": "Pending QE templates that are draft, ready_for_review, or approved but not materialized/executed can be hard-deleted through guarded backend, MCP, and UI flows.",
   "actual": "Current main exposes supersede but no hard delete repository method, API endpoint, MCP tool, or UI delete action for pending templates.",
   "allowed_write_scope": [
     "backend/services/qe_templates/",
@@ -25,64 +15,78 @@
     "backend/tests/research_assistant/",
     "frontend/tests/qe-templates/"
   ],
-  "required_verification": [
-    "l0",
-    "qe_backend_or_targeted_qe_template_tests",
-    "frontend_targeted_template_ui_validation"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-277",
+  "closed_at": null,
   "closure_requirements": [
     "Guarded delete API and repository behavior implemented for non-executed pending templates.",
     "MCP delete tool exposes explicit confirmation semantics.",
     "UI delete button exists with confirmation and refresh behavior.",
     "Executed/runtime history is not silently deleted."
   ],
+  "created_at": "2026-06-06T06:26:19Z",
+  "description": "GitHub Issue #114 was originally titled BUG-086, but local BUG-086 is already fixed for a different Paper v2 runtime-config issue. This record preserves the real open QE template hard-delete lifecycle bug under a new unique BUG ID.",
+  "events": [
+    {
+      "action": "github_registry_renumber",
+      "actor": "codex",
+      "note": "Renumbered GitHub Issue #114 from BUG-086 to BUG-277 because the previous BUG ID already exists locally with a different fixed issue.",
+      "timestamp": "2026-06-06T06:26:19Z"
+    },
+    {
+      "action": "scope_expansion_for_declared_closure_requirement",
+      "actor": "codex",
+      "note": "Closure requirements include an MCP delete tool, so the fix scope was expanded before editing MCP gateway/script wrappers and their tests.",
+      "timestamp": "2026-06-06T09:52:00Z"
+    },
+    {
+      "action": "scope_expansion_for_manifest_count_contract_tests",
+      "actor": "codex",
+      "note": "Adding qe_template_delete_confirmed changes the gateway manifest count consumed by Research Assistant catalog contract tests.",
+      "timestamp": "2026-06-06T09:58:00Z"
+    },
+    {
+      "action": "scope_expansion_for_frontend_delete_e2e",
+      "actor": "codex",
+      "note": "Closure requires UI delete button confirmation and refresh behavior, so the focused QE template Playwright spec was added to scope before editing.",
+      "timestamp": "2026-06-06T10:21:00Z"
+    }
+  ],
   "evidence_uris": [
     "GitHub Issue #114",
     "rg search found supersede-only current behavior on 2026-06-06"
   ],
-  "previous_conflicting_bug_id": "BUG-086",
-  "schema_version": "aistock_validation_bug_v1",
-  "status": "open",
-  "created_at": "2026-06-06T06:26:19Z",
+  "expected": "Pending QE templates that are draft, ready_for_review, or approved but not materialized/executed can be hard-deleted through guarded backend, MCP, and UI flows.",
   "first_seen_at": "2026-06-06T06:26:19Z",
-  "last_seen_at": "2026-06-06T06:26:19Z",
-  "fixed_at": null,
-  "closed_at": null,
-  "assigned_agent": null,
   "fix_branch": null,
-  "fix_commit": null,
-  "pr_url": null,
+  "fix_commit": "71f3b6419e09cab337019eac15dd4305874440ee",
+  "fixed_at": "2026-06-06T11:26:41.597575Z",
+  "github_issue_number": 114,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/114",
+  "last_seen_at": "2026-06-06T06:26:19Z",
+  "module": "qe",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/810",
+  "previous_conflicting_bug_id": "BUG-086",
+  "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "production_backend_dependency_gate": "noop",
+  "reproduce_command": "rg -n \"delete.*template|qe_template_delete|supersede\" backend/services/qe_templates backend/routers/qe_templates.py frontend/src -S",
+  "required_verification": [
+    "l0",
+    "qe_backend_or_targeted_qe_template_tests",
+    "frontend_targeted_template_ui_validation"
+  ],
+  "risk_area": "feature_gap",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
   "suspected_modules": [
     "backend/services/qe_templates",
     "frontend/src/app/quantevolver/templates"
   ],
-  "events": [
-    {
-      "timestamp": "2026-06-06T06:26:19Z",
-      "actor": "codex",
-      "action": "github_registry_renumber",
-      "note": "Renumbered GitHub Issue #114 from BUG-086 to BUG-277 because the previous BUG ID already exists locally with a different fixed issue."
-    },
-    {
-      "timestamp": "2026-06-06T09:52:00Z",
-      "actor": "codex",
-      "action": "scope_expansion_for_declared_closure_requirement",
-      "note": "Closure requirements include an MCP delete tool, so the fix scope was expanded before editing MCP gateway/script wrappers and their tests."
-    },
-    {
-      "timestamp": "2026-06-06T09:58:00Z",
-      "actor": "codex",
-      "action": "scope_expansion_for_manifest_count_contract_tests",
-      "note": "Adding qe_template_delete_confirmed changes the gateway manifest count consumed by Research Assistant catalog contract tests."
-    },
-    {
-      "timestamp": "2026-06-06T10:21:00Z",
-      "actor": "codex",
-      "action": "scope_expansion_for_frontend_delete_e2e",
-      "note": "Closure requires UI delete button confirmation and refresh behavior, so the focused QE template Playwright spec was added to scope before editing."
-    }
+  "title": "QE pending template lifecycle lacks hard delete API, MCP tool, and UI button",
+  "validation_evidence": [
+    "CI for PR #810 -> passed (17 passed, 0 failed, 0 pending; Workflow validation fast lane skipped)",
+    "npm exec -- playwright test tests/qe-templates with manual Next dev on 3012 -> passed (4 passed)"
   ]
 }
