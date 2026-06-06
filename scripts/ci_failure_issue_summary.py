@@ -110,6 +110,21 @@ def _logs_not_ready_error(value: Any) -> bool:
     return "run" in text and "still in progress" in text and "log" in text
 
 
+def _diagnostic_retry_command(run_id: str) -> str:
+    run_arg = run_id or "<run-id>"
+    return (
+        f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_arg} "
+        "--wait-for-completion --wait-attempts 2 --wait-seconds 15 "
+        "--log-attempts 3 --log-wait-seconds 10 "
+        "--output tmp/validation/ci_failure_issue/summary.json "
+        "--markdown-output tmp/validation/ci_failure_issue/body.md "
+        "--context-output tmp/validation/ci_failure_issue/context-pack.json "
+        "--context-markdown-output tmp/validation/ci_failure_issue/context-pack.md "
+        "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json "
+        "--stdout-format compact"
+    )
+
+
 def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     diagnostic_status = summary.get("diagnostic_status") or "partial"
     errors = summary.get("extraction_errors") or []
@@ -118,18 +133,10 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     has_manual_summary = bool(str(summary.get("manual_summary") or "").strip())
     run_id = str(summary.get("run_id") or "").strip()
     if diagnostic_status == "deferred":
-        next_command = (
-            f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
-            "--output tmp/validation/ci_failure_issue/summary.json "
-            "--markdown-output tmp/validation/ci_failure_issue/body.md "
-            "--context-output tmp/validation/ci_failure_issue/context-pack.json "
-            "--context-markdown-output tmp/validation/ci_failure_issue/context-pack.md "
-            "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json"
-        )
         return {
             "allowed": False,
             "reason": LOGS_NOT_READY_REASON if any(_logs_not_ready_error(error) for error in errors) else "diagnostics_not_actionable",
-            "next_command": next_command,
+            "next_command": _diagnostic_retry_command(run_id),
         }
     if diagnostic_status == "partial" and has_manual_summary:
         return {
@@ -141,10 +148,7 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
         return {
             "allowed": False,
             "reason": "diagnostics_not_actionable",
-            "next_command": (
-                f"python scripts/ci_failure_issue_summary.py --repo {DEFAULT_REPO} --run-id {run_id} "
-                "--output tmp/validation/ci_failure_issue/summary.json"
-            ),
+            "next_command": _diagnostic_retry_command(run_id),
         }
     return {
         "allowed": True,

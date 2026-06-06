@@ -293,14 +293,77 @@ def _latest_codegraph_freshness_artifact(root: Path) -> dict[str, Any] | None:
     }
 
 
-def latest_codegraph_freshness(root: Path | None = None) -> dict[str, Any]:
+def _codegraph_live_status_is_fresh(status: dict[str, Any] | None) -> bool:
+    status = status or {}
+    return bool(
+        status.get("available")
+        and status.get("index_exists")
+        and (status.get("status_check") or {}).get("ok")
+        and (status.get("index_summary") or {}).get("up_to_date")
+    )
+
+
+def _live_codegraph_freshness_payload(status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_codegraph_freshness_v1",
+        "artifact_type": "codegraph_live_status",
+        "provider": "codegraph",
+        "workflow_gate": "ready",
+        "freshness": "fresh",
+        "freshness_basis": "live_codegraph_status",
+        "status": status.get("status"),
+        "generated_at": _utc_now(),
+        "git_commit": status.get("git_commit"),
+        "graph_root": status.get("graph_root"),
+        "graph_root_source": status.get("graph_root_source"),
+        "artifact_path": None,
+        "summary_ref": None,
+        "index_summary": status.get("index_summary") or {},
+        "warnings": [],
+        "notes": [
+            "Latest persisted freshness artifact was missing or stale, but live CodeGraph status reports the index is up to date."
+        ],
+        "blocking_for_issue_workflow": False,
+    }
+
+
+def latest_codegraph_freshness(
+    root: Path | None = None,
+    *,
+    live_status: dict[str, Any] | None = None,
+    refresh_if_stale: bool = False,
+    output_dir: Path | None = None,
+    max_age_hours: float = 36.0,
+    skip_external: bool = False,
+) -> dict[str, Any]:
     root = root or REPO_ROOT
     latest = _latest_codegraph_freshness_artifact(root)
     warnings: list[str] = []
+    notes: list[str] = []
+    refreshed = False
+    effective = latest
+    effective_source = "artifact" if latest else "none"
+    if refresh_if_stale and (latest is None or latest.get("freshness") != "fresh"):
+        refreshed_payload = build_codegraph_freshness_artifact(
+            root=root,
+            output_dir=output_dir or root / "tmp" / "validation" / "code-intelligence" / "latest",
+            max_age_hours=max_age_hours,
+            skip_external=skip_external,
+        )
+        latest = _latest_codegraph_freshness_artifact(root) or refreshed_payload
+        effective = latest
+        effective_source = "refreshed_artifact"
+        refreshed = True
+    elif (latest is None or latest.get("freshness") != "fresh") and _codegraph_live_status_is_fresh(live_status):
+        effective = _live_codegraph_freshness_payload(live_status or {})
+        effective_source = "live_status"
+        notes.extend(effective.get("notes") or [])
     if latest is None:
-        warnings.append("No CodeGraph freshness artifact found; use the live doctor/status fallback.")
+        if effective_source != "live_status":
+            warnings.append("No CodeGraph freshness artifact found; use latest-freshness --refresh-if-stale or live doctor/status fallback.")
     elif latest.get("freshness") != "fresh":
-        warnings.append(f"Latest CodeGraph freshness is {latest.get('freshness') or 'unknown'}.")
+        if effective_source != "live_status":
+            warnings.append(f"Latest CodeGraph freshness is {latest.get('freshness') or 'unknown'}.")
     return {
         "schema_version": "aistock_codegraph_latest_freshness_v1",
         "generated_at": _utc_now(),
@@ -308,7 +371,11 @@ def latest_codegraph_freshness(root: Path | None = None) -> dict[str, Any]:
         "blocking_for_issue_workflow": False,
         "artifact_roots": [_repo_rel(root / item, root) for item in CODE_INTELLIGENCE_ARTIFACT_ROOTS],
         "latest": latest,
+        "effective": effective,
+        "effective_source": effective_source,
+        "refreshed": refreshed,
         "warnings": warnings,
+        "notes": notes,
     }
 
 
@@ -322,6 +389,13 @@ def _understand_config_path(root: Path) -> Path:
 
 def _understand_ignore_path(root: Path) -> Path:
     return root / ".understand-anything" / ".understandignore"
+
+
+def _git_commit_is_ancestor(root: Path, ancestor: Any, descendant: Any) -> bool:
+    if not ancestor or not descendant:
+        return False
+    result = _git(["merge-base", "--is-ancestor", str(ancestor), str(descendant)], cwd=root)
+    return bool(result.get("ok"))
 
 
 def _user_home() -> Path:
@@ -666,7 +740,7 @@ def build_code_intelligence_run_manifest(
         "output_dir": _repo_rel(output_dir, root),
         "download": {
             "gh_command": download_command,
-            "local_latest_freshness_command": "python scripts/code_intelligence_adapter.py latest-freshness",
+            "local_latest_freshness_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
         },
         "consumable_refs": {
             "codegraph_freshness_json": _repo_rel(freshness_json, root) if freshness_json.exists() else None,
@@ -721,12 +795,37 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
     ignore_path = _understand_ignore_path(root)
     graph = _read_json_object(graph_path)
     manifest: dict[str, Any] = {}
+    project = graph.get("project") if isinstance(graph.get("project"), dict) else {}
+    metadata = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    graph_commit = project.get("gitCommitHash") or metadata.get("gitCommitHash") or graph.get("gitCommitHash")
+    graph_analyzed_at = project.get("analyzedAt") or metadata.get("analyzedAt") or graph.get("analyzedAt")
+    current_git_commit = _git_snapshot(requested_root).get("head")
+    if graph_path.exists() and graph_commit and current_git_commit:
+        if str(graph_commit) == str(current_git_commit):
+            freshness = "fresh"
+        elif _git_commit_is_ancestor(requested_root, graph_commit, current_git_commit):
+            freshness = "base_current"
+        else:
+            freshness = "stale"
+    elif graph_path.exists():
+        freshness = "unknown"
+    else:
+        freshness = "missing"
+    warnings: list[str] = []
+    if freshness == "stale":
+        warnings.append("Understand Anything graph commit differs from the requested worktree commit; use it as warning-only context.")
+    notes: list[str] = []
+    if freshness == "base_current":
+        notes.append("Understand Anything graph matches an ancestor of the current worktree; use it for base-code context plus targeted reads of changed files.")
     if graph_path.exists() and graph:
         manifest = {
             "node_count": len(graph.get("nodes") or []),
             "edge_count": len(graph.get("edges") or []),
             "project": graph.get("project") or {},
             "version": graph.get("version"),
+            "graph_commit": graph_commit,
+            "analyzed_at": graph_analyzed_at,
+            "freshness": freshness,
         }
         if graph.get("read_error"):
             manifest = {"read_error": graph.get("read_error")}
@@ -751,6 +850,12 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
         "graph_root": str(root),
         "graph_root_source": "canonical_worktree_root" if root != requested_root else "current_worktree",
         "graph_exists": graph_path.exists(),
+        "graph_commit": graph_commit,
+        "graph_analyzed_at": graph_analyzed_at,
+        "current_git_commit": current_git_commit,
+        "freshness": freshness,
+        "warnings": warnings,
+        "notes": notes,
         "config_path": _repo_rel(config_path, root),
         "config_exists": config_path.exists(),
         "understandignore_path": _repo_rel(ignore_path, root),
@@ -792,11 +897,15 @@ def build_understand_anything_summary(
     md_path = output_dir / f"ua-{safe_module}-summary.md"
     limit = max_nodes or int(ua_config.get("max_context_nodes_t3") or 60)
     status = understand_anything_status(requested_root, skip_external=True)
+    graph_commit = status.get("graph_commit")
+    current_git_commit = status.get("current_git_commit")
+    graph_analyzed_at = status.get("graph_analyzed_at")
+    freshness = status.get("freshness") or "unknown"
     node_count = 0
     edge_count = 0
     selected_nodes: list[dict[str, Any]] = []
     selected_edges: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(status.get("warnings") or [])
     if graph_path.exists():
         try:
             graph = json.loads(graph_path.read_text(encoding="utf-8-sig"))
@@ -823,7 +932,10 @@ def build_understand_anything_summary(
         "generated_at": _utc_now(),
         "graph_provider": "understand_anything",
         "graph_version": ua_config.get("version") or DEFAULT_UNDERSTAND_ANYTHING_VERSION,
-        "graph_commit": _git_snapshot(graph_root).get("head"),
+        "graph_commit": graph_commit,
+        "current_git_commit": current_git_commit,
+        "graph_analyzed_at": graph_analyzed_at,
+        "freshness": freshness,
         "module": module,
         "status": "ok" if graph_path.exists() and not warnings else "fallback",
         "graph_path": _repo_rel(graph_path, graph_root),
@@ -872,11 +984,17 @@ def build_understand_anything_summary_manifest(
         "schema_version": "aistock_understand_anything_summary_manifest_v1",
         "generated_at": _utc_now(),
         "graph_provider": "understand_anything",
+        "workflow_gate": "warning"
+        if any(item.get("warnings") or item.get("freshness") in {"missing", "stale"} for item in summaries)
+        else "ready",
         "modules": module_list,
         "summary_refs": [
             {
                 "module": item.get("module"),
                 "status": item.get("status"),
+                "freshness": item.get("freshness"),
+                "graph_commit": item.get("graph_commit"),
+                "current_git_commit": item.get("current_git_commit"),
                 "summary_ref": item.get("summary_ref"),
                 "artifact_path": item.get("artifact_path"),
             }
@@ -896,6 +1014,9 @@ def render_understand_anything_summary_markdown(payload: dict[str, Any]) -> str:
         f"- status: `{payload.get('status') or 'unknown'}`",
         f"- graph_version: `{payload.get('graph_version') or 'unknown'}`",
         f"- graph_commit: `{payload.get('graph_commit') or 'unknown'}`",
+        f"- current_git_commit: `{payload.get('current_git_commit') or 'unknown'}`",
+        f"- freshness: `{payload.get('freshness') or 'unknown'}`",
+        f"- graph_analyzed_at: `{payload.get('graph_analyzed_at') or 'unknown'}`",
         f"- graph_path: `{payload.get('graph_path') or 'not_configured'}`",
         f"- nodes_used: `{payload.get('nodes_used', 0)}` / `{payload.get('node_count', 0)}`",
         f"- edges_used: `{payload.get('edges_used', 0)}` / `{payload.get('edge_count', 0)}`",
@@ -922,7 +1043,7 @@ def build_doctor_report(root: Path | None = None, *, skip_external: bool = False
     root = root or REPO_ROOT
     catalog = _load_catalog(root)
     codegraph = codegraph_status(root, skip_external=skip_external)
-    freshness = latest_codegraph_freshness(root)
+    freshness = latest_codegraph_freshness(root, live_status=codegraph)
     ua = understand_anything_status(root, skip_external=skip_external)
     warnings: list[str] = []
     if not codegraph.get("available"):
@@ -1345,7 +1466,13 @@ def cmd_freshness(args: argparse.Namespace) -> int:
 
 
 def cmd_latest_freshness(args: argparse.Namespace) -> int:
-    payload = latest_codegraph_freshness(root=Path(args.root) if args.root else REPO_ROOT)
+    payload = latest_codegraph_freshness(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        refresh_if_stale=args.refresh_if_stale,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        max_age_hours=args.max_age_hours,
+        skip_external=args.skip_external,
+    )
     _emit(payload, args.output)
     return 0
 
@@ -1465,6 +1592,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read the latest warning-only CodeGraph freshness artifact without invoking CodeGraph.",
     )
     latest_freshness.add_argument("--root")
+    latest_freshness.add_argument("--refresh-if-stale", action="store_true")
+    latest_freshness.add_argument("--output-dir")
+    latest_freshness.add_argument("--max-age-hours", type=float, default=36.0)
+    latest_freshness.add_argument("--skip-external", action="store_true")
     latest_freshness.add_argument("--output")
     latest_freshness.set_defaults(func=cmd_latest_freshness)
 
