@@ -1289,6 +1289,48 @@ def test_scheduler_no_rebalance_submission_marks_success_without_broker() -> Non
     assert result.results[0].run.run_payload_json["broker_called"] is False
 
 
+def test_scheduler_marks_existing_zero_intent_plan_success_when_submit_window_reuses_it() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    fake_selection = FakeSelectionService(release, candidates=[], valid_no_candidate=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_empty_qmt",
+                    current_positions={},
+                )
+            }
+        ),
+    )
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    resumed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    assert planned.planned_count == 1
+    assert planned.results[0].execution_plan.intents == []
+    assert resumed.submitted_count == 1
+    assert resumed.reused_count == 0
+    assert resumed.results[0].status == "NO_REBALANCE"
+    assert len(fake_selection.calls) == 1
+    latest = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest.run_payload_json["no_rebalance_required"] is True
+    assert latest.run_payload_json["broker_called"] is False
+    assert latest.run_payload_json["last_stage"] == "SUCCEEDED"
+
+
 def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_restart_idempotency() -> None:
     release, local_binding_a, _, repo = _release_and_bindings()
     assert local_binding_a is not None

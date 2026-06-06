@@ -1582,6 +1582,30 @@ class SimulationLifecycleScheduler:
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
             status = "NO_REBALANCE"
+        if self._should_mark_existing_no_rebalance(run=run, plan=plan, submit=submit):
+            updated = self.repository.update_simulation_daily_run(
+                run.run_id,
+                status=SimulationDailyRunStatus.SUCCEEDED,
+                payload_patch={
+                    "no_rebalance_required": True,
+                    "broker_called": False,
+                    "last_stage": "SUCCEEDED",
+                    "submit_failure": None,
+                },
+            )
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="NO_REBALANCE",
+                run=updated,
+                execution_plan=plan,
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
             context = self.context_provider.load_context(
                 runtime_release=runtime_release,
@@ -1823,6 +1847,25 @@ class SimulationLifecycleScheduler:
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             statuses.add(SimulationDailyRunStatus.SUBMITTING)
         return run.status in statuses
+
+    @staticmethod
+    def _should_mark_existing_no_rebalance(
+        *,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        submit: bool,
+    ) -> bool:
+        if not submit or plan.intents or run.run_payload_json.get("broker_called"):
+            return False
+        return run.status in {
+            SimulationDailyRunStatus.CREATED,
+            SimulationDailyRunStatus.PRECHECKING,
+            SimulationDailyRunStatus.SIGNAL_GENERATING,
+            SimulationDailyRunStatus.TARGET_GENERATING,
+            SimulationDailyRunStatus.PLANNING_EXECUTION,
+            SimulationDailyRunStatus.FAILED_RETRYABLE,
+            SimulationDailyRunStatus.SUBMITTING,
+        }
 
     @staticmethod
     def _should_reconcile_existing_miniqmt_run(
