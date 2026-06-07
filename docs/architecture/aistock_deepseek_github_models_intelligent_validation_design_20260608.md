@@ -1,9 +1,9 @@
 ﻿# AIstock GitHub Models / DeepSeek 智能验证与 Issue Intake 增强设计方案
 
-版本：v1.0  
-日期：2026-06-08  
-状态：设计方案待审阅  
-目标分支：`docs/deepseek-github-models-validation-design-20260608`  
+版本：v1.0
+日期：2026-06-08
+状态：设计方案待审阅
+目标分支：`docs/deepseek-github-models-validation-design-20260608`
 合入策略：本文档完成后先提交到独立设计分支，等待用户审阅确认后再合入 `main`。
 
 ## 1. 执行结论
@@ -1127,4 +1127,3 @@ GitHub Models + DeepSeek 对 AIstock 最合理的定位是“低成本智能增�
 但它不能替代 AIstock 已经建立的工程质量体系。代码质量仍由标准 worktree、PR、CI、Validation Center、nox、BUG JSON、GitHub Issue close-sync、production gates 和人工授权合入共同保证。
 
 本方案通过 Phase 0-10 的完整阶段划分，既能充分发挥 GitHub Models / DeepSeek 的低成本智能能力，又能避免 LLM 直接控制生产、合入、修复和关闭流程，从而在不降低代码质量的前提下提升夜间发现问题、Issue 提交质量、测试调度效率和 Codex/Claude Code 修复效率。
-
