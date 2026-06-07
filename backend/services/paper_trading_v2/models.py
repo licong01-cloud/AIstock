@@ -96,6 +96,8 @@ class PaperBrokerAccountBinding(BaseModel):
     broker_backend: BrokerBackendId
     broker_mode: str = "SIM"
     broker_account_id: str
+    account_group_id: str | None = None
+    strategy_slot_id: str | None = None
     portfolio_id: str
     binding_status: BrokerAccountBindingStatus = BrokerAccountBindingStatus.ACTIVE
     allocation_mode: str = "exclusive_account"

@@ -1,0 +1,172 @@
+{
+  "actual": "create_minqmt_auto_run_portfolio and enable_auto_run still call get_active_broker_account_binding by broker account and reject a second active portfolio; test_auto_run currently asserts that rejection; paper_v2.broker_account_binding schema/comments/index remain exclusive-account oriented; frontend MiniQMT page labels the flow exclusive account auto-run.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/paper_trading_v2/models.py",
+    "backend/db/init_trading_core_v2_schema.py",
+    "backend/migrations/trading_core_v2_schema.sql",
+    "backend/migrations/paper_v2_miniqmt_auto_run_20260527.sql",
+    "backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql",
+    "backend/tests/paper_trading_v2/test_auto_run.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260606_BUG-282-paper-v2-miniqmt-auto-run-still-rejects-same-account-strategy-slots.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-282",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-06T14:30:27.367450Z",
+  "description": "create_minqmt_auto_run_portfolio and enable_auto_run still call get_active_broker_account_binding by broker account and reject a second active portfolio; test_auto_run currently asserts that rejection; paper_v2.broker_account_binding schema/comments/index remain exclusive-account oriented; frontend MiniQMT page labels the flow exclusive account auto-run.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260606-88da9aea74ef",
+      "timestamp": "2026-06-06T14:30:27.367445Z"
+    },
+    {
+      "timestamp": "2026-06-06T14:37:55.785856Z",
+      "actor": "codex",
+      "action": "scope_expanded_after_root_cause",
+      "note": "Current code recheck showed broker_account_binding needs new account_group_id/strategy_slot_id DDL and unique-index migration; added committed migration file to allowed_write_scope. Production DDL remains pending until after merge/authorization."
+    },
+    {
+      "timestamp": "2026-06-06T15:13:49.104972Z",
+      "actor": "codex",
+      "action": "current_code_revalidated_before_fix",
+      "note": "Rechecked latest main/BUG-210 residual: prior Paper v2 updates fixed BUG-262/270/272/274/280, but current MiniQMT auto-run still rejected same broker account N>1 strategy slots and runtime readiness lacked persisted account_group_slots attribution."
+    },
+    {
+      "timestamp": "2026-06-06T15:13:49.104972Z",
+      "actor": "codex",
+      "action": "implementation_completed_pending_pr",
+      "note": "Implemented account_group_id/strategy_slot_id persistence, idempotent DDL/index migration, MiniQMT account_group_slots auto-run binding reuse, runtime broker kwargs/order attribution, active-portfolio switch guard, no broad runtime fallback, and UI copy update from exclusive-account to account-group slots."
+    },
+    {
+      "timestamp": "2026-06-06T15:13:49.104972Z",
+      "actor": "codex",
+      "action": "validation_completed_with_frontend_residuals",
+      "note": "Passed targeted Paper v2/MiniQMT tests, ruff, compileall, l0+paper_v2_backend+validation_module_registry_l0+paper_v2_l3, validation_center_backend, qe_archive_l3. frontend_tsc is blocked by unrelated research-assistant test TS2322; paper_v2_ui not run because dev backend 8012 is not running and agent did not start backend services."
+    }
+  ],
+  "evidence_uris": [
+    "BUG-210 recheck on origin/main 22935a78: service.py:363/475, repository unique active account lookup, broker_account_binding active-account unique index, frontend miniqmt-sim exclusive copy; shared vn.py/slot tests 15 passed but this rejection test still passes.",
+    "Fix implementation: service/repository/models persist account_group_id and strategy_slot_id; create_minqmt_auto_run_portfolio and enable_auto_run allow same MiniQMT SIM account with distinct portfolio strategy slots; day_runner/readiness pass account_mode=account_group_slots and add order metadata for vn.py/MiniQMTSim attribution.",
+    "DDL required: backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql adds account_group_id/strategy_slot_id, backfills MiniQMT account_group_slots, drops old active-account unique index, adds legacy-account/account-slot/active-portfolio/account-group indexes; production_ddl_gate remains pending until after main merge and production application.",
+    "Validation passed: python -m pytest backend/tests/paper_trading_v2/test_auto_run.py -q -p no:cacheprovider -> 12 passed; MiniQMTSim account_group_slots targeted tests -> 2 passed; Paper day/live/session -> 82 passed; MiniQMT vn.py shared adapter tests -> 12 passed; simulation_runtime/qmt_strategy_ledger account-group tests -> 9 passed.",
+    "Validation passed: ruff check changed Paper v2 files -> passed; python -m compileall -q backend/services/paper_trading_v2 backend/db/init_trading_core_v2_schema.py -> passed; git diff --check -> passed.",
+    "Validation passed: PAPER_V2_L3_SKIP_UI=1 python -m nox -s l0 paper_v2_backend validation_module_registry_l0 paper_v2_l3 -> l0 success, paper_v2_backend 605 passed/1 skipped/2 xfailed, validation_module_registry_l0 8 passed, paper_v2_l3/data_quality success with legacy ledger consistency warning only.",
+    "Validation passed: python -m nox -s validation_center_backend -> 389 passed, coverage line 80.07/branch 62.3; QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 with TDX_DB env from canonical .env -> qe_archive_backend 128 passed, qe_archive_data_quality success, data_quality_deep 10 passed/21 skipped.",
+    "Frontend residual: npm exec tsc -- --noEmit --incremental false attempted after npm ci; failed only at frontend/tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 TS2322 (null not assignable to string), outside Paper v2 scope. Full paper_v2_ui requires dev backend 8012; 8012 is currently free and agent did not start backend per user restart/start guardrail."
+  ],
+  "expected": "Paper v2 MiniQMT auto-run should treat single strategy as N=1 of the same account group and allow N>1 strategy slots under one MiniQMT SIM account, with account_group_id/strategy_slot_id/order remark attribution, slot uniqueness/capital preflight, legacy exclusive compatibility, API/UI evidence, and no duplicate-submit regression.",
+  "first_seen_at": "2026-06-06T14:30:27.367450Z",
+  "fix_branch": "bug/BUG-282-paper-v2-miniqmt-auto-run-still-rejects-same-acc-20260606",
+  "fix_commit": "e0dcb842a21ff19114acd95438c150fbd352d4f2",
+  "fixed_at": null,
+  "github_issue_number": 822,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/822",
+  "last_seen_at": "2026-06-06T14:30:27.367450Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py::test_minqmt_auto_run_rejects_second_active_binding_without_strategy_gate -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "qe_archive_l3",
+    "validation_center_backend",
+    "frontend_tsc",
+    "paper_v2_ui"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT auto-run still rejects same-account strategy slots",
+  "trigger_condition": {
+    "fingerprint": "88da9aea74efbe989f1ab488",
+    "source_event_id": "FE-20260606-88da9aea74ef"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/services/paper_trading_v2/models.py",
+      "backend/db/init_trading_core_v2_schema.py",
+      "backend/migrations/trading_core_v2_schema.sql",
+      "backend/migrations/paper_v2_miniqmt_auto_run_20260527.sql",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+      "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+      "frontend/src/lib/paper-v2/api.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/broker_mode/broker_account_id",
+    "ui_routes": [
+      "/broker_mode/broker_account_id",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

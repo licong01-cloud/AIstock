@@ -63,6 +63,13 @@ from backend.services.trading_core.oms import OMS
 
 from .broker import MiniQMTSimBackend
 from .execution import MiniQMTAlgoExecutionResult, MiniQMTLiveAlgoAdapter, build_minqmt_execution_quality_report
+from .auto_run import (
+    MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+    miniqmt_account_group_id,
+    miniqmt_order_remark,
+    miniqmt_strategy_name,
+    miniqmt_strategy_slot_id,
+)
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
@@ -81,6 +88,71 @@ def _in_memory_package_repository_from_portfolios(repository: Any | None) -> Any
         if manifest is not None:
             package_repository.save_manifest(manifest)
     return package_repository
+
+
+def miniqmt_account_slot_context(repository: Any, portfolio: Any) -> dict[str, str]:
+    if hasattr(repository, "list_active_broker_account_bindings"):
+        bindings = repository.list_active_broker_account_bindings(portfolio.portfolio_id)
+    else:  # pragma: no cover - legacy dry-run repository shims do not model bindings.
+        bindings = []
+    binding = next(
+        (item for item in bindings if item.allocation_mode == MINIQMT_ACCOUNT_GROUP_BINDING_MODE),
+        None,
+    )
+    if binding is None:
+        return {
+            "strategy_slot_id": str(portfolio.portfolio_id),
+        }
+    account_id = str(binding.broker_account_id or ((portfolio.auto_run_config or {}).get("broker") or {}).get("account_id") or "")
+    account_group_id = binding.account_group_id or miniqmt_account_group_id(account_id)
+    strategy_slot_id = binding.strategy_slot_id or miniqmt_strategy_slot_id(portfolio.portfolio_id)
+    if not account_group_id or not strategy_slot_id:
+        raise RuntimeConfigInvalidError(
+            "MiniQMT account_group_slots binding is missing runtime attribution",
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "broker_account_id": binding.broker_account_id,
+                "account_group_id": binding.account_group_id,
+                "strategy_slot_id": binding.strategy_slot_id,
+            },
+        )
+    return {
+        "account_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+        "account_group_id": account_group_id,
+        "strategy_slot_id": strategy_slot_id,
+    }
+
+
+def miniqmt_broker_kwargs_for_portfolio(repository: Any, portfolio: Any, *, package_id: str) -> dict[str, Any]:
+    return {
+        "portfolio_id": portfolio.portfolio_id,
+        "package_id": package_id,
+        "data_source": MinuteDataSource.MINIQMT_REALTIME,
+        **miniqmt_account_slot_context(repository, portfolio),
+    }
+
+
+def miniqmt_intent_with_account_slot(
+    portfolio: Any,
+    intent: OrderIntent,
+    *,
+    account_slot_context: dict[str, str],
+) -> OrderIntent:
+    if account_slot_context.get("account_mode") != MINIQMT_ACCOUNT_GROUP_BINDING_MODE:
+        return intent
+    strategy_slot_id = account_slot_context["strategy_slot_id"]
+    metadata = {
+        **dict(intent.metadata or {}),
+        "account_group_id": account_slot_context["account_group_id"],
+        "strategy_slot_id": strategy_slot_id,
+        "strategy_name": miniqmt_strategy_name(strategy_slot_id),
+        "order_remark": miniqmt_order_remark(
+            portfolio_id=portfolio.portfolio_id,
+            package_id=intent.package_id,
+            intent_id=intent.intent_id,
+        ),
+    }
+    return intent.model_copy(update={"metadata": metadata})
 
 
 class PaperTradingDayRunner:
@@ -238,10 +310,7 @@ class PaperTradingDayRunner:
             )
             if portfolio.broker_backend == "minqmt_sim":
                 minqmt_broker = self.minqmt_broker_factory(
-                    portfolio_id=portfolio.portfolio_id,
-                    package_id=manifest.package_id,
-                    data_source=MinuteDataSource.MINIQMT_REALTIME,
-                    strategy_slot_id=portfolio.portfolio_id,
+                    **miniqmt_broker_kwargs_for_portfolio(self.repository, portfolio, package_id=manifest.package_id),
                 )
                 broker_account = minqmt_broker.query_account()
                 current_positions, current_prices = minqmt_broker.query_position_marks()
@@ -1032,10 +1101,7 @@ class PaperTradingDayRunner:
         fee_model: FeeModel | None = None,
     ) -> PaperDayRunResult:
         broker = broker or self.minqmt_broker_factory(
-            portfolio_id=portfolio.portfolio_id,
-            package_id=manifest.package_id,
-            data_source=MinuteDataSource.MINIQMT_REALTIME,
-            strategy_slot_id=portfolio.portfolio_id,
+            **miniqmt_broker_kwargs_for_portfolio(self.repository, portfolio, package_id=manifest.package_id),
         )
         report_fee_model = fee_model or self._fee_model_from_policy(getattr(portfolio, "fee_policy", {}) or {})
         orders = []
@@ -1054,7 +1120,11 @@ class PaperTradingDayRunner:
                         "broker_backend": "minqmt_sim",
                     },
                 )
-            ordered_intents = self._miniqmt_order_submission_sequence(intents)
+            account_slot_context = miniqmt_account_slot_context(self.repository, portfolio)
+            ordered_intents = [
+                miniqmt_intent_with_account_slot(portfolio, intent, account_slot_context=account_slot_context)
+                for intent in self._miniqmt_order_submission_sequence(intents)
+            ]
             if ordered_intents:
                 self.repository.save_run_event(
                     run_id=run.run_id,
@@ -1671,10 +1741,7 @@ class PaperTradingDayRunner:
 
         owns_broker = broker is None
         broker = broker or self.minqmt_broker_factory(
-            portfolio_id=portfolio.portfolio_id,
-            package_id=portfolio.package_id,
-            data_source=MinuteDataSource.MINIQMT_REALTIME,
-            strategy_slot_id=portfolio.portfolio_id,
+            **miniqmt_broker_kwargs_for_portfolio(self.repository, portfolio, package_id=portfolio.package_id),
         )
         session_id = self._miniqmt_session_id_from_run(run)
         new_fills: list[Fill] = []

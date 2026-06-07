@@ -414,7 +414,7 @@ export default function PaperV2MiniQMTSimPage() {
       <ErrorPanel error={error} title="MiniQMT 模拟盘检查失败" />
       <div className="pv2-grid pv2-grid-4">
         <div className="pv2-metric pv2-metric-info"><div className="pv2-metric-label">连接状态</div><div className="pv2-metric-value">{connected ? "已连接" : "未连接"}</div><div className="pv2-metric-hint">{provider} / {status?.client_class || "-"}</div></div>
-        <div className="pv2-metric"><div className="pv2-metric-label">账号模式</div><div className="pv2-metric-value">{status?.mode || "-"}</div><div className="pv2-metric-hint">MVP 仅允许 exclusive_account</div></div>
+        <div className="pv2-metric"><div className="pv2-metric-label">账号模式</div><div className="pv2-metric-value">{status?.mode || "-"}</div><div className="pv2-metric-hint">account_group_slots 多策略槽位</div></div>
         <div className="pv2-metric pv2-metric-success"><div className="pv2-metric-label">账号总资产</div><div className="pv2-metric-value">{fmt(numberValue(account, "total_asset"))}</div><div className="pv2-metric-hint">仅来自 MiniQMT account query</div></div>
         <div className="pv2-metric pv2-metric-warning"><div className="pv2-metric-label">自动调度</div><div className="pv2-metric-value">{bootstrapStatus?.scheduler?.running ? "运行中" : "未运行"}</div><div className="pv2-metric-hint">自动组合 {activeMiniPortfolios.filter((row) => row.auto_run_enabled).length}/{miniPortfolios.length}</div></div>
       </div>
@@ -423,7 +423,7 @@ export default function PaperV2MiniQMTSimPage() {
         AIstock 只生成买卖方向、代码、数量和提交时间；MiniQMT 是唯一委托、拒单、成交、资金和持仓权威。本页面不会用 TDX、DB、tick 或 LocalSim 补成交，也不会展示每策略真实资金池。
       </NoticePanel>
 
-      <SectionCard title="创建 MiniQMT 自动运行组合" eyebrow="exclusive account auto-run" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !packageId || !brokerAccountId.trim()} type="button">{creating ? "创建中..." : "创建并启用自动运行"}</button>}>
+      <SectionCard title="创建 MiniQMT 自动运行组合" eyebrow="account group slot auto-run" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !packageId || !brokerAccountId.trim()} type="button">{creating ? "创建中..." : "创建并启用自动运行"}</button>}>
         <div className="pv2-form-grid">
           <div className="pv2-field"><label>策略包</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{eligiblePackages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
           <div className="pv2-field"><label>Validated execution policy</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">平台默认：使用 manifest 默认执行策略</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code || "-"}</option>)}</select></div>
@@ -471,7 +471,7 @@ export default function PaperV2MiniQMTSimPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="MiniQMT 组合清单" eyebrow="exclusive account auto-run">
+      <SectionCard title="MiniQMT 组合清单" eyebrow="account group slots">
         <NoticePanel title="本地字段说明" tone="info">
           <span data-testid="miniqmt-local-fields-help">“本地字段”来自 AIstock Paper v2 本地 portfolio schema，用于兼容创建流程、列表排序和 auto-run 控制；它不代表 MiniQMT 账户已分配的真实资金。真实资金、持仓、成本、市值和成交以 MiniQMT broker query 为准。</span>
         </NoticePanel>

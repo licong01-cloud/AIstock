@@ -68,7 +68,14 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
-from .auto_run import auto_run_live_source_for_broker, compute_auto_run_config_sha256, normalize_auto_run_config
+from .auto_run import (
+    MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+    auto_run_live_source_for_broker,
+    compute_auto_run_config_sha256,
+    miniqmt_account_group_id,
+    miniqmt_strategy_slot_id,
+    normalize_auto_run_config,
+)
 
 # Allowed broker_backend values at the Paper v2 portfolio creation API.
 # minqmt_live is intentionally excluded - live admission goes through main
@@ -141,6 +148,62 @@ class PaperTradingV2PortfolioService:
         self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService(
             validator=self.validator
         )
+
+    def _assert_minqmt_account_accepts_group_slot(
+        self,
+        *,
+        broker_account_id: str,
+        broker_mode: str,
+        candidate_portfolio_id: str | None,
+        account_group_id: str | None = None,
+        strategy_slot_id: str | None = None,
+    ) -> None:
+        active_bindings = self.repository.list_active_broker_account_bindings_for_account(
+            broker_backend="minqmt_sim",
+            broker_mode=broker_mode,
+            broker_account_id=broker_account_id,
+        )
+        for binding in active_bindings:
+            if candidate_portfolio_id and binding.portfolio_id == candidate_portfolio_id:
+                continue
+            if binding.allocation_mode != MINIQMT_ACCOUNT_GROUP_BINDING_MODE:
+                raise InvalidStateTransitionError(
+                    "MiniQMT account has a legacy exclusive Paper v2 auto-run binding",
+                    context={
+                        "broker_backend": "minqmt_sim",
+                        "broker_mode": broker_mode,
+                        "broker_account_id": broker_account_id,
+                        "existing_portfolio_id": binding.portfolio_id,
+                        "existing_allocation_mode": binding.allocation_mode,
+                        "candidate_portfolio_id": candidate_portfolio_id,
+                    },
+                )
+            if not binding.account_group_id or not binding.strategy_slot_id:
+                raise InvalidStateTransitionError(
+                    "MiniQMT account group binding is missing strategy slot attribution",
+                    context={
+                        "broker_backend": "minqmt_sim",
+                        "broker_mode": broker_mode,
+                        "broker_account_id": broker_account_id,
+                        "existing_portfolio_id": binding.portfolio_id,
+                        "candidate_portfolio_id": candidate_portfolio_id,
+                    },
+                )
+            if not candidate_portfolio_id:
+                continue
+            if binding.account_group_id == account_group_id and binding.strategy_slot_id == strategy_slot_id:
+                raise InvalidStateTransitionError(
+                    "MiniQMT account group already has this Paper v2 strategy slot active",
+                    context={
+                        "broker_backend": "minqmt_sim",
+                        "broker_mode": broker_mode,
+                        "broker_account_id": broker_account_id,
+                        "account_group_id": account_group_id,
+                        "strategy_slot_id": strategy_slot_id,
+                        "existing_portfolio_id": binding.portfolio_id,
+                        "candidate_portfolio_id": candidate_portfolio_id,
+                    },
+                )
 
     def create_portfolio(
         self,
@@ -360,21 +423,11 @@ class PaperTradingV2PortfolioService:
                 "MiniQMT auto-run portfolio requires broker_account_id",
                 context={"package_id": package_id, "broker_backend": "minqmt_sim"},
             )
-        existing = self.repository.get_active_broker_account_binding(
-            broker_backend="minqmt_sim",
-            broker_mode="SIM",
+        self._assert_minqmt_account_accepts_group_slot(
             broker_account_id=account_id,
+            broker_mode="SIM",
+            candidate_portfolio_id=None,
         )
-        if existing is not None:
-            raise InvalidStateTransitionError(
-                "MiniQMT account already has an active Paper v2 auto-run binding",
-                context={
-                    "broker_backend": "minqmt_sim",
-                    "broker_mode": "SIM",
-                    "broker_account_id": account_id,
-                    "existing_portfolio_id": existing.portfolio_id,
-                },
-            )
         config = normalize_auto_run_config(
             auto_run_config,
             package_id=package_id,
@@ -388,7 +441,6 @@ class PaperTradingV2PortfolioService:
             fee_policy=fee_policy,
             trade_window_policy=trade_window_policy,
         )
-        config_sha256 = compute_auto_run_config_sha256(config)
         portfolio = self.create_portfolio(
             package_id=package_id,
             portfolio_name=portfolio_name,
@@ -400,14 +452,21 @@ class PaperTradingV2PortfolioService:
             risk_policy=risk_policy,
             execution_policy=execution_policy,
         )
+        account_group_id = miniqmt_account_group_id(account_id)
+        strategy_slot_id = miniqmt_strategy_slot_id(portfolio.portfolio_id)
+        config["broker"]["account_group_id"] = account_group_id
+        config["broker"]["strategy_slot_id"] = strategy_slot_id
+        config_sha256 = compute_auto_run_config_sha256(config)
         binding = self.repository.create_broker_account_binding(
             PaperBrokerAccountBinding(
                 broker_backend="minqmt_sim",
                 broker_mode="SIM",
                 broker_account_id=account_id,
+                account_group_id=account_group_id,
+                strategy_slot_id=strategy_slot_id,
                 portfolio_id=portfolio.portfolio_id,
                 binding_status=BrokerAccountBindingStatus.ACTIVE,
-                allocation_mode="account_group_slots",
+                allocation_mode=MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
                 initial_cash=initial_cash,
                 created_by=created_by,
             )
@@ -472,29 +531,77 @@ class PaperTradingV2PortfolioService:
             initial_cash=portfolio.initial_cash,
         )
         broker_mode = str((normalized.get("broker") or {}).get("broker_mode") or "SIM").upper()
-        existing = self.repository.get_active_broker_account_binding(
+        account_group_id = miniqmt_account_group_id(account_id) if broker_backend == "minqmt_sim" else None
+        strategy_slot_id = miniqmt_strategy_slot_id(portfolio_id) if broker_backend == "minqmt_sim" else None
+        if broker_backend == "minqmt_sim":
+            normalized["broker"]["account_group_id"] = account_group_id
+            normalized["broker"]["strategy_slot_id"] = strategy_slot_id
+        active_portfolio_bindings = self.repository.list_active_broker_account_bindings(portfolio_id)
+        existing = next(
+            (
+                item
+                for item in active_portfolio_bindings
+                if item.broker_backend == broker_backend
+                and item.broker_mode == broker_mode
+                and item.broker_account_id == account_id
+            ),
+            None,
+        )
+        existing = existing or self.repository.get_active_broker_account_binding(
             broker_backend=broker_backend,
             broker_mode=broker_mode,
             broker_account_id=account_id,
+            account_group_id=account_group_id,
+            strategy_slot_id=strategy_slot_id,
         )
-        if existing is not None and existing.portfolio_id != portfolio_id:
-            raise InvalidStateTransitionError(
-                "Paper v2 auto-run account already has an active binding",
-                context={
-                    "broker_backend": broker_backend,
-                    "broker_mode": broker_mode,
-                    "broker_account_id": account_id,
-                    "existing_portfolio_id": existing.portfolio_id,
-                    "portfolio_id": portfolio_id,
-                },
+        if broker_backend == "minqmt_sim":
+            self._assert_minqmt_account_accepts_group_slot(
+                broker_account_id=account_id,
+                broker_mode=broker_mode,
+                candidate_portfolio_id=portfolio_id,
+                account_group_id=account_group_id,
+                strategy_slot_id=strategy_slot_id,
             )
+        else:
+            account_existing = self.repository.get_active_broker_account_binding(
+                broker_backend=broker_backend,
+                broker_mode=broker_mode,
+                broker_account_id=account_id,
+            )
+            if account_existing is not None and account_existing.portfolio_id != portfolio_id:
+                raise InvalidStateTransitionError(
+                    "Paper v2 auto-run account already has an active binding",
+                    context={
+                        "broker_backend": broker_backend,
+                        "broker_mode": broker_mode,
+                        "broker_account_id": account_id,
+                        "existing_portfolio_id": account_existing.portfolio_id,
+                        "portfolio_id": portfolio_id,
+                    },
+                )
         if existing is None:
-            allocation_mode = "account_group_slots" if broker_backend == "minqmt_sim" else "virtual_portfolio"
+            conflicting_portfolio_binding = next(iter(active_portfolio_bindings), None)
+            if conflicting_portfolio_binding is not None:
+                raise InvalidStateTransitionError(
+                    "Paper v2 portfolio already has an active auto-run broker binding; disable auto-run before switching accounts",
+                    context={
+                        "portfolio_id": portfolio_id,
+                        "existing_broker_backend": conflicting_portfolio_binding.broker_backend,
+                        "existing_broker_mode": conflicting_portfolio_binding.broker_mode,
+                        "existing_broker_account_id": conflicting_portfolio_binding.broker_account_id,
+                        "broker_backend": broker_backend,
+                        "broker_mode": broker_mode,
+                        "broker_account_id": account_id,
+                    },
+                )
+            allocation_mode = MINIQMT_ACCOUNT_GROUP_BINDING_MODE if broker_backend == "minqmt_sim" else "virtual_portfolio"
             binding = self.repository.create_broker_account_binding(
                 PaperBrokerAccountBinding(
                     broker_backend=broker_backend,
                     broker_mode=broker_mode,
                     broker_account_id=account_id,
+                    account_group_id=account_group_id,
+                    strategy_slot_id=strategy_slot_id,
                     portfolio_id=portfolio_id,
                     binding_status=BrokerAccountBindingStatus.ACTIVE,
                     allocation_mode=allocation_mode,

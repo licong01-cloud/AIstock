@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
-from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
+from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
@@ -425,10 +425,7 @@ class PaperTradingReadinessService:
             checks.append(self._audit_check("suspend_d_refresh", status))
 
         broker = self.minqmt_broker_factory(
-            portfolio_id=portfolio.portfolio_id,
-            package_id=manifest.package_id,
-            data_source=MinuteDataSource.MINIQMT_REALTIME,
-            strategy_slot_id=portfolio.portfolio_id,
+            **miniqmt_broker_kwargs_for_portfolio(self.repository, portfolio, package_id=manifest.package_id),
         )
         try:
             account = broker.query_account()
