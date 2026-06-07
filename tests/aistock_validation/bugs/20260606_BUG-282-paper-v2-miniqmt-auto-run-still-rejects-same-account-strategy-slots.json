@@ -38,28 +38,28 @@
       "timestamp": "2026-06-06T14:30:27.367445Z"
     },
     {
-      "timestamp": "2026-06-06T14:37:55.785856Z",
-      "actor": "codex",
       "action": "scope_expanded_after_root_cause",
-      "note": "Current code recheck showed broker_account_binding needs new account_group_id/strategy_slot_id DDL and unique-index migration; added committed migration file to allowed_write_scope. Production DDL remains pending until after merge/authorization."
+      "actor": "codex",
+      "note": "Current code recheck showed broker_account_binding needs new account_group_id/strategy_slot_id DDL and unique-index migration; added committed migration file to allowed_write_scope. Production DDL remains pending until after merge/authorization.",
+      "timestamp": "2026-06-06T14:37:55.785856Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "current_code_revalidated_before_fix",
-      "note": "Rechecked latest main/BUG-210 residual: prior Paper v2 updates fixed BUG-262/270/272/274/280, but current MiniQMT auto-run still rejected same broker account N>1 strategy slots and runtime readiness lacked persisted account_group_slots attribution."
+      "actor": "codex",
+      "note": "Rechecked latest main/BUG-210 residual: prior Paper v2 updates fixed BUG-262/270/272/274/280, but current MiniQMT auto-run still rejected same broker account N>1 strategy slots and runtime readiness lacked persisted account_group_slots attribution.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "implementation_completed_pending_pr",
-      "note": "Implemented account_group_id/strategy_slot_id persistence, idempotent DDL/index migration, MiniQMT account_group_slots auto-run binding reuse, runtime broker kwargs/order attribution, active-portfolio switch guard, no broad runtime fallback, and UI copy update from exclusive-account to account-group slots."
+      "actor": "codex",
+      "note": "Implemented account_group_id/strategy_slot_id persistence, idempotent DDL/index migration, MiniQMT account_group_slots auto-run binding reuse, runtime broker kwargs/order attribution, active-portfolio switch guard, no broad runtime fallback, and UI copy update from exclusive-account to account-group slots.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "validation_completed_with_frontend_residuals",
-      "note": "Passed targeted Paper v2/MiniQMT tests, ruff, compileall, l0+paper_v2_backend+validation_module_registry_l0+paper_v2_l3, validation_center_backend, qe_archive_l3. frontend_tsc is blocked by unrelated research-assistant test TS2322; paper_v2_ui not run because dev backend 8012 is not running and agent did not start backend services."
+      "actor": "codex",
+      "note": "Passed targeted Paper v2/MiniQMT tests, ruff, compileall, l0+paper_v2_backend+validation_module_registry_l0+paper_v2_l3, validation_center_backend, qe_archive_l3. frontend_tsc is blocked by unrelated research-assistant test TS2322; paper_v2_ui not run because dev backend 8012 is not running and agent did not start backend services.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
     }
   ],
   "evidence_uris": [
@@ -75,8 +75,8 @@
   "expected": "Paper v2 MiniQMT auto-run should treat single strategy as N=1 of the same account group and allow N>1 strategy slots under one MiniQMT SIM account, with account_group_id/strategy_slot_id/order remark attribution, slot uniqueness/capital preflight, legacy exclusive compatibility, API/UI evidence, and no duplicate-submit regression.",
   "first_seen_at": "2026-06-06T14:30:27.367450Z",
   "fix_branch": "bug/BUG-282-paper-v2-miniqmt-auto-run-still-rejects-same-acc-20260606",
-  "fix_commit": "e0dcb842a21ff19114acd95438c150fbd352d4f2",
-  "fixed_at": null,
+  "fix_commit": "260ea2f549e0881078c17f0e08339698baa8338d",
+  "fixed_at": "2026-06-07T00:56:00.365619Z",
   "github_issue_number": 822,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/822",
   "last_seen_at": "2026-06-06T14:30:27.367450Z",
@@ -84,8 +84,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/823",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py::test_minqmt_auto_run_rejects_second_active_binding_without_strategy_gate -q -p no:cacheprovider",
   "required_verification": [
@@ -100,7 +101,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -155,6 +156,12 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py -q -p no:cacheprovider -> 12 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s l0 paper_v2_backend validation_module_registry_l0 paper_v2_l3 -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed",
+    "QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
