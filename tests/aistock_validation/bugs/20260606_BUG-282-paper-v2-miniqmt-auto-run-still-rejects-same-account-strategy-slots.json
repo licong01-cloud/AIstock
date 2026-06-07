@@ -38,34 +38,40 @@
       "timestamp": "2026-06-06T14:30:27.367445Z"
     },
     {
-      "timestamp": "2026-06-06T14:37:55.785856Z",
-      "actor": "codex",
       "action": "scope_expanded_after_root_cause",
-      "note": "Current code recheck showed broker_account_binding needs new account_group_id/strategy_slot_id DDL and unique-index migration; added committed migration file to allowed_write_scope. Production DDL remains pending until after merge/authorization."
+      "actor": "codex",
+      "note": "Current code recheck showed broker_account_binding needs new account_group_id/strategy_slot_id DDL and unique-index migration; added committed migration file to allowed_write_scope. Production DDL remains pending until after merge/authorization.",
+      "timestamp": "2026-06-06T14:37:55.785856Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "current_code_revalidated_before_fix",
-      "note": "Rechecked latest main/BUG-210 residual: prior Paper v2 updates fixed BUG-262/270/272/274/280, but current MiniQMT auto-run still rejected same broker account N>1 strategy slots and runtime readiness lacked persisted account_group_slots attribution."
+      "actor": "codex",
+      "note": "Rechecked latest main/BUG-210 residual: prior Paper v2 updates fixed BUG-262/270/272/274/280, but current MiniQMT auto-run still rejected same broker account N>1 strategy slots and runtime readiness lacked persisted account_group_slots attribution.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "implementation_completed_pending_pr",
-      "note": "Implemented account_group_id/strategy_slot_id persistence, idempotent DDL/index migration, MiniQMT account_group_slots auto-run binding reuse, runtime broker kwargs/order attribution, active-portfolio switch guard, no broad runtime fallback, and UI copy update from exclusive-account to account-group slots."
+      "actor": "codex",
+      "note": "Implemented account_group_id/strategy_slot_id persistence, idempotent DDL/index migration, MiniQMT account_group_slots auto-run binding reuse, runtime broker kwargs/order attribution, active-portfolio switch guard, no broad runtime fallback, and UI copy update from exclusive-account to account-group slots.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
     },
     {
-      "timestamp": "2026-06-06T15:13:49.104972Z",
-      "actor": "codex",
       "action": "validation_completed_with_frontend_residuals",
-      "note": "Passed targeted Paper v2/MiniQMT tests, ruff, compileall, l0+paper_v2_backend+validation_module_registry_l0+paper_v2_l3, validation_center_backend, qe_archive_l3. frontend_tsc is blocked by unrelated research-assistant test TS2322; paper_v2_ui not run because dev backend 8012 is not running and agent did not start backend services."
+      "actor": "codex",
+      "note": "Passed targeted Paper v2/MiniQMT tests, ruff, compileall, l0+paper_v2_backend+validation_module_registry_l0+paper_v2_l3, validation_center_backend, qe_archive_l3. frontend_tsc is blocked by unrelated research-assistant test TS2322; paper_v2_ui not run because dev backend 8012 is not running and agent did not start backend services.",
+      "timestamp": "2026-06-06T15:13:49.104972Z"
+    },
+    {
+      "timestamp": "2026-06-07T01:03:47.341569Z",
+      "actor": "codex",
+      "action": "production_ddl_applied_and_verified",
+      "note": "Applied backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql to production DB 127.0.0.1:5432/aistock; verified columns/comments/indexes/backfill and duplicate checks 0. No runtime services restarted."
     }
   ],
   "evidence_uris": [
     "BUG-210 recheck on origin/main 22935a78: service.py:363/475, repository unique active account lookup, broker_account_binding active-account unique index, frontend miniqmt-sim exclusive copy; shared vn.py/slot tests 15 passed but this rejection test still passes.",
     "Fix implementation: service/repository/models persist account_group_id and strategy_slot_id; create_minqmt_auto_run_portfolio and enable_auto_run allow same MiniQMT SIM account with distinct portfolio strategy slots; day_runner/readiness pass account_mode=account_group_slots and add order metadata for vn.py/MiniQMTSim attribution.",
-    "DDL required: backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql adds account_group_id/strategy_slot_id, backfills MiniQMT account_group_slots, drops old active-account unique index, adds legacy-account/account-slot/active-portfolio/account-group indexes; production_ddl_gate remains pending until after main merge and production application.",
+    "Production DDL applied and verified: backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql added account_group_id/strategy_slot_id, comments, MiniQMT account_group_slots backfill, legacy/account-slot/active-portfolio/account-group indexes; old active-account index absent; duplicate checks all 0.",
     "Validation passed: python -m pytest backend/tests/paper_trading_v2/test_auto_run.py -q -p no:cacheprovider -> 12 passed; MiniQMTSim account_group_slots targeted tests -> 2 passed; Paper day/live/session -> 82 passed; MiniQMT vn.py shared adapter tests -> 12 passed; simulation_runtime/qmt_strategy_ledger account-group tests -> 9 passed.",
     "Validation passed: ruff check changed Paper v2 files -> passed; python -m compileall -q backend/services/paper_trading_v2 backend/db/init_trading_core_v2_schema.py -> passed; git diff --check -> passed.",
     "Validation passed: PAPER_V2_L3_SKIP_UI=1 python -m nox -s l0 paper_v2_backend validation_module_registry_l0 paper_v2_l3 -> l0 success, paper_v2_backend 605 passed/1 skipped/2 xfailed, validation_module_registry_l0 8 passed, paper_v2_l3/data_quality success with legacy ledger consistency warning only.",
@@ -75,8 +81,8 @@
   "expected": "Paper v2 MiniQMT auto-run should treat single strategy as N=1 of the same account group and allow N>1 strategy slots under one MiniQMT SIM account, with account_group_id/strategy_slot_id/order remark attribution, slot uniqueness/capital preflight, legacy exclusive compatibility, API/UI evidence, and no duplicate-submit regression.",
   "first_seen_at": "2026-06-06T14:30:27.367450Z",
   "fix_branch": "bug/BUG-282-paper-v2-miniqmt-auto-run-still-rejects-same-acc-20260606",
-  "fix_commit": "e0dcb842a21ff19114acd95438c150fbd352d4f2",
-  "fixed_at": null,
+  "fix_commit": "260ea2f549e0881078c17f0e08339698baa8338d",
+  "fixed_at": "2026-06-07T01:03:47.341569Z",
   "github_issue_number": 822,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/822",
   "last_seen_at": "2026-06-06T14:30:27.367450Z",
@@ -84,8 +90,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/823",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py::test_minqmt_auto_run_rejects_second_active_binding_without_strategy_gate -q -p no:cacheprovider",
   "required_verification": [
@@ -100,7 +107,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -155,6 +162,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py -q -p no:cacheprovider -> 12 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s l0 paper_v2_backend validation_module_registry_l0 paper_v2_l3 -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed",
+    "QE_ARCHIVE_L3_SKIP_UI=1 python -m nox -s qe_archive_l3 -> passed",
+    "production DDL backend/migrations/paper_v2_broker_account_binding_slots_20260606.sql -> applied_and_verified; columns/comments/indexes present; duplicate checks 0"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
