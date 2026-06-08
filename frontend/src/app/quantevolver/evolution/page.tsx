@@ -213,7 +213,6 @@ interface Task {
   stock_pool?: string;
   factor_blacklist?: string[];
   strategy_evo_config?: Record<string, any>;
-  strategy_evo_execution_mode?: string;
   node_id?: string;
 }
 
@@ -500,8 +499,6 @@ export default function EvolutionDashboard() {
   const [customEvoTargetLoopIndex, setCustomEvoTargetLoopIndex] = useState<number | null>(null);
   const [customEvoCloneSourceTaskId, setCustomEvoCloneSourceTaskId] = useState("");
   const [customEvoMutationWarning, setCustomEvoMutationWarning] = useState("");
-  const [customEvoExecutionMode, setCustomEvoExecutionMode] = useState<string>("serial");
-  const [customEvoParallelism, setCustomEvoParallelism] = useState<number>(2);
   const [customEvoNodeId, setCustomEvoNodeId] = useState<string>("");
   const [customEvoNodeParallelism, setCustomEvoNodeParallelism] = useState<Record<string, number>>({});
   const [customEvoInitSource, setCustomEvoInitSource] = useState<"manual" | "qe_experiment" | "evolution_loop" | "rdagent_task">("manual");
@@ -602,8 +599,6 @@ export default function EvolutionDashboard() {
     setCustomEvoCloneSourceTaskId("");
     setCustomEvoMutationWarning("");
     setCustomEvoLoops([makeDefaultCustomLoop()]);
-    setCustomEvoExecutionMode("serial");
-    setCustomEvoParallelism(2);
     setCustomEvoNodeId("");
     setCustomEvoNodeParallelism({});
     setCustomEvoFirstLoopReady(false);
@@ -613,17 +608,6 @@ export default function EvolutionDashboard() {
     setCustomEvoSourceLoopIdx(-1);
     setCustomEvoForkLoops([]);
     setCustomEvoHmmSnapshots({});
-  };
-
-  const parseCustomEvoExecutionMode = (raw?: string) => {
-    if (raw?.startsWith("parallel")) {
-      const n = Number(raw.split("_")[1] || 2);
-      setCustomEvoExecutionMode("parallel");
-      setCustomEvoParallelism([1, 2, 3, 4].includes(n) ? n : 2);
-    } else {
-      setCustomEvoExecutionMode("serial");
-      setCustomEvoParallelism(2);
-    }
   };
 
   const customLoopFromServer = (loop: any, collapsed = false): CustomEvoLoopConfig => {
@@ -687,7 +671,6 @@ export default function EvolutionDashboard() {
     setCustomEvoTargetLoopIndex(null);
     setCustomEvoCloneSourceTaskId(mode === "clone" ? cfg.task_id : "");
     setCustomEvoMutationWarning(warning);
-    parseCustomEvoExecutionMode(cfg.execution_mode || "serial");
     setCustomEvoNodeId(cfg.node_id || "");
     setCustomEvoNodeParallelism(cfg.node_parallelism || {});
     setCustomEvoLoops(loopsToUse.map((loop, idx) => customLoopFromServer(loop, idx > 0)));
@@ -845,7 +828,6 @@ export default function EvolutionDashboard() {
   const [cloneFromTask, setCloneFromTask] = useState<Task | null>(null);
   const [factorsExpanded, setFactorsExpanded] = useState(false);
   const [strategyEvoLoops, setStrategyEvoLoops] = useState<any[]>([]);
-  const [strategyEvoExecutionMode, setStrategyEvoExecutionMode] = useState<"serial" | "parallel">("serial");
   const [isForking, setIsForking] = useState(false);
 
   // Phase 3: 增强诊断状态
@@ -1526,13 +1508,11 @@ export default function EvolutionDashboard() {
             ? (loop.node_id || customEvoNodeId || undefined)
             : (loop.node_id || undefined),
         }));
-        const execMode = customEvoExecutionMode === "parallel" ? `parallel_${customEvoParallelism}` : "serial";
         let endpoint = `${API}/quantevolver/evolution/custom-tasks`;
         let body: Record<string, any> = {
           task_name: newTask.task_name,
           target_desc: newTask.target_desc || "自定义演进任务",
           loops: loopsPayload,
-          execution_mode: execMode,
           node_id: customEvoNodeId || undefined,
           node_parallelism: customEvoNodeParallelism,
           engine_mode: "unified",
@@ -1542,7 +1522,6 @@ export default function EvolutionDashboard() {
           endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/loops/${customEvoTargetLoopIndex}/rerun`;
           body = {
             loop: loopsPayload[0],
-            execution_mode: execMode,
             node_id: customEvoNodeId || undefined,
             node_parallelism: customEvoNodeParallelism,
             engine_mode: "unified",
@@ -1552,7 +1531,6 @@ export default function EvolutionDashboard() {
           endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/custom-loops/append`;
           body = {
             loops: loopsPayload,
-            execution_mode: execMode,
             node_id: customEvoNodeId || undefined,
             node_parallelism: customEvoNodeParallelism,
             engine_mode: "unified",
@@ -1803,7 +1781,6 @@ export default function EvolutionDashboard() {
     setForkType("evolution");
     setForkForm(emptyForkFormState());
     setStrategyEvoLoops([]);
-    setStrategyEvoExecutionMode("serial");
   };
 
   // 策略演进 Loop 配置管理
@@ -1894,14 +1871,13 @@ export default function EvolutionDashboard() {
           from_loop_index: showForkDialog,
           task_name: forkForm.task_name || undefined,
           loops: strategyEvoLoops,
-          execution_mode: strategyEvoExecutionMode,
           inherit_history: forkForm.inherit_history,
         }),
       });
       const data = await res.json();
       if (data.status === "success") {
         appendLogs([`[System] 已从 Loop ${showForkDialog} 创建策略演进任务 ${data.task_id}`]);
-        appendLogs([`[System] 共 ${data.total_loops} 个策略回测 Loop，执行方式: ${data.execution_mode}`]);
+        appendLogs([`[System] 共 ${data.total_loops} 个策略回测 Loop`]);
         handleForkCancel();
         fetchTasks();
         setTimeout(() => setActiveTaskId(data.task_id), 500);
@@ -4152,26 +4128,7 @@ export default function EvolutionDashboard() {
               {/* 执行方式 + 节点 */}
               <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#f8fafc" }}>
                 <div style={{ fontSize: "13px", fontWeight: 700, color: "#334155", marginBottom: "8px" }}>执行设置</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>执行方式</label>
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      <button onClick={() => setCustomEvoExecutionMode("serial")} style={{ flex: 1, padding: "6px", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer", border: customEvoExecutionMode === "serial" ? "2px solid #8b5cf6" : "1px solid #cbd5e1", backgroundColor: customEvoExecutionMode === "serial" ? "#f5f3ff" : "#fff", color: customEvoExecutionMode === "serial" ? "#7c3aed" : "#64748b" }}>串行</button>
-                      <button onClick={() => setCustomEvoExecutionMode("parallel")} style={{ flex: 1, padding: "6px", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer", border: customEvoExecutionMode === "parallel" ? "2px solid #8b5cf6" : "1px solid #cbd5e1", backgroundColor: customEvoExecutionMode === "parallel" ? "#f5f3ff" : "#fff", color: customEvoExecutionMode === "parallel" ? "#7c3aed" : "#64748b" }}>并行</button>
-                    </div>
-                  </div>
-                  {customEvoExecutionMode === "parallel" && (
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>旧全局并行度</label>
-                      <select value={customEvoParallelism} onChange={e => setCustomEvoParallelism(parseInt(e.target.value))} style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}>
-                        <option value={1}>1</option>
-                        <option value={2}>2</option>
-                        <option value={3}>3</option>
-                        <option value={4}>4</option>
-                      </select>
-                      <div style={{ fontSize: "10px", color: "#94a3b8", marginTop: "3px" }}>实际限流以下方每节点并行度为准</div>
-                    </div>
-                  )}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                   <div>
                     <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>执行节点</label>
                     <select value={customEvoNodeId} onChange={e => setCustomEvoNodeId(e.target.value)} style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}>
@@ -4187,7 +4144,7 @@ export default function EvolutionDashboard() {
                   </div>
                 </div>
               </div>
-              {customEvoExecutionMode === "parallel" && (
+              {(
                 <div style={{ border: "1px solid #fed7aa", borderRadius: "8px", padding: "12px", backgroundColor: "#fff7ed" }}>
                   <div style={{ fontSize: "13px", fontWeight: 700, color: "#9a3412", marginBottom: "8px" }}>每节点并行度（默认1，最大4）</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -4544,43 +4501,6 @@ export default function EvolutionDashboard() {
                       </div>
                     );
                   })()}
-                </div>
-
-                {/* 执行方式 */}
-                <div style={{ marginBottom: "16px" }}>
-                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>
-                    执行方式
-                  </label>
-                  <div style={{ display: "flex", gap: "12px" }}>
-                    <button
-                      onClick={() => setStrategyEvoExecutionMode("serial")}
-                      style={{
-                        flex: 1,
-                        padding: "10px",
-                        borderRadius: "8px",
-                        border: strategyEvoExecutionMode === "serial" ? "2px solid #8b5cf6" : "1px solid #cbd5e1",
-                        backgroundColor: strategyEvoExecutionMode === "serial" ? "#f5f3ff" : "#fff",
-                        fontWeight: strategyEvoExecutionMode === "serial" ? 600 : 400,
-                        cursor: "pointer",
-                      }}
-                    >
-                      串行（逐个执行）
-                    </button>
-                    <button
-                      onClick={() => setStrategyEvoExecutionMode("parallel")}
-                      style={{
-                        flex: 1,
-                        padding: "10px",
-                        borderRadius: "8px",
-                        border: strategyEvoExecutionMode === "parallel" ? "2px solid #8b5cf6" : "1px solid #cbd5e1",
-                        backgroundColor: strategyEvoExecutionMode === "parallel" ? "#f5f3ff" : "#fff",
-                        fontWeight: strategyEvoExecutionMode === "parallel" ? 600 : 400,
-                        cursor: "pointer",
-                      }}
-                    >
-                      并行（同时执行）
-                    </button>
-                  </div>
                 </div>
 
                 {/* Loop 配置列表 */}
