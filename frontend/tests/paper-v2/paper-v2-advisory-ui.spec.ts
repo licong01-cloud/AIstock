@@ -104,6 +104,121 @@ const reviews = Array.from({ length: REVIEW_COUNT }, (_, index) => ({
   return_bps: index % 2 === 0 ? 120 : -80,
 }));
 
+const activeBinding = {
+  binding_version_id: "advb_active_20260604",
+  program_id: PROGRAM_ID,
+  program_version: 1,
+  package_mode: "single_package",
+  package_ids: ["pkg_codex_smoke"],
+  package_weights: { pkg_codex_smoke: 1 },
+  fusion_method: null,
+  package_set_hash: "pkg_hash",
+  fusion_policy_sha256: null,
+  runtime_config_json: {},
+  effective_from_trade_date: null,
+  effective_to_trade_date: null,
+  activation_status: "ACTIVE",
+  activation_reason: "initial advisory program binding",
+  source_replay_run_id: null,
+  created_by: "codex",
+  created_at: "2026-06-04T11:16:00+08:00",
+  activated_at: "2026-06-04T11:16:00+08:00",
+};
+
+const listVersions = [
+  {
+    list_version_id: "advlv_20260605",
+    program_id: PROGRAM_ID,
+    binding_version_id: activeBinding.binding_version_id,
+    review_run_id: "advrun_20260605",
+    trade_date: "2026-06-05",
+    previous_list_version_id: "advlv_20260604",
+    version_status: "PUBLISHED",
+    target_count: 20,
+    active_count: 20,
+    entered_count: 2,
+    held_count: 17,
+    exited_count: 1,
+    waiting_count: 0,
+    changed_count: 3,
+    turnover_rate: 0.15,
+    overlap_rate: 0.85,
+    summary_json: {},
+    created_at: "2026-06-05T18:10:00+08:00",
+  },
+  {
+    list_version_id: "advlv_20260604",
+    program_id: PROGRAM_ID,
+    binding_version_id: activeBinding.binding_version_id,
+    review_run_id: "advrun_20260604",
+    trade_date: "2026-06-04",
+    previous_list_version_id: null,
+    version_status: "PUBLISHED",
+    target_count: 20,
+    active_count: 20,
+    entered_count: 20,
+    held_count: 0,
+    exited_count: 0,
+    waiting_count: 0,
+    changed_count: 20,
+    turnover_rate: 1,
+    overlap_rate: null,
+    summary_json: {},
+    created_at: "2026-06-04T18:10:00+08:00",
+  },
+];
+
+const listItems = [
+  {
+    list_item_id: "advli_hold_000001",
+    list_version_id: "advlv_20260605",
+    program_id: PROGRAM_ID,
+    binding_version_id: activeBinding.binding_version_id,
+    episode_id: "episode_001",
+    symbol: "000001.SZ",
+    item_state: "ACTIVE",
+    action: "HOLD",
+    previous_action: "ENTER",
+    rank: 3,
+    score: 0.73,
+    previous_rank: 1,
+    previous_score: 0.91,
+    entry_price: 10.2,
+    exit_price: null,
+    price_basis: "next_open_executable",
+    effective_trade_date: "2026-06-06",
+    reason_code: "KEEP_TOPK",
+    operation_advice_json: { advice_type: "HOLD", human_label: "keep in list", reason_summary: "KEEP_TOPK" },
+    component_scores_json: {},
+    evidence_json: {},
+    created_at: "2026-06-05T18:10:00+08:00",
+  },
+  {
+    list_item_id: "advli_exit_000099",
+    list_version_id: "advlv_20260605",
+    program_id: PROGRAM_ID,
+    binding_version_id: activeBinding.binding_version_id,
+    episode_id: "episode_exit",
+    symbol: "000099.SZ",
+    item_state: "EXITED",
+    action: "EXIT",
+    previous_action: "HOLD",
+    rank: 49,
+    score: 0.12,
+    previous_rank: 18,
+    previous_score: 0.56,
+    entry_price: 9.8,
+    exit_price: 10.8,
+    price_basis: "next_open_executable",
+    effective_trade_date: "2026-06-06",
+    reason_code: "TAKE_PROFIT",
+    operation_advice_json: { advice_type: "EXIT", human_label: "exit from list", reason_summary: "TAKE_PROFIT" },
+    component_scores_json: {},
+    evidence_json: {},
+    created_at: "2026-06-05T18:10:00+08:00",
+  },
+];
+
 const returns = activePool.map((row, index) => ({
   ...row,
   status: index === 0 ? "EXITED" : row.status,
@@ -156,6 +271,17 @@ async function mockAdvisoryApis(page: Page) {
       active_pool: activePool,
       metrics: { win_rate: 0.64 },
       preview,
+      binding_version_id: activeBinding.binding_version_id,
+      review_run_id: preview ? "advrun_preview_20260608" : "advrun_20260608",
+      list_version_id: preview ? "advlv_preview_20260608" : "advlv_20260608",
+      change_summary: { entered_count: 1, held_count: 1, exited_count: 0, waiting_count: 0, turnover_rate: 0.05, overlap_rate: 0.95 },
+      list_items: listItems.slice(0, 1).map((item) => ({
+        ...item,
+        list_item_id: preview ? "advli_preview_000001" : "advli_run_000001",
+        list_version_id: preview ? "advlv_preview_20260608" : "advlv_20260608",
+        action: preview ? "HOLD" : "ENTER",
+        operation_advice_json: { advice_type: preview ? "HOLD" : "ENTER", human_label: preview ? "preview hold" : "enter list", reason_summary: "KEEP_TOPK" },
+      })),
     },
   });
   await page.route("**/api/v1/advisory/**", async (route) => {
@@ -187,6 +313,18 @@ async function mockAdvisoryApis(page: Page) {
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/active-pool`) && method === "GET") {
       return json(route, { ok: true, active_pool: activePool });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/bindings`) && method === "GET") {
+      return json(route, { ok: true, bindings: [activeBinding] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/bindings/active`) && method === "GET") {
+      return json(route, { ok: true, binding: activeBinding });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/list-versions`) && method === "GET") {
+      return json(route, { ok: true, list_versions: listVersions });
+    }
+    if (path.endsWith("/api/v1/advisory/list-versions/advlv_20260605") && method === "GET") {
+      return json(route, { ok: true, list_version: listVersions[0], items: listItems });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews`) && method === "GET") {
       const limit = Number(url.searchParams.get("limit") || "20");
@@ -263,9 +401,16 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("JSON");
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
+  await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("000099.SZ");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("EXIT");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("exit from list");
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_20260608");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("preview hold");
   expect(reviewBodies.at(-1)).toMatchObject({
     trade_date: "2026-06-08",
     runtime_config: {
@@ -281,6 +426,8 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("已复评");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260608");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("enter list");
 
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
