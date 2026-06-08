@@ -43,8 +43,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-08T03:22:00.862516Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a6d06bb90b597b746193906cfa70ecfa64eb6974",
+  "fixed_at": "2026-06-08T04:13:49.183922Z",
   "github_issue_number": 826,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/826",
   "last_seen_at": "2026-06-08T03:22:00.862516Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/827",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -73,6 +74,9 @@
     "fingerprint": "71d6b3b1cd4e60ec104a951e",
     "source_event_id": "FE-20260608-71d6b3b1cd4e"
   },
+  "validation_evidence": [
+    "ruff changed files -> passed; pytest targeted qmt+simulation -> 58 passed; codegraph-neighbor pytest -> 63 passed; nox -s l0 -> passed; nox -s paper_v2_backend -> 605 passed, 1 skipped, 2 xfailed; nox -s validation_module_registry_l0 -> 8 passed; PAPER_V2_L3_SKIP_UI=1 nox -s paper_v2_l3 -> passed; nox -s validation_center_backend -> 389 passed, coverage line 80.07%, branch 62.3%; GitHub PR #827 checks -> all success, mergeStateStatus CLEAN"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
