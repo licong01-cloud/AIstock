@@ -1,0 +1,71 @@
+{
+  "actual": "2026-06-08 live validation shows two minqmt_sim daily runs marked SUCCEEDED while qmt_batch_status=PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, failed_intents=54/16 and /api/v1/qmt/orders plus /trades are empty. Manual scheduler tick reuses existing plans and cannot retry because runs are terminal; deterministic qmt order_batch cache keeps PREFLIGHT_FAILED. Root cause candidates: lifecycle maps MiniQMT submit failure to success, retry eligibility ignores preflight-failed no-side-effect runs, and rebalance preflight rejects aggregate BUY before SELL proceeds/sequence are considered.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260608_BUG-283-miniqmt-simulation-preflight-failed-false-success-prevents-retry-and-blo.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-283",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T03:22:00.862516Z",
+  "description": "2026-06-08 live validation shows two minqmt_sim daily runs marked SUCCEEDED while qmt_batch_status=PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, failed_intents=54/16 and /api/v1/qmt/orders plus /trades are empty. Manual scheduler tick reuses existing plans and cannot retry because runs are terminal; deterministic qmt order_batch cache keeps PREFLIGHT_FAILED. Root cause candidates: lifecycle maps MiniQMT submit failure to success, retry eligibility ignores preflight-failed no-side-effect runs, and rebalance preflight rejects aggregate BUY before SELL proceeds/sequence are considered.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260608-71d6b3b1cd4e",
+      "timestamp": "2026-06-08T03:22:00.862513Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-08T03:22:00.862516Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 826,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/826",
+  "last_seen_at": "2026-06-08T03:22:00.862516Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "MiniQMT simulation PREFLIGHT_FAILED false success prevents retry and blocks rebalance execution",
+  "trigger_condition": {
+    "fingerprint": "71d6b3b1cd4e60ec104a951e",
+    "source_event_id": "FE-20260608-71d6b3b1cd4e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
