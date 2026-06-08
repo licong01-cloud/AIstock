@@ -1,0 +1,73 @@
+{
+  "actual": "The design is merged and BUG-286 tracks Phase 0, but Phase 1 contracts and blockers are not implemented yet.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime",
+    "backend/tests/simulation_runtime",
+    "tests/aistock_validation/bugs/20260609_BUG-287-p0-miniqmt-phase1-enforce-unified-runtime-contracts-and-blockers.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-287",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T18:27:08.802656Z",
+  "description": "The design is merged and BUG-286 tracks Phase 0, but Phase 1 contracts and blockers are not implemented yet.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-733df2382b6a",
+      "timestamp": "2026-06-08T18:27:08.802653Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md; BUG-286; https://github.com/licong01-cloud/AIstock/issues/836"
+  ],
+  "expected": "Phase 1 contract/gate implementation exists with tests for AlphaSignalBook forbidden broker/order fields, MiniQMT V25_* fail-fast, no fixed max_concurrent_packages product gate, and product entrypoints detecting the canonical runtime gate. BUG-286/GitHub #836 is referenced as the Phase 0 architecture gate.",
+  "first_seen_at": "2026-06-08T18:27:08.802656Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 837,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/837",
+  "last_seen_at": "2026-06-08T18:27:08.802656Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md sections 3, 10.8, 10.9, 10.10, 11, and 13.1.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT][Phase1] Enforce unified runtime contracts and blockers",
+  "trigger_condition": {
+    "fingerprint": "733df2382b6a8a44bb0d01fe",
+    "source_event_id": "FE-20260609-733df2382b6a"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
