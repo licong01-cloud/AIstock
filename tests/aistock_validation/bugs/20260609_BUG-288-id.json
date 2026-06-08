@@ -34,8 +34,8 @@
   "expected": "荐股中心添加策略包时通过下拉菜单选择可用策略包，显示人类可读名称/状态/摘要，表单内部保存 package_id；不要求用户手工输入超长策略包 ID。",
   "first_seen_at": "2026-06-08T18:45:18.830869Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7e7fc6e237b35d9ab39b04dbd8a73fe468398dea",
+  "fixed_at": "2026-06-08T19:54:39.860800Z",
   "github_issue_number": 839,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/839",
   "last_seen_at": "2026-06-08T18:45:18.830869Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/842",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -106,6 +107,17 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "rtk git diff --check -> passed",
+    "rtk npm --prefix frontend run build -> passed; existing React Hook warnings only",
+    "rtk npm --prefix frontend run test:e2e -- --config playwright.paper-v2.config.ts tests/paper-v2/paper-v2-advisory-ui.spec.ts --timeout=120000 with PAPER_V2_FRONTEND_PORT=3016 -> 1 passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed; 8 passed",
+    "rtk python -m nox -s l0 -> passed; blocking=0",
+    "rtk python -m nox -s paper_v2_backend -> passed; 605 passed, 1 skipped, 2 xfailed",
+    "rtk python -m nox -s validation_center_backend -> passed; 389 passed; coverage line=80.07 branch=62.30",
+    "PAPER_V2_L3_SKIP_UI=1 rtk python -m nox -s paper_v2_l3 -> passed; l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep passed; focused advisory Playwright UI run covered paper_v2_ui",
+    "rtk npx tsc --noEmit --pretty false --incremental false in frontend -> blocked by unrelated pre-existing research-assistant test type error outside BUG-288 scope; app build/typecheck passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
