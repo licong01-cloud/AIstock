@@ -1,0 +1,75 @@
+{
+  "actual": "QMT status connected=true mode=SIM; /api/v1/qmt/orders shows 70 orders, /api/v1/qmt/trades shows live fills; /api/v1/simulation-runtime/runs shows L16 SUCCEEDED and L2 stuck RECONCILING, then manual tick fails with CheckViolation cash_ledger balances for BUY_FILL 0000000050037536. DB read confirms codex_final_ms_l16 cash=18634.06 frozen_cash=36016, no cash entry for cash_62266303_2026-06-08_buy_fill_0000000050037536, and 13 QMT trades remain missing from trade_ledger after failure.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "tests/aistock_validation/bugs/20260608_BUG-284-miniqmt-trade-sync-buy-fill-before-sell-fill-violates-cash-ledger-and-bl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-284",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T05:29:06.043216Z",
+  "description": "QMT status connected=true mode=SIM; /api/v1/qmt/orders shows 70 orders, /api/v1/qmt/trades shows live fills; /api/v1/simulation-runtime/runs shows L16 SUCCEEDED and L2 stuck RECONCILING, then manual tick fails with CheckViolation cash_ledger balances for BUY_FILL 0000000050037536. DB read confirms codex_final_ms_l16 cash=18634.06 frozen_cash=36016, no cash entry for cash_62266303_2026-06-08_buy_fill_0000000050037536, and 13 QMT trades remain missing from trade_ledger after failure.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260608-e45518137b8c",
+      "timestamp": "2026-06-08T05:29:06.043208Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-08/13:23-simulation-runtime-scheduler-tick-checkviolation-cash-ledger-buy-fill-before-sell-fill",
+    "runtime-api://2026-06-08/qmt-orders=70-qmt-trades=131-filtered-db-trade-ledger=118-missing=13"
+  ],
+  "expected": "MiniQMT sync must settle same-day SELL_FILL proceeds and buy frozen cash before BUY_FILL cash deduction so virtual cash never becomes negative for a valid sell-funded rebalance; a sync failure must not leave partial trade/position/cash side effects that make future ticks fail.",
+  "first_seen_at": "2026-06-08T05:29:06.043216Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 830,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/830",
+  "last_seen_at": "2026-06-08T05:29:06.043216Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/tick during 2026-06-08 afternoon MiniQMT SIM after orders 1090533354-1090533423 filled; observe ck_qmt_strategy_cash_ledger_balances CheckViolation for cash_62266303_2026-06-08_buy_fill_0000000050037536.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT trade sync BUY_FILL before SELL_FILL violates cash ledger and blocks intraday reconciliation",
+  "trigger_condition": {
+    "fingerprint": "e45518137b8c0cb49e69d50b",
+    "source_event_id": "FE-20260608-e45518137b8c"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
