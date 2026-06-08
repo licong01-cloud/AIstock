@@ -26,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260608-71d6b3b1cd4e",
       "timestamp": "2026-06-08T03:22:00.862513Z"
+    },
+    {
+      "timestamp": "2026-06-08T04:20:20Z",
+      "actor": "codex",
+      "action": "final_metadata_cleanup",
+      "note": "Removed residual workflow_gate after source PR #827 and close-sync PR #828 merged; GitHub issue #826 is closed and labeled status:fixed."
     }
   ],
   "evidence_uris": [
@@ -75,7 +81,8 @@
     "source_event_id": "FE-20260608-71d6b3b1cd4e"
   },
   "validation_evidence": [
-    "ruff changed files -> passed; pytest targeted qmt+simulation -> 58 passed; codegraph-neighbor pytest -> 63 passed; nox -s l0 -> passed; nox -s paper_v2_backend -> 605 passed, 1 skipped, 2 xfailed; nox -s validation_module_registry_l0 -> 8 passed; PAPER_V2_L3_SKIP_UI=1 nox -s paper_v2_l3 -> passed; nox -s validation_center_backend -> 389 passed, coverage line 80.07%, branch 62.3%; GitHub PR #827 checks -> all success, mergeStateStatus CLEAN"
+    "ruff changed files -> passed; pytest targeted qmt+simulation -> 58 passed; codegraph-neighbor pytest -> 63 passed; nox -s l0 -> passed; nox -s paper_v2_backend -> 605 passed, 1 skipped, 2 xfailed; nox -s validation_module_registry_l0 -> 8 passed; PAPER_V2_L3_SKIP_UI=1 nox -s paper_v2_l3 -> passed; nox -s validation_center_backend -> 389 passed, coverage line 80.07%, branch 62.3%; GitHub PR #827 checks -> all success, mergeStateStatus CLEAN",
+    "post-merge metadata cleanup -> removed residual workflow_gate after PR #827 and close-sync PR #828 merged; GitHub issue #826 closed with status:fixed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -88,6 +95,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "workflow_gate": "validation_passed_pending_pr"
+  }
 }
