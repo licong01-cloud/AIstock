@@ -16,7 +16,6 @@ Later phases can replace or增强这些规则为 LLM 驱动的分析，同时复
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 

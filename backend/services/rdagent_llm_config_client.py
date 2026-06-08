@@ -6,7 +6,6 @@ It replaces direct .env file manipulation with API calls.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import httpx
