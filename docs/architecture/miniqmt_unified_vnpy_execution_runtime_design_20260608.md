@@ -603,59 +603,167 @@ XtQuant / MiniQMT SIM or approved LIVE
 - DESIGN-COMPLIANCE-001 item-by-item。
 - PR body 明确 production gates、DDL、backend/frontend dependency、restart requirement。
 
-### 10.8 ???????
+### 10.8 阶段验收硬门禁
 
-?? Phase 0-7 ????????????????????????????????????????????? issue / PR ??????????????????????????????????????????? `main`??????? BUG/GitHub Issue?
+上面 Phase 0-7 已给出每阶段的验收项，但为了避免再次出现“代码完成但与设计完全不一致”的情况，后续每个实现 issue / PR 必须额外提交本节的阶段验收证据。缺任一项即视为该阶段未完成，不得进入下一阶段，不得合入 `main`，不得关闭对应 BUG/GitHub Issue。
 
-#### 10.8.1 ?????????
+#### 10.8.1 每阶段统一通过定义
 
-????? PR body?issue close-sync ? validation history ???????
+每个阶段的 PR body、issue close-sync 和 validation history 必须同时包含：
 
-1. **??????**???? PR ????????????????????????????????????
-2. **????**???????????? MiniQMT ???????????????? side path?raw path??? path?
-3. **????**???????????? N=1/N>1?event loop?operator command?SELL-first ??
-4. **????**????????????? V25 ?? MiniQMT broker execution?AlphaSignalBook ? broker ???raw qmt ????????????????
-5. **????**???? 11.1 ? grep/static guard?????????? legacy compatibility?test fixture ???????????
-6. **?????**??? runtime ?????? fake broker ??? MiniQMT SIM ???mock-only ????????????? L2/L3/L4/L5?
-7. **????**??? `production_ddl_gate`?`production_frontend_dependency_gate`?`production_backend_dependency_gate`??????????????????????????????
-8. **DESIGN-COMPLIANCE-001**??? 14 ????? PASS / BLOCKED / EXPLICITLY_DEFERRED?P0 ?????? deferred?
+1. **设计追踪矩阵**：列出本 PR 覆盖的本文章节、实现文件、测试文件、未覆盖项、延期项。核心约束不得延期。
+2. **路径证据**：用代码位置或调用链证明 MiniQMT 仍只有一个产品执行入口，没有新增 side path、raw path、临时 path。
+3. **正向测试**：证明目标能力可用，例如 N=1/N>1、event loop、operator command、SELL-first 等。
+4. **负向测试**：证明错误路径被阻断，例如 V25 进入 MiniQMT broker execution、AlphaSignalBook 带 broker 字段、raw qmt 作为产品路径、固定策略数量门槛。
+5. **静态扫描**：执行第 11.1 节 grep/static guard，并解释所有命中项是 legacy compatibility、test fixture 还是必须修复的违规项。
+6. **运行级证据**：涉及 runtime 的阶段必须有 fake broker 或受控 MiniQMT SIM 证据；mock-only 只能作为单元测试，不能代替 L2/L3/L4/L5。
+7. **生产门禁**：明确 `production_ddl_gate`、`production_frontend_dependency_gate`、`production_backend_dependency_gate`、是否需要用户重启后端。需要重启时只通知用户，不得自行重启。
+8. **DESIGN-COMPLIANCE-001**：按第 14 节逐项给出 PASS / BLOCKED / EXPLICITLY_DEFERRED。P0 核心项不允许 deferred。
 
-#### 10.8.2 ??????
+#### 10.8.2 阶段验收矩阵
 
-| ?? | ???? | ????????? | ??????????? |
+| 阶段 | 验收方法 | 必须达到的验收标准 | 不通过即阻断的偏航信号 |
 |---|---|---|---|
-| Phase 0?????? issue epic | ??????????epic ?? issue ?? `scripts/aistock_issue_workflow.py` ?? GitHub??? issue ? context pack / allowed_write_scope / production gates? | ??? issue ?????? 3?4?9?10.8?11?14 ??????????? supersede?????? DDL?? runtime ??? | ??? BUG JSON ??? GitHub?issue ??? MiniQMT ???????? vn.py ?? commit????????? |
-| Phase 1???????? | ?????????negative tests?grep guard??? AlphaSignalBook DTO / schema / API payload? | `AlphaSignalBook` ?? broker/order/execution ???MiniQMT path ?? `V25_*` fail-fast?`max_concurrent_packages` ?????????????????????? canonical runtime gate? | Alpha ??? `broker_account_id` / `order_remark` / `execution_algo_code`?V25 ? MiniQMT ??? silent fallback???????? DTO/path? |
-| Phase 2?durable runtime skeleton | ? fake broker ? event loop?gateway?OMS?algo instance?restart recovery??? DDL???? dry-run ? production DDL gate ??? | tick/order/trade/timer/reconcile/operator event ??????active order ? algo instance ?? DB ??????? sync broker facts??????? | runtime ????????reconcile ???? submit ????? event order test?DDL ??? production gate ???? |
-| Phase 3?vn.py-derived algo instance ? | ? Sniper/BestLimit/TWAP ??? characterization tests?import-boundary tests?attribution check??? commit diff note? | ??????????/?????????? vnpy_algotrading ?? commit ????? core ??? DB/FastAPI/MiniQMT/vn.py runtime?timer ? runtime event loop ??? | ??????????????? MIT attribution???? for-loop ???? timer????????????? migration note? |
-| Phase 4?Paper v2 / simulation_runtime ?? | ? N=1 ? N>1 ?? runtime ?????????API contract tests??? Paper v2?simulation_runtime?operator ????? runtime client? | Paper v2 MiniQMT ? simulation_runtime MiniQMT ??? `MiniQMTExecutionRuntime`?????????? `XtQuantQMTClient.place_order` ? `QmtManagedOrderService.submit_batch`?raw/manual order ??? admin/operator compatibility? | ????? adapter owner?day_runner ???? MiniQMT ?????qmt_strategy router ????????? submit?N=1 ?????? |
-| Phase 5?????? SELL-first ?? | ? funds-only capacity?SELL-first rebalance?same-batch proceeds?unfilled sell blocks dependent buy?partial fill / reject / timeout tests? | ????????????????????? slot/intent ????????????????????????/????? cash freeze ?????? | ????? strategy/package count gate??????????????????????? proceeds ?????????? residual ??? |
-| Phase 6?operator command runtime ? | ? `FLATTEN_ALL_POSITIONS`?`CANCEL_ALL_OPEN_ORDERS`?`RESET_STRATEGY_SLOT`?`REPLACE_ALPHA_SIGNAL_BOOK` ??/??/UI ??? | ?? operator ?????? command_id???/???broker raw packet??????/????? Gateway/OMS/slot ledger?? alpha ??? signal book??????? | operator ???? runtime?raw qmt order ?????????????? strategy slot lot/cash??? alpha ???????? |
-| Phase 7?L0-L5 ??? legacy ?? | ? L0 static/unit?L2 fake broker?L3 unattended MiniQMT SIM stub?L4 dual-backend/restart?L5 real MiniQMT SIM ?????? validation history?? DESIGN-COMPLIANCE-001? | L0-L4 ??? PASS?L5 ?????????? pending-live-window??????????legacy ????????????????? chore issue ??? | ??? smoke ?? L0-L4?L5 ??????????????????????PR ????????????? |
+| Phase 0：设计冻结和 issue epic | 检查设计文档已合入、epic 和子 issue 通过 `scripts/aistock_issue_workflow.py` 同步 GitHub、每个 issue 有 context pack / allowed_write_scope / production gates。 | 所有子 issue 都引用本文第 3、4、9、10.8、11、14 节；旧文档冲突项被标注 supersede；无代码、无 DDL、无 runtime 变更。 | 手工建 BUG JSON 不同步 GitHub；issue 未声明 MiniQMT 触碰范围；未记录 vn.py 固定 commit；直接开始写代码。 |
+| Phase 1：合同和禁用门禁 | 运行合同单元测试、negative tests、grep guard；检查 AlphaSignalBook DTO / schema / API payload。 | `AlphaSignalBook` 不含 broker/order/execution 字段；MiniQMT path 收到 `V25_*` fail-fast；`max_concurrent_packages` 不再作为产品策略数量门槛；所有产品入口能检测 canonical runtime gate。 | Alpha 层出现 `broker_account_id` / `order_remark` / `execution_algo_code`；V25 被 MiniQMT 接受或 silent fallback；新建单策略专用 DTO/path。 |
+| Phase 2：durable runtime skeleton | 用 fake broker 跑 event loop、gateway、OMS、algo instance、restart recovery；如有 DDL，跑迁移 dry-run 和 production DDL gate 记录。 | tick/order/trade/timer/reconcile/operator event 都能持久化；active order 和 algo instance 可从 DB 恢复；重启后先 sync broker facts，不重复下单。 | runtime 只存在内存状态；reconcile 成功覆盖 submit 失败；没有 event order test；DDL 合入后 production gate 未记录。 |
+| Phase 3：vn.py-derived algo instance 化 | 对 Sniper/BestLimit/TWAP 做上游 characterization tests、import-boundary tests、attribution check、固定 commit diff note。 | 每个算法都有上游文件/行号映射；核心行为与 vnpy_algotrading 固定 commit 一致；算法 core 不导入 DB/FastAPI/MiniQMT/vn.py runtime；timer 由 runtime event loop 驱动。 | 只保留算法名字但重写行为；没有 MIT attribution；用同步 for-loop 伪造生产 timer；偏离上游行为但无测试名和 migration note。 |
+| Phase 4：Paper v2 / simulation_runtime 收敛 | 跑 N=1 和 N>1 同源 runtime 测试、调用链扫描、API contract tests；检查 Paper v2、simulation_runtime、operator 是否都调用 runtime client。 | Paper v2 MiniQMT 和 simulation_runtime MiniQMT 都进入 `MiniQMTExecutionRuntime`；产品路径不直接调用 `XtQuantQMTClient.place_order` 或 `QmtManagedOrderService.submit_batch`；raw/manual order 只能是 admin/operator compatibility。 | 新增第二个 adapter owner；day_runner 继续自建 MiniQMT 下单语义；qmt_strategy router 可被模拟盘策略直接 submit；N=1 走单独代码。 |
+| Phase 5：资金容量和 SELL-first 模型 | 跑 funds-only capacity、SELL-first rebalance、same-batch proceeds、unfilled sell blocks dependent buy、partial fill / reject / timeout tests。 | 策略数量只由资金和交易规则决定；资金不足是 slot/intent 显式状态；卖出未成交时依赖买入不得提交或必须缩放/跳过；历史 cash freeze 可恢复释放。 | 仍存在固定 strategy/package count gate；虚拟现金不足导致永远买不出；未成交卖单被当作 proceeds 已释放；部分成交没有 residual 状态。 |
+| Phase 6：operator command runtime 化 | 跑 `FLATTEN_ALL_POSITIONS`、`CANCEL_ALL_OPEN_ORDERS`、`RESET_STRATEGY_SLOT`、`REPLACE_ALPHA_SIGNAL_BOOK` 单元/集成/UI 测试。 | 所有 operator 命令都持久化 command_id、审批/原因、broker raw packet、终态；清仓/撤单走同一 Gateway/OMS/slot ledger；换 alpha 只替换 signal book，不改执行层。 | operator 清仓绕过 runtime；raw qmt order 成为常规产品按钮；清仓不更新 strategy slot lot/cash；更换 alpha 需要改执行代码。 |
+| Phase 7：L0-L5 验证和 legacy 退役 | 跑 L0 static/unit、L2 fake broker、L3 unattended MiniQMT SIM stub、L4 dual-backend/restart、L5 real MiniQMT SIM 交易时段；写 validation history；做 DESIGN-COMPLIANCE-001。 | L0-L4 必须全 PASS；L5 若非交易时段只能标为 pending-live-window，不能宣称实盘可用；legacy 删除只能在全量验证和用户确认后单独 chore issue 执行。 | 用手工 smoke 代替 L0-L4；L5 未跑却声明生产就绪；为了统一提前删除旧路径；PR 未记录生产门禁或重启要求。 |
 
-#### 10.8.3 ????????
+#### 10.8.3 开发偏航阻断规则
 
-???? MiniQMT/Paper v2/simulation_runtime/qmt_strategy ?? PR ????????????????????? issue ???
+后续任何 MiniQMT/Paper v2/simulation_runtime/qmt_strategy 相关 PR 命中以下任一条件，必须停止合入并回到设计或 issue 阶段：
 
-1. ?????????? MiniQMT ?????adapter?router?scheduler ???
-2. ????????????? owner?? N=1 ?? N-slot runtime ????
-3. Alpha ???????? broker/account/order/execution ???
-4. MiniQMT broker execution ?? `V25_*` ???????? fallback ? TWAP/????????
-5. `NO_REBALANCE`?`SUCCEEDED`?`RECONCILED` ??????????submit ???broker reject??????? stale order?
-6. ?????????????????????????????
-7. ???? PR ??????????????????? validation evidence?
+1. 新增了本文没有定义的 MiniQMT 下单路径、adapter、router、scheduler 分支。
+2. 单策略和多策略出现不同执行 owner，或 N=1 不是 N-slot runtime 的特例。
+3. Alpha 信号层读取或写入 broker/account/order/execution 字段。
+4. MiniQMT broker execution 接受 `V25_*` 或在算法不可用时 fallback 到 TWAP/最新价整笔提交。
+5. `NO_REBALANCE`、`SUCCEEDED`、`RECONCILED` 被用来掩盖信号缺失、submit 失败、broker reject、未成交、历史 stale order。
+6. 策略数量被固定常量限制，而不是资金容量和交易规则计算结果。
+7. 任何代码 PR 不能给出对应本文章节、测试、静态扫描和 validation evidence。
 
-#### 10.8.4 ???????????
+#### 10.8.4 一次性架构整改完成标准
 
-?? MiniQMT ?????????????????????????????? bug ????????????????
+本轮 MiniQMT 模拟盘架构整改只有在以下全部满足时才能称为完成，不能只因某个 bug 修完或某天模拟盘跑通就宣称完成：
 
-1. MiniQMT ???????? `MiniQMTExecutionRuntime` ?? owner?Paper v2?simulation_runtime?operator command ??? runtime client?
-2. `AlphaSignalBook -> StrategySlotTarget -> RebalanceIntent -> ExecutionPlan -> ExecutionAlgoInstance -> ChildOrder -> OMS/Ledger` ???????
-3. Sniper/BestLimit/TWAP ? vn.py-derived ????? commit?source mapping?attribution?characterization tests?
-4. N=1 ? N>1 ???? runtime ? L3/L4 ????????????????
-5. submit failure?deterministic retry?SELL-first??????????? terminalization?operator ????????????????
-6. ? 11.1 ??????????????? 11.2 ??????? PASS ????????? P0 ???
-7. DESIGN-COMPLIANCE-001 ?? P0 ??? PASS??? DDL/??/?????????
+1. MiniQMT 产品执行链路只有 `MiniQMTExecutionRuntime` 一个 owner，Paper v2、simulation_runtime、operator command 都只是 runtime client。
+2. `AlphaSignalBook -> StrategySlotTarget -> RebalanceIntent -> ExecutionPlan -> ExecutionAlgoInstance -> ChildOrder -> OMS/Ledger` 全链路可追溯。
+3. Sniper/BestLimit/TWAP 的 vn.py-derived 行为有固定 commit、source mapping、attribution、characterization tests。
+4. N=1 和 N>1 通过同一 runtime 的 L3/L4 验证；策略数量只受资金容量限制。
+5. submit failure、deterministic retry、SELL-first、卖单未成交、历史挂单 terminalization、operator 清仓全部有自动化测试和运行证据。
+6. 第 11.1 节静态扫描无未解释违规命中；第 11.2 节测试矩阵全部 PASS 或只剩用户批准的非 P0 延期。
+7. DESIGN-COMPLIANCE-001 全部 P0 核心项 PASS；生产 DDL/依赖/重启门禁全部明确。
+
+### 10.9 实施 issue / PR 证据模板
+
+后续 MiniQMT 架构整改不能只按口头理解开发。每个实现 issue 和 PR 必须复制本节模板并填满证据；缺字段视为验收失败。
+
+#### 10.9.1 Issue context pack 必填模板
+
+```yaml
+process_level: L/T3
+module: miniqmt_execution_runtime | paper_v2 | simulation_runtime | qmt_strategy_ledger | frontend_paper_v2
+design_doc: docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md
+design_sections:
+  - "3. 不可变硬规则"
+  - "4. vn.py 参考矩阵"
+  - "9. 验收场景矩阵"
+  - "10.8 阶段验收硬门禁"
+  - "11. 反回归门禁"
+  - "14. DESIGN-COMPLIANCE-001 预检清单"
+allowed_write_scope:
+  - "<exact file or directory>"
+non_goals:
+  - "不得重启 backend/frontend/TDX/MiniQMT；需要重启时通知用户"
+  - "不得引入本文未定义的 MiniQMT 下单路径"
+  - "不得把 V25_* 接入 MiniQMT broker execution"
+  - "不得用 mock-only 证据替代 L2/L3/L4/L5"
+closure_requirements:
+  - "design_trace_matrix 已填写且 P0 项无 deferred"
+  - "positive_tests 已执行并记录"
+  - "negative_tests 已执行并记录"
+  - "static_guard_scan 已执行并解释所有命中"
+  - "production gates 已记录"
+```
+
+#### 10.9.2 PR body 必填模板
+
+```markdown
+## Design Trace Matrix
+
+| design_item | design_ref | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|---|
+| MiniQMT single execution runtime | §3.1 / §8.1 / §10.8 | ... | ... | PASS/BLOCKED | ... |
+| Alpha/execution isolation | §3.2 / §5.1 | ... | ... | PASS/BLOCKED | ... |
+| vn.py-derived behavior | §4.1 / §4.2 | ... | ... | PASS/BLOCKED | ... |
+| N=1 and N>1 same path | §7.1 / §9 | ... | ... | PASS/BLOCKED | ... |
+| funds-only capacity | §3.3 / §10.8 | ... | ... | PASS/BLOCKED | ... |
+
+## Required Evidence
+
+- positive_tests:
+- negative_tests:
+- static_guard_scan:
+- runtime_evidence:
+- validation_history_path:
+- production_ddl_gate:
+- production_frontend_dependency_gate:
+- production_backend_dependency_gate:
+- restart_required: yes/no; if yes, user must restart
+
+## Explicit Non-Regression Claims
+
+- No new MiniQMT broker submit path:
+- No direct product call to raw QMT order:
+- No V25_* MiniQMT broker execution:
+- No fixed strategy-count gate:
+- No mock-only completion claim:
+```
+
+#### 10.9.3 Validation history 必填模板
+
+每个阶段的验证记录必须落到 `tests/aistock_validation/history/...`，并包含：
+
+```markdown
+# MiniQMT Unified Runtime Validation
+
+- issue:
+- github_issue:
+- branch:
+- commit:
+- phase:
+- design_doc:
+- design_sections:
+- commands:
+- positive_results:
+- negative_results:
+- static_guard_results:
+- runtime_evidence:
+- known_gaps:
+- production_ddl_gate:
+- production_frontend_dependency_gate:
+- production_backend_dependency_gate:
+- restart_required:
+- DESIGN-COMPLIANCE-001:
+```
+
+### 10.10 阶段合入顺序和停止线
+
+本项目允许在不同 worktree 中准备后续阶段的只读分析，但代码合入必须遵守阶段顺序：
+
+1. Phase 0 设计和 issue epic 未完成，不得合入任何 MiniQMT 架构整改代码。
+2. Phase 1 合同和禁用门禁未合入，不得合入 runtime skeleton；否则旧路径可能继续扩散。
+3. Phase 2 durable runtime skeleton 未合入，不得把 Paper v2 / simulation_runtime 默认入口切到 runtime。
+4. Phase 3 vn.py-derived algo instance parity 未合入，不得声明 Sniper/BestLimit/TWAP 已按 vn.py 逻辑运行。
+5. Phase 4 路径收敛未合入，不得开始 legacy deprecation。
+6. Phase 5 funds-only capacity 和 SELL-first 未合入，不得把多策略资金能力声明为完成。
+7. Phase 6 operator command 未合入，不得开放 operator 清仓/重置作为常规产品能力。
+8. Phase 7 L0-L5 未完成且用户未确认，不得删除 legacy path，也不得宣称 MiniQMT 模拟盘架构整改完成。
+
+任一阶段发现设计与现实冲突时，必须先更新本文或创建 design amendment issue；不得在代码中自行改架构。
 
 ## 11. 反回归门禁
 
@@ -738,6 +846,27 @@ MiniQMT 模拟盘 run 只有在以下条件全部满足时才能标为“交易�
 10. `chore: legacy path deprecation`：仅在 L0-L5 和用户确认后执行。
 
 所有 issue 必须使用 `scripts/aistock_issue_workflow.py` 创建和同步 GitHub；每个 issue 都必须说明是否触碰 MiniQMT、是否需要 DDL、是否需要后端重启、是否需要生产依赖。
+
+### 13.1 推荐的执行型 issue 拆分
+
+为避免多个窗口在同一阶段各自实现不同理解，建议每个阶段至少拆成 `gate` 和 `implementation` 两类 issue：
+
+| 顺序 | Issue 类型 | 目的 | 是否允许改生产代码 | 完成条件 |
+|---:|---|---|---|---|
+| 0.1 | `gate/design-freeze` | 合入本文、创建 GitHub epic、登记所有子 issue。 | 否 | Phase 0 context pack 和 closure requirements 完成。 |
+| 1.1 | `gate/contracts` | 先落 AlphaSignalBook / runtime request / forbidden-field tests。 | 是，限合同和测试 | Phase 1 negative tests 能阻止旧路径继续扩散。 |
+| 1.2 | `implementation/path-blockers` | 给旧入口加 canonical runtime gate / V25 fail-fast / fixed-count blocker。 | 是，限 guard | 旧路径命中时 fail-fast，不能 fallback。 |
+| 2.1 | `implementation/runtime-skeleton` | 建 durable runtime / event / gateway / OMS / repository skeleton。 | 是 | fake broker L2 + restart recovery PASS。 |
+| 2.2 | `gate/ddl-production` | 若 Phase 2 引入 DDL，负责 DDL 验证和 production gate。 | 只限 migration / verification | `production_ddl_gate=applied_and_verified` 或明确 pending。 |
+| 3.1 | `implementation/vnpy-parity` | Sniper/BestLimit/TWAP algo instance 化和上游 parity。 | 是 | source mapping + attribution + characterization tests PASS。 |
+| 4.1 | `implementation/path-convergence-paper` | Paper v2 MiniQMT 改为 runtime client。 | 是 | N=1 仍走 runtime；day_runner 不再自建 MiniQMT 执行语义。 |
+| 4.2 | `implementation/path-convergence-simulation` | simulation_runtime MiniQMT 改为 runtime client。 | 是 | N>1 与 N=1 共用 runtime owner。 |
+| 5.1 | `implementation/capacity-cash` | funds-only capacity、SELL-first、proceeds、dependent buy。 | 是 | 资金/卖出未成交/partial fill/residual 测试 PASS。 |
+| 6.1 | `implementation/operator-command` | 清仓、撤单、重置、换信号都进入 runtime。 | 是 | operator command audit、raw packet、slot ledger 证据 PASS。 |
+| 7.1 | `gate/full-validation` | L0-L5 和 DESIGN-COMPLIANCE-001 总验收。 | 可写验证记录 | L0-L4 PASS；L5 有交易时段证据或 pending-live-window。 |
+| 7.2 | `chore/legacy-deprecation` | 删除或禁用 legacy 产品路径。 | 是，需用户确认 | 只能在 7.1 完成后执行。 |
+
+每个 implementation issue 的 `allowed_write_scope` 必须窄化到本阶段；若需要改相邻阶段文件，必须先更新 issue scope，不能在 PR 中顺手修改。
 
 ## 14. DESIGN-COMPLIANCE-001 预检清单
 
