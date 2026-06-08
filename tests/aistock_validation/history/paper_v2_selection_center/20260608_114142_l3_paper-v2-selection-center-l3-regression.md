@@ -32,6 +32,7 @@
 | MiniQMT preflight retry | PREFLIGHT_FAILED no-broker run stays retryable and can resubmit after cash is available | targeted scheduler regression -> 58-test slice passed | PASS |
 | MiniQMT rebalance cash | Same-batch SELL proceeds unblock covered BUY rebalance and submit SELL before BUY | targeted qmt order-service regression -> 58-test slice passed; neighboring MiniQMT/QMT/simulation tests -> 63 passed | PASS |
 | UI E2E | No UI change; backend L3 run skips browser by explicit scope | `PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3` | SKIPPED_BY_SCOPE |
+| Validation Center backend | Issue/validation workflow backend remains healthy | `python -m nox -s validation_center_backend` -> 389 passed, coverage line 80.07%, branch 62.3% | PASS |
 | Asset safety | No protected asset modified silently | `git status --short`, changed files limited to allowed BUG-283 code/tests/registry/evidence | PASS |
 
 ## Commands
@@ -43,6 +44,7 @@ python -m pytest backend/tests/qmt_strategy_ledger/test_selection_order_builder.
 python -m nox -s l0
 python -m nox -s paper_v2_backend
 python -m nox -s validation_module_registry_l0
+python -m nox -s validation_center_backend
 PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3
 ```
 

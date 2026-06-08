@@ -37,7 +37,8 @@
     "validation://nox-paper_v2_backend/605-passed-1-skipped-2-xfailed",
     "validation://nox-validation_module_registry_l0/8-passed",
     "validation://nox-paper_v2_l3-skip-ui/passed",
-    "validation://pytest-codegraph-suggested-miniqmt-neighbors/63-passed"
+    "validation://pytest-codegraph-suggested-miniqmt-neighbors/63-passed",
+    "validation://nox-validation_center_backend/389-passed-coverage-line-80.07-branch-62.3"
   ],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-08T03:22:00.862516Z",
