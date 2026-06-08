@@ -13,41 +13,44 @@ def test_llm_triage_config_defaults_are_safe():
     assert config["default_provider"] == "github_models"
     assert config["providers"]["deepseek_api"]["enabled"] is False
     assert config["providers"]["deepseek_api"]["model"] == "deepseek-v4-pro"
-    assert config["providers"]["github_models"]["model_selector"]["allow_lower_tier_fallback"] is False
+    selector = config["providers"]["github_models"]["model_selector"]
+    assert selector["required_model_family"] == "deepseek-r1"
+    assert selector["preferred_models"] == ["deepseek/deepseek-r1"]
+    assert selector["allow_lower_tier_fallback"] is False
 
 
-def test_github_model_catalog_selects_deepseek_v4_pro_variant():
+def test_github_model_catalog_selects_deepseek_r1():
     selector = adapter.load_config()["providers"]["github_models"]["model_selector"]
     catalog = {
         "models": [
             {
                 "id": "openai/gpt-test",
                 "publisher": "OpenAI",
-                "capabilities": ["tool-calling", "json-output"],
+                "capabilities": ["tool-calling", "reasoning"],
             },
             {
-                "id": "deepseek/deepseek-v4-pro-202606",
+                "id": "deepseek/deepseek-r1",
                 "publisher": {"name": "DeepSeek"},
-                "capabilities": {"tool-calling": True, "json-output": True},
+                "capabilities": {"tool-calling": True, "reasoning": True, "streaming": True},
             },
         ]
     }
 
     selected = adapter.select_github_model(catalog, selector)
 
-    assert selected["model_id"] == "deepseek/deepseek-v4-pro-202606"
+    assert selected["model_id"] == "deepseek/deepseek-r1"
     assert selected["publisher"] == "DeepSeek"
-    assert selected["capabilities"] == ["json-output", "tool-calling"]
+    assert selected["capabilities"] == ["reasoning", "streaming", "tool-calling"]
 
 
-def test_github_model_catalog_fails_closed_without_v4_pro():
+def test_github_model_catalog_fails_closed_without_r1():
     selector = adapter.load_config()["providers"]["github_models"]["model_selector"]
     catalog = {
         "models": [
             {
-                "id": "deepseek/deepseek-v4-flash",
+                "id": "deepseek/deepseek-v3-0324",
                 "publisher": "DeepSeek",
-                "capabilities": ["tool-calling", "json-output"],
+                "capabilities": ["tool-calling"],
             }
         ]
     }
