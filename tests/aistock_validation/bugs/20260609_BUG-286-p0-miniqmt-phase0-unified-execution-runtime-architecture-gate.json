@@ -1,0 +1,73 @@
+{
+  "actual": "Design exists on main but the architecture gate and implementation issue were not yet tracked through the BUG/GitHub workflow.",
+  "allowed_write_scope": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md",
+    "tests/aistock_validation/bugs/20260609_BUG-286-p0-miniqmt-phase0-unified-execution-runtime-architecture-gate.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-286",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T18:25:13.090112Z",
+  "description": "Design exists on main but the architecture gate and implementation issue were not yet tracked through the BUG/GitHub workflow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-ea9dd570745c",
+      "timestamp": "2026-06-08T18:25:13.090109Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md"
+  ],
+  "expected": "The P0 architecture gate is tracked through BUG/GitHub workflow, references the design sections 3, 4, 9, 10.8, 10.9, 10.10, 11, 13.1, and 14, and links the Phase 1 implementation issue.",
+  "first_seen_at": "2026-06-08T18:25:13.090112Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 836,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/836",
+  "last_seen_at": "2026-06-08T18:25:13.090112Z",
+  "module": "architecture",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md sections 10.8, 10.9, 10.10, and 13.1.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "architecture"
+  ],
+  "title": "[P0][MiniQMT][Phase0] Unified execution runtime architecture gate",
+  "trigger_condition": {
+    "fingerprint": "ea9dd570745c5ef23b1b6e4c",
+    "source_event_id": "FE-20260609-ea9dd570745c"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
