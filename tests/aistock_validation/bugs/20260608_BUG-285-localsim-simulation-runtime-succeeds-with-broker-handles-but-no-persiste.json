@@ -1,0 +1,72 @@
+{
+  "actual": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-08 reports both local_sim runs SUCCEEDED, broker_called=true, submitted_intents=40 and 8. DB read shows paper_v2.orders/fills/cash_ledger/positions counts are all 0 for paper_b26d2312d986441f8497f7484c05f0ec and paper_e225bf8a68244c54b4cc25506dadad81; run payload strategy_performance remains cash=500000 positions=[].",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260608_BUG-285-localsim-simulation-runtime-succeeds-with-broker-handles-but-no-persiste.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-285",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T06:11:12.093256Z",
+  "description": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-08 reports both local_sim runs SUCCEEDED, broker_called=true, submitted_intents=40 and 8. DB read shows paper_v2.orders/fills/cash_ledger/positions counts are all 0 for paper_b26d2312d986441f8497f7484c05f0ec and paper_e225bf8a68244c54b4cc25506dadad81; run payload strategy_performance remains cash=500000 positions=[].",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260608-020a11f4cdf9",
+      "timestamp": "2026-06-08T06:11:12.093251Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-db://2026-06-08/local-sim-succeeded-submitted-40-8-but-zero-persisted-orders-fills-cash-positions"
+  ],
+  "expected": "LocalSim simulation runtime must persist executed orders/fills/cash/positions or fail with actionable evidence; SUCCEEDED must not be reported when only transient broker handles exist and no durable portfolio state changes are recorded.",
+  "first_seen_at": "2026-06-08T06:11:12.093256Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 833,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/833",
+  "last_seen_at": "2026-06-08T06:11:12.093256Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-08&limit=50; query paper_v2.orders/fills/cash_ledger/positions for the two local_sim portfolio IDs.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSim simulation runtime succeeds with broker handles but no persisted fills or portfolio state",
+  "trigger_condition": {
+    "fingerprint": "020a11f4cdf913ef55233452",
+    "source_event_id": "FE-20260608-020a11f4cdf9"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
