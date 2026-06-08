@@ -10,6 +10,7 @@ from sector_strategy_data import SectorStrategyDataFetcher
 from sector_strategy_engine import SectorStrategyEngine
 from sector_strategy_markdown import generate_sector_markdown_report
 from sector_strategy_pdf import SectorStrategyPDFGenerator
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 
 
 router = APIRouter(prefix="/sector-strategy", tags=["sector-strategy"])
@@ -22,7 +23,7 @@ class SectorStrategyAnalyzeRequest(BaseModel):
     与旧版语义一致的前提下扩展字段。
     """
 
-    model: str = "deepseek-chat"
+    model: str = DEFAULT_DEEPSEEK_MODEL
 
 
 class SectorStrategyAnalyzeResponse(BaseModel):

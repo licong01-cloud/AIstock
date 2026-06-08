@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 
 from backend.db.pg_pool import get_conn
 from backend.infra.deepseek_client import DeepSeekClient
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL, DeepSeekConfigError, resolve_deepseek_config
 from backend.services.announcements.title_classifier import RULE_VERSION as ANNOUNCEMENT_RULE_VERSION
 from backend.services.event_signal.document_preprocessor import EvidenceChunk, preprocess_document
 
@@ -389,7 +390,7 @@ def process_candidate(
     candidate: PdfSmokeCandidate,
     *,
     deepseek_client: Optional[Any],
-    model: str = "deepseek-chat",
+    model: str = DEFAULT_DEEPSEEK_MODEL,
     downloader: Callable[..., bytes] = download_pdf_bytes,
     text_extractor: Callable[..., str] = extract_pdf_text,
     artifact_dir: Path = DEFAULT_ARTIFACT_DIR,
@@ -616,7 +617,7 @@ def run_pdf_smoke(
     artifact_dir: Path = DEFAULT_ARTIFACT_DIR,
     save_pdf: bool = True,
     use_deepseek: bool = True,
-    model: str = "deepseek-chat",
+    model: str = DEFAULT_DEEPSEEK_MODEL,
     max_pages: int = 8,
     max_chars: int = 20000,
     max_chunks: int = 6,
@@ -629,8 +630,11 @@ def run_pdf_smoke(
         raise ValueError("candidate_scan_limit must be >= limit")
 
     _load_env()
-    if use_deepseek and not os.getenv("DEEPSEEK_API_KEY"):
-        raise PdfSmokeError("DEEPSEEK_API_KEY is not configured")
+    if use_deepseek:
+        try:
+            resolve_deepseek_config(model=model)
+        except DeepSeekConfigError as exc:
+            raise PdfSmokeError(str(exc)) from exc
 
     with get_conn() as conn:
         candidates = fetch_pdf_smoke_candidates(
@@ -699,7 +703,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
     parser.add_argument("--no-save-pdf", action="store_true")
     parser.add_argument("--no-deepseek", action="store_true")
-    parser.add_argument("--model", default="deepseek-chat")
+    parser.add_argument("--model", default=DEFAULT_DEEPSEEK_MODEL)
     parser.add_argument("--max-pages", type=int, default=8)
     parser.add_argument("--max-chars", type=int, default=20000)
     parser.add_argument("--max-chunks", type=int, default=6)
