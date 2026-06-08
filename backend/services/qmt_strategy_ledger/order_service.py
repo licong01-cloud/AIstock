@@ -398,6 +398,7 @@ class QmtManagedOrderService:
         return ManagedOrderSubmitResult(False, intent.intent_id, None, message, preflight, True)
 
     def submit_batch(self, requests: list[ManagedOrderRequest]) -> ManagedBatchSubmitResult:
+        requests = _batch_submission_order(requests)
         batch_id = _batch_id_for_requests(requests)
         retry_result = self._existing_batch_result(batch_id, len(requests))
         if retry_result is not None:
@@ -599,6 +600,8 @@ class QmtManagedOrderService:
         seen_remarks: dict[tuple[str, str], int] = {}
         buy_freeze_by_account_strategy: dict[tuple[str, str], Decimal] = {}
         buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
+        sell_proceeds_by_account_strategy: dict[tuple[str, str], Decimal] = {}
+        sell_proceeds_by_account_group: dict[tuple[str, str], Decimal] = {}
         sell_quantity_by_account_strategy_symbol: dict[tuple[str, str, str], int] = {}
         broker_sell_quantity_by_account_symbol: dict[tuple[str, str], int] = {}
 
@@ -632,6 +635,18 @@ class QmtManagedOrderService:
                 sell_quantity_by_account_strategy_symbol[key] = (
                     sell_quantity_by_account_strategy_symbol.get(key, 0) + max(int(request.quantity), 0)
                 )
+                strategy_key = (request.account_id, request.strategy_name)
+                sell_proceeds = max(base_results[index].estimated_notional, Decimal("0"))
+                sell_proceeds_by_account_strategy[strategy_key] = (
+                    sell_proceeds_by_account_strategy.get(strategy_key, Decimal("0")) + sell_proceeds
+                )
+                account = self._account_by_strategy_name(request.account_id, request.strategy_name)
+                group_limit = _account_group_cash_limit(account) if account is not None else None
+                if group_limit is not None:
+                    group_key, _cash_limit, _context = group_limit
+                    sell_proceeds_by_account_group[group_key] = (
+                        sell_proceeds_by_account_group.get(group_key, Decimal("0")) + sell_proceeds
+                    )
                 broker_key = (request.account_id, request.symbol)
                 broker_sell_quantity_by_account_symbol[broker_key] = (
                     broker_sell_quantity_by_account_symbol.get(broker_key, 0) + max(int(request.quantity), 0)
@@ -640,13 +655,26 @@ class QmtManagedOrderService:
         for index, request in enumerate(requests):
             result = base_results[index]
             if request.order_type == BUY_ORDER_TYPE and result.available_cash is not None and result.strategy_id:
-                total_freeze = buy_freeze_by_account_strategy[(request.account_id, request.strategy_name)]
-                if total_freeze > result.available_cash:
+                strategy_key = (request.account_id, request.strategy_name)
+                total_freeze = buy_freeze_by_account_strategy[strategy_key]
+                same_batch_sell_proceeds = sell_proceeds_by_account_strategy.get(strategy_key, Decimal("0"))
+                effective_cash = result.available_cash + same_batch_sell_proceeds
+                if total_freeze <= effective_cash:
+                    errors_by_index[index] = _without_preflight_error_codes(
+                        errors_by_index[index],
+                        {"INSUFFICIENT_CASH"},
+                    )
+                else:
                     errors_by_index[index].append(
                         OrderPreflightError(
                             "BATCH_INSUFFICIENT_CASH",
-                            "batch aggregate buy freeze exceeds virtual strategy cash",
-                            {"available_cash": float(result.available_cash), "batch_required_cash": float(total_freeze)},
+                            "batch aggregate buy freeze exceeds virtual strategy cash plus same-batch sell proceeds",
+                            {
+                                "available_cash": float(result.available_cash),
+                                "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
+                                "effective_cash": float(effective_cash),
+                                "batch_required_cash": float(total_freeze),
+                            },
                         )
                     )
                 account = self._account_by_strategy_name(request.account_id, request.strategy_name)
@@ -654,14 +682,18 @@ class QmtManagedOrderService:
                 if group_limit is not None:
                     group_key, cash_limit, context = group_limit
                     group_total_freeze = buy_freeze_by_account_group.get(group_key, Decimal("0"))
-                    if group_total_freeze > cash_limit:
+                    group_sell_proceeds = sell_proceeds_by_account_group.get(group_key, Decimal("0"))
+                    group_effective_cash_limit = cash_limit + group_sell_proceeds
+                    if group_total_freeze > group_effective_cash_limit:
                         errors_by_index[index].append(
                             OrderPreflightError(
                                 "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH",
-                                "batch aggregate buy freeze exceeds MiniQMT account-group cash limit",
+                                "batch aggregate buy freeze exceeds MiniQMT account-group cash limit plus same-batch sell proceeds",
                                 {
                                     **context,
                                     "account_group_cash_limit": float(cash_limit),
+                                    "same_batch_estimated_sell_proceeds": float(group_sell_proceeds),
+                                    "effective_account_group_cash_limit": float(group_effective_cash_limit),
                                     "batch_required_cash": float(group_total_freeze),
                                 },
                             )
@@ -717,9 +749,13 @@ class QmtManagedOrderService:
         account = self._account_by_strategy_name(request.account_id, request.strategy_name)
         intent = self._create_intent(request, account, preflight, IntentSubmitStatus.SUBMITTED, batch_id=batch_id)
         freeze_applied = False
+        applied_freeze_amount = Decimal("0")
         if request.order_type == BUY_ORDER_TYPE and preflight.freeze_amount > 0:
-            self._apply_cash_entry(account, request, preflight.freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id)
-            freeze_applied = True
+            # Batch preflight may allow a rebalance BUY using same-batch SELL proceeds.
+            applied_freeze_amount = min(preflight.freeze_amount, account.cash)
+            if applied_freeze_amount > 0:
+                self._apply_cash_entry(account, request, applied_freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id)
+                freeze_applied = True
 
         try:
             order_id, message = self._broker.place_order(
@@ -733,7 +769,13 @@ class QmtManagedOrderService:
             )
         except Exception as exc:  # noqa: BLE001
             if freeze_applied:
-                self._release_cash_entry(account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id)
+                self._release_cash_entry(
+                    account.strategy_id,
+                    request,
+                    applied_freeze_amount,
+                    CashEntryType.UNFREEZE_REJECT,
+                    intent.intent_id,
+                )
             self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC))
             return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
 
@@ -741,7 +783,13 @@ class QmtManagedOrderService:
         status = IntentSubmitStatus.ACCEPTED if success else IntentSubmitStatus.REJECTED
         self._repository.set_order_intent_submit_status(intent.intent_id, status, submitted_at=datetime.now(UTC), updated_at=datetime.now(UTC))
         if not success and freeze_applied:
-            self._release_cash_entry(account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id)
+            self._release_cash_entry(
+                account.strategy_id,
+                request,
+                applied_freeze_amount,
+                CashEntryType.UNFREEZE_REJECT,
+                intent.intent_id,
+            )
         if success:
             qmt_order_id = str(order_id)
             self._repository.upsert_order_ledger(
@@ -786,6 +834,8 @@ class QmtManagedOrderService:
             return None
         batch = get_batch(batch_id)
         if batch is None:
+            return None
+        if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED:
             return None
         intents = list_intents(batch_id)
         stored_results = tuple(
@@ -1022,6 +1072,23 @@ def _batch_id_for_requests(requests: list[ManagedOrderRequest]) -> str:
     signatures = [_request_signature(request) for request in requests]
     payload = json.dumps(signatures, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f"qmtbatch_{sha1(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _batch_submission_order(requests: list[ManagedOrderRequest]) -> list[ManagedOrderRequest]:
+    return [
+        request
+        for _index, request in sorted(
+            enumerate(requests),
+            key=lambda item: (0 if item[1].order_type == SELL_ORDER_TYPE else 1, item[0]),
+        )
+    ]
+
+
+def _without_preflight_error_codes(
+    errors: list[OrderPreflightError],
+    codes: set[str],
+) -> list[OrderPreflightError]:
+    return [error for error in errors if error.code not in codes]
 
 
 def _request_signature(request: ManagedOrderRequest) -> dict[str, Any]:

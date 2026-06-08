@@ -205,6 +205,27 @@ def test_submit_batch_aggregates_cash_before_broker_call() -> None:
     assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
 
 
+def test_submit_batch_uses_same_batch_sell_proceeds_for_rebalance_buy_cash() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100")))
+    _add_sellable_lot(repo, 1000)
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+
+    result = _service(repo, broker).submit_batch(
+        [_buy_request("remark_rebalance_buy"), _sell_request("remark_rebalance_sell")]
+    )
+
+    assert result.success is True
+    assert result.batch_status == OrderBatchStatus.SUCCEEDED.value
+    assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE, BUY_ORDER_TYPE]
+    assert {
+        error.code
+        for item in result.results
+        for error in item.preflight.errors
+    } == set()
+
+
 def test_submit_batch_aggregates_same_symbol_sell_and_broker_can_sell() -> None:
     repo = _repo()
     _add_sellable_lot(repo, 1000)
@@ -249,7 +270,8 @@ def test_submit_batch_preflight_failure_keeps_broker_called_false_for_restart_re
 
     assert first.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
     assert all(result.broker_called is False for result in first.results)
-    assert second.retry_of_batch_id == first.batch_id
+    assert second.retry_of_batch_id is None
+    assert second.batch_id == first.batch_id
     assert second.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
     assert all(result.broker_called is False for result in second.results)
     assert second_broker.place_order_payloads == []

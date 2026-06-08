@@ -1537,6 +1537,24 @@ class SimulationLifecycleScheduler:
             mode=mode,
             price_by_symbol=context.price_by_symbol,
         )
+        if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
+            self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status=execution.status,
+                run=latest_run,
+                execution_plan=execution.execution_plan,
+                execution_result=execution,
+                sync_result=sync_result,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
         reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
         self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
@@ -1655,6 +1673,24 @@ class SimulationLifecycleScheduler:
                 mode=mode,
                 price_by_symbol=context.price_by_symbol,
             )
+            if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
+                self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+                latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+                return SimulationSchedulerBindingResult(
+                    binding_id=binding.binding_id,
+                    strategy_id=binding.strategy_id,
+                    broker_backend=binding.broker_backend,
+                    status=execution.status,
+                    run=latest_run,
+                    execution_plan=execution.execution_plan,
+                    execution_result=execution,
+                    sync_result=sync_result,
+                    data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                        binding=binding,
+                        trade_date=trade_date,
+                        default_data_source=data_source,
+                    ),
+                )
             tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
             reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
@@ -1702,6 +1738,20 @@ class SimulationLifecycleScheduler:
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM and trade_date == date.today():
             return MinuteDataSource.TDX_REALTIME.value
         return default_data_source
+
+    @staticmethod
+    def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:
+        if bool(payload.get("broker_called")):
+            return False
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
+        if status not in {"PREFLIGHT_FAILED", "FAILED", "PARTIAL"}:
+            return False
+        try:
+            failed = int(batch.get("failed", payload.get("failed_intents", 0)) or 0)
+        except (TypeError, ValueError):
+            failed = 0
+        return failed > 0
 
     def _run_selection_once_per_release(
         self,
@@ -1846,7 +1896,13 @@ class SimulationLifecycleScheduler:
         }
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             statuses.add(SimulationDailyRunStatus.SUBMITTING)
-        return run.status in statuses
+        if run.status in statuses:
+            return True
+        return (
+            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and run.status == SimulationDailyRunStatus.SUCCEEDED
+            and SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(run.run_payload_json)
+        )
 
     @staticmethod
     def _should_mark_existing_no_rebalance(
@@ -1997,10 +2053,22 @@ class SimulationLifecycleScheduler:
         )
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         report_status = str(payload.get("run", {}).get("status") or "").upper()
-        if report_status == "SUCCEEDED":
+        batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+        if report_status == "SUCCEEDED" and batch_succeeded:
             next_status = SimulationDailyRunStatus.SUCCEEDED
         else:
             next_status = SimulationDailyRunStatus.FAILED_RETRYABLE
+        if not batch_succeeded:
+            payload = {
+                **payload,
+                "submit_result_gate": {
+                    "schema_version": "miniqmt_reconcile_submit_result_gate_v1",
+                    "status": "blocked",
+                    "reason": "MiniQMT reconciliation cannot mark a run successful when submit batch did not succeed",
+                    "qmt_batch_status": run.run_payload_json.get("qmt_batch_status"),
+                    "broker_called": bool(run.run_payload_json.get("broker_called")),
+                },
+            }
         self.repository.update_simulation_daily_run(
             run.run_id,
             status=next_status,
@@ -2275,6 +2343,8 @@ class SimulationLifecycleScheduler:
             return "TAIL_HANDLED" if tail_result.get("success") else "TAIL_HANDLING_FAILED"
         if reconciliation is not None:
             run = reconciliation.get("run") if isinstance(reconciliation.get("run"), dict) else {}
+            if execution_status not in {"SUBMITTED", "RECOVERED"}:
+                return "BROKER_SUBMIT_FAILED_RECONCILED" if run.get("status") == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
             return "RECONCILED" if run.get("status") == "SUCCEEDED" else "RECONCILIATION_WARNING"
         return execution_status
 

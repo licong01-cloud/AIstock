@@ -2,7 +2,13 @@
   "actual": "2026-06-08 live validation shows two minqmt_sim daily runs marked SUCCEEDED while qmt_batch_status=PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, failed_intents=54/16 and /api/v1/qmt/orders plus /trades are empty. Manual scheduler tick reuses existing plans and cannot retry because runs are terminal; deterministic qmt order_batch cache keeps PREFLIGHT_FAILED. Root cause candidates: lifecycle maps MiniQMT submit failure to success, retry eligibility ignores preflight-failed no-side-effect runs, and rebalance preflight rejects aggregate BUY before SELL proceeds/sequence are considered.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260608_BUG-283-miniqmt-simulation-preflight-failed-false-success-prevents-retry-and-blo.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "tests/aistock_validation/history/paper_v2/BUG-283-miniqmt-preflight-false-success-20260608.md",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260608_114142_l3_paper-v2-selection-center-l3-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-283",
@@ -22,7 +28,17 @@
       "timestamp": "2026-06-08T03:22:00.862513Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "runtime-api://2026-06-08/minqmt_sim-runs/status=SUCCEEDED-qmt_batch_status=PREFLIGHT_FAILED-broker_called=false-submitted_intents=0-failed_intents=54-16",
+    "runtime-api://2026-06-08/qmt-orders-trades-empty-after-retry-tick",
+    "validation://ruff-changed-files/BUG-283-passed",
+    "validation://pytest-qmt-order-service-and-lifecycle-scheduler/58-passed",
+    "validation://nox-l0/BUG-283-passed",
+    "validation://nox-paper_v2_backend/605-passed-1-skipped-2-xfailed",
+    "validation://nox-validation_module_registry_l0/8-passed",
+    "validation://nox-paper_v2_l3-skip-ui/passed",
+    "validation://pytest-codegraph-suggested-miniqmt-neighbors/63-passed"
+  ],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-08T03:22:00.862516Z",
   "fix_branch": null,
@@ -41,7 +57,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "paper_v2_l3"
+    "paper_v2_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -67,5 +84,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "validation_passed_pending_pr"
 }
