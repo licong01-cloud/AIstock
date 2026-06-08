@@ -118,7 +118,7 @@ class RDAgentLLMConfigClient:
         """Verify model API availability.
 
         Args:
-            model_id: Model identifier (e.g., "deepseek/deepseek-chat")
+            model_id: Model identifier (e.g., "deepseek/deepseek-v4-pro")
             api_key: Optional API key to use for verification
             api_base: Optional API base URL
             custom_prompt: Optional custom verification prompt

@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ..infra.deepseek_client import DeepSeekClient
+from ..infra.deepseek_config import DeepSeekConfigError
 from ..db.pg_pool import get_conn
 
 # 配置日志
@@ -448,9 +449,10 @@ def validate_template_file(req: TemplateFileValidateRequest) -> Dict[str, Any]:
 @router.post("/prompt-audit", summary="提示词一致性检查")
 def prompt_audit(req: TemplatePromptAuditRequest) -> Dict[str, Any]:
     """纯本地逻辑（调用 DeepSeek），不需要调用 RDAgent API。"""
-    if not os.getenv("DEEPSEEK_API_KEY"):
-        raise HTTPException(status_code=400, detail="DEEPSEEK_API_KEY 未配置，无法执行提示词检查")
-    client = DeepSeekClient()
+    try:
+        client = DeepSeekClient()
+    except DeepSeekConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     messages = _build_prompt_audit_messages(req.path, req.content)
     result = client.call_api(messages, temperature=0.2, max_tokens=2000)
     return {"ok": True, "path": req.path, "result": result}

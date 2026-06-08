@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, Optional
 
 from backend.db.pg_pool import get_conn
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_LITELLM_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def _find_provider_api_config(
             }
     return None
 
-def get_llm_kwargs(agent_type: str, default_model: str = "deepseek/deepseek-chat") -> Dict[str, Any]:
+def get_llm_kwargs(agent_type: str, default_model: str = DEFAULT_DEEPSEEK_LITELLM_MODEL) -> Dict[str, Any]:
     """
     获取传递给 litellm.completion 的 kwargs (model, api_key, api_base等)。
     通过查询 QE的agent配置 -> aistock_llm_models -> 对应的API凭证。
@@ -86,7 +87,7 @@ def get_llm_kwargs(agent_type: str, default_model: str = "deepseek/deepseek-chat
                             kwargs["api_key"] = api_key
                         return kwargs
                 elif model_id_db and isinstance(model_id_db, str) and model_id_db.strip():
-                    # Fallback for old str format (e.g. direct full_model_id like "deepseek/deepseek-chat")
+                    # Fallback for old str format (e.g. direct full_model_id like "deepseek/deepseek-v4-pro")
                     return {"model": model_id_db}
 
     except Exception as e:

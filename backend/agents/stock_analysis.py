@@ -9,12 +9,13 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from .ai_agents_impl import StockAnalysisAgents
+from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 
 
 class NextStockAnalysisAgents:
     """包装旧应用多智能体，实现新后端的稳定接口层。"""
 
-    def __init__(self, model: str = "deepseek-chat") -> None:
+    def __init__(self, model: str = DEFAULT_DEEPSEEK_MODEL) -> None:
         self._core = StockAnalysisAgents(model=model)
 
     def run_core_analysis(

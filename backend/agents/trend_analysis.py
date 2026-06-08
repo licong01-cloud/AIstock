@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Tuple
 from ..core.risk_data_fetcher_impl import RiskDataFetcher
 from ..infra.debug_logger import debug_logger
 from ..infra.deepseek_client import DeepSeekClient
+from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 from ..models.analysis import (
     PredictionStep,
     TrendAnalystResult,
@@ -54,10 +55,10 @@ class StockTrendAnalysisAgents:
     - 风险分析师（风险补充）
     """
 
-    def __init__(self, model: str = "deepseek-chat") -> None:
+    def __init__(self, model: str = DEFAULT_DEEPSEEK_MODEL) -> None:
         # 目前规则化实现未直接调用 LLM；model 预留用于后续接入 DeepSeek。
         self.model = model
-        self.deepseek_client = DeepSeekClient(model=model)
+        self.deepseek_client = DeepSeekClient(model=model, require_api_key=False)
 
     # ------------------------------------------------------------------
     # Public API

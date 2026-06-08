@@ -21,6 +21,7 @@ from ..agents.trend_analysis import StockTrendAnalysisAgents
 from ..repositories.analysis_repo_impl import analysis_repo
 from ..repositories.trend_analysis_repo_impl import trend_analysis_repo
 from ..infra.pdf_report_impl import create_pdf_report, generate_markdown_report
+from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 
 
 logger = logging.getLogger(__name__)
@@ -414,7 +415,7 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
     _mark_optional_source("chip", "chip_data")
 
     # 3. 运行多智能体分析（通过 next_app 封装层调用旧多智能体实现）
-    agents_core = NextStockAnalysisAgents(model="deepseek-chat")
+    agents_core = NextStockAnalysisAgents(model=DEFAULT_DEEPSEEK_MODEL)
 
     agents_results, discussion_result, final_decision = agents_core.run_core_analysis(
         stock_info=stock_info,
@@ -739,7 +740,7 @@ def analyze_stock_trend(req: StockTrendAnalysisRequest) -> StockTrendAnalysisRes
             logger.exception("get_announcement_data failed for symbol=%s", symbol)
 
     # 4. 调用趋势分析 orchestrator（当前仅技术资金分析师规则化初版）
-    trend_agents = StockTrendAnalysisAgents(model="deepseek-chat")
+    trend_agents = StockTrendAnalysisAgents(model=DEFAULT_DEEPSEEK_MODEL)
 
     horizons, analyst_results, risk_report, evolution = trend_agents.run_trend_analysis(
         stock_info=stock_info or {},

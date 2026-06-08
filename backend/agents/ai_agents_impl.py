@@ -18,6 +18,7 @@ import threading
 import time
 
 from ..infra.deepseek_client import DeepSeekClient  # shared infrastructure module
+from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 from ..infra.debug_logger import debug_logger  # shared logging utility
 from ..core.risk_data_fetcher_impl import RiskDataFetcher
 
@@ -42,7 +43,7 @@ class StockAnalysisAgents:
     implementation lives entirely inside next_app.
     """
 
-    def __init__(self, model: str = "deepseek-chat") -> None:
+    def __init__(self, model: str = DEFAULT_DEEPSEEK_MODEL) -> None:
         self.model = model
         self.deepseek_client = DeepSeekClient(model=model)
 
