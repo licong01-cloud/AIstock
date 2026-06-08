@@ -61,6 +61,14 @@ TRADE_DATE = date(2026, 5, 21)
 def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | None = None):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
+    if qmt_only:
+        execution_policy_version_id = "vnpy_asset:SNIPER_MINIQMT"
+        execution_policy_sha256 = "exec_policy_hash_sniper_miniqmt"
+        execution_policy_json = {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}
+    else:
+        execution_policy_version_id = "exec_policy_v25_1_small_cap"
+        execution_policy_sha256 = "exec_policy_hash_v25_1_small_cap"
+        execution_policy_json = None
     release = service.create_release(
         package_id="pkg_scheduler",
         manifest_sha256="manifest_scheduler",
@@ -68,8 +76,9 @@ def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | No
         runtime_profile_version_id="runtime_profile_scheduler_v1",
         runtime_profile_sha256="runtime_profile_scheduler_hash",
         daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-        execution_policy_version_id="exec_policy_v25_1_small_cap",
-        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        execution_policy_version_id=execution_policy_version_id,
+        execution_policy_sha256=execution_policy_sha256,
+        execution_policy_json=execution_policy_json,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
         release_metadata=release_metadata,

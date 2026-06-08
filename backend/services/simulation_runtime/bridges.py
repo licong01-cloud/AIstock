@@ -34,7 +34,10 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
-from .models import ExecutionPlan, ExecutionPlanIntent, SimulationReleaseBinding
+from .models import ExecutionPlan, ExecutionPlanIntent, MiniQMTUnsupportedExecutionAlgoError, SimulationReleaseBinding
+
+
+MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
 
 
 @dataclass(frozen=True)
@@ -243,6 +246,7 @@ class MiniQMTExecutionBridge:
                 "MiniQMTExecutionBridge requires a minqmt_sim binding",
                 context={"binding_id": binding.binding_id, "broker_backend": binding.broker_backend.value},
             )
+        _reject_v25_for_miniqmt_broker_execution(plan)
         if str(mode or "SIM").strip().upper() != "SIM":
             raise LiveApprovalRequiredError(
                 "MiniQMTExecutionBridge build path currently accepts SIM mode only",
@@ -486,6 +490,45 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
     }
 
 
+def _reject_v25_for_miniqmt_broker_execution(plan: ExecutionPlan) -> None:
+    policy_container = plan.plan_payload_json.get("execution_policy")
+    if not isinstance(policy_container, dict):
+        return
+    payload = policy_container.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
+    explicit_algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip()
+    candidates = (
+        (explicit_algo_code,)
+        if explicit_algo_code
+        else (
+            payload.get("validated_execution_policy_id"),
+            payload.get("policy_id"),
+            payload.get("policy_version_id"),
+            policy_container.get("version_id"),
+            plan.execution_policy_version_id,
+        )
+    )
+    matched = _infer_unsupported_v25_algo_from_values(candidates)
+    if matched is None:
+        return
+    raise MiniQMTUnsupportedExecutionAlgoError(
+        "MiniQMT broker execution does not support V25_* execution algorithms",
+        context=_policy_error_context(
+            plan=plan,
+            policy_container=policy_container,
+            payload=payload,
+            inferred_algo_code=matched,
+            broker_backend="minqmt_sim",
+            required_action=(
+                "activate SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT, "
+                "or another approved MiniQMT vn.py-style execution asset"
+            ),
+        ),
+    )
+
+
 def _reject_vnpy_style_for_localsim(plan: ExecutionPlan) -> None:
     policy_container = plan.plan_payload_json.get("execution_policy")
     if not isinstance(policy_container, dict):
@@ -545,6 +588,22 @@ def _infer_vnpy_algo_code_from_text(value: str) -> str | None:
     for algo_code in VNPY_STYLE_ASSETS:
         if algo_code in normalized:
             return algo_code
+    return None
+
+
+def _infer_unsupported_v25_algo_from_values(values: tuple[Any, ...]) -> str | None:
+    for value in values:
+        normalized = str(value or "").strip().upper()
+        if not normalized:
+            continue
+        if normalized in MINIQMT_UNSUPPORTED_V25_ALGOS:
+            return normalized
+        for segment in normalized.split(":"):
+            if segment in MINIQMT_UNSUPPORTED_V25_ALGOS:
+                return segment
+        for algo_code in MINIQMT_UNSUPPORTED_V25_ALGOS:
+            if algo_code in normalized:
+                return algo_code
     return None
 
 
