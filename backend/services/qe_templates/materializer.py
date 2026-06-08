@@ -89,7 +89,6 @@ class QETemplateMaterializer:
             task_name=config.get("task_name") or template.get("title"),
             target_desc=config.get("target_desc") or template.get("description") or "",
             loops_config=loops_config,
-            execution_mode=config.get("execution_mode") or "serial",
             node_id=loop1_node_id,
             node_parallelism=node_parallelism,
             engine_mode="unified",
