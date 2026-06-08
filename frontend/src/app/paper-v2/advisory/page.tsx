@@ -5,11 +5,16 @@ import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
   type AdvisoryEpisode,
+  type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
+  type AdvisoryPackageMode,
   type AdvisoryProgram,
   type AdvisoryQualityReport,
+  type AdvisoryRecommendationListItem,
+  type AdvisoryRecommendationListVersion,
   type AdvisoryReviewDecision,
   type AdvisoryReviewResult,
+  type AdvisoryStrategyBindingVersion,
 } from "@/lib/api/advisory";
 import type { JsonObject } from "@/lib/api/selectionCenter";
 
@@ -52,6 +57,7 @@ type ActivePoolColumn = {
 };
 
 const REVIEW_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const PACKAGE_MODE_OPTIONS: AdvisoryPackageMode[] = ["single_package", "weighted_rank_fusion", "fusion_pool", "union", "intersection"];
 
 function fmtPct(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-";
@@ -88,7 +94,7 @@ function newPackageRow(index: number): PackageWeightRow {
   return { rowId: `pkg-new-${Date.now()}-${index}`, packageId: "", weight: "1" };
 }
 
-function packageIdsFromRows(rows: PackageWeightRow[], mode: "single_package" | "fusion_pool"): string[] {
+function packageIdsFromRows(rows: PackageWeightRow[], mode: AdvisoryPackageMode): string[] {
   const ids = rows.map((row) => row.packageId.trim()).filter(Boolean);
   return mode === "single_package" ? ids.slice(0, 1) : ids;
 }
@@ -204,6 +210,14 @@ function reviewRuntimeConfig(program: AdvisoryProgram): JsonObject {
   };
 }
 
+function modeNeedsWeights(mode: AdvisoryPackageMode): boolean {
+  return mode === "fusion_pool" || mode === "weighted_rank_fusion";
+}
+
+function adviceText(item: AdvisoryRecommendationListItem): string {
+  return String(item.operation_advice_json?.human_label || item.operation_advice_json?.reason_summary || item.reason_code || "-");
+}
+
 function reviewState(program: AdvisoryProgram, targetDate: string) {
   if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", hint: "等待交易日服务返回最近交易日。" };
   if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", hint: "任务启用后才可执行每日复评。" };
@@ -221,12 +235,15 @@ function AdvisoryPageContent() {
   const [selectedProgramId, setSelectedProgramId] = useState("");
   const [sortBy, setSortBy] = useState("win_rate");
   const [programName, setProgramName] = useState("每日 Top20 荐股任务");
-  const [packageMode, setPackageMode] = useState<"single_package" | "fusion_pool">(packageIdsFromText(prefillPackages).length > 1 ? "fusion_pool" : "single_package");
+  const [packageMode, setPackageMode] = useState<AdvisoryPackageMode>(packageIdsFromText(prefillPackages).length > 1 ? "weighted_rank_fusion" : "single_package");
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
   const [targetCount, setTargetCount] = useState(20);
   const [reviewTradeDate, setReviewTradeDate] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
   const [activePool, setActivePool] = useState<AdvisoryEpisode[]>([]);
+  const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
+  const [listVersions, setListVersions] = useState<AdvisoryRecommendationListVersion[]>([]);
+  const [listVersionDetail, setListVersionDetail] = useState<AdvisoryListVersionDetail | null>(null);
   const [activeSort, setActiveSort] = useState<ActivePoolSort>(null);
   const [reviews, setReviews] = useState<AdvisoryReviewDecision[]>([]);
   const [reviewTotalCount, setReviewTotalCount] = useState(0);
@@ -287,15 +304,20 @@ function AdvisoryPageContent() {
 
   async function loadProgramDetails(programId: string, page = 1, pageSize: (typeof REVIEW_PAGE_SIZE_OPTIONS)[number] = reviewPageSize) {
     const offset = (Math.max(page, 1) - 1) * pageSize;
-    const [poolRows, reviewPageData, returnRows] = await Promise.all([
+    const [poolRows, reviewPageData, returnRows, bindingRows, versionRows] = await Promise.all([
       advisoryApi.activePool(programId),
       advisoryApi.reviews(programId, pageSize, offset),
       advisoryApi.returns(programId),
+      advisoryApi.bindings(programId),
+      advisoryApi.listVersions(programId, 20, 0),
     ]);
     setActivePool(poolRows);
     setReviews(reviewPageData.reviews);
     setReviewTotalCount(reviewPageData.total_count);
     setReturns(returnRows.returns || []);
+    setBindings(bindingRows);
+    setListVersions(versionRows);
+    setListVersionDetail(versionRows[0] ? await advisoryApi.listVersionDetail(versionRows[0].list_version_id) : null);
   }
 
   async function refreshAll(nextProgramId?: string) {
@@ -320,6 +342,9 @@ function AdvisoryPageContent() {
         setReviews([]);
         setReviewTotalCount(0);
         setReturns([]);
+        setBindings([]);
+        setListVersions([]);
+        setListVersionDetail(null);
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -350,7 +375,7 @@ function AdvisoryPageContent() {
   useEffect(() => {
     if (prefillPackages) {
       const ids = packageIdsFromText(prefillPackages);
-      setPackageMode(ids.length > 1 ? "fusion_pool" : "single_package");
+      setPackageMode(ids.length > 1 ? "weighted_rank_fusion" : "single_package");
       setPackageRows(packageRowsFromText(prefillPackages));
     }
   }, [prefillPackages]);
@@ -496,9 +521,37 @@ function AdvisoryPageContent() {
     }
   }
 
+  async function viewListVersion(listVersionId: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      setListVersionDetail(await advisoryApi.listVersionDetail(listVersionId));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate) : null;
   const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
   const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
+  const activeBinding = bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
+  const visibleListItems = reviewResult?.list_items?.length ? reviewResult.list_items : listVersionDetail?.items || [];
+  const visibleListVersion = reviewResult?.list_version_id
+    ? {
+        list_version_id: reviewResult.list_version_id,
+        trade_date: reviewResult.trade_date,
+        version_status: reviewResult.preview ? "PREVIEW" : "PUBLISHED",
+        active_count: visibleListItems.filter((item) => item.item_state === "ACTIVE").length,
+        entered_count: Number(reviewResult.change_summary?.entered_count ?? 0),
+        held_count: Number(reviewResult.change_summary?.held_count ?? 0),
+        exited_count: Number(reviewResult.change_summary?.exited_count ?? 0),
+        waiting_count: Number(reviewResult.change_summary?.waiting_count ?? 0),
+        turnover_rate: reviewResult.change_summary?.turnover_rate as number | null | undefined,
+        overlap_rate: reviewResult.change_summary?.overlap_rate as number | null | undefined,
+      }
+    : listVersionDetail?.list_version;
 
   return (
     <main className="pv2-main">
@@ -601,7 +654,7 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-form-grid">
           <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
-          <label className="pv2-field">策略模式<select className="pv2-select" value={packageMode} onChange={(event) => setPackageMode(event.target.value as "single_package" | "fusion_pool")}><option value="single_package">single_package</option><option value="fusion_pool">fusion_pool</option></select></label>
+          <label className="pv2-field">策略模式<select className="pv2-select" value={packageMode} onChange={(event) => setPackageMode(event.target.value as AdvisoryPackageMode)}>{PACKAGE_MODE_OPTIONS.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>
           <label className="pv2-field">目标数量<input className="pv2-input" type="number" min={1} max={100} value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} /></label>
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
@@ -612,7 +665,7 @@ function AdvisoryPageContent() {
                 <tr key={row.rowId}>
                   <td><input className="pv2-input" value={row.packageId} onChange={(event) => updatePackageRow(row.rowId, { packageId: event.target.value })} placeholder="strategy_package_id" /></td>
                   <td><input className="pv2-input" min="0.01" step="0.01" type="number" value={row.weight} onChange={(event) => updatePackageRow(row.rowId, { weight: event.target.value })} /></td>
-                  <td className="pv2-muted">{packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : "参与荐股评分或融合"}</td>
+                  <td className="pv2-muted">{packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : modeNeedsWeights(packageMode) ? "参与加权融合；权重仅作配置，不写入策略包" : "参与荐股集合运算"}</td>
                   <td><button className="pv2-button-ghost" disabled={packageRows.length <= 1} onClick={() => setPackageRows((rows) => rows.filter((item) => item.rowId !== row.rowId))} type="button">移除</button></td>
                 </tr>
               ))}
@@ -621,7 +674,7 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 12 }}>
           <button className="pv2-button" onClick={() => setPackageRows((rows) => [...rows, newPackageRow(rows.length + 1)])} type="button">添加策略包</button>
-          <span className="pv2-muted">融合模式下使用每行权重；单策略包模式只使用第一行。</span>
+          <span className="pv2-muted">加权融合模式使用每行权重；union/intersection 不把收益或换手指标作为硬门禁。</span>
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
           <table className="pv2-table">
@@ -677,13 +730,78 @@ function AdvisoryPageContent() {
         <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
           <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{reviewTradeDate || "-"}</span></strong>
           <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
+          {activeBinding ? (
+            <div className="pv2-muted" style={{ marginTop: 6 }}>
+              当前策略绑定：{activeBinding.package_mode} / {activeBinding.package_ids.join(" + ")} / {short(activeBinding.binding_version_id, 18)}
+            </div>
+          ) : null}
         </div>
         {reviewResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
             <strong>复评状态： {reviewResult.review_status}</strong>
-            <span className="pv2-muted"> 决策数： {reviewResult.decisions.length}; 活跃快照数： {reviewResult.active_pool.length}</span>
+            <span className="pv2-muted"> 决策数： {reviewResult.decisions.length}; 活跃快照数： {reviewResult.active_pool.length}; 列表版本： {short(reviewResult.list_version_id, 20)}</span>
           </div>
         ) : null}
+        {visibleListVersion ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-list-version-summary">
+            <strong>推荐列表版本：{short(visibleListVersion.list_version_id, 22)} / {visibleListVersion.trade_date} / {visibleListVersion.version_status}</strong>
+            <span className="pv2-muted">
+              {" "}ACTIVE {visibleListVersion.active_count}，ENTER {visibleListVersion.entered_count}，HOLD {visibleListVersion.held_count}，EXIT {visibleListVersion.exited_count}，WAITING {visibleListVersion.waiting_count}，换手 {fmtPct(visibleListVersion.turnover_rate)}，重合 {fmtPct(visibleListVersion.overlap_rate)}
+            </span>
+          </div>
+        ) : null}
+        <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+          <table className="pv2-table" data-testid="advisory-list-items-table">
+            <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>
+            <tbody>
+              {visibleListItems.map((item) => (
+                <tr key={item.list_item_id}>
+                  <td><strong>{item.symbol}</strong></td>
+                  <td>{item.item_state}</td>
+                  <td>{item.action}</td>
+                  <td>{item.rank ?? "-"} / {fmtNumber(item.score, 3)}</td>
+                  <td>{item.previous_action ? `${item.previous_action} -> ${item.action}` : item.action}</td>
+                  <td>{adviceText(item)}<br /><span className="pv2-muted">{item.price_basis || "-"} @ {fmtPrice(item.action === "EXIT" ? item.exit_price : item.entry_price)}</span></td>
+                  <td>{item.effective_trade_date || "-"}</td>
+                  <td>{item.reason_code}</td>
+                </tr>
+              ))}
+              {!visibleListItems.length ? <tr><td colSpan={8}>暂无列表版本明细；执行预览或复评后会显示 ENTER/HOLD/EXIT/WAITING 调整方案。</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">列表版本时间线</div>
+            <h2>初始列表与每日复评后的推荐列表</h2>
+            <p className="pv2-muted">每次正式复评生成一个 PUBLISHED 列表版本；退出股票不会消失，会以 EXIT 动作和操作建议保留在版本明细中。</p>
+          </div>
+        </div>
+        <div className="pv2-table-wrap">
+          <table className="pv2-table" data-testid="advisory-list-versions-table">
+            <thead><tr><th>交易日</th><th>状态</th><th>ACTIVE</th><th>ENTER</th><th>HOLD</th><th>EXIT</th><th>WAITING</th><th>换手</th><th>重合</th><th>操作</th></tr></thead>
+            <tbody>
+              {listVersions.map((version) => (
+                <tr key={version.list_version_id}>
+                  <td>{version.trade_date}<br /><span className="pv2-muted pv2-mono">{short(version.list_version_id, 18)}</span></td>
+                  <td>{version.version_status}</td>
+                  <td>{version.active_count}</td>
+                  <td>{version.entered_count}</td>
+                  <td>{version.held_count}</td>
+                  <td>{version.exited_count}</td>
+                  <td>{version.waiting_count}</td>
+                  <td>{fmtPct(version.turnover_rate)}</td>
+                  <td>{fmtPct(version.overlap_rate)}</td>
+                  <td><button className="pv2-button" onClick={() => void viewListVersion(version.list_version_id)} type="button">查看明细</button></td>
+                </tr>
+              ))}
+              {!listVersions.length ? <tr><td colSpan={10}>暂无列表版本；首次预览或复评后会生成可查看的列表版本。</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <div className="pv2-grid pv2-grid-2">

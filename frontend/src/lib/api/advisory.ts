@@ -1,11 +1,19 @@
 import { apiFetch, type JsonObject } from "./selectionCenter";
 
+export type AdvisoryPackageMode =
+  | "single_package"
+  | "fusion_pool"
+  | "weighted_rank_fusion"
+  | "union"
+  | "intersection"
+  | "sleeve_mode_future";
+
 export type AdvisoryProgram = {
   program_id: string;
   program_name: string;
   status: string;
   target_count: number;
-  package_mode: "single_package" | "fusion_pool" | "sleeve_mode_future";
+  package_mode: AdvisoryPackageMode;
   package_ids: string[];
   package_weights: Record<string, number>;
   fusion_method?: string | null;
@@ -66,11 +74,82 @@ export type AdvisoryReviewDecision = {
   reason_code: string;
   review_status: string;
   trade_date: string;
+  binding_version_id?: string | null;
+  review_run_id?: string | null;
+  list_version_id?: string | null;
   episode_id?: string | null;
   rank?: number | null;
   score?: number | null;
   return_bps?: number | null;
   evidence_json?: JsonObject;
+  operation_advice_json?: JsonObject;
+};
+
+export type AdvisoryStrategyBindingVersion = {
+  binding_version_id: string;
+  program_id: string;
+  program_version: number;
+  package_mode: AdvisoryPackageMode;
+  package_ids: string[];
+  package_weights: Record<string, number>;
+  fusion_method?: string | null;
+  package_set_hash: string;
+  fusion_policy_sha256?: string | null;
+  runtime_config_json?: JsonObject;
+  effective_from_trade_date?: string | null;
+  effective_to_trade_date?: string | null;
+  activation_status: "DRAFT" | "ACTIVE" | "RETIRED" | string;
+  activation_reason?: string | null;
+  source_replay_run_id?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  activated_at?: string | null;
+};
+
+export type AdvisoryRecommendationListVersion = {
+  list_version_id: string;
+  program_id: string;
+  binding_version_id: string;
+  review_run_id: string;
+  trade_date: string;
+  previous_list_version_id?: string | null;
+  version_status: "PREVIEW" | "PUBLISHED" | "REPLAY" | string;
+  target_count: number;
+  active_count: number;
+  entered_count: number;
+  held_count: number;
+  exited_count: number;
+  waiting_count: number;
+  changed_count: number;
+  turnover_rate?: number | null;
+  overlap_rate?: number | null;
+  summary_json?: JsonObject;
+  created_at?: string | null;
+};
+
+export type AdvisoryRecommendationListItem = {
+  list_item_id: string;
+  list_version_id: string;
+  program_id: string;
+  binding_version_id: string;
+  episode_id?: string | null;
+  symbol: string;
+  item_state: string;
+  action: string;
+  previous_action?: string | null;
+  rank?: number | null;
+  score?: number | null;
+  previous_rank?: number | null;
+  previous_score?: number | null;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  price_basis?: string | null;
+  effective_trade_date?: string | null;
+  reason_code: string;
+  operation_advice_json: JsonObject;
+  component_scores_json?: JsonObject;
+  evidence_json?: JsonObject;
+  created_at?: string | null;
 };
 
 export type AdvisoryReviewResult = {
@@ -81,6 +160,11 @@ export type AdvisoryReviewResult = {
   active_pool: AdvisoryEpisode[];
   metrics: JsonObject;
   preview: boolean;
+  binding_version_id?: string | null;
+  review_run_id?: string | null;
+  list_version_id?: string | null;
+  change_summary?: JsonObject;
+  list_items?: AdvisoryRecommendationListItem[];
 };
 
 export type AdvisoryQualityReport = {
@@ -100,7 +184,7 @@ export type AdvisoryTradingDayDefaults = {
 
 export type CreateAdvisoryProgramPayload = {
   program_name: string;
-  package_mode: "single_package" | "fusion_pool";
+  package_mode: AdvisoryPackageMode;
   package_ids: string[];
   target_count?: number;
   package_weights?: Record<string, number>;
@@ -127,6 +211,11 @@ export type AdvisoryReviewPreviewPayload = {
   trade_date: string;
   exit_guard_policy: JsonObject;
   fusion_policy: JsonObject;
+};
+
+export type AdvisoryListVersionDetail = {
+  list_version: AdvisoryRecommendationListVersion;
+  items: AdvisoryRecommendationListItem[];
 };
 
 function body(payload: unknown, method = "POST"): RequestInit {
@@ -176,6 +265,14 @@ export const advisoryApi = {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);
     return data.active_pool || [];
   },
+  async bindings(programId: string): Promise<AdvisoryStrategyBindingVersion[]> {
+    const data = await apiFetch<{ bindings: AdvisoryStrategyBindingVersion[] }>(`/advisory/programs/${encodeURIComponent(programId)}/bindings`);
+    return data.bindings || [];
+  },
+  async activeBinding(programId: string): Promise<AdvisoryStrategyBindingVersion> {
+    const data = await apiFetch<{ binding: AdvisoryStrategyBindingVersion }>(`/advisory/programs/${encodeURIComponent(programId)}/bindings/active`);
+    return data.binding;
+  },
   async reviews(programId: string, limit = 20, offset = 0): Promise<{ reviews: AdvisoryReviewDecision[]; total_count: number; limit: number; offset: number }> {
     const data = await apiFetch<{ reviews: AdvisoryReviewDecision[]; total_count?: number; limit?: number; offset?: number }>(
       `/advisory/programs/${encodeURIComponent(programId)}/reviews?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
@@ -190,6 +287,15 @@ export const advisoryApi = {
   },
   async returns(programId: string): Promise<{ returns: AdvisoryEpisode[]; metrics: JsonObject }> {
     return apiFetch<{ returns: AdvisoryEpisode[]; metrics: JsonObject }>(`/advisory/programs/${encodeURIComponent(programId)}/returns`);
+  },
+  async listVersions(programId: string, limit = 20, offset = 0): Promise<AdvisoryRecommendationListVersion[]> {
+    const data = await apiFetch<{ list_versions: AdvisoryRecommendationListVersion[] }>(
+      `/advisory/programs/${encodeURIComponent(programId)}/list-versions?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+    );
+    return data.list_versions || [];
+  },
+  async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
+    return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
   },
   async previewReview(programId: string, payload: AdvisoryReviewPayload): Promise<AdvisoryReviewResult> {
     const data = await apiFetch<{ review: AdvisoryReviewResult }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews/preview`, body(payload));
