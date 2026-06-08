@@ -4,7 +4,8 @@
     "backend/services/simulation_runtime",
     "backend/tests/simulation_runtime",
     "tests/aistock_validation/bugs/20260609_BUG-287-p0-miniqmt-phase1-enforce-unified-runtime-contracts-and-blockers.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified/20260609_bug-287_phase1_contracts_and_blockers.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-287",
@@ -12,7 +13,11 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "AlphaSignalBook and runtime request contracts are implemented with broker/order/execution forbidden-field tests.",
+    "MiniQMT V25_* broker execution is rejected fail-fast without silent fallback.",
+    "Canonical MiniQMT runtime owner gate and fixed strategy-count blocker are covered by tests.",
+    "Phase 1 design trace matrix, static guard explanation, production gates, and DESIGN-COMPLIANCE-001 are recorded in PR and validation history."
   ],
   "created_at": "2026-06-08T18:27:08.802656Z",
   "description": "The design is merged and BUG-286 tracks Phase 0, but Phase 1 contracts and blockers are not implemented yet.",
@@ -44,7 +49,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Review docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md sections 3, 10.8, 10.9, 10.10, 11, and 13.1.",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
