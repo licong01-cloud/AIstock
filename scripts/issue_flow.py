@@ -23,6 +23,7 @@ FAILURES_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "runs" / "failures"
 MODULE_REGISTRY = CATALOG_ROOT / "module_registry.yaml"
 FILE_OWNERSHIP = CATALOG_ROOT / "file_ownership.yaml"
 TEST_PLANS = CATALOG_ROOT / "test_plans.yaml"
+PR_COMMENT_MAX_CHARS = 55000
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
     "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md",
@@ -136,6 +137,12 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
 
 
 def _unique_strings(items: list[Any]) -> list[str]:
@@ -1055,6 +1062,59 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     }
 
 
+def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Create a compact LLM-ready PR summary without prompts, logs, or secrets."""
+
+    validation = summary.get("selected_validation") if isinstance(summary.get("selected_validation"), dict) else {}
+    scope = summary.get("scope_check") if isinstance(summary.get("scope_check"), dict) else {}
+    p0p1_gate = summary.get("p0p1_evidence_gate") if isinstance(summary.get("p0p1_evidence_gate"), dict) else {}
+    design_gate = summary.get("design_compliance_gate") if isinstance(summary.get("design_compliance_gate"), dict) else {}
+    compact = {
+        "schema_version": "aistock_pr_quality_llm_summary_v1",
+        "provider": "deterministic",
+        "model": "compact-pr-quality-summary-v1",
+        "invoked": False,
+        "input_policy": "pr_metadata_changed_files_catalog_summary_only",
+        "prompt_persisted": False,
+        "changed_file_count": len(summary.get("changed_files") or []),
+        "linked_issue_count": len(summary.get("linked_issues") or []),
+        "impacted_modules": list(summary.get("impacted_modules") or [])[:8],
+        "scope_check": scope.get("status"),
+        "p0p1_evidence_gate": p0p1_gate.get("workflow_gate"),
+        "design_compliance_gate": design_gate.get("workflow_gate"),
+        "required_validation_count": len(validation.get("required_plans") or []),
+        "recommended_validation_count": len(validation.get("recommended_plans") or []),
+        "production_gates": {
+            "production_ddl_gate": summary.get("production_ddl_gate"),
+            "production_frontend_dependency_gate": summary.get("production_frontend_dependency_gate"),
+            "production_backend_dependency_gate": summary.get("production_backend_dependency_gate"),
+        },
+        "code_intelligence": {
+            "used": "not_available_in_pr_quality_summary",
+            "fallback_reason": "code_intelligence_artifact_built_in_separate_pr_quality_step",
+        },
+    }
+    compact["estimated_prompt_tokens"] = _estimate_tokens(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+    compact["estimated_completion_tokens"] = None
+    compact["estimated_cost_usd"] = None
+    return compact
+
+
+def evaluate_pr_comment_budget(summary_markdown: str, code_intelligence_markdown: str = "") -> dict[str, Any]:
+    summary_chars = len(summary_markdown or "")
+    code_intel_chars = len(code_intelligence_markdown or "")
+    total_chars = summary_chars + code_intel_chars
+    return {
+        "schema_version": "aistock_pr_comment_budget_v1",
+        "max_chars": PR_COMMENT_MAX_CHARS,
+        "summary_chars": summary_chars,
+        "code_intelligence_chars": code_intel_chars,
+        "total_chars": total_chars,
+        "workflow_gate": "passed" if total_chars <= PR_COMMENT_MAX_CHARS else "warning",
+        "truncated": total_chars > PR_COMMENT_MAX_CHARS,
+    }
+
+
 def build_pr_quality(
     *,
     base: str,
@@ -1126,11 +1186,13 @@ def build_pr_quality(
     }
     summary["p0p1_evidence_gate"] = evaluate_pr_quality_gate(summary, enforce_p0_p1=enforce_p0_p1_evidence)
     summary["design_compliance_gate"] = evaluate_design_compliance_gate(summary)
+    summary["llm_triage_summary"] = build_pr_quality_llm_summary(summary)
     summary.pop("issue_record", None)
     return summary
 
 
 def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
+    llm_summary = summary.get("llm_triage_summary") if isinstance(summary.get("llm_triage_summary"), dict) else {}
     gates = [
         f"- production_ddl_gate: `{summary.get('production_ddl_gate')}`",
         f"- production_frontend_dependency_gate: `{summary.get('production_frontend_dependency_gate')}`",
@@ -1151,6 +1213,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
         *gates,
+        f"- llm_summary: provider=`{llm_summary.get('provider') or 'none'}` invoked=`{llm_summary.get('invoked')}` prompt_tokens=`{llm_summary.get('estimated_prompt_tokens')}`",
         "",
     ]
     violations = (summary.get("scope_check") or {}).get("violations") or []
@@ -1161,6 +1224,18 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         lines.extend(["### P0/P1 Evidence Gate Blocking", *[f"- `{item}`" for item in gate["blocking"]], ""])
     elif gate.get("warnings"):
         lines.extend(["### P0/P1 Evidence Gate Warnings", *[f"- `{item}`" for item in gate["warnings"]], ""])
+    if llm_summary:
+        lines.extend(
+            [
+                "### Compact LLM Summary",
+                f"- input_policy: `{llm_summary.get('input_policy')}`",
+                f"- prompt_persisted: `{llm_summary.get('prompt_persisted')}`",
+                f"- changed_file_count: `{llm_summary.get('changed_file_count')}`",
+                f"- required_validation_count: `{llm_summary.get('required_validation_count')}`",
+                f"- code_intelligence: `{(llm_summary.get('code_intelligence') or {}).get('used')}`",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1323,10 +1398,12 @@ def cmd_pr_check(args: argparse.Namespace) -> int:
         changed_files=changed_files,
         enforce_p0_p1_evidence=enforce_p0_p1,
     )
+    rendered_md = render_pr_quality_markdown(summary)
+    summary["pr_comment_budget"] = evaluate_pr_comment_budget(rendered_md)
     if args.output_md:
         path = Path(args.output_md)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_pr_quality_markdown(summary), encoding="utf-8")
+        path.write_text(rendered_md, encoding="utf-8")
     _write_json(Path(args.output_json) if args.output_json else None, summary)
     status = (summary.get("scope_check") or {}).get("status")
     evidence_gate = (summary.get("p0p1_evidence_gate") or {}).get("workflow_gate")

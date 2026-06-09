@@ -700,6 +700,46 @@ def test_pr_check_design_compliance_ignores_non_t3_bug(
     assert gate["warnings"] == []
 
 
+def test_pr_check_includes_compact_llm_summary_without_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "")
+
+    assert flow.main(["pr-check", "--changed-file", "scripts/issue_flow.py"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    llm_summary = summary["llm_triage_summary"]
+    assert llm_summary["schema_version"] == "aistock_pr_quality_llm_summary_v1"
+    assert llm_summary["invoked"] is False
+    assert llm_summary["prompt_persisted"] is False
+    assert llm_summary["input_policy"] == "pr_metadata_changed_files_catalog_summary_only"
+    assert llm_summary["estimated_prompt_tokens"] > 0
+    assert "prompt" not in llm_summary
+
+
+def test_pr_quality_markdown_is_compact_and_comment_budget_is_checked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "")
+    summary = flow.build_pr_quality(
+        base="origin/main",
+        head="HEAD",
+        changed_files=["scripts/issue_flow.py"],
+    )
+    markdown = flow.render_pr_quality_markdown(summary)
+    budget = flow.evaluate_pr_comment_budget(markdown, "x" * 60000)
+
+    assert "### Compact LLM Summary" in markdown
+    assert "prompt_persisted" in markdown
+    assert budget["workflow_gate"] == "warning"
+    assert budget["truncated"] is True
+
+
 def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
@@ -762,6 +802,21 @@ def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
 
     env = build_steps[0]["env"]
     assert env["AISTOCK_PR_QUALITY_ENFORCE_P0P1"] == "${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}"
+
+
+def test_pr_quality_workflow_truncates_oversized_comment() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    comment_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Comment PR summary"
+    ]
+    script = comment_steps[0]["with"]["script"]
+
+    assert "const maxChars = 55000;" in script
+    assert "body.length > maxChars" in script
+    assert "omitted from the PR comment because the compact budget was exceeded" in script
 
 
 def test_standalone_semgrep_scans_changed_files_only() -> None:

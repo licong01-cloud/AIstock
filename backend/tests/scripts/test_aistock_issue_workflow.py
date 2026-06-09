@@ -2277,6 +2277,8 @@ def test_postmortem_defaults_to_compact_success_without_artifacts(
     payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
 
     assert payload["artifact_policy"] == "compact_success_no_artifact"
+    assert payload["h6_summary"]["token_usage_status"] == "unknown"
+    assert payload["h6_summary"]["total_estimated_tokens"] is None
     assert "postmortem_json_path" not in payload
     assert "postmortem_md_path" not in payload
     assert not (workflow_root / "postmortem.json").exists()
