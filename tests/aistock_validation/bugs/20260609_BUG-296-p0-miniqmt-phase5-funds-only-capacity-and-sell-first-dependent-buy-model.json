@@ -1,0 +1,82 @@
+{
+  "actual": "Phase 4 validation records still mark funds-only capacity and SELL-first as EXPLICITLY_DEFERRED; docs state Phase 5 is required before declaring MiniQMT architecture complete. Current implementation covers only same-batch estimated sell proceeds and buy/sell submit order, while dependent-buy execution state and full funds-only capacity gate remain incomplete.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_account_group_slots.py",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified",
+    "tests/aistock_validation/bugs/20260609_BUG-296-p0-miniqmt-phase5-funds-only-capacity-and-sell-first-dependent-buy-model.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-296",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T13:59:10.604749Z",
+  "description": "Phase 4 validation records still mark funds-only capacity and SELL-first as EXPLICITLY_DEFERRED; docs state Phase 5 is required before declaring MiniQMT architecture complete. Current implementation covers only same-batch estimated sell proceeds and buy/sell submit order, while dependent-buy execution state and full funds-only capacity gate remain incomplete.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-5914344544d4",
+      "timestamp": "2026-06-09T13:59:10.604745Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/567#issuecomment-4660428233"
+  ],
+  "expected": "MiniQMT strategy count is governed only by capital capacity and trading rules; account-group slots expose ACTIVE/SKIPPED_INSUFFICIENT_CAPITAL/PARTIAL_CAPITAL_ALLOCATED/MIN_LOT_NOT_REACHED/SELL_PROCEEDS_REQUIRED states; full rebalance uses SELL-first with proceeds only when safe; dependent buys are blocked, scaled, or explicitly residual when sells are unfilled, partial, rejected, or timed out; automated tests and validation history prove these scenarios before BUG-210 parent closure.",
+  "first_seen_at": "2026-06-09T13:59:10.604749Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 871,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/871",
+  "last_seen_at": "2026-06-09T13:59:10.604749Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review Phase 5 in docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md and current qmt_strategy_ledger order_service dependent-buy behavior.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "[P0][MiniQMT][Phase5] funds-only capacity and SELL-first dependent-buy model incomplete",
+  "trigger_condition": {
+    "fingerprint": "5914344544d4668361eab467",
+    "source_event_id": "FE-20260609-5914344544d4"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
