@@ -7,6 +7,11 @@
     "frontend/tests/paper-v2",
     "backend/routers/paper_trading_v2.py",
     "backend/services/paper_trading_v2",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
     "tests/aistock_validation/bugs/20260609_BUG-292-issue.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
