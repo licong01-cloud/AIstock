@@ -40,6 +40,13 @@ from .models import (
     new_id,
 )
 
+_DEPENDENT_BUY_PROCEEDS_ERROR_CODES = frozenset(
+    {
+        "SELL_PROCEEDS_REQUIRED",
+        "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
+    }
+)
+
 
 class ManagedOrderBroker(Protocol):
     def get_positions(self) -> list[dict[str, Any]]:
@@ -400,12 +407,19 @@ class QmtManagedOrderService:
     def submit_batch(self, requests: list[ManagedOrderRequest]) -> ManagedBatchSubmitResult:
         requests = _batch_submission_order(requests)
         batch_id = _batch_id_for_requests(requests)
+        deferred_batch = self._existing_dependent_buy_batch(batch_id)
+        if deferred_batch is not None:
+            return self._retry_dependent_buy_batch(batch_id, requests, deferred_batch)
         retry_result = self._existing_batch_result(batch_id, len(requests))
         if retry_result is not None:
             return retry_result
 
         preflight_results = tuple(self._batch_preflight(requests))
-        if any(not preflight.allowed for preflight in preflight_results):
+        hard_preflight_failed = any(
+            not preflight.allowed and not _is_dependent_buy_proceeds_deferred(request, preflight)
+            for request, preflight in zip(requests, preflight_results, strict=True)
+        )
+        if hard_preflight_failed:
             results = tuple(
                 ManagedOrderSubmitResult(False, None, None, "batch preflight failed", preflight, False)
                 for preflight in preflight_results
@@ -442,12 +456,29 @@ class QmtManagedOrderService:
 
         results_list: list[ManagedOrderSubmitResult] = []
         for request, preflight in zip(requests, preflight_results, strict=True):
+            if not preflight.allowed and _is_dependent_buy_proceeds_deferred(request, preflight):
+                results_list.append(
+                    ManagedOrderSubmitResult(
+                        False,
+                        None,
+                        None,
+                        "dependent buy deferred until same-batch sell proceeds are reconciled",
+                        preflight,
+                        False,
+                    )
+                )
+                continue
             results_list.append(self._submit_preflighted_order(request, preflight, batch_id=batch_id))
         results = tuple(results_list)
         succeeded = sum(1 for result in results if result.success)
         failed = len(results) - succeeded
         status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
-        compensation_required = status == OrderBatchStatus.PARTIAL
+        deferred_failed = sum(
+            1
+            for request, result in zip(requests, results, strict=True)
+            if not result.success and _is_dependent_buy_proceeds_deferred(request, result.preflight)
+        )
+        compensation_required = status == OrderBatchStatus.PARTIAL and failed != deferred_failed
         compensation_actions = tuple(_compensation_actions(results)) if compensation_required else ()
         compensation_hint = (
             "partial broker submission: review accepted qmt_order_id values and call managed cancel for compensation if needed"
@@ -460,7 +491,9 @@ class QmtManagedOrderService:
             status=status,
             results=results,
             metadata={
-                "preflight_passed": True,
+                "preflight_passed": deferred_failed == 0,
+                "dependent_buy_deferred": deferred_failed > 0,
+                "dependent_buy_count": deferred_failed,
                 "compensation_required": compensation_required,
                 "compensation_actions": list(compensation_actions),
             },
@@ -470,7 +503,7 @@ class QmtManagedOrderService:
             success=failed == 0,
             batch_id=batch_id,
             batch_status=status.value,
-            preflight_passed=True,
+            preflight_passed=deferred_failed == 0,
             total=len(results),
             succeeded=succeeded,
             failed=failed,
@@ -602,6 +635,8 @@ class QmtManagedOrderService:
         buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
         sell_proceeds_by_account_strategy: dict[tuple[str, str], Decimal] = {}
         sell_proceeds_by_account_group: dict[tuple[str, str], Decimal] = {}
+        sell_requests_by_account_strategy: dict[tuple[str, str], list[ManagedOrderRequest]] = {}
+        sell_requests_by_account_group: dict[tuple[str, str], list[ManagedOrderRequest]] = {}
         sell_quantity_by_account_strategy_symbol: dict[tuple[str, str, str], int] = {}
         broker_sell_quantity_by_account_symbol: dict[tuple[str, str], int] = {}
 
@@ -640,6 +675,7 @@ class QmtManagedOrderService:
                 sell_proceeds_by_account_strategy[strategy_key] = (
                     sell_proceeds_by_account_strategy.get(strategy_key, Decimal("0")) + sell_proceeds
                 )
+                sell_requests_by_account_strategy.setdefault(strategy_key, []).append(request)
                 account = self._account_by_strategy_name(request.account_id, request.strategy_name)
                 group_limit = _account_group_cash_limit(account) if account is not None else None
                 if group_limit is not None:
@@ -647,11 +683,14 @@ class QmtManagedOrderService:
                     sell_proceeds_by_account_group[group_key] = (
                         sell_proceeds_by_account_group.get(group_key, Decimal("0")) + sell_proceeds
                     )
+                    sell_requests_by_account_group.setdefault(group_key, []).append(request)
                 broker_key = (request.account_id, request.symbol)
                 broker_sell_quantity_by_account_symbol[broker_key] = (
                     broker_sell_quantity_by_account_symbol.get(broker_key, 0) + max(int(request.quantity), 0)
                 )
 
+        cumulative_buy_freeze_by_account_strategy: dict[tuple[str, str], Decimal] = {}
+        cumulative_buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
         for index, request in enumerate(requests):
             result = base_results[index]
             if request.order_type == BUY_ORDER_TYPE and result.available_cash is not None and result.strategy_id:
@@ -659,11 +698,32 @@ class QmtManagedOrderService:
                 total_freeze = buy_freeze_by_account_strategy[strategy_key]
                 same_batch_sell_proceeds = sell_proceeds_by_account_strategy.get(strategy_key, Decimal("0"))
                 effective_cash = result.available_cash + same_batch_sell_proceeds
+                cumulative_freeze = (
+                    cumulative_buy_freeze_by_account_strategy.get(strategy_key, Decimal("0")) + result.freeze_amount
+                )
+                cumulative_buy_freeze_by_account_strategy[strategy_key] = cumulative_freeze
                 if total_freeze <= effective_cash:
-                    errors_by_index[index] = _without_preflight_error_codes(
-                        errors_by_index[index],
-                        {"INSUFFICIENT_CASH"},
-                    )
+                    if cumulative_freeze > result.available_cash:
+                        errors_by_index[index] = _without_preflight_error_codes(
+                            errors_by_index[index],
+                            {"INSUFFICIENT_CASH", "BATCH_INSUFFICIENT_CASH"},
+                        )
+                        errors_by_index[index].append(
+                            _sell_proceeds_required_error(
+                                request=request,
+                                result=result,
+                                sell_requests=sell_requests_by_account_strategy.get(strategy_key, []),
+                                same_batch_sell_proceeds=same_batch_sell_proceeds,
+                                effective_cash=effective_cash,
+                                batch_required_cash=total_freeze,
+                                cumulative_required_cash=cumulative_freeze,
+                            )
+                        )
+                    else:
+                        errors_by_index[index] = _without_preflight_error_codes(
+                            errors_by_index[index],
+                            {"INSUFFICIENT_CASH"},
+                        )
                 else:
                     errors_by_index[index].append(
                         OrderPreflightError(
@@ -684,6 +744,10 @@ class QmtManagedOrderService:
                     group_total_freeze = buy_freeze_by_account_group.get(group_key, Decimal("0"))
                     group_sell_proceeds = sell_proceeds_by_account_group.get(group_key, Decimal("0"))
                     group_effective_cash_limit = cash_limit + group_sell_proceeds
+                    group_cumulative_freeze = (
+                        cumulative_buy_freeze_by_account_group.get(group_key, Decimal("0")) + result.freeze_amount
+                    )
+                    cumulative_buy_freeze_by_account_group[group_key] = group_cumulative_freeze
                     if group_total_freeze > group_effective_cash_limit:
                         errors_by_index[index].append(
                             OrderPreflightError(
@@ -696,6 +760,24 @@ class QmtManagedOrderService:
                                     "effective_account_group_cash_limit": float(group_effective_cash_limit),
                                     "batch_required_cash": float(group_total_freeze),
                                 },
+                            )
+                        )
+                    elif group_cumulative_freeze > cash_limit:
+                        errors_by_index[index] = _without_preflight_error_codes(
+                            errors_by_index[index],
+                            {"BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH"},
+                        )
+                        errors_by_index[index].append(
+                            _account_group_sell_proceeds_required_error(
+                                request=request,
+                                result=result,
+                                sell_requests=sell_requests_by_account_group.get(group_key, []),
+                                group_context=context,
+                                account_group_cash_limit=cash_limit,
+                                same_batch_sell_proceeds=group_sell_proceeds,
+                                effective_account_group_cash_limit=group_effective_cash_limit,
+                                batch_required_cash=group_total_freeze,
+                                cumulative_required_cash=group_cumulative_freeze,
                             )
                         )
             if request.order_type == SELL_ORDER_TYPE and result.strategy_available_sell_quantity is not None:
@@ -827,6 +909,106 @@ class QmtManagedOrderService:
             return ManagedOrderSubmitResult(True, intent.intent_id, qmt_order_id, message, preflight, True)
         return ManagedOrderSubmitResult(False, intent.intent_id, None, message, preflight, True)
 
+    def _existing_dependent_buy_batch(self, batch_id: str) -> OrderBatchRecord | None:
+        get_batch = getattr(self._repository, "get_order_batch", None)
+        if get_batch is None:
+            return None
+        batch = get_batch(batch_id)
+        if batch is None or batch.batch_status != OrderBatchStatus.PARTIAL:
+            return None
+        if not isinstance(batch.metadata, dict) or not batch.metadata.get("dependent_buy_deferred"):
+            return None
+        return batch
+
+    def _retry_dependent_buy_batch(
+        self,
+        batch_id: str,
+        requests: list[ManagedOrderRequest],
+        batch: OrderBatchRecord,
+    ) -> ManagedBatchSubmitResult:
+        stored_results = tuple(
+            _result_from_dict(item)
+            for item in (batch.result_json or {}).get("results", ())
+            if isinstance(item, dict)
+        )
+        if len(stored_results) != len(requests):
+            retry_result = self._existing_batch_result(batch_id, len(requests))
+            if retry_result is not None:
+                return retry_result
+
+        results_list = list(stored_results)
+        deferred_indexes = [
+            index
+            for index, (request, result) in enumerate(zip(requests, stored_results, strict=True))
+            if _is_dependent_buy_retry_candidate(request, result)
+        ]
+        deferred_requests = [requests[index] for index in deferred_indexes]
+        deferred_preflights = self._batch_preflight(deferred_requests)
+        pending_deferred_indexes: set[int] = set()
+        retry_preflight_passed = True
+        for relative_index, preflight in enumerate(deferred_preflights):
+            index = deferred_indexes[relative_index]
+            request = requests[index]
+            if preflight.allowed:
+                results_list[index] = self._submit_preflighted_order(request, preflight, batch_id=batch_id)
+                continue
+            retry_preflight_passed = False
+            if not _is_retry_waiting_for_cash(preflight):
+                results_list[index] = ManagedOrderSubmitResult(
+                    False,
+                    None,
+                    None,
+                    "dependent buy retry preflight failed",
+                    preflight,
+                    False,
+                )
+                continue
+            pending_deferred_indexes.add(index)
+            results_list[index] = ManagedOrderSubmitResult(
+                False,
+                None,
+                None,
+                "dependent buy still waiting for reconciled sell proceeds",
+                stored_results[index].preflight,
+                False,
+            )
+
+        results = tuple(results_list)
+        succeeded = sum(1 for result in results if result.success)
+        failed = len(results) - succeeded
+        status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
+        still_deferred = bool(pending_deferred_indexes)
+        self._upsert_batch_record(
+            batch_id=batch_id,
+            requests=requests,
+            status=status,
+            results=results,
+            metadata={
+                **(batch.metadata if isinstance(batch.metadata, dict) else {}),
+                "preflight_passed": retry_preflight_passed and not still_deferred,
+                "dependent_buy_deferred": still_deferred,
+                "dependent_buy_count": len(pending_deferred_indexes),
+                "dependent_buy_retry": True,
+                "compensation_required": False,
+                "compensation_actions": [],
+            },
+            completed=True,
+        )
+        return ManagedBatchSubmitResult(
+            success=failed == 0,
+            batch_id=batch_id,
+            batch_status=status.value,
+            preflight_passed=retry_preflight_passed and not still_deferred,
+            retry_of_batch_id=batch_id,
+            total=len(results),
+            succeeded=succeeded,
+            failed=failed,
+            results=results,
+            compensation_required=False,
+            compensation_hint=None,
+            compensation_actions=(),
+        )
+
     def _existing_batch_result(self, batch_id: str, request_count: int) -> ManagedBatchSubmitResult | None:
         get_batch = getattr(self._repository, "get_order_batch", None)
         list_intents = getattr(self._repository, "list_order_intents_by_batch", None)
@@ -851,11 +1033,16 @@ class QmtManagedOrderService:
             else sum(1 for result in results if not result.success) + max(request_count - len(results), 0)
         )
         compensation_required = batch.batch_status == OrderBatchStatus.PARTIAL
+        if isinstance(batch.metadata, dict):
+            compensation_required = bool(batch.metadata.get("compensation_required", compensation_required))
+        preflight_passed = batch.batch_status != OrderBatchStatus.PREFLIGHT_FAILED
+        if isinstance(batch.metadata, dict):
+            preflight_passed = bool(batch.metadata.get("preflight_passed", preflight_passed))
         return ManagedBatchSubmitResult(
             success=batch.batch_status == OrderBatchStatus.SUCCEEDED,
             batch_id=batch_id,
             batch_status=batch.batch_status.value,
-            preflight_passed=batch.batch_status != OrderBatchStatus.PREFLIGHT_FAILED,
+            preflight_passed=preflight_passed,
             retry_of_batch_id=batch_id,
             total=request_count,
             succeeded=succeeded,
@@ -1089,6 +1276,118 @@ def _without_preflight_error_codes(
     codes: set[str],
 ) -> list[OrderPreflightError]:
     return [error for error in errors if error.code not in codes]
+
+
+def _is_dependent_buy_proceeds_deferred(
+    request: ManagedOrderRequest,
+    preflight: OrderPreflightResult,
+) -> bool:
+    if request.order_type != BUY_ORDER_TYPE or preflight.allowed:
+        return False
+    error_codes = {error.code for error in preflight.errors}
+    return bool(error_codes) and error_codes <= _DEPENDENT_BUY_PROCEEDS_ERROR_CODES
+
+
+def _is_dependent_buy_retry_candidate(
+    request: ManagedOrderRequest,
+    result: ManagedOrderSubmitResult,
+) -> bool:
+    error_codes = {error.code for error in result.preflight.errors}
+    return (
+        request.order_type == BUY_ORDER_TYPE
+        and not result.success
+        and not result.broker_called
+        and result.intent_id is None
+        and bool(error_codes)
+        and error_codes <= _DEPENDENT_BUY_PROCEEDS_ERROR_CODES
+    )
+
+
+def _is_retry_waiting_for_cash(preflight: OrderPreflightResult) -> bool:
+    error_codes = {error.code for error in preflight.errors}
+    return bool(error_codes) and error_codes <= {
+        "INSUFFICIENT_CASH",
+        "BATCH_INSUFFICIENT_CASH",
+        "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH",
+        *_DEPENDENT_BUY_PROCEEDS_ERROR_CODES,
+    }
+
+
+def _sell_proceeds_required_error(
+    *,
+    request: ManagedOrderRequest,
+    result: OrderPreflightResult,
+    sell_requests: list[ManagedOrderRequest],
+    same_batch_sell_proceeds: Decimal,
+    effective_cash: Decimal,
+    batch_required_cash: Decimal,
+    cumulative_required_cash: Decimal,
+) -> OrderPreflightError:
+    return OrderPreflightError(
+        "SELL_PROCEEDS_REQUIRED",
+        "dependent buy requires same-batch sell proceeds that are not reconciled yet",
+        {
+            "account_id": request.account_id,
+            "strategy_name": request.strategy_name,
+            "buy_order_remark": request.order_remark,
+            "symbol": request.symbol,
+            "available_cash": float(result.available_cash or Decimal("0")),
+            "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
+            "effective_cash": float(effective_cash),
+            "batch_required_cash": float(batch_required_cash),
+            "cumulative_required_cash": float(cumulative_required_cash),
+            "required_cash": float(result.freeze_amount),
+            "dependent_sell_orders": _sell_request_summaries(sell_requests),
+            "next_action": "submit SELL first; resubmit BUY only after sell fill reconciles cash",
+        },
+    )
+
+
+def _account_group_sell_proceeds_required_error(
+    *,
+    request: ManagedOrderRequest,
+    result: OrderPreflightResult,
+    sell_requests: list[ManagedOrderRequest],
+    group_context: dict[str, Any],
+    account_group_cash_limit: Decimal,
+    same_batch_sell_proceeds: Decimal,
+    effective_account_group_cash_limit: Decimal,
+    batch_required_cash: Decimal,
+    cumulative_required_cash: Decimal,
+) -> OrderPreflightError:
+    return OrderPreflightError(
+        "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
+        "dependent buy requires same-batch account-group sell proceeds that are not reconciled yet",
+        {
+            **group_context,
+            "strategy_name": request.strategy_name,
+            "buy_order_remark": request.order_remark,
+            "symbol": request.symbol,
+            "account_group_cash_limit": float(account_group_cash_limit),
+            "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
+            "effective_account_group_cash_limit": float(effective_account_group_cash_limit),
+            "batch_required_cash": float(batch_required_cash),
+            "cumulative_required_cash": float(cumulative_required_cash),
+            "required_cash": float(result.freeze_amount),
+            "dependent_sell_orders": _sell_request_summaries(sell_requests),
+            "next_action": "submit SELL first; resubmit BUY only after sell fill reconciles account-group cash",
+        },
+    )
+
+
+def _sell_request_summaries(requests: list[ManagedOrderRequest]) -> list[dict[str, Any]]:
+    return [
+        {
+            "strategy_name": request.strategy_name,
+            "symbol": request.symbol,
+            "quantity": request.quantity,
+            "price": str(request.price),
+            "estimated_proceeds": str(max(request.price * Decimal(request.quantity), Decimal("0"))),
+            "order_remark": request.order_remark,
+        }
+        for request in requests
+        if request.order_type == SELL_ORDER_TYPE
+    ]
 
 
 def _request_signature(request: ManagedOrderRequest) -> dict[str, Any]:

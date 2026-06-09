@@ -71,6 +71,17 @@ def test_account_group_slots_create_n1_and_n2_under_same_minqmt_account() -> Non
     assert {account.account_id for account in repo.list_virtual_accounts(ACCOUNT_ID)} == {ACCOUNT_ID}
 
 
+def test_account_group_slot_count_is_governed_by_cash_not_fixed_package_gate() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    slots = tuple(_slot(f"s{index:02d}", cash="100") for index in range(80))
+
+    group = repo.create_account_group_slots(_group(*slots, cash_limit="8000"))
+
+    assert len(group.slots) == 80
+    assert group.allocated_cash_total == Decimal("8000")
+    assert len(repo.list_account_group_slots(ACCOUNT_GROUP_ID, broker_account_id=ACCOUNT_ID)) == 80
+
+
 @pytest.mark.parametrize(
     ("slots", "cash_limit", "message"),
     [
