@@ -30,8 +30,8 @@
   "expected": "每日复评应对当前ACTIVE持仓独立盯市计算return_bps；持仓未进入当天TopK应作为排名/换仓证据处理，不能阻断收益统计。复评业务成功时应产生HOLD/EXIT/ENTER或明确可解释状态，排行榜可统计开放持仓收益。",
   "first_seen_at": "2026-06-09T11:00:03.437944Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ee38fe1eec1438dd3114073adb2cf88cae2c0725",
+  "fixed_at": "2026-06-09T13:14:56.515915Z",
   "github_issue_number": 860,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/860",
   "last_seen_at": "2026-06-09T11:00:03.437944Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/866",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -58,6 +59,13 @@
     "fingerprint": "212e725afd2c13dea52ab387",
     "source_event_id": "FE-20260609-212e725afd2c"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/watchlist/test_advisory_program.py -q -> passed (14 passed after origin/main merge)",
+    "rtk ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py -> passed",
+    "rtk git diff --check origin/main..HEAD -> passed",
+    "rtk nox -s l0 -> passed after origin/main merge",
+    "rtk nox -s validation_module_registry_l0 -> passed after origin/main merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
