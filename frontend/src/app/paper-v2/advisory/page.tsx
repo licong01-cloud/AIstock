@@ -16,6 +16,9 @@ import {
   type AdvisoryReviewResult,
   type AdvisoryStrategyBindingVersion,
 } from "@/lib/api/advisory";
+import { selectionCenterApi } from "@/lib/paper-v2/api";
+import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
+import type { SelectablePackage } from "@/lib/paper-v2/types";
 import type { JsonObject } from "@/lib/api/selectionCenter";
 
 type SortDirection = "asc" | "desc";
@@ -92,6 +95,13 @@ function packageRowsFromText(text: string): PackageWeightRow[] {
 
 function newPackageRow(index: number): PackageWeightRow {
   return { rowId: `pkg-new-${Date.now()}-${index}`, packageId: "", weight: "1" };
+}
+
+function packageOptionLabel(pkg: SelectablePackage): string {
+  const parts = [packageDisplayLabel(pkg), pkg.package_status];
+  if (pkg.alpha_mode) parts.push(String(pkg.alpha_mode));
+  if (pkg.latest_selection_run?.trade_date) parts.push(`最近选股 ${pkg.latest_selection_run.trade_date}`);
+  return parts.filter(Boolean).join(" / ");
 }
 
 function packageIdsFromRows(rows: PackageWeightRow[], mode: AdvisoryPackageMode): string[] {
@@ -237,6 +247,7 @@ function AdvisoryPageContent() {
   const [programName, setProgramName] = useState("每日 Top20 荐股任务");
   const [packageMode, setPackageMode] = useState<AdvisoryPackageMode>(packageIdsFromText(prefillPackages).length > 1 ? "weighted_rank_fusion" : "single_package");
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
+  const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
   const [targetCount, setTargetCount] = useState(20);
   const [reviewTradeDate, setReviewTradeDate] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
@@ -278,6 +289,21 @@ function AdvisoryPageContent() {
     { key: "price_quality_status", label: "价格状态", value: (row) => row.price_quality_status, render: (row) => row.price_quality_status || "-" },
     { key: "exit_reason", label: "退出原因", value: (row) => row.exit_reason, render: (row) => row.exit_reason || "-" },
   ], []);
+
+  const packageById = useMemo(
+    () => new Map(selectablePackages.map((pkg) => [pkg.package_id, pkg])),
+    [selectablePackages],
+  );
+
+  const packageLabel = (packageId: string): string => {
+    const pkg = packageById.get(packageId);
+    return pkg ? packageDisplayLabel(pkg) : shortHash(packageId, 7);
+  };
+
+  const packageSummary = (packageIds: string[]): string => {
+    if (!packageIds.length) return "-";
+    return packageIds.map(packageLabel).join(" + ");
+  };
 
   const sortedActivePool = useMemo(() => {
     if (!activeSort) return activePool;
@@ -324,13 +350,19 @@ function AdvisoryPageContent() {
     setLoading(true);
     setError(null);
     try {
-      const [programRows, boardRows, tradingDefaults] = await Promise.all([
+      const [programRows, boardRows, tradingDefaults, packageOptions] = await Promise.all([
         advisoryApi.programs(false),
         advisoryApi.leaderboard(sortBy),
         advisoryApi.tradingDayDefaults(10),
+        selectionCenterApi.selectablePackages(300).catch(() => []),
       ]);
       setPrograms(programRows);
       setLeaderboard(boardRows);
+      setSelectablePackages(packageOptions);
+      setPackageRows((rows) => {
+        if (rows.some((row) => row.packageId.trim()) || !packageOptions[0]) return rows;
+        return rows.map((row, index) => index === 0 ? { ...row, packageId: packageOptions[0].package_id } : row);
+      });
       setReviewTradeDate(tradingDefaults.latest_trading_day);
       const resolvedProgramId = nextProgramId || selectedProgramId || programRows[0]?.program_id || "";
       setSelectedProgramId(resolvedProgramId);
@@ -384,7 +416,7 @@ function AdvisoryPageContent() {
     setError(null);
     try {
       const packageIds = packageIdsFromRows(packageRows, packageMode);
-      if (!packageIds.length) throw new Error("至少需要填写一个策略包 ID");
+      if (!packageIds.length) throw new Error("至少需要从下拉菜单选择一个策略包");
       const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
       if (!confirmed) return;
       const program = await advisoryApi.createProgram({
@@ -599,7 +631,7 @@ function AdvisoryPageContent() {
                 const runKey = `${row.program_id}:run`;
                 return (
                   <tr key={row.program_id} onClick={() => void selectProgram(row.program_id)}>
-                    <td><strong>{row.program_name}</strong><br /><span className="pv2-muted pv2-mono">{short(row.package_ids.join("+"), 24)}</span></td>
+                    <td><strong>{row.program_name}</strong><br /><span className="pv2-muted">{packageSummary(row.package_ids)}</span></td>
                     <td>{row.status}</td>
                     <td>{short(row.enabled_since, 16)}</td>
                     <td>{row.entered_episode_count ?? 0}</td>
@@ -659,11 +691,29 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table">
-            <thead><tr><th>策略包 ID</th><th>权重</th><th>说明</th><th>操作</th></tr></thead>
+            <thead><tr><th>策略包</th><th>权重</th><th>说明</th><th>操作</th></tr></thead>
             <tbody>
               {packageRows.map((row, index) => (
                 <tr key={row.rowId}>
-                  <td><input className="pv2-input" value={row.packageId} onChange={(event) => updatePackageRow(row.rowId, { packageId: event.target.value })} placeholder="strategy_package_id" /></td>
+                  <td>
+                    <select
+                      className="pv2-select"
+                      data-testid={`advisory-package-select-${row.rowId}`}
+                      value={row.packageId}
+                      onChange={(event) => updatePackageRow(row.rowId, { packageId: event.target.value })}
+                    >
+                      <option value="">选择策略包</option>
+                      {selectablePackages.map((pkg) => (
+                        <option key={pkg.package_id} value={pkg.package_id}>{packageOptionLabel(pkg)}</option>
+                      ))}
+                      {row.packageId && !packageById.has(row.packageId) ? (
+                        <option value={row.packageId}>已预填策略包 {shortHash(row.packageId, 7)}</option>
+                      ) : null}
+                    </select>
+                    <div className="pv2-muted" style={{ marginTop: 4 }}>
+                      {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "已预填"}` : "请从下拉菜单选择，无需记忆内部编号。"}
+                    </div>
+                  </td>
                   <td><input className="pv2-input" min="0.01" step="0.01" type="number" value={row.weight} onChange={(event) => updatePackageRow(row.rowId, { weight: event.target.value })} /></td>
                   <td className="pv2-muted">{packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : modeNeedsWeights(packageMode) ? "参与加权融合；权重仅作配置，不写入策略包" : "参与荐股集合运算"}</td>
                   <td><button className="pv2-button-ghost" disabled={packageRows.length <= 1} onClick={() => setPackageRows((rows) => rows.filter((item) => item.rowId !== row.rowId))} type="button">移除</button></td>
@@ -732,7 +782,7 @@ function AdvisoryPageContent() {
           <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
           {activeBinding ? (
             <div className="pv2-muted" style={{ marginTop: 6 }}>
-              当前策略绑定：{activeBinding.package_mode} / {activeBinding.package_ids.join(" + ")} / {short(activeBinding.binding_version_id, 18)}
+              当前策略绑定：{activeBinding.package_mode} / {packageSummary(activeBinding.package_ids)} / {short(activeBinding.binding_version_id, 18)}
             </div>
           ) : null}
         </div>
