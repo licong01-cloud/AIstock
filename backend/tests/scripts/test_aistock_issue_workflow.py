@@ -21,6 +21,9 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
         "fallback_used": True,
         "affected_tests_count": 0,
         "affected_quality": "codegraph_fallback",
+        "latest_freshness": "fresh",
+        "latest_freshness_ref": "tmp/validation/code-intelligence/codegraph-freshness.json",
+        "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
         "affected_tests": {"suggested_tests": []},
         "understand_anything": {"status": "not_required_missing"},
         "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
@@ -435,6 +438,8 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["supported_clients"] == ["Codex", "Claude Code", "Cursor", "CLI"]
     assert task_card["artifact_refs"]["context_pack_md"].endswith("context-pack.md")
     assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert task_card["code_intelligence"]["latest_freshness"] == "fresh"
+    assert task_card["code_intelligence"]["consume_command"].endswith("latest-freshness --refresh-if-stale")
     assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
@@ -842,6 +847,13 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
+    assert payload["client_manifest"]["codex_skill_status"] in {
+        "current",
+        "missing_repo_skill",
+        "missing_global",
+        "stale",
+    }
+    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "ready_for_pr"
@@ -872,6 +884,9 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert payload["closed_loop_checks"]["agent_handoff_section"] is True
     assert payload["closed_loop_checks"]["promotion_requires_registry_worktree"] is True
     assert payload["closed_loop_checks"]["candidate_history_tmp_only"] is True
+    context_pack = json.loads((isolated_workflow_root / payload["artifacts"]["context"]).read_text(encoding="utf-8"))
+    assert context_pack["llm_triage_advice"]["workflow_gate"] == "ready"
+    assert context_pack["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 

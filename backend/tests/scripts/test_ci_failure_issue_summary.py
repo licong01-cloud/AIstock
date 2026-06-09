@@ -712,12 +712,15 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert "paper_v2" in payload["suspected_modules"]
     assert "noxfile.py" in payload["suspected_files"]
     assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
+    assert payload["llm_triage_advice"]["workflow_gate"] == "ready"
+    assert payload["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
     assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
     assert "module:validation.runner" in issue_payload["labels"]
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
+    assert context_pack["llm_triage_advice"]["provider"] == "github_models"
     assert context_pack["token_budget"]["full_logs_included"] is False
 
 
@@ -855,3 +858,36 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "No actionable Nightly issue created." in script
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+
+
+def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+
+    # PyYAML 1.1 treats the GitHub Actions key "on" as boolean True.
+    triggers = workflow.get("on") or workflow.get(True)
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["run_dr"]["default"] is False
+    assert dispatch_inputs["run_nightly_l3"]["default"] is True
+    assert dispatch_inputs["run_paper_v2_live"]["default"] is False
+    assert dispatch_inputs["run_code_intelligence"]["default"] is True
+    assert "inputs.run_dr" in workflow["jobs"]["dr-snapshot"]["if"]
+    assert "inputs.run_dr" in workflow["jobs"]["dr-validate"]["if"]
+    assert "inputs.run_nightly_l3" in workflow["jobs"]["nightly-l3"]["if"]
+    assert "github.event_name == 'workflow_dispatch' && !inputs.run_dr" in workflow["jobs"]["nightly-l3"]["if"]
+    assert "inputs.run_nightly_l3 && inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    assert "inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])
+    assert "triage-quality-smoke" in code_steps
+    assert "llm-triage-quality.json" in code_steps
+    summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
+    assert "run_dr_requested" in summary_run
+    assert "run_nightly_l3_requested" in summary_run
+
+
+def test_nightly_workflow_success_manifests_are_compact() -> None:
+    text = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+    assert "manifest=omitted_on_success" in text
+    assert "Select-Object -First 100 -ExpandProperty FullName" not in text

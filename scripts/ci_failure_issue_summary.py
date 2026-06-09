@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-
 DEFAULT_REPO = "licong01-cloud/AIstock"
 CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
 NIGHTLY_STATUS_KEYS = (
@@ -731,6 +730,7 @@ def build_context_pack(
         "github_issue_url": github_issue_url or _github_issue_url(github_issue_number),
         "failure_event": event,
         "agent_handoff": handoff,
+        "llm_triage_advice": summary.get("llm_triage_advice"),
         "reproduce_command": summary.get("reproduce_command") or "Inspect the linked CI run log.",
         "allowed_write_scope": handoff["allowed_write_scope"],
         "required_verification": handoff["required_verification"],
@@ -744,6 +744,22 @@ def build_context_pack(
             "historical_design_docs": "Not embedded. Load only if the promoted BUG scope requires them.",
         },
     }
+
+
+def _llm_triage_lines(payload: dict[str, Any]) -> list[str]:
+    if not payload:
+        return []
+    evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
+    return [
+        "",
+        "## LLM Triage Advice",
+        "",
+        f"- provider: `{payload.get('provider') or 'unknown'}`",
+        f"- model: `{payload.get('model') or evidence.get('model') or 'unknown'}`",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- invoked: `{evidence.get('invoked')}`",
+        f"- input_policy: `{evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
+    ]
 
 
 def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
@@ -775,6 +791,7 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
             lines.append(f"- issue_creation_next_command: `{policy.get('next_command')}`")
     lines.append(f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`")
     lines.append(f"- needs_bug_json: `{handoff.get('needs_bug_json')}`")
+    lines.extend(_llm_triage_lines(context_pack.get("llm_triage_advice") if isinstance(context_pack.get("llm_triage_advice"), dict) else {}))
     if infra_action:
         lines.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
     for command in handoff.get("next_commands") or []:
@@ -1001,6 +1018,47 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
     }
 
 
+def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str = "github_models") -> dict[str, Any]:
+    """Attach schema-checked LLM triage advice without performing a network call."""
+
+    try:
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from scripts import llm_provider_adapter
+
+        config = llm_provider_adapter.load_config()
+        advice = llm_provider_adapter.build_triage_quality_smoke(provider, config)
+    except Exception as exc:
+        return {
+            "schema_version": "aistock_deepseek_triage_advice_v1",
+            "provider": provider,
+            "workflow_gate": "warning",
+            "blocking_for_issue_creation": False,
+            "fallback_used": True,
+            "fallback_reason": str(exc),
+            "llm_invocation_evidence": {
+                "schema_version": "aistock_llm_invocation_evidence_v1",
+                "provider": provider,
+                "model": "unknown",
+                "invoked": False,
+                "reason": "triage_advice_unavailable",
+                "redaction_applied": True,
+            },
+        }
+    advice = dict(advice)
+    advice["workflow_gate"] = "ready"
+    advice["blocking_for_issue_creation"] = False
+    advice["failure_event_ref"] = (summary.get("failure_event") or {}).get("event_id")
+    advice["source_fingerprint"] = summary.get("fingerprint")
+    advice["code_intelligence_input_policy"] = {
+        "required": True,
+        "full_repo_scan_allowed": False,
+        "full_logs_included": False,
+    }
+    return advice
+
+
 def summarize_nightly_status(
     payload: dict[str, Any],
     *,
@@ -1067,6 +1125,7 @@ def summarize_nightly_status(
     summary["last_green_locator"] = _last_green_payload(summary, status="not_requested")
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
+    summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
     return summary
 
 
@@ -1222,6 +1281,21 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.extend(["", "## Nightly Statuses", ""])
         for key in NIGHTLY_STATUS_KEYS:
             lines.append(f"- {key}: `{statuses.get(key) or 'unknown'}`")
+    llm_advice = summary.get("llm_triage_advice") if isinstance(summary.get("llm_triage_advice"), dict) else {}
+    llm_evidence = llm_advice.get("llm_invocation_evidence") if isinstance(llm_advice.get("llm_invocation_evidence"), dict) else {}
+    if llm_advice:
+        lines.extend(
+            [
+                "",
+                "## LLM Triage Advice",
+                "",
+                f"- provider: `{llm_advice.get('provider') or 'unknown'}`",
+                f"- model: `{llm_advice.get('model') or llm_evidence.get('model') or 'unknown'}`",
+                f"- workflow_gate: `{llm_advice.get('workflow_gate') or 'unknown'}`",
+                f"- invoked: `{llm_evidence.get('invoked')}`",
+                f"- input_policy: `{llm_evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
+            ]
+        )
     policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
     if policy:
         lines.extend(
@@ -1503,6 +1577,19 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
         "fingerprint": summary.get("fingerprint"),
         "nightly_failed_stages": summary.get("nightly_failed_stages") or [],
         "issue_creation_policy": summary.get("issue_creation_policy") or {},
+        "llm_triage": {
+            "provider": (summary.get("llm_triage_advice") or {}).get("provider")
+            if isinstance(summary.get("llm_triage_advice"), dict)
+            else None,
+            "workflow_gate": (summary.get("llm_triage_advice") or {}).get("workflow_gate")
+            if isinstance(summary.get("llm_triage_advice"), dict)
+            else None,
+            "invoked": (
+                ((summary.get("llm_triage_advice") or {}).get("llm_invocation_evidence") or {}).get("invoked")
+                if isinstance(summary.get("llm_triage_advice"), dict)
+                else None
+            ),
+        },
         "suspected_modules": summary.get("suspected_modules") or [],
         "suspected_files_count": len(summary.get("suspected_files") or []),
         "failed_jobs_count": len(summary.get("failed_jobs") or []),
