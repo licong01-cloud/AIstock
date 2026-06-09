@@ -76,6 +76,17 @@ def _validation_artifacts_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _paper_v2_skip_realtime() -> bool:
+    value = os.environ.get("PAPER_V2_SKIP_REALTIME", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _paper_v2_force_realtime(args: list[str]) -> bool:
+    if os.environ.get("PAPER_V2_FORCE_REALTIME", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return "--require-live-bars" in args or "--require-fills" in args
+
+
 def _validation_artifact_args(*, output_json: str, summary_md: str | None = None) -> list[str]:
     if not _validation_artifacts_enabled():
         return []
@@ -3061,24 +3072,32 @@ def paper_v2_live(session: nox.Session) -> None:
     """Run Paper v2 catch-up-to-live validation against dev backend and TDX."""
     backend_port = os.environ.get("BACKEND_PORT", "8012")
     tdx_port = os.environ.get("TDX_HTTP_PORT", "19080")
-    session.run(
-        "python",
-        "scripts/aistock_validate.py",
-        "services",
-        "--backend-port",
-        backend_port,
-        "--tdx-port",
-        tdx_port,
-        external=True,
-    )
-    session.run(
-        "python",
-        "scripts/paper_v2_live_validation.py",
-        "--api-base",
-        os.environ.get("PAPER_V2_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1"),
-        "--tdx-base-url",
-        os.environ.get("TDX_BASE_URL", f"http://127.0.0.1:{tdx_port}"),
-        *session.posargs,
-        env=_env(),
-        external=True,
-    )
+    posargs = list(session.posargs)
+    if _paper_v2_skip_realtime() and not _paper_v2_force_realtime(posargs):
+        session.skip(
+            "PAPER_V2_SKIP_REALTIME=1; skipping Paper v2 catch-up-to-live gate. "
+            "Set PAPER_V2_FORCE_REALTIME=1 or pass --require-live-bars to run the realtime gate."
+        )
+    with _managed_validation_backend(session, backend_port):
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--tdx-port",
+            tdx_port,
+            env=_env({"PAPER_V2_SKIP_REALTIME": "0"}),
+            external=True,
+        )
+        session.run(
+            "python",
+            "scripts/paper_v2_live_validation.py",
+            "--api-base",
+            os.environ.get("PAPER_V2_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1"),
+            "--tdx-base-url",
+            os.environ.get("TDX_BASE_URL", f"http://127.0.0.1:{tdx_port}"),
+            *posargs,
+            env=_env({"PAPER_V2_SKIP_REALTIME": "0"}),
+            external=True,
+        )

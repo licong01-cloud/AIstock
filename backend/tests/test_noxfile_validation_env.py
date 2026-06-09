@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,53 @@ def test_reclaim_validation_ports_enabled_in_github_actions(monkeypatch: pytest.
     monkeypatch.delenv("AISTOCK_RECLAIM_VALIDATION_PORTS", raising=False)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     assert noxfile._reclaim_validation_ports() is True
+
+
+def test_paper_v2_live_skips_realtime_gate_by_default_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PAPER_V2_SKIP_REALTIME", "1")
+    monkeypatch.delenv("PAPER_V2_FORCE_REALTIME", raising=False)
+    calls: list[tuple[str, ...]] = []
+    logs: list[str] = []
+
+    class DummySession:
+        posargs: list[str] = []
+
+        def skip(self, message: str) -> None:
+            logs.append(message)
+            raise RuntimeError("skipped")
+
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    with pytest.raises(RuntimeError, match="skipped"):
+        noxfile.paper_v2_live(DummySession())  # type: ignore[arg-type]
+
+    assert calls == []
+    assert any("PAPER_V2_SKIP_REALTIME=1" in message for message in logs)
+
+
+def test_paper_v2_live_force_realtime_still_runs_service_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PAPER_V2_SKIP_REALTIME", "1")
+    monkeypatch.setenv("PAPER_V2_FORCE_REALTIME", "1")
+    calls: list[tuple[str, ...]] = []
+
+    @contextmanager
+    def fake_backend(_session: object, _port: str):
+        yield
+
+    monkeypatch.setattr(noxfile, "_managed_validation_backend", fake_backend)
+
+    class DummySession:
+        posargs: list[str] = []
+
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    noxfile.paper_v2_live(DummySession())  # type: ignore[arg-type]
+
+    assert calls[0][:3] == ("python", "scripts/aistock_validate.py", "services")
+    assert calls[1][:2] == ("python", "scripts/paper_v2_live_validation.py")
