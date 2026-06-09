@@ -64,6 +64,8 @@ class MiniQMTExecutionEventType(str, Enum):
     RECONCILE_STARTED = "RECONCILE_STARTED"
     RECONCILE_COMPLETED = "RECONCILE_COMPLETED"
     OPERATOR_COMMAND_RECEIVED = "OPERATOR_COMMAND_RECEIVED"
+    OPERATOR_COMMAND_EXECUTED = "OPERATOR_COMMAND_EXECUTED"
+    OPERATOR_COMMAND_REJECTED = "OPERATOR_COMMAND_REJECTED"
     RUNTIME_STOPPED = "RUNTIME_STOPPED"
 
 
@@ -81,6 +83,11 @@ class MiniQMTChildOrderStatus(str, Enum):
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+
+
+class MiniQMTOperatorCommandStatus(str, Enum):
+    EXECUTED = "EXECUTED"
     REJECTED = "REJECTED"
 
 
@@ -265,3 +272,32 @@ class MiniQMTRuntimeRecoverySnapshot(BaseModel):
             if event.event_type == MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED:
                 return False
         return False
+
+
+class MiniQMTOperatorCommandResult(BaseModel):
+    """Terminal audit record for an operator command executed by the runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    command_type: str
+    runtime_id: str
+    status: MiniQMTOperatorCommandStatus
+    reason: str
+    strategy_slot_id: str | None = None
+    alpha_signal_book_id: str | None = None
+    cancelled_child_order_ids: list[str] = Field(default_factory=list)
+    submitted_child_order_ids: list[str] = Field(default_factory=list)
+    affected_algo_instance_ids: list[str] = Field(default_factory=list)
+    broker_packets: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("command_id", "command_type", "runtime_id", "reason")
+    @classmethod
+    def _required_result_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value

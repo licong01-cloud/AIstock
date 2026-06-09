@@ -511,6 +511,46 @@ export type SimulationRuntimeRunsResponse = {
   runs: SimulationRuntimeRunSummary[];
 };
 
+export type SimulationRuntimeOperatorCommandRequest = {
+  command_id?: string;
+  command_type:
+    | "FLATTEN_ALL_POSITIONS"
+    | "FLATTEN_STRATEGY_SLOT"
+    | "CANCEL_ALL_OPEN_ORDERS"
+    | "RESET_STRATEGY_SLOT"
+    | "REPLACE_ALPHA_SIGNAL_BOOK";
+  account_group_id: string;
+  trade_date: string;
+  runtime_config_hash: string;
+  runtime_id?: string;
+  strategy_slot_id?: string;
+  alpha_signal_book_id?: string;
+  requested_by?: string;
+  reason: string;
+  confirm_text?: string;
+  payload?: JsonObject;
+};
+
+export type SimulationRuntimeOperatorCommandResult = {
+  ok: boolean;
+  operator_command?: JsonObject;
+  result: JsonObject & {
+    command_id?: string;
+    command_type?: string;
+    runtime_id?: string;
+    status?: string;
+    reason?: string;
+    cancelled_child_order_ids?: string[];
+    submitted_child_order_ids?: string[];
+    affected_algo_instance_ids?: string[];
+    broker_packets?: JsonObject[];
+    errors?: JsonObject[];
+    metadata?: JsonObject;
+  };
+  runtime_evidence?: JsonObject;
+  production_runtime_restart_required?: boolean;
+};
+
 export type MiniQMTExecutionQualityReport = JsonObject & {
   schema_version: "miniqmt_execution_quality_report_v1";
   portfolio_id: string;

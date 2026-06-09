@@ -36,6 +36,8 @@ import type {
   SelectionMode,
   SelectionRun,
   SimulationRuntimePlanSummary,
+  SimulationRuntimeOperatorCommandRequest,
+  SimulationRuntimeOperatorCommandResult,
   SimulationRuntimeRunDetail,
   SimulationRuntimeRunsResponse,
   SimulationRuntimeSchedulerStatus,
@@ -768,6 +770,14 @@ export const simulationRuntimeApi = {
       target_broker_backend: params.targetBrokerBackend || "minqmt_live",
     });
     return apiFetch<JsonObject>(`/simulation-runtime/live-admission/evidence?${qs.toString()}`);
+  },
+  async executeMiniQmtOperatorCommand(
+    payload: SimulationRuntimeOperatorCommandRequest,
+  ): Promise<SimulationRuntimeOperatorCommandResult> {
+    return apiFetch<SimulationRuntimeOperatorCommandResult>(
+      "/simulation-runtime/miniqmt/operator-commands",
+      body(payload),
+    );
   },
 };
 

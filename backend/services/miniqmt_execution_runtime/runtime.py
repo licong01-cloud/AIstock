@@ -33,6 +33,8 @@ from .models import (
     MiniQMTExecutionRuntimeState,
     MiniQMTGatewayState,
     MiniQMTOmsState,
+    MiniQMTOperatorCommandResult,
+    MiniQMTOperatorCommandStatus,
     MiniQMTRuntimeRecoverySnapshot,
 )
 from .oms import MiniQMTOmsLedger
@@ -427,6 +429,71 @@ class MiniQMTExecutionRuntime:
             },
         )
 
+    def execute_operator_command(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> MiniQMTOperatorCommandResult:
+        """Execute a user/operator command inside the canonical runtime owner.
+
+        ``record_operator_command`` remains audit-only for preview paths. This
+        method is the product boundary that mutates gateway/OMS state.
+        """
+
+        command_payload = dict(payload or {})
+        self.record_operator_command(
+            command_id=command_id,
+            command_type=command_type,
+            reason=reason,
+            payload=command_payload,
+        )
+        normalized = str(command_type or "").strip().upper()
+        if normalized == "CANCEL_ALL_OPEN_ORDERS":
+            return self._execute_cancel_all_open_orders(
+                command_id=command_id,
+                command_type=normalized,
+                reason=reason,
+                payload=command_payload,
+            )
+        if normalized in {"FLATTEN_ALL_POSITIONS", "FLATTEN_STRATEGY_SLOT"}:
+            return self._execute_flatten_positions(
+                command_id=command_id,
+                command_type=normalized,
+                reason=reason,
+                payload=command_payload,
+            )
+        if normalized == "RESET_STRATEGY_SLOT":
+            return self._execute_reset_strategy_slot(
+                command_id=command_id,
+                command_type=normalized,
+                reason=reason,
+                payload=command_payload,
+            )
+        if normalized == "REPLACE_ALPHA_SIGNAL_BOOK":
+            return self._execute_replace_alpha_signal_book(
+                command_id=command_id,
+                command_type=normalized,
+                reason=reason,
+                payload=command_payload,
+            )
+        return self._operator_result(
+            command_id=command_id,
+            command_type=normalized or command_type,
+            status=MiniQMTOperatorCommandStatus.REJECTED,
+            reason=reason,
+            payload=command_payload,
+            errors=[
+                {
+                    "error_code": "MINIQMT_OPERATOR_COMMAND_UNSUPPORTED",
+                    "message": "unsupported MiniQMT operator command",
+                    "context": {"command_type": command_type},
+                }
+            ],
+        )
+
     def record_order_event(
         self,
         *,
@@ -552,6 +619,482 @@ class MiniQMTExecutionRuntime:
             broker_trades=snapshot.broker_trades,
             broker_positions=snapshot.broker_positions,
         )
+
+    def _execute_cancel_all_open_orders(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> MiniQMTOperatorCommandResult:
+        runtime = self._require_runtime()
+        strategy_slot_id = _optional_text(payload.get("strategy_slot_id"))
+        active_children = [
+            child
+            for child in self.repository.list_child_orders(runtime.runtime_id, active_only=True)
+            if strategy_slot_id is None or child.strategy_slot_id == strategy_slot_id
+        ]
+        try:
+            imported_children = self._import_active_broker_orders_for_cancel(
+                command_id=command_id,
+                runtime_id=runtime.runtime_id,
+                strategy_slot_id=strategy_slot_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_BROKER_SYNC_FAILED",
+                        "message": "MiniQMT broker open-order sync failed before operator cancel",
+                        "context": {"reason": f"{type(exc).__name__}: {exc}"},
+                    }
+                ],
+            )
+        active_children.extend(imported_children)
+        cancelled_child_order_ids: list[str] = []
+        broker_packets: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for child in active_children:
+            ack = self.gateway.cancel_child_order(child, reason=reason)
+            broker_packets.append(
+                {
+                    "action": "cancel_child_order",
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "accepted": ack.accepted,
+                    "message": ack.message,
+                    "raw": dict(ack.raw),
+                }
+            )
+            self.events.append(
+                runtime_id=runtime.runtime_id,
+                event_type=MiniQMTExecutionEventType.CHILD_ORDER_CANCEL_REQUESTED,
+                source="operator",
+                payload={
+                    "command_id": command_id,
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "accepted": ack.accepted,
+                    "message": ack.message,
+                    "reason": reason,
+                },
+            )
+            if ack.accepted:
+                cancelled_child_order_ids.append(child.child_order_id)
+                self.oms.record_child_order(
+                    child.model_copy(
+                        update={
+                            "status": MiniQMTChildOrderStatus.CANCELLED,
+                            "metadata": {
+                                **dict(child.metadata),
+                                "operator_command_id": command_id,
+                                "operator_cancel_ack": dict(ack.raw),
+                            },
+                        }
+                    )
+                )
+            else:
+                errors.append(
+                    {
+                        "error_code": "MINIQMT_OPERATOR_CANCEL_REJECTED",
+                        "message": ack.message,
+                        "context": {"child_order_id": child.child_order_id, "broker_order_id": child.broker_order_id},
+                    }
+                )
+        status = MiniQMTOperatorCommandStatus.EXECUTED if not errors else MiniQMTOperatorCommandStatus.REJECTED
+        return self._operator_result(
+            command_id=command_id,
+            command_type=command_type,
+            status=status,
+            reason=reason,
+            payload=payload,
+            cancelled_child_order_ids=cancelled_child_order_ids,
+            affected_algo_instance_ids=_unique(child.algo_instance_id for child in active_children),
+            broker_packets=broker_packets,
+            errors=errors,
+            metadata={"active_child_count": len(active_children), "strategy_slot_id": strategy_slot_id},
+        )
+
+    def _import_active_broker_orders_for_cancel(
+        self,
+        *,
+        command_id: str,
+        runtime_id: str,
+        strategy_slot_id: str | None,
+    ) -> list[MiniQMTChildOrder]:
+        known_broker_ids = {
+            child.broker_order_id
+            for child in self.repository.list_child_orders(runtime_id, active_only=True)
+            if child.broker_order_id
+        }
+        imported: list[MiniQMTChildOrder] = []
+        for broker_order in self.gateway.sync_orders(runtime_id=runtime_id):
+            broker_order_id = _broker_order_id(broker_order)
+            broker_slot_id = _position_strategy_slot_id(broker_order) or _optional_text(broker_order.get("strategy_name"))
+            if not broker_order_id or broker_order_id in known_broker_ids:
+                continue
+            if strategy_slot_id is not None and broker_slot_id != strategy_slot_id:
+                continue
+            if not _is_open_broker_order(broker_order):
+                continue
+            symbol = _position_symbol(broker_order)
+            side = _order_side(broker_order)
+            quantity = _open_order_remaining_quantity(broker_order)
+            if not symbol or side is None or quantity <= 0:
+                continue
+            instance = self.create_algo_instance(
+                parent_intent_id=f"{command_id}_broker_{broker_order_id}",
+                strategy_slot_id=broker_slot_id or strategy_slot_id or "broker_open_order",
+                symbol=symbol,
+                side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
+                target_quantity=quantity,
+                algo_code="OPERATOR_IMPORT_BROKER_ORDER",
+                metadata={
+                    "operator_command_id": command_id,
+                    "source": "operator_command_broker_sync",
+                    "broker_order": dict(broker_order),
+                },
+            )
+            child = self.record_external_child_order(
+                algo_instance_id=instance.algo_instance_id,
+                quantity=quantity,
+                price=_position_price(broker_order),
+                price_type=_order_price_type(broker_order),
+                status=MiniQMTChildOrderStatus.SUBMITTED,
+                broker_order_id=broker_order_id,
+                metadata={
+                    "operator_command_id": command_id,
+                    "source": "operator_command_broker_sync",
+                    "broker_order": dict(broker_order),
+                },
+            )
+            known_broker_ids.add(broker_order_id)
+            imported.append(child)
+        return imported
+
+    def _execute_flatten_positions(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> MiniQMTOperatorCommandResult:
+        runtime = self._require_runtime()
+        strategy_slot_id = _optional_text(payload.get("strategy_slot_id"))
+        if command_type == "FLATTEN_STRATEGY_SLOT" and not strategy_slot_id:
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_STRATEGY_SLOT_REQUIRED",
+                        "message": "FLATTEN_STRATEGY_SLOT requires strategy_slot_id",
+                        "context": {"command_id": command_id},
+                    }
+                ],
+            )
+        cancel_result = self._execute_cancel_all_open_orders(
+            command_id=f"{command_id}_cancel",
+            command_type="CANCEL_ALL_OPEN_ORDERS",
+            reason=f"{reason}; flatten pre-cancel",
+            payload={"strategy_slot_id": strategy_slot_id} if strategy_slot_id else {},
+        )
+        if cancel_result.errors:
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                cancelled_child_order_ids=list(cancel_result.cancelled_child_order_ids),
+                broker_packets=list(cancel_result.broker_packets),
+                errors=list(cancel_result.errors),
+                metadata={"strategy_slot_id": strategy_slot_id, "pre_cancel_required": True},
+            )
+        try:
+            positions = [
+                item
+                for item in self.gateway.sync_positions(runtime_id=runtime.runtime_id)
+                if _position_quantity(item) > 0
+                and (strategy_slot_id is None or _position_strategy_slot_id(item) == strategy_slot_id)
+            ]
+        except Exception as exc:  # noqa: BLE001
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_BROKER_SYNC_FAILED",
+                        "message": "MiniQMT broker position sync failed before operator flatten",
+                        "context": {"reason": f"{type(exc).__name__}: {exc}"},
+                    }
+                ],
+            )
+        if (
+            command_type == "FLATTEN_ALL_POSITIONS"
+            and strategy_slot_id is None
+            and payload.get("allow_open_sell_order_fallback") is True
+        ):
+            positions.extend(
+                _open_sell_positions_from_broker_orders(
+                    self.gateway.sync_orders(runtime_id=runtime.runtime_id),
+                    known_symbols={_position_symbol(item) for item in positions},
+                )
+            )
+        submitted_child_order_ids: list[str] = []
+        broker_packets = list(cancel_result.broker_packets)
+        errors = list(cancel_result.errors)
+        for position in positions:
+            position_slot_id = _position_strategy_slot_id(position) or strategy_slot_id or "broker_position"
+            symbol = _position_symbol(position)
+            quantity = _position_sellable_quantity(position)
+            if not symbol or quantity <= 0:
+                errors.append(
+                    {
+                        "error_code": "MINIQMT_OPERATOR_POSITION_NOT_SELLABLE",
+                        "message": "position cannot be flattened because symbol or sellable quantity is missing",
+                        "context": {"position": dict(position)},
+                    }
+                )
+                continue
+            instance = self.create_algo_instance(
+                parent_intent_id=command_id,
+                strategy_slot_id=position_slot_id,
+                symbol=symbol,
+                side=OrderSide.SELL,
+                target_quantity=quantity,
+                algo_code="OPERATOR_FLATTEN",
+                metadata={
+                    "operator_command_id": command_id,
+                    "operator_command_type": command_type,
+                    "source": "operator_command",
+                    "broker_position": dict(position),
+                },
+            )
+            price = _position_price(position)
+            child = self.submit_child_order(
+                algo_instance_id=instance.algo_instance_id,
+                quantity=quantity,
+                price=price,
+                metadata={
+                    "source": "operator_command",
+                    "operator_command_id": command_id,
+                    "operator_command_type": command_type,
+                    "broker_position": dict(position),
+                },
+            )
+            submitted_child_order_ids.append(child.child_order_id)
+            broker_packets.append(
+                {
+                    "action": "submit_flatten_sell",
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "price": price,
+                    "status": child.status.value,
+                }
+            )
+            if child.status == MiniQMTChildOrderStatus.REJECTED:
+                errors.append(
+                    {
+                        "error_code": "MINIQMT_OPERATOR_FLATTEN_SELL_REJECTED",
+                        "message": "flatten sell order was rejected by gateway",
+                        "context": {"child_order_id": child.child_order_id, "symbol": symbol},
+                    }
+                )
+        status = MiniQMTOperatorCommandStatus.EXECUTED if not errors else MiniQMTOperatorCommandStatus.REJECTED
+        return self._operator_result(
+            command_id=command_id,
+            command_type=command_type,
+            status=status,
+            reason=reason,
+            payload=payload,
+            cancelled_child_order_ids=list(cancel_result.cancelled_child_order_ids),
+            submitted_child_order_ids=submitted_child_order_ids,
+            affected_algo_instance_ids=_unique(
+                item.algo_instance_id for item in self.repository.list_algo_instances(runtime.runtime_id, active_only=False)
+            ),
+            broker_packets=broker_packets,
+            errors=errors,
+            metadata={"position_count": len(positions), "strategy_slot_id": strategy_slot_id},
+        )
+
+    def _execute_reset_strategy_slot(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> MiniQMTOperatorCommandResult:
+        runtime = self._require_runtime()
+        strategy_slot_id = _optional_text(payload.get("strategy_slot_id"))
+        if not strategy_slot_id:
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_STRATEGY_SLOT_REQUIRED",
+                        "message": "RESET_STRATEGY_SLOT requires strategy_slot_id",
+                        "context": {"command_id": command_id},
+                    }
+                ],
+            )
+        cancel_result = self._execute_cancel_all_open_orders(
+            command_id=f"{command_id}_cancel",
+            command_type="CANCEL_ALL_OPEN_ORDERS",
+            reason=f"{reason}; reset pre-cancel",
+            payload={"strategy_slot_id": strategy_slot_id},
+        )
+        affected_instances = []
+        for instance in self.repository.list_algo_instances(runtime.runtime_id, active_only=True):
+            if instance.strategy_slot_id != strategy_slot_id:
+                continue
+            affected_instances.append(instance.algo_instance_id)
+            self.oms.record_algo_instance(
+                instance.model_copy(
+                    update={
+                        "status": MiniQMTAlgoInstanceStatus.CANCELLED,
+                        "metadata": {
+                            **dict(instance.metadata),
+                            "operator_command_id": command_id,
+                            "operator_reset_reason": reason,
+                        },
+                    }
+                )
+            )
+        status = MiniQMTOperatorCommandStatus.EXECUTED if not cancel_result.errors else MiniQMTOperatorCommandStatus.REJECTED
+        return self._operator_result(
+            command_id=command_id,
+            command_type=command_type,
+            status=status,
+            reason=reason,
+            payload=payload,
+            cancelled_child_order_ids=list(cancel_result.cancelled_child_order_ids),
+            affected_algo_instance_ids=affected_instances,
+            broker_packets=list(cancel_result.broker_packets),
+            errors=list(cancel_result.errors),
+            metadata={"strategy_slot_id": strategy_slot_id, "settlement_snapshot_required": True},
+        )
+
+    def _execute_replace_alpha_signal_book(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> MiniQMTOperatorCommandResult:
+        strategy_slot_id = _optional_text(payload.get("strategy_slot_id"))
+        alpha_signal_book_id = _optional_text(payload.get("alpha_signal_book_id"))
+        errors = []
+        if not strategy_slot_id:
+            errors.append(
+                {
+                    "error_code": "MINIQMT_OPERATOR_STRATEGY_SLOT_REQUIRED",
+                    "message": "REPLACE_ALPHA_SIGNAL_BOOK requires strategy_slot_id",
+                    "context": {"command_id": command_id},
+                }
+            )
+        if not alpha_signal_book_id:
+            errors.append(
+                {
+                    "error_code": "MINIQMT_OPERATOR_ALPHA_SIGNAL_BOOK_REQUIRED",
+                    "message": "REPLACE_ALPHA_SIGNAL_BOOK requires alpha_signal_book_id",
+                    "context": {"command_id": command_id},
+                }
+            )
+        status = MiniQMTOperatorCommandStatus.REJECTED if errors else MiniQMTOperatorCommandStatus.EXECUTED
+        return self._operator_result(
+            command_id=command_id,
+            command_type=command_type,
+            status=status,
+            reason=reason,
+            payload=payload,
+            errors=errors,
+            metadata={
+                "strategy_slot_id": strategy_slot_id,
+                "alpha_signal_book_id": alpha_signal_book_id,
+                "execution_layer_mutated": False,
+            },
+        )
+
+    def _operator_result(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        status: MiniQMTOperatorCommandStatus,
+        reason: str,
+        payload: dict[str, Any],
+        cancelled_child_order_ids: list[str] | None = None,
+        submitted_child_order_ids: list[str] | None = None,
+        affected_algo_instance_ids: list[str] | None = None,
+        broker_packets: list[dict[str, Any]] | None = None,
+        errors: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MiniQMTOperatorCommandResult:
+        runtime = self._require_runtime()
+        result = MiniQMTOperatorCommandResult(
+            command_id=command_id,
+            command_type=command_type,
+            runtime_id=runtime.runtime_id,
+            status=status,
+            reason=reason,
+            strategy_slot_id=_optional_text(payload.get("strategy_slot_id")),
+            alpha_signal_book_id=_optional_text(payload.get("alpha_signal_book_id")),
+            cancelled_child_order_ids=list(cancelled_child_order_ids or []),
+            submitted_child_order_ids=list(submitted_child_order_ids or []),
+            affected_algo_instance_ids=list(affected_algo_instance_ids or []),
+            broker_packets=list(broker_packets or []),
+            errors=list(errors or []),
+            metadata=dict(metadata or {}),
+        )
+        self.repository.upsert_runtime(
+            runtime.model_copy(
+                update={
+                    "event_loop_state": MiniQMTExecutionRuntimeState.READY
+                    if status == MiniQMTOperatorCommandStatus.EXECUTED
+                    else MiniQMTExecutionRuntimeState.FAILED,
+                    "oms_state": MiniQMTOmsState.RECONCILED
+                    if not self.repository.list_child_orders(runtime.runtime_id, active_only=True)
+                    else runtime.oms_state,
+                    "metadata": {
+                        **dict(runtime.metadata),
+                        "last_operator_command": result.model_dump(mode="json"),
+                    },
+                }
+            )
+        )
+        self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=(
+                MiniQMTExecutionEventType.OPERATOR_COMMAND_EXECUTED
+                if status == MiniQMTOperatorCommandStatus.EXECUTED
+                else MiniQMTExecutionEventType.OPERATOR_COMMAND_REJECTED
+            ),
+            source="operator",
+            payload=result.model_dump(mode="json"),
+        )
+        return result
 
     def _require_runtime(self) -> MiniQMTExecutionRuntimeRecord:
         runtime = self.repository.get_runtime(self.config.runtime_id)
@@ -835,6 +1378,169 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _unique(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _position_symbol(position: dict[str, Any]) -> str | None:
+    for key in ("symbol", "stock_code", "instrument", "code"):
+        value = _optional_text(position.get(key))
+        if value:
+            return value
+    return None
+
+
+def _position_strategy_slot_id(position: dict[str, Any]) -> str | None:
+    for key in ("strategy_slot_id", "slot_id"):
+        value = _optional_text(position.get(key))
+        if value:
+            return value
+    metadata = position.get("metadata")
+    if isinstance(metadata, dict):
+        return _optional_text(metadata.get("strategy_slot_id"))
+    return None
+
+
+def _open_sell_positions_from_broker_orders(
+    broker_orders: list[dict[str, Any]],
+    *,
+    known_symbols: set[str | None],
+) -> list[dict[str, Any]]:
+    """Fallback for brokers/tests that expose open orders but no positions."""
+
+    positions: list[dict[str, Any]] = []
+    seen_symbols = {symbol for symbol in known_symbols if symbol}
+    for order in broker_orders:
+        symbol = _position_symbol(order)
+        if not symbol or symbol in seen_symbols:
+            continue
+        if _order_side(order) != "SELL" or not _is_open_broker_order(order):
+            continue
+        quantity = _open_order_remaining_quantity(order)
+        if quantity <= 0:
+            continue
+        seen_symbols.add(symbol)
+        positions.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "available_quantity": quantity,
+                "price": _position_price(order),
+                "strategy_slot_id": _position_strategy_slot_id(order) or _optional_text(order.get("strategy_name")),
+                "source": "open_sell_order_fallback",
+                "broker_order": dict(order),
+            }
+        )
+    return positions
+
+
+def _order_side(order: dict[str, Any]) -> str | None:
+    raw = str(order.get("side") or "").strip().upper()
+    if raw in {"BUY", "SELL"}:
+        return raw
+    try:
+        order_type = int(order.get("order_type"))
+    except (TypeError, ValueError):
+        return None
+    if order_type == 23:
+        return "BUY"
+    if order_type == 24:
+        return "SELL"
+    return None
+
+
+def _is_open_broker_order(order: dict[str, Any]) -> bool:
+    diagnostic = order.get("diagnostic")
+    if isinstance(diagnostic, dict) and diagnostic.get("cancelable_stale_warning") is True:
+        return False
+    raw_status = str(order.get("status") or order.get("raw_status") or "").strip().upper()
+    if raw_status in {"OPEN", "SUBMITTED", "PARTIALLY_FILLED", "PENDING", "CANCEL_REQUESTED"}:
+        return True
+    try:
+        return int(order.get("order_status")) in {48, 49, 50, 51, 55}
+    except (TypeError, ValueError):
+        return False
+
+
+def _open_order_remaining_quantity(order: dict[str, Any]) -> int:
+    for key in ("remaining_volume", "remaining_quantity"):
+        if order.get(key) is None:
+            continue
+        try:
+            return max(int(order[key]), 0)
+        except (TypeError, ValueError):
+            continue
+    try:
+        order_volume = int(order.get("order_volume") or order.get("quantity") or 0)
+        traded_volume = int(order.get("traded_volume") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(order_volume - traded_volume, 0)
+
+
+def _position_quantity(position: dict[str, Any]) -> int:
+    for key in ("quantity", "volume", "current_amount", "position_quantity"):
+        if position.get(key) is None:
+            continue
+        try:
+            return max(int(position[key]), 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _position_sellable_quantity(position: dict[str, Any]) -> int:
+    for key in ("available_quantity", "available", "can_sell", "can_sell_quantity", "sellable_quantity"):
+        if position.get(key) is None:
+            continue
+        try:
+            return max(int(position[key]), 0)
+        except (TypeError, ValueError):
+            continue
+    return _position_quantity(position)
+
+
+def _position_price(position: dict[str, Any]) -> float:
+    for key in ("price", "last_price", "current_price", "market_price", "avg_price", "avg_cost", "cost_price", "open_price"):
+        if position.get(key) in (None, ""):
+            continue
+        try:
+            return max(float(position[key]), 0.0)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _broker_order_id(order: dict[str, Any]) -> str | None:
+    for key in ("broker_order_id", "order_id", "qmt_order_id", "native_order_id"):
+        value = _optional_text(order.get(key))
+        if value:
+            return value
+    return None
+
+
+def _order_price_type(order: dict[str, Any]) -> int:
+    try:
+        return int(order.get("price_type") or 11)
+    except (TypeError, ValueError):
+        return 11
 
 
 def _required_positive_float(value: Any, name: str) -> float:

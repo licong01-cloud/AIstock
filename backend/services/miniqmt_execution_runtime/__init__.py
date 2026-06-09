@@ -9,7 +9,13 @@ from .client import (
     PaperMiniQMTRuntimeSubmitResult,
     PaperV2MiniQMTRuntimeGateway,
 )
-from .gateway import FakeMiniQMTGateway, MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
+from .gateway import (
+    FakeMiniQMTGateway,
+    MiniQMTGateway,
+    MiniQMTGatewayCancelAck,
+    MiniQMTGatewayOrderAck,
+    QmtClientMiniQMTGateway,
+)
 from .models import (
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrder,
@@ -23,6 +29,8 @@ from .models import (
     MiniQMTExecutionRuntimeState,
     MiniQMTGatewayState,
     MiniQMTOmsState,
+    MiniQMTOperatorCommandResult,
+    MiniQMTOperatorCommandStatus,
     MiniQMTRuntimeRecoverySnapshot,
 )
 from .oms import MiniQMTOmsLedger, MiniQMTOmsProjection
@@ -64,5 +72,8 @@ __all__ = [
     "MiniQMTOmsLedger",
     "MiniQMTOmsProjection",
     "MiniQMTOmsState",
+    "MiniQMTOperatorCommandResult",
+    "MiniQMTOperatorCommandStatus",
     "MiniQMTRuntimeRecoverySnapshot",
+    "QmtClientMiniQMTGateway",
 ]

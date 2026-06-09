@@ -72,6 +72,13 @@ function brokerOrderCount(row: SimulationRuntimeRunSummary | null | undefined): 
   return arrayValue(handles).length + batchResults.length;
 }
 
+function miniQmtRuntimeId(row: SimulationRuntimeRunSummary | null | undefined): string | undefined {
+  const batch = objectValue(itemValue(row?.broker_context, "qmt_batch_result"));
+  const evidence = objectValue(itemValue(batch, "runtime_evidence"));
+  const runtimeId = textValue(itemValue(evidence, "runtime_id"));
+  return runtimeId === "-" ? undefined : runtimeId;
+}
+
 function reconciliationIssueCount(row: SimulationRuntimeRunSummary | null | undefined): number {
   if (!row) return 0;
   return numberValue(itemValue(row.reconciliation_context, "issue_count"));
@@ -81,6 +88,14 @@ function projectionRows(row: SimulationRuntimeRunSummary | null | undefined, key
   if (!row) return [];
   return arrayValue(row[key]).map(objectValue).filter((item): item is JsonObject => Boolean(item));
 }
+
+const OPERATOR_COMMAND_OPTIONS = [
+  "CANCEL_ALL_OPEN_ORDERS",
+  "FLATTEN_ALL_POSITIONS",
+  "FLATTEN_STRATEGY_SLOT",
+  "RESET_STRATEGY_SLOT",
+  "REPLACE_ALPHA_SIGNAL_BOOK",
+] as const;
 
 export default function SimulationRuntimeOpsPage() {
   const [scheduler, setScheduler] = useState<SimulationRuntimeSchedulerStatus | null>(null);
@@ -93,6 +108,12 @@ export default function SimulationRuntimeOpsPage() {
   const [strategyId, setStrategyId] = useState("");
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [operatorCommand, setOperatorCommand] = useState<(typeof OPERATOR_COMMAND_OPTIONS)[number]>("CANCEL_ALL_OPEN_ORDERS");
+  const [operatorReason, setOperatorReason] = useState("");
+  const [operatorConfirmText, setOperatorConfirmText] = useState("");
+  const [operatorAlphaSignalBookId, setOperatorAlphaSignalBookId] = useState("");
+  const [operatorSubmitting, setOperatorSubmitting] = useState(false);
+  const [operatorResult, setOperatorResult] = useState<JsonObject | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
@@ -152,6 +173,38 @@ export default function SimulationRuntimeOpsPage() {
   function clearSelectedRun() {
     setSelectedRun(null);
     setSelectedPlan(null);
+    setOperatorResult(null);
+  }
+
+  async function executeOperatorCommand() {
+    if (!selectedRun) return;
+    setOperatorSubmitting(true);
+    setError(null);
+    setOperatorResult(null);
+    try {
+      const result = await simulationRuntimeApi.executeMiniQmtOperatorCommand({
+        command_type: operatorCommand,
+        account_group_id: String(selectedRun.run.account_group_id || ""),
+        strategy_slot_id: selectedRun.run.strategy_slot_id ? String(selectedRun.run.strategy_slot_id) : undefined,
+        alpha_signal_book_id: operatorAlphaSignalBookId.trim() || undefined,
+        trade_date: selectedRun.run.trade_date || tradeDate,
+        runtime_config_hash: String(selectedRun.run.execution_plan_hash || selectedRun.run.binding_hash || selectedRun.run.release_hash || ""),
+        runtime_id: miniQmtRuntimeId(selectedRun.run),
+        reason: operatorReason.trim(),
+        confirm_text: operatorConfirmText.trim(),
+        requested_by: "paper-v2-simulation-runtime-ui",
+        payload: {
+          selected_run_id: selectedRun.run.run_id,
+          source: "simulation_runtime_ops_page",
+        },
+      });
+      setOperatorResult(result as unknown as JsonObject);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setOperatorSubmitting(false);
+    }
   }
 
   return (
@@ -235,6 +288,43 @@ export default function SimulationRuntimeOpsPage() {
             { key: "state", header: "State", render: (row) => <StatusBadge status={textValue(row.state)} /> },
           ]}
         />
+      </SectionCard>
+
+      <SectionCard title="MiniQMT Operator Command" eyebrow="runtime command">
+        <NoticePanel title="必须进入 MiniQMTExecutionRuntime" tone="warning">
+          清仓、撤单、重置策略槽和换 alpha 信号只允许通过受控 runtime 命令执行；页面不会自动触发，破坏性命令必须输入确认文本。
+        </NoticePanel>
+        <div className="pv2-form-grid" data-testid="sim-runtime-operator-command-panel">
+          <div className="pv2-field">
+            <label>command</label>
+            <select className="pv2-select" data-testid="sim-runtime-operator-command-type" value={operatorCommand} onChange={(event) => setOperatorCommand(event.target.value as (typeof OPERATOR_COMMAND_OPTIONS)[number])}>
+              {OPERATOR_COMMAND_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </div>
+          <div className="pv2-field">
+            <label>reason</label>
+            <input className="pv2-input" data-testid="sim-runtime-operator-reason" value={operatorReason} onChange={(event) => setOperatorReason(event.target.value)} placeholder="必须填写运维原因" />
+          </div>
+          <div className="pv2-field">
+            <label>confirm_text</label>
+            <input className="pv2-input" data-testid="sim-runtime-operator-confirm" value={operatorConfirmText} onChange={(event) => setOperatorConfirmText(event.target.value)} placeholder={`EXECUTE ${operatorCommand}`} />
+          </div>
+          <div className="pv2-field">
+            <label>alpha_signal_book_id</label>
+            <input className="pv2-input" data-testid="sim-runtime-operator-alpha-book" value={operatorAlphaSignalBookId} onChange={(event) => setOperatorAlphaSignalBookId(event.target.value)} placeholder="REPLACE_ALPHA_SIGNAL_BOOK 必填" />
+          </div>
+        </div>
+        <div className="pv2-readable-panel">
+          <div className="pv2-readable-table">
+            <div className="pv2-readable-row"><div className="pv2-readable-key">目标运行</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-operator-selected-run">{selectedRun?.run.run_id || "请先选择 MiniQMT SIM 运行记录"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">account group / slot</div><div className="pv2-readable-value pv2-mono">{textValue(selectedRun?.run.account_group_id)} / {textValue(selectedRun?.run.strategy_slot_id)}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">确认文本</div><div className="pv2-readable-value pv2-mono">EXECUTE {operatorCommand}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">last result</div><div className="pv2-readable-value" data-testid="sim-runtime-operator-result">{textValue(itemValue(objectValue(operatorResult?.result), "status") || itemValue(operatorResult, "ok"))}</div></div>
+          </div>
+        </div>
+        <button className="pv2-button pv2-button-danger" data-testid="sim-runtime-operator-submit" type="button" onClick={executeOperatorCommand} disabled={!selectedRun || selectedRun.run.broker_backend !== "minqmt_sim" || operatorSubmitting || !operatorReason.trim()}>
+          {operatorSubmitting ? "执行中..." : "提交 runtime 命令"}
+        </button>
       </SectionCard>
 
       <SectionCard title="选中运行链路" eyebrow="operator detail">

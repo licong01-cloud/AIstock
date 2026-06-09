@@ -27,7 +27,12 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
-from .models import MiniQMTChildOrder, MiniQMTChildOrderStatus, MiniQMTExecutionRuntimeConfig
+from .models import (
+    MiniQMTChildOrder,
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionRuntimeConfig,
+    MiniQMTOperatorCommandResult,
+)
 from .repository import InMemoryMiniQMTExecutionRuntimeRepository, MiniQMTExecutionRuntimeRepository
 from .runtime import MiniQMTExecutionRuntime
 
@@ -442,6 +447,37 @@ class MiniQMTExecutionRuntimeClient:
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
             source=source,
         )
+
+    def execute_operator_command(
+        self,
+        *,
+        account_group_id: str,
+        trade_date: date,
+        runtime_config_hash: str,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        gateway: MiniQMTGateway,
+        runtime_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        source: str = "operator_command",
+    ) -> tuple[MiniQMTOperatorCommandResult, MiniQMTRuntimeEvidence]:
+        runtime = self._runtime(
+            account_group_id=account_group_id,
+            trade_date=trade_date,
+            runtime_config_hash=runtime_config_hash,
+            runtime_id=runtime_id,
+            gateway=gateway,
+            metadata={"source": source},
+        )
+        runtime.start()
+        result = runtime.execute_operator_command(
+            command_id=command_id,
+            command_type=command_type,
+            reason=reason,
+            payload=dict(payload or {}),
+        )
+        return result, self._evidence(runtime, source=source)
 
     def _evidence(self, runtime: MiniQMTExecutionRuntime, *, source: str) -> MiniQMTRuntimeEvidence:
         runtime_id = runtime.config.runtime_id
@@ -918,6 +954,7 @@ def _short_hash(value: Any) -> str:
 __all__ = [
     "MiniQMTExecutionRuntimeClient",
     "MiniQMTPlanPreviewResult",
+    "MiniQMTOperatorCommandResult",
     "MiniQMTRuntimeEvidence",
     "MiniQMTRuntimeManagedBatchSubmitResult",
     "PaperMiniQMTRuntimeChildResult",
