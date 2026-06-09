@@ -1,0 +1,87 @@
+{
+  "actual": "Current main has OperatorCommand models and MiniQMTExecutionRuntime.record_operator_command(), but code search shows this only appends OPERATOR_COMMAND_RECEIVED events. No service/router/UI path executes FLATTEN_ALL_POSITIONS, CANCEL_ALL_OPEN_ORDERS, RESET_STRATEGY_SLOT, or REPLACE_ALPHA_SIGNAL_BOOK through gateway/OMS/slot ledger, and Phase 3/4/5 validation records still mark Phase 6 as pending.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/gateway.py",
+    "backend/services/miniqmt_execution_runtime/oms.py",
+    "backend/services/miniqmt_execution_runtime/models.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/tests/miniqmt_execution_runtime",
+    "backend/tests/simulation_runtime",
+    "backend/tests/qmt_strategy_ledger",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified",
+    "tests/aistock_validation/bugs/20260609_BUG-297-p0-miniqmt-phase6-operator-commands-are-audit-only-and-not-executed-thro.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-297",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T15:42:48.715948Z",
+  "description": "Current main has OperatorCommand models and MiniQMTExecutionRuntime.record_operator_command(), but code search shows this only appends OPERATOR_COMMAND_RECEIVED events. No service/router/UI path executes FLATTEN_ALL_POSITIONS, CANCEL_ALL_OPEN_ORDERS, RESET_STRATEGY_SLOT, or REPLACE_ALPHA_SIGNAL_BOOK through gateway/OMS/slot ledger, and Phase 3/4/5 validation records still mark Phase 6 as pending.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-20526b0c5a29",
+      "timestamp": "2026-06-09T15:42:48.715943Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md#phase-6-operator-command-runtime",
+    "https://github.com/licong01-cloud/AIstock/issues/567#issuecomment-4660428233"
+  ],
+  "expected": "All MiniQMT operator commands enter MiniQMTExecutionRuntime as the only execution owner. CANCEL_ALL_OPEN_ORDERS cancels active child orders through gateway and terminalizes OMS state; FLATTEN_ALL_POSITIONS/FLATTEN_STRATEGY_SLOT generate sell-first execution through runtime/OMS with slot attribution and broker raw packets; RESET_STRATEGY_SLOT cancels/terminalizes slot orders and records settlement snapshot; REPLACE_ALPHA_SIGNAL_BOOK creates a new signal-book binding/target plan without changing execution code. Tests, validation history, and DESIGN-COMPLIANCE-001 evidence prove the behavior before BUG-210 closure.",
+  "first_seen_at": "2026-06-09T15:42:48.715948Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 877,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/877",
+  "last_seen_at": "2026-06-09T15:42:48.715948Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n operator_command|OperatorCommand|FLATTEN_ALL_POSITIONS|CANCEL_ALL_OPEN_ORDERS|RESET_STRATEGY_SLOT|REPLACE_ALPHA_SIGNAL_BOOK backend/services backend/routers backend/tests frontend/src tests/aistock_validation/bugs docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][Phase6] operator commands are audit-only and not executed through the runtime",
+  "trigger_condition": {
+    "fingerprint": "20526b0c5a2941614c3acf94",
+    "source_event_id": "FE-20260609-20526b0c5a29"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
