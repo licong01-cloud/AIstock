@@ -37,8 +37,8 @@
   "expected": "当前推荐股票列表显示股票代码和股票名称；入选/退出生效日期使用选股信号对应数据日后的下一交易日，跳过非交易日；荐股任务详情区能清楚区分列表版本、当前持仓/候选清单和策略包绑定信息。",
   "first_seen_at": "2026-06-09T06:05:02.096224Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2dda6ea15e93427cd79787a1ad429c06379ae2ad",
+  "fixed_at": "2026-06-09T08:51:12.774479Z",
   "github_issue_number": 852,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/852",
   "last_seen_at": "2026-06-09T06:05:02.096224Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/856",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -106,6 +107,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "CI watch-ci for PR #856 -> 17 passed, 0 pending, 0 failed",
+    "python -m py_compile backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -> passed after rebase",
+    "python -m pytest backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -q -p no:cacheprovider -> 23 passed after rebase",
+    "python -m ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -> All checks passed after rebase",
+    "frontend Playwright tests/paper-v2/paper-v2-advisory-ui.spec.ts --project=chromium on FRONTEND_PORT=3914 -> 2 passed",
+    "frontend tsc --noEmit -> blocked by existing tests/research-assistant/phase5-mcp-gateway-ui.spec.ts TS2322, not changed by BUG-292"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
