@@ -217,8 +217,8 @@ jobs:
           conda run -n AIstock python -m nox -s paper_v2_l3
         env:
           PAPER_V2_SKIP_REALTIME: '1'
-          PAPER_V2_E2E_TRADE_DATE: '2026-06-03'
-          PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-03'
+          PAPER_V2_E2E_TRADE_DATE: '2026-06-02'
+          PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-02'
 
       - name: nox -s qe_archive_l3
         run: |

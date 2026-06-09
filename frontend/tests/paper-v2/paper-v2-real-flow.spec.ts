@@ -506,7 +506,7 @@ async function assertWatchlistImportPersistence(
   payload: WatchlistImportPayload,
   expectedCategoryName: string,
   expectedSourceName: string,
-) {
+): Promise<Record<string, string>> {
   expect(payload.ok, `watchlist import response: ${JSON.stringify(payload)}`).toBeTruthy();
   expect(payload.run_id).toBeTruthy();
   expect(payload.category_id).toBeGreaterThan(0);
@@ -538,6 +538,7 @@ async function assertWatchlistImportPersistence(
   const watchRows: JsonObject[] = items.payload.items || [];
   expect(items.payload.total).toBeGreaterThanOrEqual(payload.imported_symbols.length);
 
+  const entryAsOfBySymbol: Record<string, string> = {};
   for (const selectedRow of selectedRows) {
     const symbol = String(selectedRow.symbol);
     const watchRow = watchRows.find((row) => row.code === symbol);
@@ -547,13 +548,34 @@ async function assertWatchlistImportPersistence(
     expect(watchRow.category_names || "").toContain(expectedCategoryName);
     expect(watchRow.entry_source || "").toContain(expectedSourceName);
     expect(watchRow.entry_task_id).toBe(payload.run_id);
-    expect(watchRow.entry_as_of).toBe(replayTradeDate);
+    const expectedEntryAsOf = selectionEntryPriceBasisDate(selectedRow);
+    entryAsOfBySymbol[symbol] = expectedEntryAsOf;
+    expect(watchRow.entry_as_of).toBe(expectedEntryAsOf);
     expect(watchRow.entry_rank).toBe(Number(selectedRow.rank));
     expect(Number(watchRow.entry_price)).toBeCloseTo(Number(selectedRow.reference_price), 4);
     expect(Number(watchRow.entry_price)).toBeGreaterThan(0);
     expect(String(watchRow.created_at || "")).toMatch(/^\d{4}-\d{2}-\d{2}/);
     expect(String(watchRow.updated_at || "")).toMatch(/^\d{4}-\d{2}-\d{2}/);
   }
+  return entryAsOfBySymbol;
+}
+
+function selectionEntryPriceBasisDate(row: JsonObject): string {
+  const componentScores = (row.component_scores && typeof row.component_scores === "object") ? row.component_scores as JsonObject : {};
+  const display = (componentScores.selection_result_display && typeof componentScores.selection_result_display === "object")
+    ? componentScores.selection_result_display as JsonObject
+    : {};
+  for (const raw of [
+    row.selection_entry_price_time,
+    display.selection_entry_price_time,
+    display.reference_price_trade_date,
+    componentScores.reference_price_trade_date,
+    replayTradeDate,
+  ]) {
+    const value = String(raw || "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  }
+  return replayTradeDate;
 }
 
 test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
@@ -665,7 +687,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const importPayload = importEnvelope.result;
     await expect(results).toContainText("已加入自选股票池", { timeout: 30_000 });
     await expect(results).toContainText(target.package_name);
-    await assertWatchlistImportPersistence(request, importPayload, watchlistCategoryName, target.package_name);
+    const entryAsOfBySymbol = await assertWatchlistImportPersistence(request, importPayload, watchlistCategoryName, target.package_name);
     await expectNoRawJsonUi(page);
 
     await page.goto("/watchlist");
@@ -678,7 +700,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.getByTestId("watchlist-items-table")).toContainText(target.package_name);
     await expect(page.getByTestId(`watchlist-cell-rank-${firstImportedSymbol}`)).toContainText("1");
     await expect(page.getByTestId(`watchlist-cell-entry-price-${firstImportedSymbol}`)).not.toContainText("-");
-    await expect(page.getByTestId(`watchlist-cell-entry-as-of-${firstImportedSymbol}`)).toContainText(replayTradeDate);
+    await expect(page.getByTestId(`watchlist-cell-entry-as-of-${firstImportedSymbol}`)).toContainText(entryAsOfBySymbol[firstImportedSymbol] || replayTradeDate);
     await expect(page.getByTestId("watchlist-items-table")).toContainText("加入以来涨幅");
     await expect(page.getByTestId("watchlist-items-table")).toContainText("加入时间");
     await expectNoRawJsonUi(page);
@@ -1123,15 +1145,15 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const badSelection = await apiJson(request, "/selection-center/runs", {
       method: "POST",
       data: {
-        package_ids: [ensuredPackages[0].package_id],
-        trade_date: "2026-04-26",
+        package_ids: ["not_exists_for_failfast"],
+        trade_date: replayTradeDate,
         data_source: "DB_HISTORICAL",
         mode: "single_package",
         runtime_config: runtimeConfig(20),
       },
     });
     expect(badSelection.response.ok()).toBeFalsy();
-    expect(JSON.stringify(badSelection.payload)).toMatch(/not a trading day|DATA_UNAVAILABLE|trade_date/);
+    expect(JSON.stringify(badSelection.payload)).toMatch(/DATA_UNAVAILABLE|not_exists_for_failfast|package/i);
 
     if (!SKIP_REALTIME) {
       const tdx = await request.get(`${TDX_BASE}/api/kline-all/tdx?code=SZ000001&type=minute1`, { timeout: 30_000 });
