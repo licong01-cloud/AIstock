@@ -290,7 +290,7 @@ def test_cli_persists_tmp_failure_candidate_history(
     assert "tests/aistock_validation/history" not in history_path.as_posix()
     assert history_payload["schema_version"] == "aistock_ci_failure_candidate_history_v1"
     assert history_payload["candidate"]["fingerprint"] == stdout_payload["fingerprint"]
-    assert history_payload["candidate"]["module"] == "validation"
+    assert history_payload["candidate"]["module"] == "paper_v2"
     assert history_payload["run_count"] == 1
     assert history_payload["observed_run_ids"] == ["9001"]
     assert history_payload["log_policy"]["full_log_embedded"] is False
@@ -709,6 +709,9 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert payload["nightly_failed_stages"] == ["nightly_l3"]
     assert payload["issue_title"].startswith("P1 Nightly failed:")
     assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
+    assert "paper_v2" in payload["suspected_modules"]
+    assert "noxfile.py" in payload["suspected_files"]
+    assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
     assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]

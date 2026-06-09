@@ -968,6 +968,15 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
         error = "self-hosted Windows runner unavailable"
         module = "validation"
         files = [".github/workflows/nightly.yml", "scripts/aistock_runner_health.py"]
+    elif "nightly_l3" in failed_keys:
+        error = "Nightly failed: " + ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
+        module = "paper_v2"
+        files = [
+            ".github/workflows/nightly.yml",
+            "noxfile.py",
+            "scripts/aistock_data_quality_smoke.py",
+            "scripts/aistock_validate.py",
+        ]
     elif failed_keys:
         error = "Nightly failed: " + ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
         module = "validation"

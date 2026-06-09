@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, suppress
 import os
 import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import nox
 
@@ -18,8 +23,44 @@ COMMON_ENV = {
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
 
+_VALIDATION_ENV_LOADED = False
+
+
+def _validation_env_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    explicit = os.environ.get("AISTOCK_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    source = os.environ.get("AISTOCK_SELF_HOSTED_SOURCE")
+    if source:
+        candidates.append(Path(source).expanduser() / ".env")
+    candidates.append(ROOT / ".env")
+    return candidates
+
+
+def _load_validation_env_file() -> None:
+    """Load DB/API validation env from the canonical root without copying secrets."""
+
+    global _VALIDATION_ENV_LOADED
+    if _VALIDATION_ENV_LOADED:
+        return
+    _VALIDATION_ENV_LOADED = True
+    env_path = next((path for path in _validation_env_candidates() if path.exists()), None)
+    if env_path is None:
+        return
+    os.environ.setdefault("AISTOCK_ENV_FILE", str(env_path))
+    for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and not os.environ.get(key):
+            os.environ[key] = value.strip().strip('"').strip("'")
+
 
 def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    _load_validation_env_file()
     env = os.environ.copy()
     env.update(COMMON_ENV)
     if extra:
@@ -74,6 +115,68 @@ def _is_port_open(port: str) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.3)
         return sock.connect_ex(("127.0.0.1", int(port))) == 0
+
+
+def _http_ready(url: str, *, timeout: float = 2.0) -> bool:
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            return 200 <= int(response.status) < 500
+    except (OSError, URLError, ValueError):
+        return False
+
+
+@contextmanager
+def _managed_validation_backend(session: nox.Session, backend_port: str):
+    """Start a temporary dev backend when UI validation owns an unused port."""
+
+    if str(backend_port) == "8001":
+        session.error("Refusing to start validation backend on production port 8001.")
+    if _is_port_open(backend_port):
+        yield
+        return
+
+    log_dir = ROOT / "tmp" / "validation" / "services"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"paper_v2_backend_{backend_port}.log"
+    log_file = log_path.open("w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "backend.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(backend_port),
+        ],
+        cwd=ROOT,
+        env=_env({"BACKEND_PORT": str(backend_port), "NEXT_APP_PORT": str(backend_port)}),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        url = f"http://127.0.0.1:{backend_port}/openapi.json"
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                session.error(f"Validation backend exited before ready; see {log_path}.")
+            if _http_ready(url):
+                session.log(f"Started temporary validation backend on {backend_port}; log={log_path}")
+                break
+            time.sleep(1)
+        else:
+            session.error(f"Validation backend did not become ready on {backend_port}; see {log_path}.")
+        yield
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            with suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=10)
+            if proc.poll() is None:
+                proc.kill()
+        log_file.close()
 
 
 def _codex_quick_validate_script() -> Path:
@@ -383,52 +486,53 @@ def paper_v2_ui(session: nox.Session) -> None:
     """Run Paper v2/Selection UI E2E tests on dev ports only."""
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    session.run(
-        "python",
-        "scripts/aistock_validate.py",
-        "ports",
-        "--allow-occupied",
-        backend_port,
-        frontend_port,
-        external=True,
-    )
-    session.run(
-        "python",
-        "scripts/aistock_validate.py",
-        "services",
-        "--backend-port",
-        backend_port,
-        "--tdx-port",
-        os.environ.get("TDX_HTTP_PORT", "19080"),
-        *(["--skip-tdx"] if os.environ.get("PAPER_V2_SKIP_REALTIME") == "1" else []),
-        external=True,
-    )
-    old_cwd = Path.cwd()
-    os.chdir(ROOT / "frontend")
-    try:
+    with _managed_validation_backend(session, backend_port):
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
-            "tests/paper-v2",
-            env=_env(
-                {
-                    "BACKEND_PORT": backend_port,
-                    "FRONTEND_PORT": frontend_port,
-                    "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
-                    "PAPER_V2_E2E_SKIP_REALTIME": os.environ.get(
-                        "PAPER_V2_E2E_SKIP_REALTIME",
-                        os.environ.get("PAPER_V2_SKIP_REALTIME", "0"),
-                    ),
-                }
-            ),
+            "python",
+            "scripts/aistock_validate.py",
+            "ports",
+            "--allow-occupied",
+            backend_port,
+            frontend_port,
             external=True,
         )
-    finally:
-        os.chdir(old_cwd)
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--tdx-port",
+            os.environ.get("TDX_HTTP_PORT", "19080"),
+            *(["--skip-tdx"] if os.environ.get("PAPER_V2_SKIP_REALTIME") == "1" else []),
+            external=True,
+        )
+        old_cwd = Path.cwd()
+        os.chdir(ROOT / "frontend")
+        try:
+            session.run(
+                "npm",
+                "run",
+                "test:e2e",
+                "--",
+                "tests/paper-v2",
+                env=_env(
+                    {
+                        "BACKEND_PORT": backend_port,
+                        "FRONTEND_PORT": frontend_port,
+                        "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                        "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                        "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                        "PAPER_V2_E2E_SKIP_REALTIME": os.environ.get(
+                            "PAPER_V2_E2E_SKIP_REALTIME",
+                            os.environ.get("PAPER_V2_SKIP_REALTIME", "0"),
+                        ),
+                    }
+                ),
+                external=True,
+            )
+        finally:
+            os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
