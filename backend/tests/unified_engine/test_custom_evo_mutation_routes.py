@@ -115,7 +115,6 @@ def test_custom_evo_rerun_route_schedules_only_target_loop(monkeypatch):
 
     req = qe.CustomEvoLoopRerunRequest(
         loop=_loop("replacement"),
-        execution_mode="parallel_2",
         node_id="node-a",
         node_parallelism={"node-a": 1},
         confirm_delete_old_result=True,
@@ -189,7 +188,6 @@ def test_custom_evo_rerun_keeps_full_distributed_parallelism(monkeypatch):
 
     req = qe.CustomEvoLoopRerunRequest(
         loop=_loop("replacement", node_id="node-b"),
-        execution_mode="parallel_2",
         node_parallelism={"node-a": 2, "node-b": 3},
         confirm_delete_old_result=True,
     )
@@ -210,7 +208,6 @@ def test_custom_evo_append_route_schedules_only_new_loop_indexes(monkeypatch):
 
     req = qe.CustomEvoAppendRequest(
         loops=[_loop("append-1"), _loop("append-2")],
-        execution_mode="parallel_2",
         ack_failed_loop_warning=True,
     )
     result = asyncio.run(qe.append_custom_evo_loops("task-a", req, background_tasks))
@@ -243,7 +240,6 @@ def test_custom_evo_append_keeps_existing_distributed_parallelism(monkeypatch):
 
     req = qe.CustomEvoAppendRequest(
         loops=[_loop("append-on-b", node_id="node-b")],
-        execution_mode="parallel_2",
         node_parallelism={"node-a": 2, "node-b": 3},
         ack_failed_loop_warning=True,
     )
@@ -320,7 +316,6 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
         task_name="clone task",
         target_desc="clone",
         loops=[_loop("clone-a", node_id="node-a"), _loop("clone-b", node_id="node-b")],
-        execution_mode="parallel_2",
         node_parallelism={"node-a": 2, "node-b": 3},
         clone_from_task_id="source-task",
     )

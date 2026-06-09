@@ -1535,7 +1535,7 @@ class SimulationLifecycleScheduler:
             local_broker=context.local_broker,
             managed_order_service=context.managed_order_service,
             mode=mode,
-            price_by_symbol=context.price_by_symbol,
+            price_by_symbol=context.price_by_symbol or context.current_prices,
         )
         if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
@@ -1671,7 +1671,7 @@ class SimulationLifecycleScheduler:
                 local_broker=context.local_broker,
                 managed_order_service=context.managed_order_service,
                 mode=mode,
-                price_by_symbol=context.price_by_symbol,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
             )
             if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
                 self._persist_strategy_performance(binding=binding, run=execution.run, context=context)

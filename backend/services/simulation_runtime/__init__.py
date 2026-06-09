@@ -1,6 +1,7 @@
 """Simulation runtime release and binding services."""
 
-from .bridges import LocalSimExecutionBridge, LocalSimPlanSubmitResult, MiniQMTExecutionBridge, MiniQMTPlanPreviewResult
+from backend.services.miniqmt_execution_runtime import MiniQMTPlanPreviewResult
+from .bridges import LocalSimExecutionBridge, LocalSimPlanSubmitResult, MiniQMTExecutionBridge
 from .decision import (
     ExecutionPlanCompiler,
     RebalanceIntentResult,
@@ -10,18 +11,31 @@ from .decision import (
 )
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
+    ALPHA_SIGNAL_FORBIDDEN_KEYS,
+    CANONICAL_MINIQMT_RUNTIME_OWNER,
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+    FIXED_STRATEGY_COUNT_GATE_KEYS,
+    AlphaSignalBook,
+    AlphaSignalItem,
     DailySelectionEvidence,
+    ExecutionPathNotCanonicalError,
     ExecutionPlan,
     ExecutionPlanIntent,
+    MiniQMTExecutionRuntimeRequest,
+    MiniQMTUnsupportedExecutionAlgoError,
+    OperatorCommand,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
     SimulationDailyRun,
     SimulationDailyRunStatus,
     SimulationReleaseBinding,
+    StrategySlotTarget,
     StrategyRuntimeRelease,
     TradingRuleDecision,
+    assert_alpha_signal_payload_boundary,
+    assert_canonical_miniqmt_runtime_gate,
+    assert_no_fixed_strategy_count_gate,
     assert_selection_only_payload_boundary,
 )
 from .performance import (
@@ -49,8 +63,14 @@ from .service import StrategyRuntimeReleaseService
 from .tail import TailHandlingOrderResult, TailHandlingPolicyService, TailHandlingResult
 
 __all__ = [
+    "ALPHA_SIGNAL_FORBIDDEN_KEYS",
+    "CANONICAL_MINIQMT_RUNTIME_OWNER",
     "DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID",
+    "FIXED_STRATEGY_COUNT_GATE_KEYS",
+    "AlphaSignalBook",
+    "AlphaSignalItem",
     "DailySelectionEvidence",
+    "ExecutionPathNotCanonicalError",
     "ProductionSimulationRunContextProvider",
     "DailySelectionSignalService",
     "ExecutionPlan",
@@ -60,8 +80,11 @@ __all__ = [
     "LocalSimExecutionBridge",
     "LocalSimPlanSubmitResult",
     "MiniQMTExecutionBridge",
+    "MiniQMTExecutionRuntimeRequest",
     "MiniQMTPlanPreviewResult",
+    "MiniQMTUnsupportedExecutionAlgoError",
     "MergedPositionReconciliation",
+    "OperatorCommand",
     "RebalanceIntentResult",
     "RebalanceIntentService",
     "RuntimeReleaseValidationState",
@@ -80,6 +103,7 @@ __all__ = [
     "SimulationReleaseBinding",
     "SimulationRuntimeOpsService",
     "SimulationRuntimeRepository",
+    "StrategySlotTarget",
     "StrategyRuntimeRelease",
     "StrategyRuntimeReleaseService",
     "StrategyPerformanceProjection",
@@ -94,6 +118,9 @@ __all__ = [
     "TailHandlingResult",
     "TradingRuleDecision",
     "TradingRuleService",
+    "assert_alpha_signal_payload_boundary",
+    "assert_canonical_miniqmt_runtime_gate",
+    "assert_no_fixed_strategy_count_gate",
     "assert_selection_only_payload_boundary",
     "build_simulation_lifecycle_scheduler_from_env",
     "simulation_lifecycle_background_scheduler",

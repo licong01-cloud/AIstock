@@ -11,10 +11,13 @@ from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHa
 from backend.services.qmt_strategy_ledger.order_service import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
-    ManagedBatchSubmitResult,
     ManagedOrderRequest,
-    OrderPreflightResult,
     QmtManagedOrderService,
+)
+from backend.services.miniqmt_execution_runtime import (
+    MiniQMTExecutionRuntimeClient,
+    MiniQMTPlanPreviewResult,
+    MiniQMTRuntimeManagedBatchSubmitResult,
 )
 from backend.services.trading_core.miniqmt_vnpy_execution import (
     MiniQMTCancelResult,
@@ -34,19 +37,16 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
-from .models import ExecutionPlan, ExecutionPlanIntent, SimulationReleaseBinding
+from .models import ExecutionPlan, ExecutionPlanIntent, MiniQMTUnsupportedExecutionAlgoError, SimulationReleaseBinding, canonical_json_sha256
+
+
+MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
 
 
 @dataclass(frozen=True)
 class LocalSimPlanSubmitResult:
     order_intents: tuple[OrderIntent, ...]
     handles: tuple[OrderHandle, ...]
-
-
-@dataclass(frozen=True)
-class MiniQMTPlanPreviewResult:
-    requests: tuple[ManagedOrderRequest, ...]
-    preflights: tuple[OrderPreflightResult, ...]
 
 
 class LocalSimExecutionBridge:
@@ -96,10 +96,16 @@ class LocalSimExecutionBridge:
 
 
 class MiniQMTExecutionBridge:
-    """Translate shared plans into managed MiniQMT virtual-ledger orders."""
+    """Runtime-client facade for shared MiniQMT execution plans."""
 
-    def __init__(self, *, managed_order_service: QmtManagedOrderService) -> None:
+    def __init__(
+        self,
+        *,
+        managed_order_service: QmtManagedOrderService,
+        runtime_client: MiniQMTExecutionRuntimeClient | None = None,
+    ) -> None:
         self._managed_order_service = managed_order_service
+        self._runtime_client = runtime_client or MiniQMTExecutionRuntimeClient()
 
     def build_managed_order_requests(
         self,
@@ -182,10 +188,19 @@ class MiniQMTExecutionBridge:
 
     def preview_plan(self, **kwargs: Any) -> MiniQMTPlanPreviewResult:
         requests = self.build_managed_order_requests(**kwargs)
-        preflights = tuple(self._managed_order_service.preview_order(request) for request in requests)
-        return MiniQMTPlanPreviewResult(requests=tuple(requests), preflights=preflights)
+        plan = kwargs["plan"]
+        binding = kwargs["binding"]
+        return self._runtime_client.preview_managed_order_requests(
+            managed_order_service=self._managed_order_service,
+            requests=requests,
+            account_group_id=self._account_group_id(plan=plan, binding=binding),
+            trade_date=plan.target_trade_date,
+            runtime_config_hash=self._runtime_config_hash(plan),
+            runtime_id=self._runtime_id(plan=plan, binding=binding),
+            source="simulation_runtime_preview",
+        )
 
-    def submit_plan(self, **kwargs: Any) -> ManagedBatchSubmitResult:
+    def submit_plan(self, **kwargs: Any) -> MiniQMTRuntimeManagedBatchSubmitResult:
         requests = self.build_managed_order_requests(**kwargs)
         if not requests:
             raise ArtifactGenerationFailedError("MiniQMTExecutionBridge requires at least one plan intent")
@@ -195,7 +210,17 @@ class MiniQMTExecutionBridge:
                 "MiniQMTExecutionBridge only submits SIM orders; LIVE requires separate approval path",
                 context={"mode": mode},
             )
-        return self._managed_order_service.submit_batch(requests)
+        plan = kwargs["plan"]
+        binding = kwargs["binding"]
+        return self._runtime_client.submit_managed_order_requests(
+            managed_order_service=self._managed_order_service,
+            requests=requests,
+            account_group_id=self._account_group_id(plan=plan, binding=binding),
+            trade_date=plan.target_trade_date,
+            runtime_config_hash=self._runtime_config_hash(plan),
+            runtime_id=self._runtime_id(plan=plan, binding=binding),
+            source="simulation_runtime_submit",
+        )
 
     def _build_vnpy_style_managed_order_requests(
         self,
@@ -232,6 +257,32 @@ class MiniQMTExecutionBridge:
         return list(submitter.requests)
 
     @staticmethod
+    def _account_group_id(*, plan: ExecutionPlan, binding: SimulationReleaseBinding) -> str:
+        return str(plan.account_group_id or binding.account_group_id or binding.broker_account_id or binding.strategy_id)
+
+    @staticmethod
+    def _runtime_config_hash(plan: ExecutionPlan) -> str:
+        return canonical_json_sha256(
+            {
+                "plan_id": plan.plan_id,
+                "plan_hash": plan.plan_hash,
+                "execution_policy_sha256": plan.execution_policy_sha256,
+                "tail_policy_sha256": plan.tail_policy_sha256,
+            }
+        )
+
+    @staticmethod
+    def _runtime_id(*, plan: ExecutionPlan, binding: SimulationReleaseBinding) -> str:
+        digest = canonical_json_sha256(
+            {
+                "binding_id": binding.binding_id,
+                "plan_id": plan.plan_id,
+                "trade_date": plan.target_trade_date.isoformat(),
+            }
+        )
+        return f"mqrt_sim_{digest[:24]}"
+
+    @staticmethod
     def _validate_plan_binding(*, plan: ExecutionPlan, binding: SimulationReleaseBinding, mode: str) -> None:
         if plan.binding_id != binding.binding_id or plan.binding_hash != binding.binding_hash:
             raise InvalidStateTransitionError(
@@ -243,6 +294,7 @@ class MiniQMTExecutionBridge:
                 "MiniQMTExecutionBridge requires a minqmt_sim binding",
                 context={"binding_id": binding.binding_id, "broker_backend": binding.broker_backend.value},
             )
+        _reject_v25_for_miniqmt_broker_execution(plan)
         if str(mode or "SIM").strip().upper() != "SIM":
             raise LiveApprovalRequiredError(
                 "MiniQMTExecutionBridge build path currently accepts SIM mode only",
@@ -486,6 +538,45 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
     }
 
 
+def _reject_v25_for_miniqmt_broker_execution(plan: ExecutionPlan) -> None:
+    policy_container = plan.plan_payload_json.get("execution_policy")
+    if not isinstance(policy_container, dict):
+        return
+    payload = policy_container.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
+    explicit_algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip()
+    candidates = (
+        (explicit_algo_code,)
+        if explicit_algo_code
+        else (
+            payload.get("validated_execution_policy_id"),
+            payload.get("policy_id"),
+            payload.get("policy_version_id"),
+            policy_container.get("version_id"),
+            plan.execution_policy_version_id,
+        )
+    )
+    matched = _infer_unsupported_v25_algo_from_values(candidates)
+    if matched is None:
+        return
+    raise MiniQMTUnsupportedExecutionAlgoError(
+        "MiniQMT broker execution does not support V25_* execution algorithms",
+        context=_policy_error_context(
+            plan=plan,
+            policy_container=policy_container,
+            payload=payload,
+            inferred_algo_code=matched,
+            broker_backend="minqmt_sim",
+            required_action=(
+                "activate SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT, "
+                "or another approved MiniQMT vn.py-style execution asset"
+            ),
+        ),
+    )
+
+
 def _reject_vnpy_style_for_localsim(plan: ExecutionPlan) -> None:
     policy_container = plan.plan_payload_json.get("execution_policy")
     if not isinstance(policy_container, dict):
@@ -545,6 +636,22 @@ def _infer_vnpy_algo_code_from_text(value: str) -> str | None:
     for algo_code in VNPY_STYLE_ASSETS:
         if algo_code in normalized:
             return algo_code
+    return None
+
+
+def _infer_unsupported_v25_algo_from_values(values: tuple[Any, ...]) -> str | None:
+    for value in values:
+        normalized = str(value or "").strip().upper()
+        if not normalized:
+            continue
+        if normalized in MINIQMT_UNSUPPORTED_V25_ALGOS:
+            return normalized
+        for segment in normalized.split(":"):
+            if segment in MINIQMT_UNSUPPORTED_V25_ALGOS:
+                return segment
+        for algo_code in MINIQMT_UNSUPPORTED_V25_ALGOS:
+            if algo_code in normalized:
+                return algo_code
     return None
 
 

@@ -1042,7 +1042,6 @@ class StrategyEvolutionForkRequest(BaseModel):
     from_loop_index: int = Field(..., description="从哪个 loop 分叉（必须已完成且有模型文件）")
     task_name: Optional[str] = Field(None, description="新任务名称")
     loops: List[StrategyLoopConfig] = Field(..., description="每个 Loop 的策略参数配置", min_length=1)
-    execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8 并行度)")
     inherit_history: bool = Field(False, description="是否继承截止到该 loop 的演进历史")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=继承源任务节点")
 
@@ -1080,7 +1079,6 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             from_loop_index=req.from_loop_index,
             task_name=req.task_name,
             loops_config=loops_config,
-            execution_mode=req.execution_mode or "serial",
             inherit_history=req.inherit_history,
             node_id=req.node_id,
         )
@@ -1204,7 +1202,6 @@ class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
     target_desc: str = Field("", description="任务描述")
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
-    execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8)")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
@@ -1215,7 +1212,6 @@ class CustomEvolutionCreateRequest(BaseModel):
 
 class CustomEvoLoopRerunRequest(BaseModel):
     loop: CustomEvoLoopConfig = Field(..., description="Replacement config for the target Loop")
-    execution_mode: str = Field("serial", description="serial / parallel_N")
     node_id: Optional[str] = Field(None, description="Default execution node for this mutation")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     engine_mode: str = Field("unified", description="Only unified is supported")
@@ -1224,7 +1220,6 @@ class CustomEvoLoopRerunRequest(BaseModel):
 
 class CustomEvoAppendRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="New Loop configs to append", min_length=1)
-    execution_mode: str = Field("serial", description="serial / parallel_N")
     node_id: Optional[str] = Field(None, description="Default execution node for appended loops")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     engine_mode: str = Field("unified", description="Only unified is supported")
@@ -1441,7 +1436,6 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             task_name=req.task_name,
             target_desc=req.target_desc,
             loops_config=loops_config,
-            execution_mode=req.execution_mode or "serial",
             node_id=loop1_node_id,
             node_parallelism=node_parallelism,
             engine_mode="unified",
@@ -1453,7 +1447,6 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             "status": "success",
             "task_id": new_task_id,
             "total_loops": len(loops_config),
-            "execution_mode": req.execution_mode or "serial",
             "node_assignments": [
                 {"loop_index": cfg.get("loop_index"), "node_id": cfg.get("node_id")}
                 for cfg in loops_config
@@ -1570,7 +1563,6 @@ async def rerun_custom_evo_loop(
             task_id=task_id,
             loop_index=loop_index,
             loop_config=loops_config[0],
-            execution_mode=req.execution_mode or "serial",
             node_id=request_node_id,
             node_parallelism=node_parallelism,
         )
@@ -1619,7 +1611,6 @@ async def append_custom_evo_loops(
         result = await scheduler.append_custom_evo_loops(
             task_id=task_id,
             loops_config=loops_config,
-            execution_mode=req.execution_mode or "serial",
             node_id=request_node_id,
             node_parallelism=node_parallelism,
             ack_failed_loop_warning=req.ack_failed_loop_warning,

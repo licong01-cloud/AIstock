@@ -18,8 +18,8 @@ import threading
 import time
 
 from ..infra.deepseek_client import DeepSeekClient  # shared infrastructure module
+from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
 from ..infra.debug_logger import debug_logger  # shared logging utility
-from ..core.risk_data_fetcher_impl import RiskDataFetcher
 
 
 DEFAULT_ENABLED_ANALYSTS: Dict[str, bool] = {
@@ -42,7 +42,7 @@ class StockAnalysisAgents:
     implementation lives entirely inside next_app.
     """
 
-    def __init__(self, model: str = "deepseek-chat") -> None:
+    def __init__(self, model: str = DEFAULT_DEEPSEEK_MODEL) -> None:
         self.model = model
         self.deepseek_client = DeepSeekClient(model=model)
 
@@ -231,6 +231,7 @@ class StockAnalysisAgents:
         risk_data_text = ""
         if risk_data and risk_data.get("data_success"):
             # 使用格式化的风险数据（改为使用 next_app 内部实现）
+            
             from ..core.risk_data_fetcher_impl import RiskDataFetcher
 
             fetcher = RiskDataFetcher()
@@ -313,8 +314,6 @@ class StockAnalysisAgents:
         """构建流动性参考数据文本（从旧版 ai_agents 迁移而来）。"""
 
         section_title = "\n【流动性参考数据】"
-        lines: list[str] = [section_title]
-
         core = None
         if fund_flow_data and fund_flow_data.get("data_success"):
             if isinstance(fund_flow_data, dict):
@@ -363,7 +362,6 @@ class StockAnalysisAgents:
                         return value
             return None
 
-        fund_flow_lines: list[str] = []
         parsed_records: list[tuple[datetime, Dict[str, Any]]] = []
         if records:
             for item in records:
@@ -378,6 +376,7 @@ class StockAnalysisAgents:
                 if dt is None:
                     continue
                 parsed_records.append((dt, item))
+        return section_title
 
     def market_sentiment_agent(
         self,
@@ -637,7 +636,6 @@ class StockAnalysisAgents:
                 executor.submit(_run_single, name): name for name in enabled_keys
             }
             for fut in as_completed(future_map):
-                name = future_map[fut]
                 key, value = fut.result()
                 with lock:
                     results[key] = value

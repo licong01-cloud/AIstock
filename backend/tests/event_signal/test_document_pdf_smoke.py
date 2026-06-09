@@ -96,7 +96,7 @@ def test_build_deepseek_messages_include_chunk_ids():
 def test_process_candidate_uses_injected_downloader_extractor_and_client(tmp_path):
     class FakeClient:
         def call_api(self, messages, model=None, temperature=0.7, max_tokens=2000):
-            assert model == "deepseek-chat"
+            assert model == "deepseek-v4-pro"
             assert "chunk:" in messages[1]["content"]
             return (
                 '{"risk_level":"high","direction":"risk","conclusion":"needs review",'
