@@ -714,6 +714,9 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
     assert payload["llm_triage_advice"]["workflow_gate"] == "ready"
     assert payload["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
+    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["workflow_gate"] == "ready"
+    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["shell_commands_allowed"] is False
+    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["llm_invoked"] is False
     assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
@@ -881,6 +884,8 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])
     assert "triage-quality-smoke" in code_steps
     assert "llm-triage-quality.json" in code_steps
+    assert "test-plan-advice" in code_steps
+    assert "llm-test-plan-advice.json" in code_steps
     summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run

@@ -111,3 +111,95 @@ def test_triage_quality_smoke_cli_uses_compact_success_output(capsys, tmp_path):
     assert '"suggested_plan_count": 2' in captured.out
     assert "DeepSeek API key" not in captured.out
     assert output.exists()
+
+
+def test_test_plan_advice_allows_runner_enabled_catalog_plan():
+    payload = adapter.build_test_plan_advice(
+        "github_models",
+        adapter.load_config(),
+        plan_keys=["l0", "validation_catalog_integrity", "validation_center_backend"],
+        changed_files=["scripts/llm_provider_adapter.py"],
+        module="validation.runner",
+    )
+
+    assert payload["schema_version"] == adapter.TEST_PLAN_ADVICE_SCHEMA_VERSION
+    assert payload["provider"] == "github_models"
+    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["deterministic_gate"]["runner_enabled_only"] is True
+    assert payload["deterministic_gate"]["command_keys_allowlisted"] is True
+    assert payload["deterministic_gate"]["validation_select_compatible"] is True
+    assert payload["deterministic_gate"]["shell_commands_allowed"] is False
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert [item["plan_key"] for item in payload["test_plan_advice"]] == [
+        "l0",
+        "validation_catalog_integrity",
+        "validation_center_backend",
+    ]
+
+
+def test_test_plan_advice_blocks_unknown_non_runner_and_production_state_plans():
+    config = adapter.load_config()
+
+    unknown = adapter.build_test_plan_advice("deterministic", config, plan_keys=["missing_plan"])
+    assert unknown["deterministic_gate"]["workflow_gate"] == "blocked"
+    assert unknown["test_plan_advice"][0]["rejection_reasons"] == ["unknown_plan_key"]
+
+    non_runner = adapter.build_test_plan_advice("deterministic", config, plan_keys=["validation_center_ui"])
+    assert non_runner["deterministic_gate"]["workflow_gate"] == "blocked"
+    assert "runner_not_enabled" in non_runner["test_plan_advice"][0]["rejection_reasons"]
+
+    business_state = adapter.build_test_plan_advice("deterministic", config, plan_keys=["miniqmt_sim_trading_hours_l5"])
+    assert business_state["deterministic_gate"]["workflow_gate"] == "blocked"
+    assert "runner_not_enabled" in business_state["test_plan_advice"][0]["rejection_reasons"]
+    assert "writes_business_state" in business_state["test_plan_advice"][0]["rejection_reasons"]
+
+
+def test_test_plan_advice_rejects_unregistered_workspace_path(tmp_path):
+    payload = adapter.build_test_plan_advice(
+        "deterministic",
+        adapter.load_config(),
+        plan_keys=["l0"],
+        workspace_path=str(tmp_path),
+    )
+
+    assert payload["deterministic_gate"]["workflow_gate"] == "blocked"
+    assert payload["workspace_gate"]["allowed"] is False
+    assert payload["workspace_gate"]["reason"] == "workspace_path_not_registered_git_worktree"
+
+
+def test_test_plan_advice_rejects_shell_command_fields():
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_test_plan_advice(
+            {
+                "schema_version": adapter.TEST_PLAN_ADVICE_SCHEMA_VERSION,
+                "test_plan_advice": [{"plan_key": "l0", "command": "python -m nox -s l0"}],
+                "deterministic_gate": {"shell_commands_allowed": False},
+            }
+        )
+
+
+def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
+    output = tmp_path / "test-plan-advice.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "test-plan-advice",
+            "--provider",
+            "github_models",
+            "--changed-file",
+            "scripts/llm_provider_adapter.py",
+            "--module",
+            "validation.runner",
+            "--output",
+            str(output),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"check": "test-plan-advice"' in captured.out
+    assert '"workflow_gate": "passed"' not in captured.out
+    assert '"advised_plan_count": 3' in captured.out
+    assert '"llm_invoked": false' in captured.out
+    assert output.exists()

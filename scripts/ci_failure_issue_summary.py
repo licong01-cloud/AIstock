@@ -1029,6 +1029,12 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
 
         config = llm_provider_adapter.load_config()
         advice = llm_provider_adapter.build_triage_quality_smoke(provider, config)
+        test_plan_advice = llm_provider_adapter.build_test_plan_advice(
+            provider,
+            config,
+            changed_files=list(summary.get("suspected_files") or []),
+            module=(summary.get("suspected_modules") or [None])[0],
+        )
     except Exception as exc:
         return {
             "schema_version": "aistock_deepseek_triage_advice_v1",
@@ -1055,6 +1061,25 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
         "required": True,
         "full_repo_scan_allowed": False,
         "full_logs_included": False,
+    }
+    advice["test_plan_advice_gate"] = {
+        "schema_version": test_plan_advice["schema_version"],
+        "workflow_gate": test_plan_advice["deterministic_gate"]["workflow_gate"],
+        "advised_plan_count": len(test_plan_advice["test_plan_advice"]),
+        "allowed_plan_count": len([item for item in test_plan_advice["test_plan_advice"] if item["allowed"]]),
+        "validation_select_compatible": test_plan_advice["deterministic_gate"]["validation_select_compatible"],
+        "workspace_path_allowed": test_plan_advice["deterministic_gate"]["workspace_path_allowed"],
+        "shell_commands_allowed": test_plan_advice["deterministic_gate"]["shell_commands_allowed"],
+        "llm_invoked": test_plan_advice["llm_invocation_evidence"]["invoked"],
+        "plans": [
+            {
+                "plan_key": item["plan_key"],
+                "allowed": item["allowed"],
+                "nox_session": item.get("nox_session"),
+                "rejection_reasons": item.get("rejection_reasons") or [],
+            }
+            for item in test_plan_advice["test_plan_advice"]
+        ],
     }
     return advice
 
