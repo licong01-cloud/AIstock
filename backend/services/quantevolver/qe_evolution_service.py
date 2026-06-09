@@ -83,6 +83,20 @@ _QE_LOOP_RETRY_MODE_ALIASES = {
     "full": QE_LOOP_RETRY_MODE_FULL_TRAIN,
 }
 
+CUSTOM_EVO_STARTED_LOOP_STATUSES = {
+    "pending",
+    "submitted",
+    "running",
+    "processing",
+    "completed",
+    "failed",
+    "cancelled",
+    "canceled",
+    "interrupted",
+    "timeout",
+    "stopped",
+}
+
 
 def normalize_qe_loop_retry_mode(mode: Optional[str]) -> str:
     """Normalize explicit loop retry mode from API/UI callers."""
@@ -2503,6 +2517,34 @@ class AutoEvolutionScheduler:
                         params + [limit, offset],
                     )
                 rows = [dict(row) for row in cur.fetchall()]
+                if detail != "full":
+                    custom_task_ids = [
+                        row["task_id"]
+                        for row in rows
+                        if row.get("task_type") == "custom_evo"
+                    ]
+                    if custom_task_ids:
+                        cur.execute(
+                            """
+                            SELECT task_id, status, COUNT(*) AS count
+                            FROM qe_evolution_loops
+                            WHERE task_id = ANY(%s)
+                            GROUP BY task_id, status
+                            """,
+                            (custom_task_ids,),
+                        )
+                        loop_counts: Dict[str, List[Dict[str, Any]]] = {}
+                        for row in cur.fetchall():
+                            loop_counts.setdefault(row["task_id"], []).append(dict(row))
+                        for task in rows:
+                            if task.get("task_type") != "custom_evo":
+                                continue
+                            loop_rows = [
+                                {"status": count_row["status"]}
+                                for count_row in loop_counts.get(task["task_id"], [])
+                                for _ in range(int(count_row.get("count") or 0))
+                            ]
+                            task.update(self._custom_evo_start_state_from_rows(task, loop_rows))
         return rows if detail == "full" else [compact_task_row(row) for row in rows]
 
     async def resume_task(self, task_id: str, additional_loops: int = 0, force_full_train: bool = False) -> dict:
@@ -2524,6 +2566,12 @@ class AutoEvolutionScheduler:
             raise ValueError(f"演进任务正在运行中: {task_id}")
 
         task_type = task.get('task_type', 'evolution')
+        if task_type == "custom_evo":
+            start_state = self.get_custom_evo_start_state(task_id)
+            if start_state.get("startable"):
+                raise ValueError(
+                    f"custom_evo task {task_id} has never been started; use custom-evo/run instead of resume"
+                )
         if force_full_train and task_type == "custom_evo":
             strategy_evo_config = task.get("strategy_evo_config") or {}
             if isinstance(strategy_evo_config, str):
@@ -4914,6 +4962,60 @@ class AutoEvolutionScheduler:
         parsed["loops"] = sorted(normalized_loops, key=lambda item: int(item.get("loop_index") or 0))
         return parsed
 
+    def _custom_evo_start_state_from_rows(
+        self,
+        task: Dict[str, Any],
+        loop_rows: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        status = str(task.get("status") or "").lower()
+        submitted_loop_count = sum(
+            1
+            for row in loop_rows
+            if str(row.get("status") or "").lower() in CUSTOM_EVO_STARTED_LOOP_STATUSES
+        )
+        startable = (
+            task.get("task_type") == "custom_evo"
+            and status == "pending"
+            and int(task.get("current_loop") or 0) == 0
+            and submitted_loop_count == 0
+        )
+        if startable:
+            reason = "custom_evo task has not been submitted"
+        elif task.get("task_type") != "custom_evo":
+            reason = "task is not custom_evo"
+        elif status != "pending":
+            reason = f"task status is {task.get('status') or 'unknown'}"
+        elif int(task.get("current_loop") or 0) != 0:
+            reason = f"current_loop is {task.get('current_loop')}"
+        else:
+            reason = f"{submitted_loop_count} loop rows already exist"
+        return {
+            "editable": startable,
+            "startable": startable,
+            "resume_allowed": not startable,
+            "start_reason": reason,
+            "submitted_loop_count": submitted_loop_count,
+        }
+
+    def get_custom_evo_start_state(self, task_id: str) -> Dict[str, Any]:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                task = cur.fetchone()
+                if not task:
+                    raise ValueError(f"custom_evo task not found: {task_id}")
+                cur.execute(
+                    """
+                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                    ORDER BY loop_index ASC
+                    """,
+                    (task_id,),
+                )
+                loop_rows = [dict(row) for row in cur.fetchall()]
+        return self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+
     async def get_custom_evo_editable_config(self, task_id: str) -> Dict[str, Any]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -4952,6 +5054,7 @@ class AutoEvolutionScheduler:
             for row in loop_rows
             if row.get("status") in ("failed", "cancelled", "canceled")
         ]
+        start_state = self._custom_evo_start_state_from_rows(dict(task), loop_rows)
         return {
             "task_id": task_id,
             "task_name": task.get("task_name"),
@@ -4967,7 +5070,189 @@ class AutoEvolutionScheduler:
             "loop_statuses": loop_rows,
             "failed_loop_indexes": failed_loop_indexes,
             "config_source": "strategy_evo_config.loops",
+            **start_state,
         }
+
+    async def update_custom_evo_editable_config(
+        self,
+        task_id: str,
+        *,
+        task_name: str,
+        target_desc: str = "",
+        loops_config: List[Dict[str, Any]],
+        node_id: Optional[str] = None,
+        node_parallelism: Optional[Dict[str, int]] = None,
+        engine_mode: str = "unified",
+    ) -> Dict[str, Any]:
+        if not loops_config:
+            raise ValueError("loops_config cannot be empty")
+        if (engine_mode or "unified") != "unified":
+            raise ValueError("QE legacy execution engine has been removed; only engine_mode='unified' is supported.")
+
+        lock_cm = get_conn()
+        lock_conn = lock_cm.__enter__()
+        try:
+            self._acquire_custom_evo_mutation_lock(lock_conn, task_id)
+            with get_conn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                    task = cur.fetchone()
+                    if not task:
+                        raise ValueError(f"custom_evo task not found: {task_id}")
+                    if task.get("task_type") != "custom_evo":
+                        raise ValueError(f"task {task_id} is not a custom_evo task")
+                    cur.execute(
+                        """
+                        SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                        FROM qe_evolution_loops
+                        WHERE task_id = %s
+                        ORDER BY loop_index ASC
+                        """,
+                        (task_id,),
+                    )
+                    loop_rows = [dict(row) for row in cur.fetchall()]
+                    start_state = self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+                    if not start_state.get("editable"):
+                        raise ValueError(
+                            f"custom_evo task {task_id} has already started or is not editable: "
+                            f"{start_state.get('start_reason')}"
+                        )
+
+                    normalized_loops: List[Dict[str, Any]] = []
+                    for idx, loop_cfg in enumerate(loops_config, start=1):
+                        cfg = dict(loop_cfg)
+                        cfg["loop_index"] = idx
+                        ensure_loop_fixed_seed(cfg, context=f"custom_evo.update[{idx}]")
+                        if cfg.get("backtest_only") and "source_label_horizon" not in cfg:
+                            if not cfg.get("model_source_task_id") or cfg.get("model_source_loop_index") is None:
+                                raise ValueError(f"Loop {idx}: backtest-only requires model_source before label_horizon validation")
+                            cfg["source_label_horizon"] = self._get_source_loop_label_horizon(
+                                cfg["model_source_task_id"],
+                                int(cfg["model_source_loop_index"]),
+                            )
+                        label_horizon = normalize_label_horizon(
+                            cfg.get("label_horizon"),
+                            field_name=f"custom_evo.update[{idx}].label_horizon",
+                        )
+                        if cfg.get("backtest_only"):
+                            source_horizon = normalize_label_horizon(
+                                cfg.get("source_label_horizon"),
+                                field_name=f"custom_evo.update[{idx}].source_label_horizon",
+                            )
+                            if label_horizon != source_horizon:
+                                raise ValueError(
+                                    f"Loop {idx}: backtest-only label_horizon={label_horizon} "
+                                    f"does not match source model label_horizon={source_horizon}"
+                                )
+                        cfg["label_horizon"] = label_horizon
+                        normalized_loops.append(cfg)
+
+                    resolved_loops, loop1_node_id, full_node_parallelism = self._normalize_full_custom_evo_nodes(
+                        normalized_loops,
+                        node_id,
+                        node_parallelism,
+                    )
+                    first_loop = resolved_loops[0]
+                    factor_names = [str(k).split("||")[0] for k in first_loop.get("factor_keys", [])]
+                    first_custom_params = dict(first_loop.get("strategy_params") or {})
+                    if first_loop.get("label_type"):
+                        first_custom_params["label_type"] = first_loop["label_type"]
+                    if bool(first_loop.get("disable_alpha158", False)):
+                        first_custom_params["disable_alpha158"] = True
+                    first_label_horizon = normalize_label_horizon(first_loop.get("label_horizon"))
+                    if first_label_horizon != DEFAULT_LABEL_HORIZON:
+                        first_custom_params["label_horizon"] = first_label_horizon
+                    first_custom_params = merge_qe_minute_runtime_contract(
+                        first_custom_params,
+                        config=first_loop,
+                        execution_algo=first_loop.get("execution_algo"),
+                        execution_algo_params=first_loop.get("execution_algo_params"),
+                        source="custom_evo_pending_update_base_experiment",
+                        allow_default_execution_algo=True,
+                    )
+                    strategy_config = {
+                        "loops": resolved_loops,
+                        "engine_mode": "unified",
+                        "node_parallelism": full_node_parallelism,
+                        "node_resolution_policy": "loop1_inherit_v1",
+                        "clone_from_task_id": (
+                            task.get("strategy_evo_config") or {}
+                        ).get("clone_from_task_id") if isinstance(task.get("strategy_evo_config"), dict) else None,
+                    }
+                    if isinstance(task.get("strategy_evo_config"), str):
+                        try:
+                            old_cfg = json.loads(task.get("strategy_evo_config") or "{}")
+                            if old_cfg.get("clone_from_task_id"):
+                                strategy_config["clone_from_task_id"] = old_cfg.get("clone_from_task_id")
+                        except json.JSONDecodeError:
+                            pass
+                    cur.execute(
+                        """
+                        UPDATE qe_experiments
+                        SET experiment_name = %s,
+                            factor_names = %s,
+                            model_id = %s,
+                            strategy_id = %s,
+                            data_split = %s,
+                            custom_params = %s,
+                            updated_at = NOW()
+                        WHERE experiment_id = %s
+                        """,
+                        (
+                            f"自定义演进基准 {task_name}",
+                            json.dumps(factor_names),
+                            first_loop.get("model_id"),
+                            first_loop.get("strategy_id"),
+                            json.dumps(first_loop.get("data_split") or {}),
+                            json.dumps(first_custom_params),
+                            task.get("base_experiment_id"),
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_tasks
+                        SET task_name = %s,
+                            target_desc = %s,
+                            max_loops = %s,
+                            current_loop = 0,
+                            status = 'pending',
+                            node_id = %s,
+                            strategy_evo_config = %s,
+                            label_horizon = %s,
+                            updated_at = NOW()
+                        WHERE task_id = %s
+                        """,
+                        (
+                            task_name,
+                            target_desc or "",
+                            len(resolved_loops),
+                            loop1_node_id,
+                            json.dumps(strategy_config),
+                            first_label_horizon,
+                            task_id,
+                        ),
+                    )
+                conn.commit()
+
+            return {
+                "task_id": task_id,
+                "operation": "update_pending_config",
+                "total_loops": len(resolved_loops),
+                "node_parallelism": full_node_parallelism,
+                "node_assignments": [
+                    {"loop_index": cfg.get("loop_index"), "node_id": cfg.get("node_id")}
+                    for cfg in resolved_loops
+                ],
+                "editable": True,
+                "startable": True,
+                "resume_allowed": False,
+                "start_reason": "custom_evo task has not been submitted",
+            }
+        finally:
+            try:
+                self._release_custom_evo_mutation_lock(lock_conn, task_id)
+            finally:
+                lock_cm.__exit__(None, None, None)
 
     def _acquire_custom_evo_mutation_lock(self, conn, task_id: str) -> None:
         with conn.cursor() as cur:

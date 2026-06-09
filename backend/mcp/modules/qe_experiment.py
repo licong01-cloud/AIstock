@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
 QE_EXPERIMENT_STOP_CONFIRM = "QE_EXPERIMENT_STOP"
+QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM = "QE_SINGLE_EXPERIMENT_UPDATE_CONFIG"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
+QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM = "QE_CUSTOM_EVO_UPDATE_CONFIG"
 QE_CUSTOM_EVO_DELETE_CONFIRM = "QE_CUSTOM_EVO_DELETE"
 QE_TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
 QE_TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
@@ -26,6 +28,9 @@ TOOL_NAMES = (
     "qe_experiment_get_logs_tail",
     "qe_experiment_get_enhanced_metrics",
     "qe_experiment_get_trade_stats",
+    "qe_single_experiment_create_pending",
+    "qe_single_experiment_get_config",
+    "qe_single_experiment_update_config_confirmed",
     "qe_experiment_run_confirmed",
     "qe_experiment_stop_confirmed",
     "qe_custom_evo_list_tasks",
@@ -36,6 +41,8 @@ TOOL_NAMES = (
     "qe_custom_evo_get_loop_analysis",
     "qe_custom_evo_get_config",
     "qe_custom_evo_get_logs_tail",
+    "qe_custom_evo_create_pending",
+    "qe_custom_evo_update_config_confirmed",
     "qe_custom_evo_run_confirmed",
     "qe_custom_evo_delete_confirmed",
     "qe_custom_evo_retry_loop_confirmed",
@@ -143,6 +150,26 @@ def register(registry: "ModuleRegistry") -> None:
         safe = registry.sanitize(experiment_id, "experiment_id")
         return client.get(f"/quantevolver/experiments/{safe}/trade-stats")
 
+    @registry.mcp.tool(name="qe_single_experiment_create_pending")
+    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None) -> Any:
+        normalized_config = _normalize_template_config("single_experiment", config_json or {})
+        normalized_config["created_by_type"] = "mcp"
+        normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
+        normalized_config["source_context_json"] = source_context_json
+        return client.post("/quantevolver/experiments/pending", normalized_config)
+
+    @registry.mcp.tool(name="qe_single_experiment_get_config")
+    def qe_single_experiment_get_config(experiment_id: str) -> Any:
+        safe = registry.sanitize(experiment_id, "experiment_id")
+        return client.get(f"/quantevolver/experiments/{safe}/editable-config")
+
+    @registry.mcp.tool(name="qe_single_experiment_update_config_confirmed")
+    def qe_single_experiment_update_config_confirmed(experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None) -> Any:
+        registry.confirm(confirm_update, QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM, "confirm_update")
+        normalized_config = _normalize_template_config("single_experiment", config_json or {})
+        safe = registry.sanitize(experiment_id, "experiment_id")
+        return client.put(f"/quantevolver/experiments/{safe}/editable-config", normalized_config)
+
     @registry.mcp.tool(name="qe_experiment_run_confirmed")
     def qe_experiment_run_confirmed(experiment_id: str, node_id: str | None = None, confirm_run: str | None = None) -> Any:
         registry.confirm(confirm_run, QE_EXPERIMENT_RUN_CONFIRM, "confirm_run")
@@ -196,6 +223,42 @@ def register(registry: "ModuleRegistry") -> None:
     def qe_custom_evo_get_logs_tail(task_id: str, tail: int = 500) -> Any:
         safe = registry.sanitize(task_id, "task_id")
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
+
+    @registry.mcp.tool(name="qe_custom_evo_create_pending")
+    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None) -> Any:
+        normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
+        safe_node = registry.sanitize(node_id, "node_id") if node_id else None
+        return client.post(
+            "/quantevolver/evolution/custom-tasks",
+            {
+                "task_name": task_name,
+                "target_desc": target_desc,
+                "loops": normalized_config.get("loops") or [],
+                "node_id": safe_node,
+                "node_parallelism": node_parallelism,
+                "engine_mode": engine_mode,
+                "auto_start": False,
+                "clone_from_task_id": clone_from_task_id,
+            },
+        )
+
+    @registry.mcp.tool(name="qe_custom_evo_update_config_confirmed")
+    def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified") -> Any:
+        registry.confirm(confirm_update, QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM, "confirm_update")
+        normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
+        safe = registry.sanitize(task_id, "task_id")
+        safe_node = registry.sanitize(node_id, "node_id") if node_id else None
+        return client.put(
+            f"/quantevolver/evolution/tasks/{safe}/custom-evo-config",
+            {
+                "task_name": task_name,
+                "target_desc": target_desc,
+                "loops": normalized_config.get("loops") or [],
+                "node_id": safe_node,
+                "node_parallelism": node_parallelism,
+                "engine_mode": engine_mode,
+            },
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_run_confirmed")
     def qe_custom_evo_run_confirmed(task_id: str, force_full_train: bool = False, confirm_custom_evo: str | None = None) -> Any:
