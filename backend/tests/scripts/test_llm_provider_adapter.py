@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from scripts import llm_provider_adapter as adapter
@@ -318,5 +320,90 @@ def test_nightly_scheduler_advice_cli_uses_compact_success_output(capsys, tmp_pa
     assert exit_code == 0
     assert '"check": "nightly-scheduler-advice"' in captured.out
     assert '"queue_count":' in captured.out
+    assert '"llm_invoked": false' in captured.out
+    assert output.exists()
+
+
+def test_prompt_evaluation_has_20_fixtures_and_compact_metrics():
+    payload = adapter.build_prompt_evaluation("deterministic", adapter.load_config())
+
+    assert payload["schema_version"] == adapter.PROMPT_EVALUATION_SCHEMA_VERSION
+    assert payload["metrics"]["case_count"] >= 20
+    assert payload["metrics"]["actionability_precision"] == 1.0
+    assert payload["metrics"]["dedupe_hit_rate"] == 1.0
+    assert payload["metrics"]["plan_recommendation_accuracy"] == 1.0
+    assert payload["metrics"]["issue_body_completeness"] == 1.0
+    assert payload["metrics"]["average_prompt_tokens"] > 0
+    assert payload["metrics"]["average_completion_tokens"] is None
+    assert payload["policy_gate"]["workflow_gate"] == "passed"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert "triage_failure" in payload["prompt_pack_versions"]
+
+
+def _write_false_positive_prompt_eval_cases(tmp_path):
+    payload = json.loads(adapter.DEFAULT_EVALUATION_CASES.read_text(encoding="utf-8-sig"))
+    case = payload["cases"][0]
+    case["failure_event"]["error_signature"] = "AssertionError: synthetic false positive fixture"
+    case["expected"].update(
+        {
+            "actionable": False,
+            "expected_action": "skip",
+            "expected_plan_keys": [],
+            "issue_body_required_sections": [],
+            "false_positive": True,
+        }
+    )
+    cases_path = tmp_path / "false-positive-fixtures.json"
+    cases_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return cases_path
+
+
+def test_prompt_evaluation_blocks_validation_llm_changes_when_false_positive_rate_is_high(tmp_path):
+    payload = adapter.build_prompt_evaluation(
+        "deterministic",
+        adapter.load_config(),
+        cases_path=_write_false_positive_prompt_eval_cases(tmp_path),
+        changed_files=["prompt_packs/validation_llm/triage_failure.prompt.yml"],
+        false_positive_threshold=0.0,
+    )
+
+    assert payload["policy_gate"]["workflow_gate"] == "blocked"
+    assert payload["policy_gate"]["auto_file_enabled"] is False
+    assert payload["policy_gate"]["blocking"] == ["false_positive_auto_file_rate"]
+
+
+def test_prompt_evaluation_warns_but_does_not_block_unrelated_business_changes(tmp_path):
+    payload = adapter.build_prompt_evaluation(
+        "deterministic",
+        adapter.load_config(),
+        cases_path=_write_false_positive_prompt_eval_cases(tmp_path),
+        changed_files=["backend/services/example.py"],
+        false_positive_threshold=0.0,
+    )
+
+    assert payload["policy_gate"]["workflow_gate"] == "warning"
+    assert payload["policy_gate"]["blocking_relevant_change"] is False
+
+
+def test_prompt_evaluation_cli_uses_compact_success_output(capsys, tmp_path):
+    output = tmp_path / "prompt-evaluation.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "prompt-evaluation",
+            "--provider",
+            "github_models",
+            "--changed-file",
+            "prompt_packs/validation_llm/triage_failure.prompt.yml",
+            "--output",
+            str(output),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"check": "prompt-evaluation"' in captured.out
+    assert '"case_count": 20' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
