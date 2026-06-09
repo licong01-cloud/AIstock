@@ -1,0 +1,19 @@
+schema_version: aistock_validation_llm_prompt_v1
+prompt_id: triage_failure
+prompt_version: v1
+model_family: deepseek
+purpose: Build compact, actionable CI/Nightly failure triage advice without writing issues or executing commands.
+input_policy:
+  - compact_failure_event
+  - suspected_files
+  - code_intelligence_refs
+  - test_plan_catalog_summary
+forbidden_inputs:
+  - secrets
+  - full_repository
+  - full_logs_on_success
+output_schema: aistock_deepseek_triage_advice_v1
+safety:
+  no_shell_execution: true
+  no_issue_write: true
+  no_production_action: true

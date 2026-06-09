@@ -39,14 +39,47 @@ GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
 TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
 TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
 NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_advice_v1"
+PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
 CODEGRAPH_FRESHNESS_VALUES = {"fresh", "stale", "missing", "unknown"}
+EVALUATION_INFRA_SIGNATURE_TOKENS = (
+    "self-hosted runner unavailable",
+    "runner unavailable",
+    "dependency installation timeout",
+    "github rate limit",
+    "rate limit",
+    "checkout failed",
+    "artifact upload failed",
+)
+EVALUATION_ISSUE_BODY_SECTIONS = (
+    "Failure Summary",
+    "Regression Locator",
+    "Agent Handoff",
+    "Token Policy",
+    "Production Gates",
+)
+EVALUATION_MODULE_PLAN_MAP = {
+    "validation.runner": ["validation_catalog_integrity"],
+    "validation.center": ["validation_center_backend"],
+    "qe.archive": ["qe_archive_backend"],
+    "qe": ["qe_mcp_backend"],
+    "paper_v2_selection_center": ["simulation_core_l2"],
+    "research_assistant": ["research_assistant_backend"],
+    "model_registry": ["model_registry_backend"],
+    "market.regime_label": ["market_regime_label"],
+    "rl_execution": ["rl_execution_smoke"],
+    "local_data": ["data_sync_autonomy_backend"],
+}
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
+DEFAULT_PROMPT_PACK_ROOT = ROOT / "prompt_packs" / "validation_llm"
+DEFAULT_EVALUATION_CASES = DEFAULT_PROMPT_PACK_ROOT / "evaluation_cases" / "historical_failure_fixtures.json"
+EVALUATION_BLOCKING_PATH_PREFIXES = ("prompt_packs/validation_llm/", "configs/validation/llm_triage.yaml")
+EVALUATION_BLOCKING_FILES = ("scripts/llm_provider_adapter.py",)
 
 
 class ProviderAdapterError(RuntimeError):
@@ -688,6 +721,218 @@ def validate_nightly_scheduler_advice(advice: dict[str, Any]) -> None:
         raise ProviderAdapterError("nightly scheduler must not allow production actions")
 
 
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _load_prompt_pack_versions(prompt_root: Path = DEFAULT_PROMPT_PACK_ROOT) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for path in sorted(prompt_root.glob("*.prompt.yml")):
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            raise ProviderAdapterError(f"prompt file must be a mapping: {path}")
+        prompt_id = str(payload.get("prompt_id") or path.stem.replace(".prompt", ""))
+        prompt_version = str(payload.get("prompt_version") or "unknown")
+        versions[prompt_id] = f"{prompt_version}:{path.relative_to(ROOT).as_posix()}"
+    return versions
+
+
+def _load_evaluation_cases(path: Path = DEFAULT_EVALUATION_CASES) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
+        raise ProviderAdapterError("evaluation cases payload must contain cases list")
+    return [item for item in payload["cases"] if isinstance(item, dict)]
+
+
+def _safe_repo_rel(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _evaluation_actionable(event: dict[str, Any]) -> bool:
+    signature = str(event.get("error_signature") or "").lower()
+    failed_job = str(event.get("failed_job") or "").lower()
+    combined = f"{signature} {failed_job}"
+    return not any(token in combined for token in EVALUATION_INFRA_SIGNATURE_TOKENS)
+
+
+def _evaluation_plan_keys(event: dict[str, Any], *, actionable: bool) -> list[str]:
+    if not actionable:
+        return []
+    module = str(event.get("module") or "").strip().lower()
+    if module in EVALUATION_MODULE_PLAN_MAP:
+        return list(EVALUATION_MODULE_PLAN_MAP[module])
+    for module_key, plan_keys in EVALUATION_MODULE_PLAN_MAP.items():
+        if module_key in module:
+            return list(plan_keys)
+    return ["l0"]
+
+
+def _evaluation_dedupe_hit(event: dict[str, Any]) -> bool:
+    return bool(
+        event.get("existing_issue_number")
+        or event.get("existing_github_issue")
+        or event.get("existing_issue_url")
+        or event.get("dedupe_status") == "hit"
+        or event.get("dedupe_hit") is True
+    )
+
+
+def _deterministic_case_prediction(case: dict[str, Any]) -> dict[str, Any]:
+    event = case.get("failure_event") if isinstance(case.get("failure_event"), dict) else {}
+    module = str(event.get("module") or "validation.runner")
+    actionable = _evaluation_actionable(event)
+    dedupe_hit = _evaluation_dedupe_hit(event)
+    recommended_plans = _evaluation_plan_keys(event, actionable=actionable)
+    advice = build_test_plan_advice(
+        "deterministic",
+        load_config(),
+        plan_keys=recommended_plans or ["l0"],
+        module=module,
+    )
+    recommended_action = "skip"
+    if actionable:
+        recommended_action = "comment_existing_issue" if dedupe_hit else "create_github_issue"
+    return {
+        "case_id": case.get("case_id"),
+        "actionable": actionable,
+        "dedupe_hit": dedupe_hit,
+        "recommended_action": recommended_action,
+        "recommended_plan_keys": recommended_plans,
+        "issue_body_sections": list(EVALUATION_ISSUE_BODY_SECTIONS) if actionable else [],
+        "test_plan_gate": {
+            "workflow_gate": advice["deterministic_gate"]["workflow_gate"],
+            "llm_invoked": advice["llm_invocation_evidence"]["invoked"],
+        },
+        "usage": {
+            "prompt_tokens": _estimate_tokens(json.dumps(event, ensure_ascii=False, sort_keys=True)),
+            "completion_tokens": None,
+            "estimated_cost_usd": None,
+        },
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 1.0
+
+
+def build_prompt_evaluation(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    cases_path: Path = DEFAULT_EVALUATION_CASES,
+    prompt_root: Path = DEFAULT_PROMPT_PACK_ROOT,
+    changed_files: list[str] | None = None,
+    false_positive_threshold: float = 0.10,
+) -> dict[str, Any]:
+    """Evaluate prompt behavior against fixtures without invoking an LLM."""
+
+    validate_config(config)
+    provider_summary = _provider_model_summary(config, provider)
+    prompt_versions = _load_prompt_pack_versions(prompt_root)
+    cases = _load_evaluation_cases(cases_path)
+    if len(cases) < 20:
+        raise ProviderAdapterError("prompt evaluation requires at least 20 historical failure fixtures")
+    rows: list[dict[str, Any]] = []
+    counts = {
+        "actionable_expected": 0,
+        "actionable_correct": 0,
+        "false_positive": 0,
+        "dedupe_expected": 0,
+        "dedupe_correct": 0,
+        "plan_expected": 0,
+        "plan_correct": 0,
+        "issue_body_expected": 0,
+        "issue_body_complete": 0,
+    }
+    prompt_tokens: list[int] = []
+    completion_tokens: list[int] = []
+    for case in cases:
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+        prediction = _deterministic_case_prediction(case)
+        expected_actionable = bool(expected.get("actionable"))
+        expected_dedupe = bool(expected.get("dedupe_hit"))
+        expected_plans = [str(item) for item in expected.get("expected_plan_keys") or []]
+        expected_sections = [str(item) for item in expected.get("issue_body_required_sections") or []]
+        actionable_correct = prediction["actionable"] == expected_actionable
+        dedupe_correct = prediction["dedupe_hit"] == expected_dedupe
+        plan_correct = set(prediction["recommended_plan_keys"]) == set(expected_plans)
+        issue_body_complete = set(expected_sections).issubset(set(prediction["issue_body_sections"]))
+        counts["actionable_expected"] += int(expected_actionable)
+        counts["actionable_correct"] += int(actionable_correct and expected_actionable)
+        counts["false_positive"] += int(prediction["actionable"] and bool(expected.get("false_positive")))
+        counts["dedupe_expected"] += int(expected_dedupe)
+        counts["dedupe_correct"] += int(dedupe_correct and expected_dedupe)
+        counts["plan_expected"] += int(bool(expected_plans))
+        counts["plan_correct"] += int(plan_correct and bool(expected_plans))
+        counts["issue_body_expected"] += int(bool(expected_sections))
+        counts["issue_body_complete"] += int(issue_body_complete and bool(expected_sections))
+        prompt_tokens.append(int((prediction["usage"] or {}).get("prompt_tokens") or 0))
+        if isinstance((prediction["usage"] or {}).get("completion_tokens"), int):
+            completion_tokens.append(int(prediction["usage"]["completion_tokens"]))
+        rows.append(
+            {
+                "case_id": case.get("case_id"),
+                "actionable_correct": actionable_correct,
+                "dedupe_correct": dedupe_correct,
+                "plan_correct": plan_correct,
+                "issue_body_complete": issue_body_complete,
+                "recommended_action": prediction["recommended_action"],
+            }
+        )
+    false_positive_rate = _ratio(counts["false_positive"], len(cases))
+    metrics = {
+        "case_count": len(cases),
+        "actionability_precision": _ratio(counts["actionable_correct"], counts["actionable_expected"]),
+        "false_positive_auto_file_rate": false_positive_rate,
+        "dedupe_hit_rate": _ratio(counts["dedupe_correct"], counts["dedupe_expected"]),
+        "plan_recommendation_accuracy": _ratio(counts["plan_correct"], counts["plan_expected"]),
+        "issue_body_completeness": _ratio(counts["issue_body_complete"], counts["issue_body_expected"]),
+        "average_prompt_tokens": round(sum(prompt_tokens) / len(prompt_tokens), 2) if prompt_tokens else None,
+        "average_completion_tokens": round(sum(completion_tokens) / len(completion_tokens), 2) if completion_tokens else None,
+    }
+    changed_files = [str(item).replace("\\", "/") for item in changed_files or [] if str(item).strip()]
+    blocking_relevant = any(
+        path.startswith(EVALUATION_BLOCKING_PATH_PREFIXES) or path in EVALUATION_BLOCKING_FILES
+        for path in changed_files
+    )
+    policy_gate = "blocked" if false_positive_rate > false_positive_threshold and blocking_relevant else (
+        "warning" if false_positive_rate > false_positive_threshold else "passed"
+    )
+    return {
+        "schema_version": PROMPT_EVALUATION_SCHEMA_VERSION,
+        "provider": provider_summary["provider"],
+        "model": provider_summary["model"],
+        "prompt_pack_versions": prompt_versions,
+        "cases_path": _safe_repo_rel(cases_path),
+        "changed_files": changed_files,
+        "metrics": metrics,
+        "policy_gate": {
+            "workflow_gate": policy_gate,
+            "blocking_relevant_change": blocking_relevant,
+            "false_positive_threshold": false_positive_threshold,
+            "auto_file_enabled": false_positive_rate <= false_positive_threshold,
+            "warnings": ["false_positive_auto_file_rate"] if false_positive_rate > false_positive_threshold else [],
+            "blocking": ["false_positive_auto_file_rate"] if policy_gate == "blocked" else [],
+        },
+        "llm_invocation_evidence": {
+            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
+            "provider": provider_summary["provider"],
+            "model": provider_summary["model"],
+            "invoked": False,
+            "reason": "prompt_evaluation_fixture_dry_run_no_network",
+            "prompt_pack_versions": prompt_versions,
+            "input_policy": "historical_fixture_expected_labels_only",
+            "redaction_applied": True,
+        },
+        "rows": rows,
+    }
+
+
 def build_triage_quality_smoke(provider: str, config: dict[str, Any]) -> dict[str, Any]:
     """Build a schema-checked triage advice fixture without calling an LLM."""
 
@@ -930,6 +1175,41 @@ def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prompt_evaluation(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    provider = args.provider or str(config.get("default_provider") or "deterministic")
+    evaluation = build_prompt_evaluation(
+        provider,
+        config,
+        cases_path=Path(args.cases),
+        prompt_root=Path(args.prompt_root),
+        changed_files=_split_csv(args.changed_file),
+        false_positive_threshold=args.false_positive_threshold,
+    )
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(evaluation, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metrics = evaluation["metrics"]
+    compact = {
+        "provider": evaluation["provider"],
+        "model": evaluation["model"],
+        "schema_version": evaluation["schema_version"],
+        "workflow_gate": evaluation["policy_gate"]["workflow_gate"],
+        "case_count": metrics["case_count"],
+        "actionability_precision": metrics["actionability_precision"],
+        "false_positive_auto_file_rate": metrics["false_positive_auto_file_rate"],
+        "dedupe_hit_rate": metrics["dedupe_hit_rate"],
+        "plan_recommendation_accuracy": metrics["plan_recommendation_accuracy"],
+        "issue_body_completeness": metrics["issue_body_completeness"],
+        "average_prompt_tokens": metrics["average_prompt_tokens"],
+        "average_completion_tokens": metrics["average_completion_tokens"],
+        "llm_invoked": evaluation["llm_invocation_evidence"]["invoked"],
+        "artifact": args.output,
+    }
+    _print_success("prompt-evaluation", compact, as_json=args.json)
+    return 2 if evaluation["policy_gate"]["workflow_gate"] == "blocked" else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock validation LLM provider adapter")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
@@ -988,6 +1268,16 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler.add_argument("--workspace-path", default=None)
     scheduler.add_argument("--output", default=None, help="Optional ignored artifact path for full scheduler advice JSON.")
     scheduler.set_defaults(func=cmd_nightly_scheduler_advice)
+
+    evaluation = subparsers.add_parser("prompt-evaluation")
+    evaluation.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit compact JSON output")
+    evaluation.add_argument("--provider", choices=["deterministic", "github_models", "deepseek_api"], default=None)
+    evaluation.add_argument("--cases", default=str(DEFAULT_EVALUATION_CASES))
+    evaluation.add_argument("--prompt-root", default=str(DEFAULT_PROMPT_PACK_ROOT))
+    evaluation.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
+    evaluation.add_argument("--false-positive-threshold", type=float, default=0.10)
+    evaluation.add_argument("--output", default=None, help="Optional ignored artifact path for full prompt evaluation JSON.")
+    evaluation.set_defaults(func=cmd_prompt_evaluation)
     return parser
 
 

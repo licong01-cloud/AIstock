@@ -112,6 +112,22 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
     assert payload["workflow_validation_required"] is True
 
 
+def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "prompt_packs/validation_llm/triage_failure.prompt.yml",
+            "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
+            "scripts/llm_provider_adapter.py",
+            "backend/tests/scripts/test_llm_provider_adapter.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+
+
 def test_issue_on_test_fail_workflow_change_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
