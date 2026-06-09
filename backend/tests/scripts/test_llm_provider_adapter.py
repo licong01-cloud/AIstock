@@ -203,3 +203,120 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert '"advised_plan_count": 3' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
+
+
+def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
+    payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
+
+    assert payload["schema_version"] == adapter.NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION
+    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert [item["plan_key"] for item in payload["queue"]] == ["l0"]
+    assert payload["queue"][0]["priority"] == "baseline"
+    assert payload["queue"][0]["allowed"] is True
+
+
+def test_nightly_scheduler_advice_qe_ui_failure_recommends_l3_and_safe_runner_fallback():
+    payload = adapter.build_nightly_scheduler_advice(
+        "github_models",
+        adapter.load_config(),
+        recent_failure_modules=["qe_ui"],
+        codegraph_freshness="fresh",
+        resource_budget_seconds=1200,
+    )
+    queue = {item["plan_key"]: item for item in payload["queue"]}
+
+    assert "qe_archive_l3" in queue
+    assert queue["qe_archive_l3"]["allowed"] is False
+    assert "runner_not_enabled" in queue["qe_archive_l3"]["deferred_reason"]
+    assert queue["qe_archive_backend"]["allowed"] is True
+    assert payload["deterministic_gate"]["production_actions_allowed"] is False
+
+
+def test_nightly_scheduler_advice_defers_over_resource_budget():
+    payload = adapter.build_nightly_scheduler_advice(
+        "deterministic",
+        adapter.load_config(),
+        recent_failure_modules=["research_assistant"],
+        codegraph_freshness="fresh",
+        resource_budget_seconds=200,
+    )
+
+    item = payload["queue"][0]
+    assert item["plan_key"] == "research_assistant_backend"
+    assert item["allowed"] is False
+    assert item["deferred_reason"] == "resource_budget_exceeded"
+    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+
+
+def test_nightly_scheduler_advice_codegraph_missing_is_warning_only():
+    payload = adapter.build_nightly_scheduler_advice(
+        "deterministic",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        codegraph_freshness="missing",
+    )
+
+    assert payload["deterministic_gate"]["workflow_gate"] == "warning"
+    assert payload["codegraph"]["warning_only"] is True
+    assert payload["deterministic_gate"]["allowed_plan_count"] >= 1
+
+
+def test_nightly_scheduler_advice_rejects_live_trading_or_business_state_plans():
+    payload = adapter.build_nightly_scheduler_advice(
+        "deterministic",
+        adapter.load_config(),
+        recent_failure_plan_keys=["miniqmt_sim_trading_hours_l5"],
+        codegraph_freshness="fresh",
+        resource_budget_seconds=9000,
+    )
+
+    item = payload["queue"][0]
+    assert item["allowed"] is False
+    assert "writes_business_state" in item["deferred_reason"]
+    assert "requires_confirmation" in item["deferred_reason"]
+    assert payload["deterministic_gate"]["workflow_gate"] == "blocked"
+
+
+def test_nightly_scheduler_advice_rejects_shell_command_fields():
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_nightly_scheduler_advice(
+            {
+                "schema_version": adapter.NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
+                "queue": [{"plan_key": "l0", "command": "python -m nox -s l0"}],
+                "deterministic_gate": {
+                    "shell_commands_allowed": False,
+                    "production_actions_allowed": False,
+                },
+            }
+        )
+
+
+def test_nightly_scheduler_advice_cli_uses_compact_success_output(capsys, tmp_path):
+    output = tmp_path / "nightly-scheduler-advice.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-scheduler-advice",
+            "--provider",
+            "github_models",
+            "--changed-file",
+            "scripts/llm_provider_adapter.py",
+            "--recent-failure-module",
+            "validation.runner",
+            "--codegraph-freshness",
+            "fresh",
+            "--resource-budget-seconds",
+            "900",
+            "--output",
+            str(output),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"check": "nightly-scheduler-advice"' in captured.out
+    assert '"queue_count":' in captured.out
+    assert '"llm_invoked": false' in captured.out
+    assert output.exists()

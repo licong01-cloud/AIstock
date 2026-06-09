@@ -351,6 +351,18 @@ jobs:
             --module validation.runner `
             --output "$outDir/llm-test-plan-advice.json"
 
+      - name: Build LLM nightly scheduler advice smoke
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
+            --provider github_models `
+            --changed-file scripts/llm_provider_adapter.py `
+            --recent-failure-module validation.runner `
+            --codegraph-freshness fresh `
+            --resource-budget-seconds 900 `
+            --output "$outDir/llm-nightly-scheduler-advice.json"
+
       - name: Build Understand Anything readiness summaries
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
