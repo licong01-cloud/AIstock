@@ -45,6 +45,8 @@ export type AdvisoryEpisode = {
   episode_id: string;
   program_id: string;
   symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
   status: string;
   signal_date: string;
   effective_entry_date: string;
@@ -70,6 +72,8 @@ export type AdvisoryEpisode = {
 
 export type AdvisoryReviewDecision = {
   symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
   action: string;
   reason_code: string;
   review_status: string;
@@ -134,6 +138,8 @@ export type AdvisoryRecommendationListItem = {
   binding_version_id: string;
   episode_id?: string | null;
   symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
   item_state: string;
   action: string;
   previous_action?: string | null;
@@ -216,6 +222,19 @@ export type AdvisoryReviewPreviewPayload = {
 export type AdvisoryListVersionDetail = {
   list_version: AdvisoryRecommendationListVersion;
   items: AdvisoryRecommendationListItem[];
+};
+
+export type WatchlistCategory = {
+  id: number;
+  name: string;
+  description?: string | null;
+};
+
+export type WatchlistBulkAddResponse = {
+  added?: number;
+  inserted?: number;
+  skipped?: number;
+  moved?: number;
 };
 
 function body(payload: unknown, method = "POST"): RequestInit {
@@ -319,5 +338,18 @@ export const advisoryApi = {
       body(payload),
     );
     return data.records || [];
+  },
+  async watchlistCategories(): Promise<WatchlistCategory[]> {
+    return apiFetch<WatchlistCategory[]>("/watchlist/categories");
+  },
+  async createWatchlistCategory(name: string, description?: string | null): Promise<WatchlistCategory> {
+    const data = await apiFetch<{ id: number }>("/watchlist/categories", body({ name, description: description ?? null }));
+    return { id: data.id, name, description: description ?? null };
+  },
+  async addWatchlistItems(codes: string[], categoryId: number): Promise<WatchlistBulkAddResponse> {
+    return apiFetch<WatchlistBulkAddResponse>(
+      "/watchlist/items/bulk-add",
+      body({ codes, category_id: categoryId, on_conflict: "ignore" }),
+    );
   },
 };

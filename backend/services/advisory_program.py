@@ -21,6 +21,7 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_quality import generate_quality_report
+from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_calendar_status import TradingCalendarStatusService
@@ -216,6 +217,7 @@ class AdvisoryRecommendationListItem:
     item_state: str
     action: str
     reason_code: str
+    stock_name: str | None = None
     episode_id: str | None = None
     previous_action: str | None = None
     rank: int | None = None
@@ -244,6 +246,8 @@ class AdvisoryCandidate:
     component_scores: dict[str, Any] = field(default_factory=dict)
     stock_name: str | None = None
     source_run_id: str | None = None
+    selection_entry_price_time: str | None = None
+    reference_price_trade_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +274,7 @@ class AdvisoryEpisode:
     entry_price: float
     entry_price_basis: str
     entry_rank: int
+    stock_name: str | None = None
     entry_score: float | None = None
     current_rank: int | None = None
     current_score: float | None = None
@@ -302,6 +307,7 @@ class AdvisoryReviewDecision:
     action: str
     reason_code: str
     review_status: str
+    stock_name: str | None = None
     episode_id: str | None = None
     rank: int | None = None
     score: float | None = None
@@ -1018,10 +1024,12 @@ class AdvisoryProgramService:
         repository: AdvisoryProgramRepository | None = None,
         selection_service: SelectionCenterService | Any | None = None,
         calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
+        symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryProgramPGRepository()
         self.selection_service = selection_service or SelectionCenterService()
         self.calendar_provider = calendar_provider or TradingCalendarStatusService()
+        self.symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver()
 
     def create_program(
         self,
@@ -1211,15 +1219,15 @@ class AdvisoryProgramService:
 
     def active_pool(self, program_id: str) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return [episode_to_dict(row) for row in self.repository.active_episodes(program_id)]
+        return self._enrich_display_names([episode_to_dict(row) for row in self.repository.active_episodes(program_id)])
 
     def review_history(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return [decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)]
+        return self._enrich_display_names([decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)])
 
     def review_history_page(self, program_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         self.repository.get_program(program_id)
-        reviews = [decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)]
+        reviews = self._enrich_display_names([decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)])
         return {
             "reviews": reviews,
             "total_count": self.repository.count_review_decisions(program_id),
@@ -1236,12 +1244,52 @@ class AdvisoryProgramService:
         items = self.repository.list_version_items(list_version_id)
         return {
             "list_version": list_version_to_dict(list_version),
-            "items": [list_item_to_dict(row) for row in items],
+            "items": self._enrich_display_names([list_item_to_dict(row) for row in items]),
         }
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return [episode_to_dict(row) for row in self.repository.all_latest_episodes(program_id)]
+        return self._enrich_display_names([episode_to_dict(row) for row in self.repository.all_latest_episodes(program_id)])
+
+    def _enrich_display_names(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return rows
+        try:
+            names = self.symbol_name_resolver.resolve(row.get("symbol") or row.get("code") for row in rows)
+        except Exception:
+            return rows
+        enriched: list[dict[str, Any]] = []
+        for row in rows:
+            copied = dict(row)
+            symbol = str(copied.get("symbol") or copied.get("code") or "").strip()
+            name = _display_stock_name(copied) or names.get(symbol)
+            if name:
+                copied["stock_name"] = name
+                copied["symbol_name"] = name
+            enriched.append(copied)
+        return enriched
+
+    def _enrich_candidate_display_names(self, candidates: list[AdvisoryCandidate]) -> list[AdvisoryCandidate]:
+        if not candidates or all(candidate.stock_name for candidate in candidates):
+            return candidates
+        try:
+            names = self.symbol_name_resolver.resolve(candidate.symbol for candidate in candidates)
+        except Exception:
+            return candidates
+        if not names:
+            return candidates
+        return [
+            replace(candidate, stock_name=candidate.stock_name or names.get(candidate.symbol))
+            for candidate in candidates
+        ]
+
+    def _effective_trade_date(self, signal_date: date, basis: str, *, candidate: AdvisoryCandidate | None = None) -> date:
+        return _effective_date(
+            signal_date,
+            basis,
+            candidate=candidate,
+            calendar_provider=self.calendar_provider,
+        )
 
     def program_metrics(self, program_id: str) -> dict[str, Any]:
         program = self.repository.get_program(program_id)
@@ -1321,6 +1369,7 @@ class AdvisoryProgramService:
             row if isinstance(row, AdvisoryCandidate) else _candidate_from_mapping(row)
             for row in candidates
         ]
+        normalized_candidates = self._enrich_candidate_display_names(normalized_candidates)
         normalized_market = {
             symbol: row if isinstance(row, AdvisoryMarketMark) else _market_from_mapping(symbol, row, trade_date=trade_date)
             for symbol, row in dict(market_by_symbol or {}).items()
@@ -1628,6 +1677,7 @@ class AdvisoryProgramService:
                     symbol=decision.symbol,
                     item_state=item_state,
                     action=decision.action,
+                    stock_name=_display_stock_name(decision.evidence_json) or decision.stock_name or (episode.stock_name if episode else None),
                     previous_action=previous.action if previous else None,
                     rank=decision.rank,
                     score=decision.score,
@@ -1741,7 +1791,7 @@ class AdvisoryProgramService:
                 rank_drop_candidates.append(marked)
                 continue
             if exit_reason:
-                exited = _episode_exited(marked, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=exit_reason)
+                exited = _episode_exited(marked, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=exit_reason, calendar_provider=self.calendar_provider)
                 snapshots.append(exited)
                 decisions.append(self._decision(program, trade_date, exited.symbol, ACTION_EXIT, exit_reason, REVIEW_STATUS_SUCCEEDED, exited, evidence))
                 continue
@@ -1753,7 +1803,7 @@ class AdvisoryProgramService:
             evidence = evidence_by_symbol[episode.symbol]
             price = _price_for_basis(market_by_symbol.get(episode.symbol), evidence, program.exit_price_basis) or episode.still_active_mark_price or episode.entry_price
             if index < replacement_budget:
-                exited = _episode_exited(episode, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=EXIT_ALPHA_RANK_DROP)
+                exited = _episode_exited(episode, trade_date=trade_date, exit_price=price, exit_basis=program.exit_price_basis, exit_reason=EXIT_ALPHA_RANK_DROP, calendar_provider=self.calendar_provider)
                 snapshots.append(exited)
                 decisions.append(self._decision(program, trade_date, exited.symbol, ACTION_EXIT, EXIT_ALPHA_RANK_DROP, REVIEW_STATUS_SUCCEEDED, exited, evidence))
             else:
@@ -1782,10 +1832,11 @@ class AdvisoryProgramService:
                 symbol=candidate.symbol,
                 status=EPISODE_STATUS_ACTIVE,
                 signal_date=trade_date,
-                effective_entry_date=_effective_date(trade_date, program.entry_price_basis),
+                effective_entry_date=self._effective_trade_date(trade_date, program.entry_price_basis, candidate=candidate),
                 entry_price=entry_price,
                 entry_price_basis=program.entry_price_basis,
                 entry_rank=candidate.rank,
+                stock_name=candidate.stock_name,
                 entry_score=candidate.score,
                 current_rank=candidate.rank,
                 current_score=candidate.score,
@@ -1826,6 +1877,7 @@ class AdvisoryProgramService:
             action=action,
             reason_code=reason_code,
             review_status=review_status,
+            stock_name=(evidence.stock_name if evidence else None) or (episode.stock_name if episode else None),
             episode_id=episode.episode_id if episode else None,
             rank=evidence.rank if evidence else episode.current_rank if episode else None,
             score=evidence.score if evidence else episode.current_score if episode else None,
@@ -2073,9 +2125,26 @@ def candidates_from_selection_run(run: SelectionRun) -> list[AdvisoryCandidate]:
             component_scores=dict(item.component_scores or {}),
             stock_name=item.stock_name,
             source_run_id=run.run_id,
+            selection_entry_price_time=item.selection_entry_price_time,
+            reference_price_trade_date=_candidate_reference_trade_date_from_selection(item, run.trade_date),
         )
         for item in run.aggregate_results
     ]
+
+
+def _candidate_reference_trade_date_from_selection(item: Any, fallback: date) -> date:
+    display = (getattr(item, "component_scores", None) or {}).get("selection_result_display")
+    display = display if isinstance(display, dict) else {}
+    for raw in (
+        display.get("reference_price_trade_date"),
+        (getattr(item, "component_scores", None) or {}).get("reference_price_trade_date"),
+        getattr(item, "selection_entry_price_time", None),
+        display.get("selection_entry_price_time"),
+    ):
+        parsed = _date_from_candidate_time(raw)
+        if parsed is not None:
+            return parsed
+    return fallback
 
 
 def compute_program_metrics(program: AdvisoryProgram, episodes: Iterable[AdvisoryEpisode]) -> dict[str, Any]:
@@ -2159,7 +2228,26 @@ def _candidate_from_mapping(row: Mapping[str, Any]) -> AdvisoryCandidate:
         component_scores=dict(row.get("component_scores") or row.get("fusion_evidence") or {}),
         stock_name=row.get("stock_name"),
         source_run_id=row.get("source_run_id"),
+        selection_entry_price_time=row.get("selection_entry_price_time"),
+        reference_price_trade_date=_candidate_reference_trade_date_from_mapping(row),
     )
+
+
+def _candidate_reference_trade_date_from_mapping(row: Mapping[str, Any]) -> date | None:
+    component_scores = row.get("component_scores") or row.get("fusion_evidence") or {}
+    display = component_scores.get("selection_result_display") if isinstance(component_scores, dict) else None
+    display = display if isinstance(display, dict) else {}
+    for raw in (
+        row.get("reference_price_trade_date"),
+        display.get("reference_price_trade_date"),
+        component_scores.get("reference_price_trade_date") if isinstance(component_scores, dict) else None,
+        row.get("selection_entry_price_time"),
+        display.get("selection_entry_price_time"),
+    ):
+        parsed = _date_from_candidate_time(raw)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _market_from_mapping(symbol: str, row: Mapping[str, Any], *, trade_date: date) -> AdvisoryMarketMark:
@@ -2191,11 +2279,40 @@ def _candidate_evidence(candidate: AdvisoryCandidate | None, program: AdvisoryPr
                 "symbol": candidate.symbol,
                 "rank": candidate.rank,
                 "score": candidate.score,
+                "stock_name": candidate.stock_name,
                 "source_run_id": candidate.source_run_id,
+                "selection_entry_price_time": candidate.selection_entry_price_time,
+                "reference_price_trade_date": candidate.reference_price_trade_date.isoformat() if candidate.reference_price_trade_date else None,
                 "component_scores": deepcopy(candidate.component_scores),
             }
         )
     return payload
+
+
+def _display_stock_name(row: Mapping[str, Any]) -> str | None:
+    for key in ("stock_name", "symbol_name"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("stock_name", "symbol_name"):
+            value = metadata.get(key)
+            if value:
+                return str(value)
+    evidence = row.get("evidence_json") or row.get("evidence") or row.get("component_scores_json") or row.get("component_scores")
+    if isinstance(evidence, dict):
+        for key in ("stock_name", "symbol_name"):
+            value = evidence.get(key)
+            if value:
+                return str(value)
+        display = evidence.get("selection_result_display")
+        if isinstance(display, dict):
+            for key in ("stock_name", "symbol_name"):
+                value = display.get(key)
+                if value:
+                    return str(value)
+    return None
 
 
 def _episode_with_mark(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, price: float, program: AdvisoryProgram) -> AdvisoryEpisode:
@@ -2238,13 +2355,21 @@ def _exit_reason(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, progr
     return None
 
 
-def _episode_exited(episode: AdvisoryEpisode, *, trade_date: date, exit_price: float, exit_basis: str, exit_reason: str) -> AdvisoryEpisode:
+def _episode_exited(
+    episode: AdvisoryEpisode,
+    *,
+    trade_date: date,
+    exit_price: float,
+    exit_basis: str,
+    exit_reason: str,
+    calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
+) -> AdvisoryEpisode:
     return_bps = (float(exit_price) / episode.entry_price - 1.0) * 10000.0
     return replace(
         episode,
         status=EPISODE_STATUS_EXITED,
         exit_signal_date=trade_date,
-        effective_exit_date=_effective_date(trade_date, exit_basis),
+        effective_exit_date=_effective_date(trade_date, exit_basis, calendar_provider=calendar_provider),
         exit_price=exit_price,
         exit_price_basis=exit_basis,
         exit_reason=exit_reason,
@@ -2271,8 +2396,43 @@ def _price_for_basis(mark: AdvisoryMarketMark | None, candidate: AdvisoryCandida
     return None
 
 
-def _effective_date(signal_date: date, basis: str) -> date:
-    return signal_date if basis == PRICE_BASIS_SIGNAL_CLOSE else signal_date + timedelta(days=1)
+def _effective_date(
+    signal_date: date,
+    basis: str,
+    *,
+    candidate: AdvisoryCandidate | None = None,
+    calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
+) -> date:
+    if basis == PRICE_BASIS_SIGNAL_CLOSE:
+        return signal_date
+    anchor = _candidate_reference_date(candidate) or signal_date
+    if calendar_provider is not None:
+        next_day = getattr(calendar_provider, "next_trading_day", None)
+        if callable(next_day):
+            return next_day(anchor, inclusive=False)
+    return anchor + timedelta(days=1)
+
+
+def _candidate_reference_date(candidate: AdvisoryCandidate | None) -> date | None:
+    if candidate is None:
+        return None
+    if candidate.reference_price_trade_date is not None:
+        return candidate.reference_price_trade_date
+    return _date_from_candidate_time(candidate.selection_entry_price_time)
+
+
+def _date_from_candidate_time(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    text = str(value)
+    if len(text) >= 10:
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return None
 
 
 def _latest_by_episode_id(rows: Iterable[AdvisoryEpisode]) -> list[AdvisoryEpisode]:
@@ -2666,6 +2826,7 @@ def _list_item_from_row(row: Mapping[str, Any]) -> AdvisoryRecommendationListIte
         symbol=str(source["symbol"]),
         item_state=str(source["item_state"]),
         action=str(source["action"]),
+        stock_name=source.get("stock_name") or _display_stock_name(source),
         previous_action=source.get("previous_action"),
         rank=_optional_int(source.get("rank")),
         score=_optional_float(source.get("score")),
@@ -2698,6 +2859,7 @@ def _episode_from_row(row: Mapping[str, Any]) -> AdvisoryEpisode:
         entry_price=float(row["entry_price"]),
         entry_price_basis=str(row["entry_price_basis"]),
         entry_rank=int(row["entry_rank"]),
+        stock_name=_display_stock_name(row),
         entry_score=_optional_float(row.get("entry_score")),
         current_rank=_optional_int(row.get("current_rank")),
         current_score=_optional_float(row.get("current_score")),
@@ -2734,6 +2896,7 @@ def _episode_from_payload(payload: Mapping[str, Any]) -> AdvisoryEpisode:
         entry_price=float(payload["entry_price"]),
         entry_price_basis=str(payload["entry_price_basis"]),
         entry_rank=int(payload["entry_rank"]),
+        stock_name=payload.get("stock_name") or _display_stock_name(payload),
         entry_score=_optional_float(payload.get("entry_score")),
         current_rank=_optional_int(payload.get("current_rank")),
         current_score=_optional_float(payload.get("current_score")),
@@ -2769,6 +2932,7 @@ def _decision_from_row(row: Mapping[str, Any]) -> AdvisoryReviewDecision:
             action=str(payload["action"]),
             reason_code=str(payload["reason_code"]),
             review_status=str(payload["review_status"]),
+            stock_name=payload.get("stock_name") or _display_stock_name(payload),
             episode_id=payload.get("episode_id"),
             rank=_optional_int(payload.get("rank")),
             score=_optional_float(payload.get("score")),
@@ -2790,6 +2954,7 @@ def _decision_from_row(row: Mapping[str, Any]) -> AdvisoryReviewDecision:
         action=str(row["action"]),
         reason_code=str(row["reason_code"]),
         review_status=str(row.get("review_status") or REVIEW_STATUS_SUCCEEDED),
+        stock_name=_display_stock_name(row),
         episode_id=row.get("episode_id"),
         rank=_optional_int(row.get("rank")),
         score=_optional_float(row.get("score")),
