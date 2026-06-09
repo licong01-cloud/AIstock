@@ -156,7 +156,12 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _llm_guarded_rollout_gate(summary: dict[str, Any]) -> dict[str, Any]:
+def _llm_guarded_rollout_gate(
+    summary: dict[str, Any],
+    *,
+    mode: str | None = None,
+    opt_in: bool | None = None,
+) -> dict[str, Any]:
     try:
         root = Path(__file__).resolve().parents[1]
         if str(root) not in sys.path:
@@ -169,6 +174,8 @@ def _llm_guarded_rollout_gate(summary: dict[str, Any]) -> dict[str, Any]:
         return llm_provider_adapter.build_guarded_rollout_gate(
             "github_models",
             config,
+            mode=mode,
+            opt_in=opt_in,
             module=(summary.get("suspected_modules") or [None])[0],
             issue_sections=[
                 "Failure Summary",
@@ -186,6 +193,8 @@ def _llm_guarded_rollout_gate(summary: dict[str, Any]) -> dict[str, Any]:
             "workflow_gate": "warning",
             "auto_file_allowed": False,
             "llm_can_enhance_issue": False,
+            "llm_enhancement_allowed": False,
+            "deterministic_issue_creation_unaffected": True,
             "fallback": "deterministic_issue_workflow",
             "rejection_reasons": ["guarded_rollout_gate_unavailable"],
             "fallback_reason": str(exc),
@@ -879,6 +888,7 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         raise ValueError("Only P0/P1 auto-file behavior is allowed.")
     if "llm_guarded_rollout_gate" not in summary:
         summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(summary)
+    rollout_gate = summary.get("llm_guarded_rollout_gate") if isinstance(summary.get("llm_guarded_rollout_gate"), dict) else {}
     fingerprint = summary.get("fingerprint") or f"run-{summary.get('run_id') or 'unknown'}"
     run_id = str(summary.get("run_id") or "")
     nightly_marker = None
@@ -943,6 +953,13 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
             "search_query": f"repo:{repo} is:issue in:body {nightly_marker or marker}",
         },
         "recurrence_comment": render_recurrence_comment(summary),
+        "llm_enhancement": {
+            "allowed": bool(rollout_gate.get("llm_enhancement_allowed")),
+            "workflow_gate": rollout_gate.get("workflow_gate") or "unknown",
+            "mode": rollout_gate.get("mode") or "unknown",
+            "fallback": rollout_gate.get("fallback") or "deterministic_issue_workflow",
+            "deterministic_issue_creation_unaffected": rollout_gate.get("deterministic_issue_creation_unaffected") is not False,
+        },
     }
 
 
@@ -1634,6 +1651,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-output")
     parser.add_argument("--context-markdown-output")
     parser.add_argument("--github-issue-payload-output")
+    parser.add_argument("--llm-triage-mode", choices=["off", "warning_only", "opt_in_auto_file"])
+    parser.add_argument("--llm-auto-file-opt-in", action="store_true", default=None)
     parser.add_argument(
         "--candidate-history-dir",
         help=(
@@ -1750,8 +1769,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
-    if "llm_guarded_rollout_gate" not in summary:
-        summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(summary)
+    if "llm_guarded_rollout_gate" not in summary or args.llm_triage_mode or args.llm_auto_file_opt_in:
+        summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(
+            summary,
+            mode=args.llm_triage_mode,
+            opt_in=args.llm_auto_file_opt_in if args.llm_auto_file_opt_in else None,
+        )
     _write_json(args.output, summary)
     _write_text(args.markdown_output, render_issue_markdown(summary))
     context_pack = build_context_pack(summary)

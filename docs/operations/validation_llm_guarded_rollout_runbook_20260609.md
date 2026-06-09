@@ -24,6 +24,18 @@
 - `AISTOCK_LLM_TRIAGE_MODE=off|warning_only|opt_in_auto_file`
 - `AISTOCK_LLM_AUTO_FILE=true|false`
 
+CI/Nightly issue intake 的显式参数：
+
+- `scripts/ci_failure_issue_summary.py --llm-triage-mode off|warning_only|opt_in_auto_file`
+- `scripts/ci_failure_issue_summary.py --llm-auto-file-opt-in`
+
+GitHub Actions manual dispatch 输入：
+
+- `issue-on-test-fail.yml`: `llm_triage_mode`、`llm_auto_file_opt_in`
+- `nightly.yml`: `llm_triage_mode`、`llm_auto_file_opt_in`
+
+默认值仍是 `warning_only`，不会因为启用 DeepSeek / GitHub Models 就自动扩大 auto-file 行为。
+
 ## 3. Allowlist
 
 默认 allowlist 仅覆盖 validation/workflow、QE、Paper v2 selected modules、Research Assistant。
@@ -46,15 +58,24 @@
 ```powershell
 python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode warning_only --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
 python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode opt_in_auto_file --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
+python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode off --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
 python -m pytest backend\tests\scripts\test_llm_provider_adapter.py backend\tests\scripts\test_ci_failure_issue_summary.py -q
 ```
+
+验收时必须确认：
+
+- `mode=off` 时 `workflow_gate=off`，`llm_enhancement_allowed=false`，但 deterministic issue payload 仍可生成。
+- `mode=warning_only` 时 `auto_file_allowed=false`，只记录 evidence。
+- `mode=opt_in_auto_file` 且 `--llm-auto-file-opt-in`、module allowlist、issue sections、evaluation threshold 全部满足时，才允许 LLM 增强 issue 内容。
+- Issue payload 必须包含 `llm_enhancement.deterministic_issue_creation_unaffected=true`。
 
 ## 6. 回滚
 
 1. 设置 `AISTOCK_LLM_TRIAGE_MODE=off`。
-2. 不需要停用 GitHub Actions、Validation Center、nox 或 BUG workflow。
-3. 确认 issue payload 中 `llm_guarded_rollout_gate.fallback=deterministic_issue_workflow`。
-4. 如需长期回滚，清空 `guarded_rollout.module_allowlist` 或回退相关 PR。
+2. 或在 manual dispatch 中选择 `llm_triage_mode=off`。
+3. 不需要停用 GitHub Actions、Validation Center、nox 或 BUG workflow。
+4. 确认 issue payload 中 `llm_guarded_rollout_gate.fallback=deterministic_issue_workflow`，并确认 `llm_enhancement.deterministic_issue_creation_unaffected=true`。
+5. 如需长期回滚，清空 `guarded_rollout.module_allowlist` 或回退相关 PR。
 
 ## 7. Production Gates
 
