@@ -415,12 +415,77 @@ def test_review_from_selection_builds_default_authoritative_runtime_config() -> 
     result = service.run_review_from_selection(program.program_id, trade_date=date(2026, 6, 8), preview=True)
 
     assert result.review_status == "SUCCEEDED"
-    assert fake_selection.runtime_config["top_k"] == 20
+    assert fake_selection.runtime_config["top_k"] == 40
     assert fake_selection.runtime_config["display_top_n"] == 20
     assert fake_selection.runtime_config["st_pit_authoritative"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
-    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 20
+    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 40
+
+
+def test_review_marks_active_holding_not_in_current_topk_instead_of_waiting_evidence() -> None:
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params):
+            return None
+
+        def fetchall(self):
+            return [{"symbol": "000001.SZ", "open_li": 11000, "close_li": 11000}]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return FakeCursor()
+
+    service, repo = _service()
+    repo._conn_factory = lambda: FakeConnection()
+    program = _program(service, target_count=1, rank_exit_threshold=1, rank_exit_confirm_days=2)
+
+    service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 1),
+        candidates=[_candidate("000001.SZ", 1, 10.0)],
+        preview=False,
+    )
+    first_review = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 2),
+        candidates=[_candidate("000002.SZ", 1, 20.0)],
+        preview=False,
+    )
+
+    active = next(row for row in first_review.active_pool if row.symbol == "000001.SZ")
+    decision = next(row for row in first_review.decisions if row.symbol == "000001.SZ")
+    assert first_review.review_status == "SUCCEEDED"
+    assert active.return_bps == pytest.approx(1000.0)
+    assert active.current_rank == 2
+    assert active.price_quality_status == "OK"
+    assert decision.action == ACTION_HOLD
+    assert decision.reason_code == "NOT_IN_CURRENT_TOPK"
+    assert decision.review_status == "SUCCEEDED"
+    assert decision.return_bps == pytest.approx(1000.0)
+    assert decision.evidence_json["component_scores"]["active_holding_review"]["reason_code"] == "NOT_IN_CURRENT_TOPK"
+    assert first_review.metrics["win_rate"] == 1.0
+
+    second_review = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 3),
+        candidates=[_candidate("000002.SZ", 1, 20.0)],
+        market_by_symbol={"000001.SZ": {"next_open_executable": 11.5, "mark_price": 11.5}},
+        preview=False,
+    )
+
+    assert any(row.symbol == "000001.SZ" and row.exit_reason == EXIT_ALPHA_RANK_DROP for row in second_review.active_pool)
 
 
 def test_replay_uses_trading_calendar_and_skips_weekend_fixture_gaps() -> None:

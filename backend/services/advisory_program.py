@@ -98,9 +98,15 @@ EXIT_TIME_STOP = "TIME_STOP"
 EXIT_REPLACEMENT_BUDGET = "REPLACEMENT_BUDGET_LIMIT"
 EXIT_REPLAY_END = "REPLAY_END_MARK"
 
+REVIEW_REASON_WAITING_EVIDENCE = "WAITING_EVIDENCE"
+REVIEW_REASON_WAITING_PRICE = "WAITING_PRICE"
+REVIEW_REASON_NOT_IN_CURRENT_TOPK = "NOT_IN_CURRENT_TOPK"
+
 WIN_INCLUDED = "INCLUDED"
 WIN_EXCLUDED = "EXCLUDED"
 WIN_OPEN_MARK = "OPEN_MARK_TO_MARKET"
+
+MARKET_PRICE_UNIT_DIVISOR = 1000.0
 
 DEFAULT_REVIEW_POLICY: dict[str, Any] = {
     "rank_enter_threshold": 20,
@@ -1374,6 +1380,13 @@ class AdvisoryProgramService:
             symbol: row if isinstance(row, AdvisoryMarketMark) else _market_from_mapping(symbol, row, trade_date=trade_date)
             for symbol, row in dict(market_by_symbol or {}).items()
         }
+        active_episodes = initial_active_episodes if initial_active_episodes is not None else self.repository.active_episodes(program_id)
+        normalized_market = self._with_active_episode_market_marks(
+            trade_date=trade_date,
+            candidates=normalized_candidates,
+            market_by_symbol=normalized_market,
+            active_episodes=active_episodes,
+        )
         if not preview and self.repository.list_version_for_date(program_id, trade_date, status=LIST_VERSION_STATUS_PUBLISHED):
             raise InvalidStateTransitionError(
                 "advisory review already published for trade_date",
@@ -1384,7 +1397,7 @@ class AdvisoryProgramService:
             trade_date=trade_date,
             candidates=normalized_candidates,
             market_by_symbol=normalized_market,
-            active_episodes=initial_active_episodes if initial_active_episodes is not None else self.repository.active_episodes(program_id),
+            active_episodes=active_episodes,
             preview=preview,
         )
         run_status = REVIEW_RUN_STATUS_SUCCEEDED if result.review_status == REVIEW_STATUS_SUCCEEDED else REVIEW_RUN_STATUS_WAITING_DATA
@@ -1632,6 +1645,66 @@ class AdvisoryProgramService:
             )
         )
 
+    def _with_active_episode_market_marks(
+        self,
+        *,
+        trade_date: date,
+        candidates: list[AdvisoryCandidate],
+        market_by_symbol: Mapping[str, AdvisoryMarketMark],
+        active_episodes: list[AdvisoryEpisode],
+    ) -> dict[str, AdvisoryMarketMark]:
+        market = dict(market_by_symbol)
+        candidate_symbols = {row.symbol for row in candidates}
+        missing_symbols = sorted(
+            {
+                episode.symbol
+                for episode in active_episodes
+                if episode.symbol not in candidate_symbols and episode.symbol not in market
+            }
+        )
+        if not missing_symbols:
+            return market
+        try:
+            loaded = self._load_daily_market_marks(missing_symbols, trade_date=trade_date)
+        except Exception:
+            return market
+        return {**loaded, **market}
+
+    def _load_daily_market_marks(self, symbols: list[str], *, trade_date: date) -> dict[str, AdvisoryMarketMark]:
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if conn_factory is None:
+            return {}
+        with conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT TRIM(ts_code) AS symbol, open_li, close_li
+                    FROM market.kline_daily_raw
+                    WHERE trade_date = %s
+                      AND TRIM(ts_code) = ANY(%s)
+                      AND (
+                          (open_li IS NOT NULL AND open_li > 0)
+                          OR (close_li IS NOT NULL AND close_li > 0)
+                      )
+                    """,
+                    (trade_date, symbols),
+                )
+                rows = cur.fetchall()
+        marks: dict[str, AdvisoryMarketMark] = {}
+        for row in rows:
+            symbol = str(row["symbol"]).strip().upper()
+            close_price = _li_price(row.get("close_li"))
+            marks[symbol] = AdvisoryMarketMark(
+                symbol=symbol,
+                trade_date=trade_date,
+                mark_price=close_price,
+                signal_close=close_price,
+                next_open_executable=_li_price(row.get("open_li")),
+                next_close=close_price,
+                price_quality_status="OK",
+            )
+        return marks
+
     def _build_list_version(
         self,
         *,
@@ -1750,6 +1823,7 @@ class AdvisoryProgramService:
         preview: bool,
     ) -> AdvisoryReviewResult:
         evidence_by_symbol = {row.symbol: row for row in candidates}
+        synthetic_missing_rank = _not_in_current_topk_rank(candidates)
         decisions: list[AdvisoryReviewDecision] = []
         snapshots: list[AdvisoryEpisode] = []
         review_status = REVIEW_STATUS_SUCCEEDED
@@ -1759,17 +1833,26 @@ class AdvisoryProgramService:
         for episode in active_episodes:
             evidence = evidence_by_symbol.get(episode.symbol)
             if evidence is None:
-                review_status = REVIEW_STATUS_WAITING_DATA
-                kept = replace(episode, price_quality_status="WAITING_EVIDENCE", updated_at=_utcnow())
-                snapshots.append(kept)
-                decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_WAITING, "WAITING_EVIDENCE", REVIEW_STATUS_WAITING_DATA, kept, None))
-                continue
+                evidence = _not_in_current_topk_candidate(
+                    episode,
+                    rank=synthetic_missing_rank,
+                    trade_date=trade_date,
+                    candidate_count=len(candidates),
+                )
+                evidence_by_symbol[episode.symbol] = evidence
             price = _price_for_basis(market_by_symbol.get(episode.symbol), evidence, program.exit_price_basis)
             if price is None:
                 review_status = REVIEW_STATUS_WAITING_DATA
-                kept = replace(episode, current_rank=evidence.rank, current_score=evidence.score, price_quality_status="WAITING_PRICE", updated_at=_utcnow())
+                kept = replace(
+                    episode,
+                    current_rank=evidence.rank,
+                    current_score=evidence.score,
+                    price_quality_status=REVIEW_REASON_WAITING_PRICE,
+                    evidence_json=_candidate_evidence(evidence, program),
+                    updated_at=_utcnow(),
+                )
                 snapshots.append(kept)
-                decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_WAITING, "WAITING_PRICE", REVIEW_STATUS_WAITING_DATA, kept, evidence))
+                decisions.append(self._decision(program, trade_date, kept.symbol, ACTION_WAITING, REVIEW_REASON_WAITING_PRICE, REVIEW_STATUS_WAITING_DATA, kept, evidence))
                 continue
             marked = _episode_with_mark(episode, evidence=evidence, price=price, program=program)
             exit_reason = _exit_reason(marked, evidence=evidence, program=program)
@@ -1796,7 +1879,7 @@ class AdvisoryProgramService:
                 decisions.append(self._decision(program, trade_date, exited.symbol, ACTION_EXIT, exit_reason, REVIEW_STATUS_SUCCEEDED, exited, evidence))
                 continue
             snapshots.append(marked)
-            decisions.append(self._decision(program, trade_date, marked.symbol, ACTION_HOLD, EXIT_NONE, REVIEW_STATUS_SUCCEEDED, marked, evidence))
+            decisions.append(self._decision(program, trade_date, marked.symbol, ACTION_HOLD, _hold_reason(evidence), REVIEW_STATUS_SUCCEEDED, marked, evidence))
 
         rank_drop_candidates.sort(key=lambda row: (row.current_rank or 0, row.symbol), reverse=True)
         for index, episode in enumerate(rank_drop_candidates):
@@ -1932,7 +2015,9 @@ class AdvisoryProgramService:
     @staticmethod
     def _review_runtime_config(program: AdvisoryProgram, runtime_config: Mapping[str, Any] | None) -> dict[str, Any]:
         config = deepcopy(dict(runtime_config or {}))
-        top_k = int(config.get("top_k") or config.get("display_top_n") or program.target_count)
+        display_top_n = int(config.get("display_top_n") or config.get("top_k") or program.target_count)
+        requested_top_k = int(config.get("top_k") or display_top_n)
+        top_k = min(max(requested_top_k, int(program.review_policy["rank_exit_threshold"]), program.target_count), 50)
         runtime_profile = deepcopy(config.get("runtime_profile") or {})
         if not isinstance(runtime_profile, dict):
             raise RuntimeConfigInvalidError(
@@ -1945,7 +2030,7 @@ class AdvisoryProgramService:
                 "advisory review runtime_profile.selection must be an object",
                 context={"program_id": program.program_id, "selection_type": type(selection_profile).__name__},
             )
-        selection_profile.setdefault("top_k", top_k)
+        selection_profile["top_k"] = max(int(selection_profile.get("top_k") or 0), top_k)
         runtime_profile["selection"] = selection_profile
         runtime_profile.setdefault("tradability", {"exclude_suspended": True})
         runtime_profile.setdefault(
@@ -1963,7 +2048,7 @@ class AdvisoryProgramService:
         artifact_config.setdefault("inference_backend", "wsl")
         artifact_config.setdefault("pit_mode", "PREVIOUS_TRADING_DAY_CLOSE")
         config["top_k"] = top_k
-        config["display_top_n"] = int(config.get("display_top_n") or top_k)
+        config["display_top_n"] = display_top_n
         config["st_pit_authoritative"] = bool(config.get("st_pit_authoritative", True))
         config["runtime_profile"] = runtime_profile
         config["selection_artifact_config"] = artifact_config
@@ -2334,6 +2419,55 @@ def _episode_with_mark(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate,
     )
 
 
+def _not_in_current_topk_candidate(
+    episode: AdvisoryEpisode,
+    *,
+    rank: int,
+    trade_date: date,
+    candidate_count: int,
+) -> AdvisoryCandidate:
+    component_scores = {
+        **deepcopy(episode.evidence_json.get("component_scores") or {}),
+        "active_holding_review": {
+            "reason_code": REVIEW_REASON_NOT_IN_CURRENT_TOPK,
+            "trade_date": trade_date.isoformat(),
+            "candidate_count": candidate_count,
+            "previous_rank": episode.current_rank,
+            "previous_score": episode.current_score,
+        },
+    }
+    return AdvisoryCandidate(
+        symbol=episode.symbol,
+        rank=rank,
+        score=episode.current_score,
+        reference_price=episode.still_active_mark_price or episode.entry_price,
+        stock_name=episode.stock_name,
+        source_run_id=episode.source_run_id,
+        component_scores=component_scores,
+    )
+
+
+def _not_in_current_topk_rank(candidates: list[AdvisoryCandidate]) -> int:
+    observed_max_rank = max((row.rank for row in candidates), default=0)
+    return observed_max_rank + 1
+
+
+def _hold_reason(evidence: AdvisoryCandidate) -> str:
+    if _candidate_reason_code(evidence) == REVIEW_REASON_NOT_IN_CURRENT_TOPK:
+        return REVIEW_REASON_NOT_IN_CURRENT_TOPK
+    return EXIT_NONE
+
+
+def _candidate_reason_code(candidate: AdvisoryCandidate | None) -> str | None:
+    component_scores = candidate.component_scores if candidate else None
+    if not isinstance(component_scores, dict):
+        return None
+    active_review = component_scores.get("active_holding_review")
+    if isinstance(active_review, dict) and active_review.get("reason_code"):
+        return str(active_review["reason_code"])
+    return None
+
+
 def _exit_reason(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, program: AdvisoryProgram) -> str | None:
     policy = program.review_policy
     return_bps = episode.return_bps
@@ -2353,6 +2487,13 @@ def _exit_reason(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, progr
         if (episode.max_runup_bps or 0) >= take_bps and trailing_bps > 0 and return_bps <= float(episode.max_runup_bps or 0) - trailing_bps:
             return EXIT_TRAILING_TAKE_PROFIT
     return None
+
+
+def _li_price(value: Any) -> float | None:
+    parsed = _optional_float(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed / MARKET_PRICE_UNIT_DIVISOR
 
 
 def _episode_exited(
