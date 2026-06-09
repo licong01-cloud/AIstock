@@ -1,0 +1,14 @@
+schema_version: aistock_validation_llm_prompt_v1
+prompt_id: issue_draft
+prompt_version: v1
+model_family: deepseek
+purpose: Draft a high-quality GitHub Issue body from compact failure evidence.
+required_sections:
+  - Failure Summary
+  - Regression Locator
+  - Agent Handoff
+  - Token Policy
+  - Production Gates
+safety:
+  no_bug_json_write: true
+  no_production_action: true

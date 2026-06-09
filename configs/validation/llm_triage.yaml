@@ -48,6 +48,30 @@ limits:
   daily_issue_create_limit: 10
   daily_llm_call_limit: 100
   fail_closed_when_schema_invalid: true
+guarded_rollout:
+  mode_env: AISTOCK_LLM_TRIAGE_MODE
+  default_mode: warning_only
+  supported_modes:
+    - "off"
+    - warning_only
+    - opt_in_auto_file
+  opt_in_env: AISTOCK_LLM_AUTO_FILE
+  deterministic_auto_file_preserved: true
+  module_allowlist:
+    - validation
+    - validation.runner
+    - validation.center
+    - qe
+    - qe_archive
+    - paper_v2
+    - paper_v2_selection_center
+    - research_assistant
+  required_issue_sections:
+    - Failure Summary
+    - Regression Locator
+    - Agent Handoff
+    - Token Policy
+    - Production Gates
 redaction:
   redact_env_vars: true
   redact_tokens: true
