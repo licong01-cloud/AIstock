@@ -31,8 +31,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-09T01:52:06.671108Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f40e5467e64390781388173e1f8d437041853cf6",
+  "fixed_at": "2026-06-09T03:30:26.898015Z",
   "github_issue_number": 846,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/846",
   "last_seen_at": "2026-06-09T01:52:06.671108Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/850",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -98,6 +99,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #850 CI -> green 16 passed, 0 failed; rtk git diff --check -> passed; frontend_tsc -> advisory patch has no new TS errors, only existing unrelated frontend/tests/research-assistant/phase5-mcp-gateway-ui.spec.ts(226,11) null-to-string error; rtk npm --prefix frontend run build -> passed; focused Playwright tests/paper-v2/paper-v2-advisory-ui.spec.ts -> passed 2; rtk python -m nox -s l0 -> passed; rtk python -m nox -s validation_module_registry_l0 -> passed 8; rtk python -m nox -s paper_v2_backend -> passed 605 passed, 1 skipped, 2 xfailed; rtk python -m nox -s validation_center_backend -> passed 389; PAPER_V2_L3_SKIP_UI=1 rtk python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
