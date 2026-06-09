@@ -696,6 +696,8 @@ def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, mo
     assert "## Code Intelligence Summary" in markdown
     assert "scripts/code_intelligence_adapter.py" in markdown
     assert "affected-tests.json" in markdown
+    assert "latest_freshness" in markdown
+    assert "latest-freshness --refresh-if-stale" in markdown
     assert "affected_quality" in markdown
     assert "warning-only" in markdown
 
