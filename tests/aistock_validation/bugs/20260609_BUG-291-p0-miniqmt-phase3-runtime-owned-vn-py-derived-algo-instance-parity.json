@@ -1,0 +1,80 @@
+{
+  "actual": "Phase 3 is not implemented yet. Existing MiniQMT execution development has design/contracts/runtime skeleton only; without this phase, vn.py-style algorithm behavior can drift or remain synchronous execute_intent style instead of runtime-owned event-driven algo instances.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime",
+    "backend/execution_algos/vnpy_style",
+    "backend/tests/miniqmt_execution_runtime",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified",
+    "tests/aistock_validation/bugs/20260609_BUG-291-p0-miniqmt-phase3-runtime-owned-vn-py-derived-algo-instance-parity.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-291",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T02:59:07.755004Z",
+  "description": "Phase 3 is not implemented yet. Existing MiniQMT execution development has design/contracts/runtime skeleton only; without this phase, vn.py-style algorithm behavior can drift or remain synchronous execute_intent style instead of runtime-owned event-driven algo instances.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-2cecf0d643a3",
+      "timestamp": "2026-06-09T02:59:07.755001Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:529"
+  ],
+  "expected": "SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, and TWAP_LITE_MINIQMT have source mapping and attribution to the fixed vn.py/vnpy_algotrading commits; algo core imports no DB/FastAPI/MiniQMT/vn.py runtime; core only emits actions; runtime owns submit/cancel/order/trade/timer routing; characterization and import-boundary tests pass.",
+  "first_seen_at": "2026-06-09T02:59:07.755004Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 849,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/849",
+  "last_seen_at": "2026-06-09T02:59:07.755004Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a - architecture implementation phase",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "qe_read_l3",
+    "paper_v2_backend",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT][Phase3] Runtime-owned vn.py-derived algo instance parity",
+  "trigger_condition": {
+    "fingerprint": "2cecf0d643a33dcd31bf41dd",
+    "source_event_id": "FE-20260609-2cecf0d643a3"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
