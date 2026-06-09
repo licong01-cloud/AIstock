@@ -15,6 +15,7 @@ import {
   type AdvisoryReviewDecision,
   type AdvisoryReviewResult,
   type AdvisoryStrategyBindingVersion,
+  type AdvisoryTradingDayDefaults,
 } from "@/lib/api/advisory";
 import { selectionCenterApi } from "@/lib/paper-v2/api";
 import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
@@ -39,6 +40,12 @@ type ActivePoolSortKey =
 type ActivePoolSort = { key: ActivePoolSortKey; direction: SortDirection } | null;
 type ListDetailSource = "latest" | "review_result" | "timeline";
 type PackageWeightRow = { rowId: string; packageId: string; weight: string };
+type ReviewDateOption = {
+  value: string;
+  label: string;
+  selectionAsOfDate?: string | null;
+  description: string;
+};
 type QualityInputRow = {
   rowId: string;
   code: string;
@@ -113,6 +120,51 @@ function packageOptionLabel(pkg: SelectablePackage): string {
   if (pkg.alpha_mode) parts.push(String(pkg.alpha_mode));
   if (pkg.latest_selection_run?.trade_date) parts.push(`最近选股 ${pkg.latest_selection_run.trade_date}`);
   return parts.filter(Boolean).join(" / ");
+}
+
+function statusText(defaults: { trading_day_status?: JsonObject } | null | undefined, key: string): string | null {
+  const value = defaults?.trading_day_status?.[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function isTradingDay(defaults: { trading_day_status?: JsonObject } | null | undefined): boolean {
+  return defaults?.trading_day_status?.is_trading_day === true;
+}
+
+function defaultReviewTargetDate(defaults: { latest_trading_day?: string; next_trading_day?: string | null } | null | undefined): string {
+  return defaults?.next_trading_day || defaults?.latest_trading_day || "";
+}
+
+function reviewDateOptions(defaults: { as_of_date?: string; latest_trading_day?: string; next_trading_day?: string | null; trading_day_status?: JsonObject } | null | undefined): ReviewDateOption[] {
+  const seen = new Set<string>();
+  const options: ReviewDateOption[] = [];
+  const add = (option: ReviewDateOption | null) => {
+    if (!option?.value || seen.has(option.value)) return;
+    seen.add(option.value);
+    options.push(option);
+  };
+  const latest = defaults?.latest_trading_day || "";
+  const previous = statusText(defaults, "previous_trading_day") || (latest && latest !== defaults?.as_of_date ? latest : null);
+  const today = defaults?.as_of_date || latest;
+  add(defaults?.next_trading_day ? {
+    value: defaults.next_trading_day,
+    label: `下一交易日 ${defaults.next_trading_day}`,
+    selectionAsOfDate: latest || null,
+    description: latest ? `默认盘后复评：用 ${latest} 已就绪数据生成 ${defaults.next_trading_day} 荐股名单。` : "默认盘后复评：等待最新数据就绪后生成下一交易日荐股名单。",
+  } : null);
+  add(today && isTradingDay(defaults) ? {
+    value: today,
+    label: `当天交易日 ${today}`,
+    selectionAsOfDate: previous,
+    description: previous ? `盘中补选：用 ${previous} 数据生成 ${today} 荐股名单。` : `盘中补选：生成 ${today} 荐股名单。`,
+  } : null);
+  add(latest ? {
+    value: latest,
+    label: `最新已就绪交易日 ${latest}`,
+    selectionAsOfDate: latest === today ? previous : null,
+    description: latest === today && previous ? `用 ${previous} 数据生成 ${latest} 荐股名单。` : `使用 ${latest} 作为目标荐股交易日。`,
+  } : null);
+  return options;
 }
 
 function packageIdsFromRows(rows: PackageWeightRow[], mode: AdvisoryPackageMode): string[] {
@@ -211,20 +263,30 @@ function SortHeader({ column, sort, onClick }: { column: ActivePoolColumn; sort:
   );
 }
 
-function reviewRuntimeConfig(program: AdvisoryProgram): JsonObject {
+function reviewRuntimeConfig(program: AdvisoryProgram, dateContext?: { targetTradeDate?: string; selectionAsOfDate?: string | null }): JsonObject {
   const topK = Math.max(1, Math.min(50, Number(program.target_count || 20)));
+  const selectionArtifactConfig: JsonObject = {
+    auto_generate: true,
+    inference_backend: "wsl",
+    pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+  };
+  if (dateContext?.selectionAsOfDate) {
+    selectionArtifactConfig.cutoff_date = dateContext.selectionAsOfDate;
+    selectionArtifactConfig.cutoff_policy = "FIXED_CUTOFF";
+    selectionArtifactConfig.fixed_cutoff = true;
+  }
   return {
     top_k: topK,
     display_top_n: topK,
     st_pit_authoritative: true,
-    selection_artifact_config: {
-      auto_generate: true,
-      inference_backend: "wsl",
-      pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+    advisory_date_context: {
+      target_trade_date: dateContext?.targetTradeDate,
+      selection_as_of_trade_date: dateContext?.selectionAsOfDate || undefined,
     },
+    selection_artifact_config: selectionArtifactConfig,
     runtime_profile: {
       selection: { top_k: topK },
-      tradability: { exclude_suspended: true },
+      tradability: { exclude_suspended: !dateContext?.selectionAsOfDate },
       industry_blacklist: [],
       hmm: { enabled: false, model_config_id: null, model_snapshot_id: null, signal_preset: null },
     },
@@ -286,6 +348,8 @@ function AdvisoryPageContent() {
   const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
   const [targetCount, setTargetCount] = useState(20);
   const [reviewTradeDate, setReviewTradeDate] = useState("");
+  const [reviewDateTouched, setReviewDateTouched] = useState(false);
+  const [tradingDefaults, setTradingDefaults] = useState<AdvisoryTradingDayDefaults | null>(null);
   const [reviewingKey, setReviewingKey] = useState("");
   const [activePool, setActivePool] = useState<AdvisoryEpisode[]>([]);
   const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
@@ -396,11 +460,11 @@ function AdvisoryPageContent() {
     }
   }
 
-  async function refreshAll(nextProgramId?: string) {
+  async function refreshAll(nextProgramId?: string, options: { resetReviewDate?: boolean } = {}) {
     setLoading(true);
     setError(null);
     try {
-      const [programRows, boardRows, tradingDefaults, packageOptions] = await Promise.all([
+      const [programRows, boardRows, nextTradingDefaults, packageOptions] = await Promise.all([
         advisoryApi.programs(false),
         advisoryApi.leaderboard(sortBy),
         advisoryApi.tradingDayDefaults(10),
@@ -413,7 +477,9 @@ function AdvisoryPageContent() {
         if (rows.some((row) => row.packageId.trim()) || !packageOptions[0]) return rows;
         return rows.map((row, index) => index === 0 ? { ...row, packageId: packageOptions[0].package_id } : row);
       });
-      setReviewTradeDate(tradingDefaults.latest_trading_day);
+      setTradingDefaults(nextTradingDefaults);
+      if (options.resetReviewDate) setReviewDateTouched(false);
+      setReviewTradeDate((current) => (options.resetReviewDate || !reviewDateTouched || !current ? defaultReviewTargetDate(nextTradingDefaults) : current));
       const resolvedProgramId = nextProgramId || selectedProgramId || programRows[0]?.program_id || "";
       setSelectedProgramId(resolvedProgramId);
       setReviewPage(1);
@@ -527,12 +593,14 @@ function AdvisoryPageContent() {
     try {
       const payload = {
         trade_date: reviewTradeDate,
-        runtime_config: reviewRuntimeConfig(program),
+        target_trade_date: reviewTradeDate,
+        selection_as_of_trade_date: reviewSelectionAsOfDate || undefined,
+        runtime_config: reviewRuntimeConfig(program, { targetTradeDate: reviewTradeDate, selectionAsOfDate: reviewSelectionAsOfDate }),
       };
       const result = preview
         ? await advisoryApi.previewReview(program.program_id, payload)
         : await advisoryApi.runReview(program.program_id, payload);
-      await refreshAll(program.program_id);
+      await refreshAll(program.program_id, { resetReviewDate: !preview });
       setReviewResult(result);
       setSelectedListVersionId(result.list_version_id || "");
       if (result.list_items && result.list_version_id) {
@@ -657,6 +725,9 @@ function AdvisoryPageContent() {
     }
   }
 
+  const reviewDateChoices = useMemo(() => reviewDateOptions(tradingDefaults), [tradingDefaults]);
+  const selectedReviewDateChoice = reviewDateChoices.find((option) => option.value === reviewTradeDate);
+  const reviewSelectionAsOfDate = selectedReviewDateChoice?.selectionAsOfDate || null;
   const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate, listVersions.length > 0) : null;
   const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
   const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
@@ -923,9 +994,27 @@ function AdvisoryPageContent() {
           </div>
         </div>
         <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+          <label className="pv2-field" style={{ marginBottom: 8 }}>
+            目标荐股交易日
+            <select
+              className="pv2-select"
+              data-testid="advisory-review-target-select"
+              value={reviewTradeDate}
+              onChange={(event) => { setReviewDateTouched(true); setReviewTradeDate(event.target.value); }}
+            >
+              {!reviewDateChoices.length ? <option value="">等待交易日</option> : null}
+              {reviewDateChoices.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+              {reviewDateChoices.length && reviewTradeDate && !reviewDateChoices.some((option) => option.value === reviewTradeDate) ? <option value={reviewTradeDate}>{reviewTradeDate}</option> : null}
+            </select>
+          </label>
           <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{reviewTradeDate || "-"}</span></strong>
           <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
-          <div className="pv2-muted" style={{ marginTop: 6 }}>生效日按选股候选实际价格数据日后的下一交易日计算；盘中运行若只用昨日收盘数据，入选生效日应落到今天这个交易日，而不是简单自然日加一天。</div>
+          <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-review-data-cutoff">
+            选股数据截止日：{reviewSelectionAsOfDate || "系统自动按目标交易日解析"}；{selectedReviewDateChoice?.description || "请选择目标荐股交易日。"}
+          </div>
+          <div className="pv2-muted" style={{ marginTop: 6 }}>生效日按目标荐股交易日与选股数据截止日计算；盘中运行若只用昨日收盘数据，入选生效日应落到今天这个交易日，而不是简单自然日加一天。</div>
           {activeBinding ? (
             <div className="pv2-muted" style={{ marginTop: 6 }}>
               当前策略绑定：{activeBinding.package_mode} / {packageSummary(activeBinding.package_ids)} / {short(activeBinding.binding_version_id, 18)}

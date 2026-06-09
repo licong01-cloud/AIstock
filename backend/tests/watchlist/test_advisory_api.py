@@ -227,7 +227,76 @@ def test_advisory_api_preview_auto_reviews_without_selection_run_id() -> None:
     assert review.json()["review"]["review_status"] == "SUCCEEDED"
     assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
-    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 20
+    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 40
+
+
+def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_run_id() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.runtime_config = None
+            self.trade_date = None
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            self.trade_date = trade_date
+            self.runtime_config = dict(runtime_config)
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config={
+                    **runtime_config,
+                    "point_in_time_context": {
+                        "reference_price_trade_date": runtime_config["advisory_date_context"]["selection_as_of_trade_date"],
+                    },
+                },
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        reference_price=10.0,
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    client, _service = _client(selection_service=fake_selection)
+    created = client.post(
+        "/api/v1/advisory/programs",
+        json={
+            "program_name": "Next day review",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_a"],
+            "target_count": 20,
+            "status": "ENABLED",
+        },
+    )
+    assert created.status_code == 200
+    program_id = created.json()["program"]["program_id"]
+
+    review = client.post(
+        f"/api/v1/advisory/programs/{program_id}/reviews/run",
+        json={
+            "trade_date": "2026-06-10",
+            "target_trade_date": "2026-06-10",
+            "selection_as_of_trade_date": "2026-06-09",
+        },
+    )
+
+    assert review.status_code == 200
+    assert fake_selection.trade_date == date(2026, 6, 10)
+    assert fake_selection.runtime_config["advisory_date_context"] == {
+        "target_trade_date": "2026-06-10",
+        "selection_as_of_trade_date": "2026-06-09",
+    }
+    assert fake_selection.runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-09"
+    assert fake_selection.runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    payload = review.json()["review"]
+    assert payload["trade_date"] == "2026-06-10"
+    assert payload["change_summary"]["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-09"
 
 
 def test_advisory_api_rejects_duplicate_published_review_for_trade_date() -> None:

@@ -1,0 +1,120 @@
+{
+  "actual": "荐股中心每日复评当前默认使用 latest_trading_day 作为目标日期，页面没有目标日期选择。开盘期间可用昨日数据生成今日荐股后，收盘后仍被锁定在今日 target，按钮显示已复评且无法为下一交易日生成荐股。根因是复评 trade_date 同时承担目标荐股日、选股数据截止日、风控/可交易性日期，导致无法表达 target_trade_date=下一交易日、selection_as_of_trade_date=最新已就绪数据日。要求默认显示下一交易日，可选择当天/下一交易日，按钮按目标日期判重，不出现手填运行 ID，并显示目标日期与数据截止日。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "backend/routers/advisory.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20260609_BUG-295-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-295",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T13:56:14.330837Z",
+  "description": "荐股中心每日复评当前默认使用 latest_trading_day 作为目标日期，页面没有目标日期选择。开盘期间可用昨日数据生成今日荐股后，收盘后仍被锁定在今日 target，按钮显示已复评且无法为下一交易日生成荐股。根因是复评 trade_date 同时承担目标荐股日、选股数据截止日、风控/可交易性日期，导致无法表达 target_trade_date=下一交易日、selection_as_of_trade_date=最新已就绪数据日。要求默认显示下一交易日，可选择当天/下一交易日，按钮按目标日期判重，不出现手填运行 ID，并显示目标日期与数据截止日。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-60240010dbb0",
+      "timestamp": "2026-06-09T13:56:14.330832Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-09T13:56:14.330837Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 870,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/870",
+  "last_seen_at": "2026-06-09T13:56:14.330837Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "荐股复评无法选择下一交易日目标日期",
+  "trigger_condition": {
+    "fingerprint": "60240010dbb092201a981c25",
+    "source_event_id": "FE-20260609-60240010dbb0"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:advisory",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "backend/routers/advisory.py",
+      "backend/services/advisory_program.py",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/paper-v2/advisory",
+    "ui_routes": [
+      "/paper-v2/advisory"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
