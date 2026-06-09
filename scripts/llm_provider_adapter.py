@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -27,11 +28,20 @@ from backend.infra.deepseek_config import (  # noqa: E402
     redact_secret_text,
     resolve_deepseek_config,
 )
+from backend.services.validation.plan_catalog import (  # noqa: E402
+    FORBIDDEN_BACKEND_PORTS,
+    ValidationCatalogError,
+    ValidationPlanCatalog,
+)
 
 GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY = "deepseek-r1"
 GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
 TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
+TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+FORBIDDEN_FRONTEND_PORTS = {3000}
+FORBIDDEN_MARKET_DATA_PORTS = {19080}
+SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
@@ -201,6 +211,143 @@ def _test_plan_keys(root: Path = ROOT) -> set[str]:
     return {str(plan.get("plan_key")) for plan in plans if isinstance(plan, dict) and plan.get("plan_key")}
 
 
+def _catalog_plans_by_key(root: Path = ROOT, catalog_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    path = catalog_path or root / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
+    try:
+        plans = ValidationPlanCatalog(path).list_plans()
+    except ValidationCatalogError as exc:
+        raise ProviderAdapterError(str(exc)) from exc
+    return {str(plan["plan_key"]): plan for plan in plans}
+
+
+def _issue_flow_validation_select(changed_files: list[str], module: str | None) -> dict[str, Any] | None:
+    if not changed_files and not module:
+        return None
+    try:
+        from scripts import issue_flow  # noqa: PLC0415
+
+        return issue_flow.select_validation(changed_files, module=module)
+    except Exception as exc:
+        raise ProviderAdapterError(f"validation-select compatibility check failed: {exc}") from exc
+
+
+def _registered_worktrees(root: Path = ROOT) -> set[str]:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "worktree", "list", "--porcelain"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ProviderAdapterError("git worktree registry cannot be inspected")
+    worktrees: set[str] = set()
+    for line in proc.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        raw = line.split(" ", 1)[1].strip()
+        try:
+            worktrees.add(str(Path(raw).resolve()).casefold())
+        except OSError:
+            worktrees.add(str(Path(raw)).casefold())
+    return worktrees
+
+
+def _workspace_gate(workspace_path: str | None, root: Path = ROOT) -> dict[str, Any]:
+    if not workspace_path:
+        return {
+            "allowed": True,
+            "workspace_path": None,
+            "reason": "not_required",
+        }
+    path = Path(workspace_path)
+    if not path.exists():
+        return {
+            "allowed": False,
+            "workspace_path": str(path),
+            "reason": "workspace_path_missing",
+        }
+    resolved = str(path.resolve()).casefold()
+    if resolved not in _registered_worktrees(root):
+        return {
+            "allowed": False,
+            "workspace_path": str(path.resolve()),
+            "reason": "workspace_path_not_registered_git_worktree",
+        }
+    return {
+        "allowed": True,
+        "workspace_path": str(path.resolve()),
+        "reason": "registered_git_worktree",
+    }
+
+
+def _plan_gate(plan_key: str, plan: dict[str, Any] | None) -> dict[str, Any]:
+    reasons: list[str] = []
+    if plan is None:
+        return {
+            "plan_key": plan_key,
+            "allowed": False,
+            "rejection_reasons": ["unknown_plan_key"],
+        }
+    if not plan.get("enabled"):
+        reasons.append("plan_disabled")
+    if not plan.get("runner_enabled"):
+        reasons.append("runner_not_enabled")
+    if plan.get("writes_business_state"):
+        reasons.append("writes_business_state")
+    if plan.get("requires_confirmation"):
+        reasons.append("requires_confirmation")
+    backend_ports = {int(port) for port in plan.get("allowed_backend_ports") or []}
+    frontend_ports = {int(port) for port in plan.get("allowed_frontend_ports") or []}
+    if backend_ports & (FORBIDDEN_BACKEND_PORTS | FORBIDDEN_MARKET_DATA_PORTS):
+        reasons.append("forbidden_backend_or_market_data_port")
+    if frontend_ports & FORBIDDEN_FRONTEND_PORTS:
+        reasons.append("forbidden_frontend_port")
+    return {
+        "plan_key": plan_key,
+        "title": plan.get("title"),
+        "module": plan.get("module"),
+        "level": plan.get("level"),
+        "command_key": plan.get("command_key"),
+        "nox_session": plan.get("nox_session"),
+        "runner_enabled": bool(plan.get("runner_enabled")),
+        "writes_business_state": bool(plan.get("writes_business_state")),
+        "allowed": not reasons,
+        "rejection_reasons": reasons,
+    }
+
+
+def _no_shell_commands(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key) in SHELL_COMMAND_FIELDS:
+                return False
+            if not _no_shell_commands(value):
+                return False
+    elif isinstance(payload, list):
+        return all(_no_shell_commands(item) for item in payload)
+    return True
+
+
+def _default_advised_plan_keys(changed_files: list[str], module: str | None) -> list[str]:
+    selection = _issue_flow_validation_select(changed_files, module)
+    if not selection:
+        return ["l0"]
+    plans_by_key = _catalog_plans_by_key()
+    keys = [
+        plan_key
+        for plan_key in selection.get("required_plans") or []
+        if (plans_by_key.get(plan_key) or {}).get("runner_enabled")
+    ]
+    keys.extend(
+        plan_key
+        for plan_key in selection.get("recommended_plans") or []
+        if (plans_by_key.get(plan_key) or {}).get("runner_enabled")
+    )
+    return keys or ["l0"]
+
+
 def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, Any]:
     if provider == "github_models":
         selector = config["providers"]["github_models"]["model_selector"]
@@ -225,6 +372,91 @@ def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, 
         "credential_source": "not_required",
         "invoked": False,
     }
+
+
+def build_test_plan_advice(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    plan_keys: list[str] | None = None,
+    changed_files: list[str] | None = None,
+    module: str | None = None,
+    workspace_path: str | None = None,
+    root: Path = ROOT,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build schema-checked test-plan advice without allowing shell commands."""
+
+    validate_config(config)
+    provider_summary = _provider_model_summary(config, provider)
+    changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
+    advised_keys = [str(key) for key in (plan_keys or _default_advised_plan_keys(changed_files, module))]
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    selection = _issue_flow_validation_select(changed_files, module)
+    selected_by_catalog = set((selection or {}).get("required_plans") or [])
+    selected_by_catalog.update((selection or {}).get("recommended_plans") or [])
+    workspace = _workspace_gate(workspace_path, root=root)
+    plan_results = [_plan_gate(plan_key, plans_by_key.get(plan_key)) for plan_key in advised_keys]
+    all_plans_allowed = all(item["allowed"] for item in plan_results)
+    catalog_compatible = not selected_by_catalog or set(advised_keys).issubset(selected_by_catalog)
+    workflow_gate = "ready" if all_plans_allowed and workspace["allowed"] and catalog_compatible else "blocked"
+    advice = {
+        "schema_version": TEST_PLAN_ADVICE_SCHEMA_VERSION,
+        "provider": provider_summary["provider"],
+        "model": provider_summary["model"],
+        "module": module,
+        "changed_files": changed_files,
+        "test_plan_advice": plan_results,
+        "validation_select": {
+            "required_plans": (selection or {}).get("required_plans") or [],
+            "recommended_plans": (selection or {}).get("recommended_plans") or [],
+            "compatible": catalog_compatible,
+        },
+        "workspace_gate": workspace,
+        "llm_invocation_evidence": {
+            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
+            "provider": provider_summary["provider"],
+            "model": provider_summary["model"],
+            "invoked": False,
+            "reason": "test_plan_advice_dry_run_no_network",
+            "credential_source": provider_summary["credential_source"],
+            "input_policy": "plan_key_intent_plus_catalog_context_only",
+            "redaction_applied": True,
+        },
+        "deterministic_gate": {
+            "workflow_gate": workflow_gate,
+            "schema_valid": True,
+            "plan_keys_exist": all("unknown_plan_key" not in item["rejection_reasons"] for item in plan_results),
+            "runner_enabled_only": all(
+                "runner_not_enabled" not in item["rejection_reasons"] for item in plan_results
+            ),
+            "command_keys_allowlisted": all(bool(item.get("command_key")) for item in plan_results),
+            "workspace_path_allowed": workspace["allowed"],
+            "validation_select_compatible": catalog_compatible,
+            "shell_commands_allowed": False,
+            "production_ports_allowed": False,
+            "production_gates": {
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            },
+        },
+    }
+    validate_test_plan_advice(advice)
+    return advice
+
+
+def validate_test_plan_advice(advice: dict[str, Any]) -> None:
+    if advice.get("schema_version") != TEST_PLAN_ADVICE_SCHEMA_VERSION:
+        raise ProviderAdapterError("test plan advice schema_version invalid")
+    if not isinstance(advice.get("test_plan_advice"), list):
+        raise ProviderAdapterError("test plan advice missing list field: test_plan_advice")
+    if not _no_shell_commands(advice):
+        raise ProviderAdapterError("test plan advice must not contain shell command fields")
+    if not isinstance(advice.get("deterministic_gate"), dict):
+        raise ProviderAdapterError("test plan advice missing deterministic_gate")
+    if advice["deterministic_gate"].get("shell_commands_allowed") is not False:
+        raise ProviderAdapterError("test plan advice must keep shell command execution disabled")
 
 
 def build_triage_quality_smoke(provider: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -398,6 +630,44 @@ def cmd_triage_quality_smoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def _split_csv(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        result.extend(item.strip() for item in str(value).split(",") if item.strip())
+    return result
+
+
+def cmd_test_plan_advice(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    provider = args.provider or str(config.get("default_provider") or "deterministic")
+    advice = build_test_plan_advice(
+        provider,
+        config,
+        plan_keys=_split_csv(args.plan_key),
+        changed_files=_split_csv(args.changed_file),
+        module=args.module,
+        workspace_path=args.workspace_path,
+    )
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    gate = advice["deterministic_gate"]
+    compact = {
+        "provider": advice["provider"],
+        "model": advice["model"],
+        "schema_version": advice["schema_version"],
+        "workflow_gate": gate["workflow_gate"],
+        "advised_plan_count": len(advice["test_plan_advice"]),
+        "allowed_plan_count": len([item for item in advice["test_plan_advice"] if item["allowed"]]),
+        "validation_select_compatible": gate["validation_select_compatible"],
+        "workspace_path_allowed": gate["workspace_path_allowed"],
+        "llm_invoked": advice["llm_invocation_evidence"]["invoked"],
+        "artifact": args.output,
+    }
+    _print_success("test-plan-advice", compact, as_json=args.json)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock validation LLM provider adapter")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
@@ -424,6 +694,16 @@ def build_parser() -> argparse.ArgumentParser:
     quality.add_argument("--provider", choices=["deterministic", "github_models", "deepseek_api"], default=None)
     quality.add_argument("--output", default=None, help="Optional ignored artifact path for full triage advice JSON.")
     quality.set_defaults(func=cmd_triage_quality_smoke)
+
+    plan = subparsers.add_parser("test-plan-advice")
+    plan.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit compact JSON output")
+    plan.add_argument("--provider", choices=["deterministic", "github_models", "deepseek_api"], default=None)
+    plan.add_argument("--plan-key", action="append", default=None, help="Plan key intent; may be repeated or comma-separated.")
+    plan.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
+    plan.add_argument("--module", default=None)
+    plan.add_argument("--workspace-path", default=None)
+    plan.add_argument("--output", default=None, help="Optional ignored artifact path for full test-plan advice JSON.")
+    plan.set_defaults(func=cmd_test_plan_advice)
     return parser
 
 
