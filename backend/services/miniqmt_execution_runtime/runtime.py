@@ -345,6 +345,67 @@ class MiniQMTExecutionRuntime:
         )
         return submitted
 
+    def record_external_child_order(
+        self,
+        *,
+        algo_instance_id: str,
+        quantity: int,
+        price: float,
+        price_type: int = 11,
+        status: MiniQMTChildOrderStatus = MiniQMTChildOrderStatus.SUBMITTED,
+        broker_order_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MiniQMTChildOrder:
+        """Attach an externally-submitted child order to the runtime ledger.
+
+        Phase 4 product clients may still use legacy broker/managed-order
+        gateways while the canonical owner records algo/child-order evidence.
+        """
+
+        runtime = self._require_runtime()
+        instance = self._require_algo_instance(runtime.runtime_id, algo_instance_id)
+        order = MiniQMTChildOrder(
+            runtime_id=runtime.runtime_id,
+            algo_instance_id=instance.algo_instance_id,
+            parent_intent_id=instance.parent_intent_id,
+            strategy_slot_id=instance.strategy_slot_id,
+            symbol=instance.symbol,
+            side=instance.side,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            status=status,
+            broker_order_id=broker_order_id,
+            submitted_at=datetime.now(UTC) if status == MiniQMTChildOrderStatus.SUBMITTED else None,
+            metadata=dict(metadata or {}),
+        )
+        order = self.oms.record_child_order(order)
+        runtime = self.repository.upsert_runtime(
+            runtime.model_copy(
+                update={
+                    "event_loop_state": MiniQMTExecutionRuntimeState.RUNNING,
+                    "oms_state": MiniQMTOmsState.OPEN,
+                }
+            )
+        )
+        self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=(
+                MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED
+                if status == MiniQMTChildOrderStatus.SUBMITTED
+                else MiniQMTExecutionEventType.CHILD_ORDER_REJECTED
+            ),
+            source="gateway",
+            payload={
+                "child_order_id": order.child_order_id,
+                "algo_instance_id": algo_instance_id,
+                "broker_order_id": broker_order_id,
+                "status": status.value,
+                "external_gateway_record": True,
+            },
+        )
+        return order
+
     def record_operator_command(
         self,
         *,
@@ -621,18 +682,21 @@ class MiniQMTExecutionRuntime:
         cancelled_child_ids: set[str] = set()
         for action in actions:
             if action.action_type == VnpyActionType.SUBMIT:
+                child_metadata = {
+                    **dict(instance.metadata.get("runtime_child_context") or {}),
+                    "source": "runtime_owned_vnpy_algo",
+                    "vnpy_action_id": action.action_id,
+                    "vnpy_vt_orderid": action.vt_orderid,
+                    "vnpy_action_type": action.action_type.value,
+                    "vnpy_reason": action.reason,
+                    "source_attribution": instance.metadata.get("source_attribution"),
+                    "execution_algo_code": instance.algo_code,
+                }
                 child = self.submit_child_order(
                     algo_instance_id=instance.algo_instance_id,
                     quantity=int(action.volume or 0),
                     price=float(action.price or 0),
-                    metadata={
-                        "source": "runtime_owned_vnpy_algo",
-                        "vnpy_action_id": action.action_id,
-                        "vnpy_vt_orderid": action.vt_orderid,
-                        "vnpy_action_type": action.action_type.value,
-                        "vnpy_reason": action.reason,
-                        "source_attribution": instance.metadata.get("source_attribution"),
-                    },
+                    metadata=child_metadata,
                 )
                 core = self._ensure_vnpy_core(instance)
                 follow_up_actions = core.update_order(

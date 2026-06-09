@@ -205,7 +205,7 @@ class MiniQMTChildOrder(BaseModel):
     symbol: str
     side: OrderSide
     quantity: int = Field(gt=0)
-    price: float = Field(gt=0)
+    price: float = Field(ge=0)
     price_type: int = 11
     status: MiniQMTChildOrderStatus = MiniQMTChildOrderStatus.SUBMITTING
     broker_order_id: str | None = None
