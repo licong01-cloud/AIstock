@@ -70,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "\u{1F3AF} \u9009\u80A1\u677F\u5757",
     items: [
       { href: "/watchlist", label: "\u2B50 \u81EA\u9009\u80A1\u7968\u6C60" },
+      { href: "/tdx-blocks", label: "\u{1F4E1} \u901A\u8FBE\u4FE1\u677F\u5757" },
       { href: "/cloud-screening", label: "\u2601 \u4E91\u9009\u80A1" },
       { href: "/market-news", label: "\u{1F4F0} \u5E02\u573A\u8D44\u8BAF / \u5E02\u573A\u5FEB\u8BAF" },
     ],
