@@ -21,10 +21,10 @@ def test_gateway_cli_list_tools_profiles() -> None:
     validation = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=validation")
     qe = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qe")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 205
-    assert full["tool_count"] == 211
-    assert validation["tool_count"] == 19
-    assert qe["tool_count"] == 65
+    assert full["legacy_tool_count"] == 211
+    assert full["tool_count"] == 217
+    assert validation["tool_count"] == 20
+    assert qe["tool_count"] == 70
 
 
 def test_gateway_cli_startup_summary_is_structured() -> None:
@@ -34,7 +34,7 @@ def test_gateway_cli_startup_summary_is_structured() -> None:
     assert payload["status"] == "pass"
     assert payload["profile"] == "validation"
     assert payload["modules"] == ["validation"]
-    assert payload["tool_count"] == 19
+    assert payload["tool_count"] == 20
     assert payload["transport"] == "stdio"
     assert payload["base_url"].startswith("http://127.0.0.1:")
     assert len(payload["manifest_version"]) == 64

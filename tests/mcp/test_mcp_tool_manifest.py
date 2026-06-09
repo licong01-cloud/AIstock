@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 205
+    assert legacy_tool_count() == 211
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 211
-    assert len(TOOL_MANIFEST_BY_NAME) == 211
+    assert len(TOOL_MANIFEST) == 217
+    assert len(TOOL_MANIFEST_BY_NAME) == 217
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name

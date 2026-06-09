@@ -1210,6 +1210,15 @@ class CustomEvolutionCreateRequest(BaseModel):
     clone_from_task_id: Optional[str] = Field(None, description="Optional source custom_evo task id for clone provenance")
 
 
+class CustomEvoConfigUpdateRequest(BaseModel):
+    task_name: str = Field(..., description="任务名称")
+    target_desc: str = Field("", description="任务描述")
+    loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
+    node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    engine_mode: str = Field("unified", description="Only unified is supported")
+
+
 class CustomEvoLoopRerunRequest(BaseModel):
     loop: CustomEvoLoopConfig = Field(..., description="Replacement config for the target Loop")
     node_id: Optional[str] = Field(None, description="Default execution node for this mutation")
@@ -1443,7 +1452,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             auto_start=req.auto_start,
         )
 
-        return {
+        response = {
             "status": "success",
             "task_id": new_task_id,
             "total_loops": len(loops_config),
@@ -1454,6 +1463,15 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             "node_parallelism": node_parallelism,
             "message": f"Custom evolution task created with {len(loops_config)} loops.",
         }
+        if not req.auto_start:
+            response.update({
+                "operation": "create_pending",
+                "editable": True,
+                "startable": True,
+                "resume_allowed": False,
+                "start_reason": "custom_evo task has not been submitted",
+            })
+        return response
     except HTTPException:
         raise
     except ValueError as e:
@@ -1475,6 +1493,42 @@ async def get_custom_evo_config(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.put("/tasks/{task_id}/custom-evo-config", summary="Update a never-started custom_evo task config")
+async def update_custom_evo_config(task_id: str, req: CustomEvoConfigUpdateRequest):
+    try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        if (req.engine_mode or "unified") != "unified":
+            raise HTTPException(
+                status_code=400,
+                detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
+            )
+        loops_config, loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
+            req.loops,
+            request_node_id=req.node_id,
+            node_parallelism_payload=req.node_parallelism,
+        )
+        result = await scheduler.update_custom_evo_editable_config(
+            task_id=task_id,
+            task_name=req.task_name,
+            target_desc=req.target_desc,
+            loops_config=loops_config,
+            node_id=loop1_node_id,
+            node_parallelism=node_parallelism,
+            engine_mode="unified",
+        )
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=409 if "already started" in str(e) or "not editable" in str(e) else 400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update custom_evo config for {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/tasks/{task_id}/custom-evo/run", summary="Submit a materialized custom_evo task")
 async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background_tasks: BackgroundTasks):
     if req.confirm_custom_evo != "QE_CUSTOM_EVO_RUN":
@@ -1485,6 +1539,14 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
             raise HTTPException(status_code=400, detail=f"task {task_id} is not a custom_evo task")
         if config.get("status") == "running":
             raise HTTPException(status_code=409, detail=f"custom_evo task {task_id} is already running")
+        if not config.get("startable"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"custom_evo task {task_id} is not a never-started pending task; "
+                    f"use resume/append/rerun as appropriate. reason={config.get('start_reason')}"
+                ),
+            )
         for idx, loop in enumerate(config.get("loops") or [], start=1):
             try:
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
@@ -1497,10 +1559,11 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
         )
         return {
             "status": "success",
+            "operation": "start",
             "task_id": task_id,
             "submitted": True,
             "force_full_train": req.force_full_train,
-            "message": "custom_evo task submitted through canonical backend executor",
+            "message": "custom_evo task started through canonical backend executor",
         }
     except HTTPException:
         raise

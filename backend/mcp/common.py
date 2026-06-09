@@ -211,6 +211,14 @@ class AIstockApiClient:
     ) -> Any:
         return self.request("POST", path, json_body=json_body or {}, params=params)
 
+    def put(
+        self,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        return self.request("PUT", path, json_body=json_body or {}, params=params)
+
     def delete(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
         return self.request("DELETE", path, json_body=json_body or {})
 

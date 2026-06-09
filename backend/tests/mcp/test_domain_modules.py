@@ -218,7 +218,7 @@ def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
             "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
         }
     ]
-    assert qe_experiment.TOOL_COUNT == 28
+    assert qe_experiment.TOOL_COUNT == 33
 
 
 def test_qe_experiment_template_create_and_run_tool_confirms_before_http() -> None:
@@ -267,6 +267,53 @@ def test_qe_experiment_template_create_and_run_tool_confirms_before_http() -> No
             },
         }
     ]
+
+
+def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+    single_payload = {
+        "factor_names": ["Alpha001"],
+        "model_id": "model_lgbm_v1",
+        "custom_params": {"random_seed": 42},
+    }
+    custom_loop = {
+        "factor_keys": ["Alpha001||alpha158"],
+        "model_id": "model_lgbm_v1",
+        "runtime_flags": {"random_seed": 42},
+    }
+
+    with pytest.raises(ValueError, match=qe_experiment.QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM):
+        mcp.tools["qe_single_experiment_update_config_confirmed"]("exp-1", single_payload, confirm_update="WRONG")
+    with pytest.raises(ValueError, match=qe_experiment.QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM):
+        mcp.tools["qe_custom_evo_update_config_confirmed"]("task-1", "task", [custom_loop], confirm_update="WRONG")
+    assert calls == []
+
+    mcp.tools["qe_single_experiment_create_pending"](single_payload, created_by_name="unit")
+    mcp.tools["qe_single_experiment_get_config"]("exp-1")
+    mcp.tools["qe_single_experiment_update_config_confirmed"](
+        "exp-1",
+        single_payload,
+        confirm_update=qe_experiment.QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM,
+    )
+    mcp.tools["qe_custom_evo_create_pending"]("pending custom", [custom_loop], node_id="node-1")
+    mcp.tools["qe_custom_evo_update_config_confirmed"](
+        "task-1",
+        "edited custom",
+        [custom_loop],
+        confirm_update=qe_experiment.QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM,
+    )
+
+    assert [call["method"] for call in calls] == ["POST", "GET", "PUT", "POST", "PUT"]
+    assert [call["path"] for call in calls] == [
+        "/api/v1/quantevolver/experiments/pending",
+        "/api/v1/quantevolver/experiments/exp-1/editable-config",
+        "/api/v1/quantevolver/experiments/exp-1/editable-config",
+        "/api/v1/quantevolver/evolution/custom-tasks",
+        "/api/v1/quantevolver/evolution/tasks/task-1/custom-evo-config",
+    ]
+    assert calls[0]["body"]["created_by_name"] == "unit"
+    assert calls[3]["body"]["auto_start"] is False
+    assert calls[3]["body"]["node_id"] == "node-1"
 
 
 

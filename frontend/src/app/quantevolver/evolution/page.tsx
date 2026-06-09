@@ -214,6 +214,11 @@ interface Task {
   factor_blacklist?: string[];
   strategy_evo_config?: Record<string, any>;
   node_id?: string;
+  editable?: boolean;
+  startable?: boolean;
+  resume_allowed?: boolean;
+  start_reason?: string;
+  submitted_loop_count?: number;
 }
 
 function isHmmTask(task: Task): boolean {
@@ -429,7 +434,7 @@ export default function EvolutionDashboard() {
   const [additionalFactorKeys, setAdditionalFactorKeys] = useState<Set<string>>(new Set());
 
   // ── 自定义演进 (custom_evo) 状态 ──
-  type CustomEvoFormMode = "create" | "clone" | "rerun" | "append";
+  type CustomEvoFormMode = "create" | "clone" | "rerun" | "append" | "edit";
   type CustomEvoLoopConfig = {
     label: string;
     factor_keys: Set<string>;
@@ -582,7 +587,7 @@ export default function EvolutionDashboard() {
 
   useEffect(() => {
     setCustomEvoNodeParallelism(prev => {
-      const keepExistingTaskNodes = customEvoFormMode === "rerun" || customEvoFormMode === "append";
+      const keepExistingTaskNodes = customEvoFormMode === "rerun" || customEvoFormMode === "append" || customEvoFormMode === "edit";
       const next: Record<string, number> = keepExistingTaskNodes ? { ...prev } : {};
       for (const nodeId of customEvoResolvedNodeIds) {
         const raw = prev[nodeId] ?? 1;
@@ -667,7 +672,7 @@ export default function EvolutionDashboard() {
     warning = "",
   ) => {
     setCustomEvoFormMode(mode);
-    setCustomEvoTargetTaskId(mode === "rerun" || mode === "append" ? cfg.task_id : "");
+    setCustomEvoTargetTaskId(["rerun", "append", "edit"].includes(mode) ? cfg.task_id : "");
     setCustomEvoTargetLoopIndex(null);
     setCustomEvoCloneSourceTaskId(mode === "clone" ? cfg.task_id : "");
     setCustomEvoMutationWarning(warning);
@@ -1470,6 +1475,11 @@ export default function EvolutionDashboard() {
           setIsCreating(false);
           return;
         }
+        if (customEvoFormMode === "edit" && !customEvoTargetTaskId) {
+          alert("编辑待启动任务缺少目标任务");
+          setIsCreating(false);
+          return;
+        }
         if (customEvoFormMode === "rerun") {
           const ok = confirm(`确认重新运行 ${customEvoTargetTaskId} Loop ${customEvoTargetLoopIndex}？旧结果会被永久删除且不保留备份。`);
           if (!ok) { setIsCreating(false); return; }
@@ -1517,6 +1527,7 @@ export default function EvolutionDashboard() {
           node_parallelism: customEvoNodeParallelism,
           engine_mode: "unified",
           clone_from_task_id: customEvoFormMode === "clone" ? (customEvoCloneSourceTaskId || undefined) : undefined,
+          auto_start: customEvoFormMode === "create" || customEvoFormMode === "clone" ? false : undefined,
         };
         if (customEvoFormMode === "rerun") {
           endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/loops/${customEvoTargetLoopIndex}/rerun`;
@@ -1536,10 +1547,20 @@ export default function EvolutionDashboard() {
             engine_mode: "unified",
             ack_failed_loop_warning: true,
           };
+        } else if (customEvoFormMode === "edit") {
+          endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/custom-evo-config`;
+          body = {
+            task_name: newTask.task_name,
+            target_desc: newTask.target_desc || "自定义演进任务",
+            loops: loopsPayload,
+            node_id: customEvoNodeId || undefined,
+            node_parallelism: customEvoNodeParallelism,
+            engine_mode: "unified",
+          };
         }
 
         const res = await fetch(endpoint, {
-          method: "POST",
+          method: customEvoFormMode === "edit" ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -1557,11 +1578,13 @@ export default function EvolutionDashboard() {
             ? `Loop ${submittedLoopIndex} 重新运行已提交`
             : submittedMode === "append"
               ? `追加 ${data.new_loop_indexes?.length || customEvoLoops.length} 个 Loop`
-              : submittedMode === "clone"
-                ? `克隆任务创建成功，共 ${data.total_loops} 个 Loop`
-                : `自定义演进任务创建成功，共 ${data.total_loops} 个 Loop`;
+              : submittedMode === "edit"
+                ? "待启动任务配置已保存"
+                : submittedMode === "clone"
+                  ? `克隆任务已创建为待启动，共 ${data.total_loops} 个 Loop`
+                  : `自定义演进任务已创建为待启动，共 ${data.total_loops} 个 Loop`;
           alert(modeMessage);
-          const targetTaskId = submittedMode === "rerun" || submittedMode === "append"
+          const targetTaskId = submittedMode === "rerun" || submittedMode === "append" || submittedMode === "edit"
             ? submittedTaskId
             : data.task_id;
           setShowCreateTask(false);
@@ -1730,12 +1753,13 @@ export default function EvolutionDashboard() {
         setTimeout(async () => {
           const freshRes = await fetch(`${API}/quantevolver/evolution/tasks`);
           const freshData = await freshRes.json();
-          if (freshData.tasks) {
-            const resumedTask = freshData.tasks.find((t: any) => t.task_id === resumingTaskId);
+          const freshTasks = freshData.data || freshData.tasks || [];
+          if (Array.isArray(freshTasks)) {
+            const resumedTask = freshTasks.find((t: any) => t.task_id === resumingTaskId);
             if (resumedTask && resumedTask.status === "failed") {
               appendLogs([`[Error] 任务 ${resumingTaskId} 恢复后立即失败，请检查后端日志`]);
             }
-            setTasks(freshData.tasks);
+            setTasks(freshTasks);
           }
         }, 3000);
       } else {
@@ -2155,6 +2179,56 @@ export default function EvolutionDashboard() {
     }
   };
 
+  const handleEditCustomEvo = async (task: Task, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    try {
+      const cfg = await fetchCustomEvoEditableConfig(task.task_id);
+      if (!cfg.editable) {
+        alert(`该任务不可全量编辑：${cfg.start_reason || "任务已经启动"}`);
+        return;
+      }
+      const loopsCfg = [...(cfg.loops || [])].sort((a: any, b: any) => Number(a.loop_index || 0) - Number(b.loop_index || 0));
+      if (loopsCfg.length === 0) {
+        alert("该任务没有可编辑的 Loop 配置");
+        return;
+      }
+      applyCustomEvoConfigToForm(cfg, "edit", loopsCfg, "编辑只保存配置，不会启动执行。");
+      setCustomEvoTargetTaskId(task.task_id);
+      setNewTask(prev => ({
+        ...prev,
+        source_type: "custom_evo",
+        task_name: cfg.task_name || task.task_name,
+        target_desc: cfg.target_desc || task.target_desc || "",
+      }));
+      setShowCreateTask(true);
+    } catch (err: any) {
+      alert(`加载待启动任务配置失败: ${err?.message || "网络错误"}`);
+    }
+  };
+
+  const handleStartCustomEvo = async (task: Task, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!confirm(`确认启动待执行任务「${task.task_name || task.task_id}」吗？启动后将提交全部 Loop，不能再全量编辑配置。`)) return;
+    try {
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${task.task_id}/custom-evo/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_custom_evo: "QE_CUSTOM_EVO_RUN", force_full_train: false }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        alert(`启动失败 (HTTP ${res.status}): ${data.detail || JSON.stringify(data)}`);
+        return;
+      }
+      appendLogs([`[System] 待启动任务 ${task.task_id} 已提交执行`]);
+      fetchTasks();
+      setActiveTaskId(task.task_id);
+      setTimeout(() => fetchTaskDetail(task.task_id), 500);
+    } catch (err: any) {
+      alert(`启动失败: ${err?.message || "网络错误"}`);
+    }
+  };
+
   const handleCloneCustomEvo = async (task: Task, e?: React.MouseEvent) => {
     e?.stopPropagation();
     try {
@@ -2392,7 +2466,14 @@ export default function EvolutionDashboard() {
                     const canResume = ["stopped", "paused", "completed", "failed"].includes(task.status);
                     const canDelete = task.status !== "running";
                     const isCustomEvoTask = task.task_type === "custom_evo";
-                    const canContinueCustomEvo = isCustomEvoTask && task.status !== "running";
+                    const isNeverStartedCustomEvo = isCustomEvoTask && (
+                      task.startable === true ||
+                      (task.status === "pending" && Number(task.current_loop || 0) === 0 && Number(task.submitted_loop_count || 0) === 0)
+                    );
+                    const canEditCustomEvo = isNeverStartedCustomEvo && task.editable !== false;
+                    const canStartCustomEvo = isNeverStartedCustomEvo;
+                    const canResumeTask = canResume && !isNeverStartedCustomEvo;
+                    const canContinueCustomEvo = isCustomEvoTask && task.status !== "running" && !isNeverStartedCustomEvo;
                     const sourceType = task.source_type;
                     const taskArchiveStatus = archiveStatus?.tasks?.[task.task_id];
                     const archivePending = taskArchiveStatus?.pending_loop_count || 0;
@@ -2498,7 +2579,21 @@ export default function EvolutionDashboard() {
                                 <Square size={11} /> 停止
                               </button>
                             )}
-                            {canResume && (
+                            {canStartCustomEvo && (
+                              <button onClick={(e) => handleStartCustomEvo(task, e)}
+                                title={task.start_reason || "启动待执行自定义演进任务"}
+                                style={{ padding: "4px 8px", border: "1px solid #0ea5e9", borderRadius: "4px", backgroundColor: "#f0f9ff", color: "#0284c7", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
+                                <Play size={11} /> 启动
+                              </button>
+                            )}
+                            {canEditCustomEvo && (
+                              <button onClick={(e) => handleEditCustomEvo(task, e)}
+                                title="编辑待启动任务配置"
+                                style={{ padding: "4px 8px", border: "1px solid #64748b", borderRadius: "4px", backgroundColor: "#f8fafc", color: "#334155", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
+                                <FileCode2 size={11} /> 编辑
+                              </button>
+                            )}
+                            {canResumeTask && (
                               <button onClick={(e) => { e.stopPropagation(); setShowResumeDialog(task.task_id); setAdditionalLoops(0); setForceFullTrain(false); }}
                                 title="恢复演进"
                                 style={{ padding: "4px 8px", border: "1px solid #86efac", borderRadius: "4px", backgroundColor: "#fff", color: "#16a34a", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
@@ -2734,7 +2829,7 @@ export default function EvolutionDashboard() {
           }}>
             <h2 style={{ margin: "0 0 20px", fontSize: "18px", color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
               <Play size={20} color="#3b82f6" />
-              {customEvoFormMode === "rerun" ? `重新运行 Loop ${customEvoTargetLoopIndex ?? ""}` : customEvoFormMode === "append" ? "继续自定义演进" : customEvoFormMode === "clone" ? "克隆自定义演进任务" : "新建演进任务"}
+              {customEvoFormMode === "rerun" ? `重新运行 Loop ${customEvoTargetLoopIndex ?? ""}` : customEvoFormMode === "append" ? "继续自定义演进" : customEvoFormMode === "edit" ? "编辑待启动任务" : customEvoFormMode === "clone" ? "克隆自定义演进任务" : "新建演进任务"}
             </h2>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -2752,6 +2847,7 @@ export default function EvolutionDashboard() {
                 <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: "13px", fontWeight: 600 }}>
                   {customEvoFormMode === "rerun" && `重新运行目标：${customEvoTargetTaskId} / Loop ${customEvoTargetLoopIndex}，旧结果会永久删除。`}
                   {customEvoFormMode === "append" && `继续演进目标：${customEvoTargetTaskId}，新增 Loop 会追加到原任务。`}
+                  {customEvoFormMode === "edit" && `编辑目标：${customEvoTargetTaskId}，仅保存待启动配置，不提交执行。`}
                   {customEvoFormMode === "clone" && `克隆来源：${customEvoCloneSourceTaskId}，只复制配置，不复制结果。`}
                 </div>
               )}
@@ -3748,7 +3844,7 @@ export default function EvolutionDashboard() {
               </div>
 
               {/* 初始配置来源（快速填充） */}
-              {customEvoFormMode !== "rerun" && customEvoFormMode !== "append" && (
+              {customEvoFormMode !== "rerun" && customEvoFormMode !== "append" && customEvoFormMode !== "edit" && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#f8fafc" }}>
                 <div style={{ fontSize: "13px", fontWeight: 700, color: "#334155", marginBottom: "8px" }}>初始配置来源（可选，用于快速填充第一个 Loop）</div>
                 <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
@@ -4195,10 +4291,12 @@ export default function EvolutionDashboard() {
                     ? `确认重新运行 Loop ${customEvoTargetLoopIndex ?? ""}`
                     : customEvoFormMode === "append"
                       ? `追加并运行 ${customEvoLoops.length} 个 Loop`
-                      : customEvoFormMode === "clone"
-                        ? `克隆创建 (${customEvoLoops.length} Loops)`
-                        : `创建自定义演进 (${customEvoLoops.length} Loops)`)
-                  : "创建并启动演进")}
+                      : customEvoFormMode === "edit"
+                        ? "保存待启动配置"
+                        : customEvoFormMode === "clone"
+                          ? `克隆为待启动 (${customEvoLoops.length} Loops)`
+                          : `创建待启动任务 (${customEvoLoops.length} Loops)`)
+                  : "创建演进任务")}
               </button>
             </div>
           </div>

@@ -323,6 +323,218 @@ class GenerateConfigRequest(BaseModel):
     parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
 
 
+class SingleExperimentPendingCreateRequest(GenerateConfigRequest):
+    created_by_type: Optional[str] = Field("mcp", description="创建来源类型: mcp/ui/agent")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称，如 Codex 或 Claude Code")
+    source_context_json: Optional[Dict[str, Any]] = Field(None, description="MCP/Agent 创建上下文")
+    provenance: Optional[Dict[str, Any]] = Field(None, description="额外溯源信息，写入 custom_params.qe_mcp_provenance")
+
+
+class SingleExperimentConfigUpdateRequest(GenerateConfigRequest):
+    """Editable single-experiment payload; same shape as config generation."""
+
+
+def _model_to_dict_compat(model: BaseModel) -> Dict[str, Any]:
+    """Support both Pydantic v1 and v2 request objects."""
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
+def _model_field_names(model_cls: type[BaseModel]) -> List[str]:
+    fields = getattr(model_cls, "model_fields", None) or getattr(model_cls, "__fields__", {})
+    return list(fields)
+
+
+def _parse_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _parse_json_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
+
+
+def _single_experiment_start_state(exp_record: Mapping[str, Any]) -> tuple[bool, str]:
+    status = str(exp_record.get("status") or "").lower()
+    if exp_record.get("is_evolution_loop"):
+        return False, "evolution loop rows must be edited through the evolution task UI"
+    if status not in {"created", "pending"}:
+        return False, f"experiment status is {exp_record.get('status') or 'unknown'}"
+    for runtime_key in ("qe_task_id", "qe_loop_id", "started_at", "completed_at"):
+        if exp_record.get(runtime_key):
+            return False, f"experiment already has runtime field {runtime_key}"
+    return True, "single experiment has not been submitted"
+
+
+def _single_experiment_editable_payload(exp_record: Mapping[str, Any]) -> Dict[str, Any]:
+    custom_params = _parse_json_object(exp_record.get("custom_params"))
+    startable, reason = _single_experiment_start_state(exp_record)
+    alpha_mode = exp_record.get("alpha_mode") or "single"
+    editable = startable and alpha_mode == "single"
+    return {
+        "experiment_id": exp_record.get("experiment_id"),
+        "experiment_name": exp_record.get("experiment_name"),
+        "status": exp_record.get("status"),
+        "alpha_mode": alpha_mode,
+        "factor_names": _parse_json_list(exp_record.get("factor_names")),
+        "factor_sources": (custom_params.get("qe_factor_sources") or {}).copy()
+        if isinstance(custom_params.get("qe_factor_sources"), dict)
+        else None,
+        "model_id": exp_record.get("model_id"),
+        "strategy_id": exp_record.get("strategy_id"),
+        "data_split": _parse_json_object(exp_record.get("data_split")),
+        "custom_params": custom_params,
+        "editable": editable,
+        "startable": startable,
+        "resume_allowed": False,
+        "start_reason": reason if startable else f"not startable: {reason}",
+        "created_at": exp_record.get("created_at"),
+        "updated_at": exp_record.get("updated_at"),
+        "started_at": exp_record.get("started_at"),
+        "completed_at": exp_record.get("completed_at"),
+    }
+
+
+def _validate_qe_catalog_refs(strategy_id: Optional[str], model_id: Optional[str]) -> None:
+    if strategy_id:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (strategy_id,))
+                if not cur.fetchone():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"strategy_id='{strategy_id}' 在策略目录中不存在",
+                    )
+
+    if model_id:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM aistock_model_catalog WHERE model_id = %s", (model_id,))
+                if not cur.fetchone():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"model_id='{model_id}' 在模型目录中不存在",
+                    )
+
+
+def _normalize_single_experiment_custom_params(
+    req: GenerateConfigRequest,
+    *,
+    source: str,
+) -> Dict[str, Any]:
+    """Normalize single-experiment executable params at create/edit boundary."""
+
+    seed_config = normalize_single_experiment_seed_config({"custom_params": req.custom_params or {}})
+    custom_params = dict(seed_config.get("custom_params") or {})
+
+    try:
+        from ..services.quantevolver.blacklist_snapshot import attach_persistent_blacklist_snapshot
+        custom_params = attach_persistent_blacklist_snapshot(custom_params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        label_horizon = normalize_label_horizon(custom_params.get("label_horizon"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if label_horizon == 1:
+        custom_params.pop("label_horizon", None)
+    else:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        custom_params["label_horizon"] = label_horizon
+
+    try:
+        custom_params = ensure_qe_risk_policy(custom_params, source=source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    _valid_unfilled_handlers = {"TAIL_BOOST", "TAIL_SUBSTITUTE"}
+    if req.unfilled_handler:
+        if req.unfilled_handler not in _valid_unfilled_handlers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unfilled_handler='{req.unfilled_handler}' 无效，允许值: {', '.join(sorted(_valid_unfilled_handlers))}",
+            )
+        custom_params["unfilled_handler"] = req.unfilled_handler
+        uf_params = req.unfilled_handler_params or {}
+        if uf_params.get("trigger_minute"):
+            custom_params["unfilled_trigger_minute"] = uf_params["trigger_minute"]
+        if uf_params.get("backup_depth"):
+            custom_params["unfilled_backup_depth"] = uf_params["backup_depth"]
+
+    if custom_params.get("enable_sector_hmm"):
+        hmm_version_id = custom_params.get("hmm_model_version_id")
+        if not hmm_version_id:
+            raise HTTPException(
+                status_code=400,
+                detail="启用行业 HMM 时必须提供 hmm_model_version_id",
+            )
+        from ..services.hmm_training_service import HMMTrainingService
+        hmm_svc = HMMTrainingService()
+        snapshot = hmm_svc.get_snapshot(hmm_version_id)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"HMM 快照 {hmm_version_id} 不存在",
+            )
+        if snapshot.get("status") != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"HMM 快照状态为 '{snapshot.get('status')}'，需要 'completed'",
+            )
+        hmm_model_path = snapshot["model_path"]
+        custom_params["sector_hmm_model_path"] = hmm_model_path
+        try:
+            config_id = snapshot["config_id"]
+            configs = hmm_svc.list_configs("sector_hmm")
+            found_config = False
+            for cfg in configs:
+                if cfg["config_id"] == config_id:
+                    cj = cfg["config_json"]
+                    if isinstance(cj, str):
+                        cj = json.loads(cj)
+                    custom_params["hmm_config_json"] = cj
+                    if "signal_presets" in cj:
+                        custom_params["hmm_signal_presets"] = cj["signal_presets"]
+                    found_config = True
+                    break
+            if not found_config:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"HMM config_id='{config_id}' 未在系统中找到",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"读取 HMM signal_presets 失败: {e}",
+            ) from e
+
+    return custom_params
+
+
 class CreateStrategyRequest(BaseModel):
     strategy_id: str = Field(..., description="策略唯一ID（英文+下划线）")
     display_name: str = Field(..., description="策略显示名称")
@@ -2810,118 +3022,11 @@ def generate_config(req: GenerateConfigRequest):
         from ..services.quantevolver.config_composer import ConfigComposer
 
         # --- 严格参数验证（禁止静默兜底）---
-        if req.strategy_id:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (req.strategy_id,))
-                    if not cur.fetchone():
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"strategy_id='{req.strategy_id}' 在策略目录中不存在",
-                        )
-
-        if req.model_id:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1 FROM aistock_model_catalog WHERE model_id = %s", (req.model_id,))
-                    if not cur.fetchone():
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"model_id='{req.model_id}' 在模型目录中不存在",
-                        )
-
-        # --- Seed 固定契约：生成/入库阶段即规范化，执行阶段只校验不补救 ---
-        seed_config = normalize_single_experiment_seed_config({"custom_params": req.custom_params or {}})
-        custom_params = dict(seed_config.get("custom_params") or {})
-
-        # --- HMM 模型验证与路径注入（对齐自动演进逻辑）---
-        try:
-            from ..services.quantevolver.blacklist_snapshot import attach_persistent_blacklist_snapshot
-            custom_params = attach_persistent_blacklist_snapshot(custom_params)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-        try:
-            label_horizon = normalize_label_horizon(custom_params.get("label_horizon"))
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        if label_horizon == 1:
-            custom_params.pop("label_horizon", None)
-        else:
-            try:
-                ensure_qe_label_horizon_schema()
-            except RuntimeError as e:
-                raise HTTPException(status_code=500, detail=str(e)) from e
-            custom_params["label_horizon"] = label_horizon
-
-        try:
-            custom_params = ensure_qe_risk_policy(custom_params, source="quantevolver.config.generate")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        # --- 尾盘涨停未成交处理注入（对齐演进任务逻辑）---
-        _VALID_UNFILLED_HANDLERS = {"TAIL_BOOST", "TAIL_SUBSTITUTE"}
-        if req.unfilled_handler:
-            if req.unfilled_handler not in _VALID_UNFILLED_HANDLERS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"unfilled_handler='{req.unfilled_handler}' 无效，允许值: {', '.join(sorted(_VALID_UNFILLED_HANDLERS))}",
-                )
-            custom_params["unfilled_handler"] = req.unfilled_handler
-            uf_params = req.unfilled_handler_params or {}
-            if uf_params.get("trigger_minute"):
-                custom_params["unfilled_trigger_minute"] = uf_params["trigger_minute"]
-            if uf_params.get("backup_depth"):
-                custom_params["unfilled_backup_depth"] = uf_params["backup_depth"]
-
-        if custom_params.get("enable_sector_hmm"):
-            hmm_version_id = custom_params.get("hmm_model_version_id")
-            if not hmm_version_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="启用行业 HMM 时必须提供 hmm_model_version_id",
-                )
-            from ..services.hmm_training_service import HMMTrainingService
-            hmm_svc = HMMTrainingService()
-            snapshot = hmm_svc.get_snapshot(hmm_version_id)
-            if snapshot is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"HMM 快照 {hmm_version_id} 不存在",
-                )
-            if snapshot.get("status") != "completed":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"HMM 快照状态为 '{snapshot.get('status')}'，需要 'completed'",
-                )
-            hmm_model_path = snapshot["model_path"]
-            custom_params["sector_hmm_model_path"] = hmm_model_path
-            # 从 DB 读取 signal_presets
-            try:
-                config_id = snapshot["config_id"]
-                configs = hmm_svc.list_configs("sector_hmm")
-                found_config = False
-                for cfg in configs:
-                    if cfg["config_id"] == config_id:
-                        cj = cfg["config_json"]
-                        if isinstance(cj, str):
-                            cj = json.loads(cj)
-                        custom_params["hmm_config_json"] = cj
-                        if "signal_presets" in cj:
-                            custom_params["hmm_signal_presets"] = cj["signal_presets"]
-                        found_config = True
-                        break
-                if not found_config:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"HMM config_id='{config_id}' 未在系统中找到",
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"读取 HMM signal_presets 失败: {e}",
-                )
+        _validate_qe_catalog_refs(req.strategy_id, req.model_id)
+        custom_params = _normalize_single_experiment_custom_params(
+            req,
+            source="quantevolver.config.generate",
+        )
 
 
         cc = ConfigComposer()
@@ -3103,6 +3208,42 @@ def generate_config(req: GenerateConfigRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/experiments/pending")
+def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
+    """Create a real single-experiment runtime row without submitting execution."""
+
+    if req.alpha_mode == "multi" or req.multi_alpha_config:
+        raise HTTPException(status_code=400, detail="experiments/pending only supports single QE tasks")
+
+    req_dict = _model_to_dict_compat(req)
+    custom_params = dict(req_dict.get("custom_params") or {})
+    provenance = {
+        "runtime_first": True,
+        "created_by_type": req.created_by_type or "mcp",
+        "created_by_name": req.created_by_name,
+        "source_context_json": req.source_context_json,
+        "provenance": req.provenance,
+    }
+    custom_params["qe_mcp_provenance"] = {
+        key: value for key, value in provenance.items() if value not in (None, "", {})
+    }
+    if req.factor_sources:
+        custom_params["qe_factor_sources"] = dict(req.factor_sources)
+    req_dict["custom_params"] = custom_params
+    generate_req = GenerateConfigRequest(**{
+        key: req_dict.get(key)
+        for key in _model_field_names(GenerateConfigRequest)
+        if key in req_dict
+    })
+    result = generate_config(generate_req)
+    result["operation"] = "create_pending"
+    result["editable"] = True
+    result["startable"] = True
+    result["resume_allowed"] = False
+    result["start_reason"] = "single experiment has not been submitted"
+    return result
+
+
 @router.get("/experiments")
 def list_experiments(
     limit: int = Query(50, ge=1, le=200),
@@ -3125,6 +3266,110 @@ def list_experiments(
         return result
     except Exception as e:
         logger.exception("获取实验列表失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/experiments/{experiment_id}/editable-config")
+def get_experiment_editable_config(experiment_id: str):
+    """Return the editable config for a not-yet-started single QE experiment."""
+    try:
+        from ..services.quantevolver.config_composer import ConfigComposer
+
+        cc = ConfigComposer()
+        exp_record = cc._get_experiment_record(experiment_id)
+        if not exp_record:
+            raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
+        return {"ok": True, "data": _single_experiment_editable_payload(exp_record)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("获取可编辑实验配置失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/experiments/{experiment_id}/editable-config")
+def update_experiment_editable_config(experiment_id: str, req: SingleExperimentConfigUpdateRequest):
+    """Update a single QE experiment only while it has never been submitted."""
+    try:
+        from ..services.quantevolver.config_composer import ConfigComposer
+
+        cc = ConfigComposer()
+        exp_record = cc._get_experiment_record(experiment_id)
+        if not exp_record:
+            raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
+        startable, reason = _single_experiment_start_state(exp_record)
+        if not startable:
+            raise HTTPException(
+                status_code=409,
+                detail=f"实验 {experiment_id} 已启动或不可编辑: {reason}",
+            )
+        if (exp_record.get("alpha_mode") or "single") != "single":
+            raise HTTPException(status_code=409, detail="multi-alpha 实验暂不支持通过单次实验编辑器修改")
+
+        _validate_qe_catalog_refs(req.strategy_id, req.model_id)
+        custom_params = _normalize_single_experiment_custom_params(
+            req,
+            source="quantevolver.experiments.editable_config",
+        )
+        existing_custom_params = _parse_json_object(exp_record.get("custom_params"))
+        for provenance_key in (
+            "qe_mcp_provenance",
+            "qe_pending_task_source",
+            "qe_pending_created_by",
+        ):
+            if provenance_key in existing_custom_params and provenance_key not in custom_params:
+                custom_params[provenance_key] = existing_custom_params[provenance_key]
+        if req.factor_sources:
+            custom_params["qe_factor_sources"] = dict(req.factor_sources)
+        elif "qe_factor_sources" in existing_custom_params and "qe_factor_sources" not in custom_params:
+            custom_params["qe_factor_sources"] = existing_custom_params["qe_factor_sources"]
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET experiment_name = COALESCE(%s, experiment_name),
+                        factor_names = %s,
+                        model_id = %s,
+                        strategy_id = %s,
+                        data_split = %s,
+                        custom_params = %s,
+                        updated_at = NOW()
+                    WHERE experiment_id = %s
+                      AND COALESCE(status, '') IN ('created', 'pending')
+                      AND qe_task_id IS NULL
+                      AND qe_loop_id IS NULL
+                      AND started_at IS NULL
+                      AND completed_at IS NULL
+                    """,
+                    (
+                        req.experiment_name,
+                        json.dumps(req.factor_names or []),
+                        req.model_id,
+                        req.strategy_id,
+                        json.dumps(req.data_split) if req.data_split else None,
+                        json.dumps(custom_params) if custom_params else None,
+                        experiment_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise HTTPException(status_code=409, detail="实验状态已变化，请刷新后再编辑")
+            conn.commit()
+
+        updated = cc._get_experiment_record(experiment_id)
+        return {
+            "ok": True,
+            "operation": "update_pending_config",
+            "experiment_id": experiment_id,
+            "data": _single_experiment_editable_payload(updated or {}),
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("更新可编辑实验配置失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 
