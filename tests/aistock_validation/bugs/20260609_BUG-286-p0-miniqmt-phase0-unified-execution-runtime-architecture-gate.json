@@ -34,8 +34,8 @@
   "expected": "The P0 architecture gate is tracked through BUG/GitHub workflow, references the design sections 3, 4, 9, 10.8, 10.9, 10.10, 11, 13.1, and 14, and links the Phase 1 implementation issue.",
   "first_seen_at": "2026-06-08T18:25:13.090112Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0fbcc419fc8300a8487869969022185640ec0c26",
+  "fixed_at": "2026-06-09T01:20:59.721740Z",
   "github_issue_number": 836,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/836",
   "last_seen_at": "2026-06-08T18:25:13.090112Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/840",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "architecture"
   ],
@@ -63,6 +64,14 @@
     "fingerprint": "ea9dd570745c5ef23b1b6e4c",
     "source_event_id": "FE-20260609-ea9dd570745c"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed; coverage passed",
+    "git diff --check -> passed",
+    "PR #840 CI -> 17 passed, 0 failed, 0 pending",
+    "Phase 0 validation history added: tests/aistock_validation/history/paper_v2_miniqmt_unified/20260609_bug-286_phase0_unified_execution_runtime_architecture_gate.md"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
