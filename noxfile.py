@@ -15,6 +15,7 @@ import nox
 
 
 ROOT = Path(__file__).parent
+CANONICAL_ROOT = Path(os.environ.get("AISTOCK_CANONICAL_ROOT", "F:/Dev/AIstock")).expanduser()
 COMMON_ENV = {
     "PYTHONIOENCODING": "utf-8",
     "PYTHONDONTWRITEBYTECODE": "1",
@@ -34,6 +35,8 @@ def _validation_env_candidates() -> list[Path]:
     source = os.environ.get("AISTOCK_SELF_HOSTED_SOURCE")
     if source:
         candidates.append(Path(source).expanduser() / ".env")
+    if CANONICAL_ROOT != ROOT:
+        candidates.append(CANONICAL_ROOT / ".env")
     candidates.append(ROOT / ".env")
     return candidates
 
@@ -125,6 +128,76 @@ def _http_ready(url: str, *, timeout: float = 2.0) -> bool:
         return False
 
 
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    if os.name != "nt" and proc.poll() is not None:
+        return
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if getattr(result, "returncode", 0) != 0:
+            _stop_windows_process(str(proc.pid))
+        with suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+        return
+    proc.terminate()
+    with suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=10)
+    if proc.poll() is None:
+        proc.kill()
+
+
+def _stop_windows_process(pid: str) -> None:
+    if not str(pid).isdigit():
+        return
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Stop-Process -Id {int(pid)} -Force -ErrorAction SilentlyContinue",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _kill_windows_listeners_on_port(port: str) -> None:
+    if os.name != "nt":
+        return
+    result = subprocess.run(
+        ["netstat", "-ano"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    pids: set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3].upper() == "LISTENING":
+            print(f"Reclaiming validation port {port}: killing PID {parts[-1]}")
+            pids.add(parts[-1])
+    for pid in sorted(pids):
+        result = subprocess.run(
+            ["taskkill", "/PID", pid, "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if getattr(result, "returncode", 0) != 0:
+            _stop_windows_process(pid)
+
+
+def _reclaim_validation_ports() -> bool:
+    value = os.environ.get("AISTOCK_RECLAIM_VALIDATION_PORTS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"} or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
 @contextmanager
 def _managed_validation_backend(session: nox.Session, backend_port: str):
     """Start a temporary dev backend when UI validation owns an unused port."""
@@ -132,8 +205,13 @@ def _managed_validation_backend(session: nox.Session, backend_port: str):
     if str(backend_port) == "8001":
         session.error("Refusing to start validation backend on production port 8001.")
     if _is_port_open(backend_port):
-        yield
-        return
+        if not _reclaim_validation_ports():
+            yield
+            return
+        _kill_windows_listeners_on_port(str(backend_port))
+        time.sleep(2)
+        if _is_port_open(backend_port):
+            session.error(f"Validation backend port {backend_port} is still occupied after reclaim.")
 
     log_dir = ROOT / "tmp" / "validation" / "services"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -170,12 +248,56 @@ def _managed_validation_backend(session: nox.Session, backend_port: str):
             session.error(f"Validation backend did not become ready on {backend_port}; see {log_path}.")
         yield
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            with suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=10)
-            if proc.poll() is None:
-                proc.kill()
+        _terminate_process_tree(proc)
+        _kill_windows_listeners_on_port(str(backend_port))
+        log_file.close()
+
+
+@contextmanager
+def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: dict[str, str]):
+    """Start a temporary Next dev server so Playwright does not own cleanup."""
+
+    if str(frontend_port) == "3000":
+        session.error("Refusing to start validation frontend on production port 3000.")
+    if _is_port_open(frontend_port):
+        if not _reclaim_validation_ports():
+            yield
+            return
+        _kill_windows_listeners_on_port(str(frontend_port))
+        time.sleep(2)
+        if _is_port_open(frontend_port):
+            session.error(f"Validation frontend port {frontend_port} is still occupied after reclaim.")
+
+    _ensure_frontend_node_modules(session)
+    log_dir = ROOT / "tmp" / "validation" / "services"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"paper_v2_frontend_{frontend_port}.log"
+    log_file = log_path.open("w", encoding="utf-8", errors="replace")
+    npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+    proc = subprocess.Popen(
+        [npm_cmd, "run", "dev", "--", "-p", str(frontend_port)],
+        cwd=ROOT / "frontend",
+        env=_env(env),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        url = f"http://127.0.0.1:{frontend_port}/paper-v2"
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                session.error(f"Validation frontend exited before ready; see {log_path}.")
+            if _http_ready(url):
+                session.log(f"Started temporary validation frontend on {frontend_port}; log={log_path}")
+                break
+            time.sleep(1)
+        else:
+            session.error(f"Validation frontend did not become ready on {frontend_port}; see {log_path}.")
+        yield
+    finally:
+        _terminate_process_tree(proc)
+        _kill_windows_listeners_on_port(str(frontend_port))
         log_file.close()
 
 
@@ -499,6 +621,16 @@ def paper_v2_ui(session: nox.Session) -> None:
     """Run Paper v2/Selection UI E2E tests on dev ports only."""
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
+    e2e_trade_date = os.environ.get("PAPER_V2_E2E_TRADE_DATE", "")
+    frontend_env = {
+        "NEXT_DEV_PORT": frontend_port,
+        "NEXT_DIST_DIR": f".next-dev-{frontend_port}",
+        "BACKEND_PORT": backend_port,
+        "FRONTEND_PORT": frontend_port,
+        "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+        "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+        "PAPER_V2_API_PROXY_TARGET": f"http://127.0.0.1:{backend_port}/api/v1",
+    }
     with _managed_validation_backend(session, backend_port):
         session.run(
             "python",
@@ -520,33 +652,31 @@ def paper_v2_ui(session: nox.Session) -> None:
             *(["--skip-tdx"] if os.environ.get("PAPER_V2_SKIP_REALTIME") == "1" else []),
             external=True,
         )
-        old_cwd = Path.cwd()
-        os.chdir(ROOT / "frontend")
-        try:
-            _ensure_frontend_node_modules(session)
-            session.run(
-                "npm",
-                "run",
-                "test:e2e",
-                "--",
-                "tests/paper-v2",
-                env=_env(
-                    {
-                        "BACKEND_PORT": backend_port,
-                        "FRONTEND_PORT": frontend_port,
-                        "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                        "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                        "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
-                        "PAPER_V2_E2E_SKIP_REALTIME": os.environ.get(
-                            "PAPER_V2_E2E_SKIP_REALTIME",
-                            os.environ.get("PAPER_V2_SKIP_REALTIME", "0"),
-                        ),
-                    }
-                ),
-                external=True,
-            )
-        finally:
-            os.chdir(old_cwd)
+        with _managed_validation_frontend(session, frontend_port, frontend_env):
+            old_cwd = Path.cwd()
+            os.chdir(ROOT / "frontend")
+            try:
+                session.run(
+                    "npm",
+                    "run",
+                    "test:e2e",
+                    "--",
+                    "tests/paper-v2",
+                    env=_env(
+                        {
+                            **frontend_env,
+                            "PLAYWRIGHT_SKIP_WEBSERVER": "1",
+                            "PAPER_V2_E2E_TRADE_DATE": e2e_trade_date or "",
+                            "PAPER_V2_E2E_SKIP_REALTIME": os.environ.get(
+                                "PAPER_V2_E2E_SKIP_REALTIME",
+                                os.environ.get("PAPER_V2_SKIP_REALTIME", "0"),
+                            ),
+                        }
+                    ),
+                    external=True,
+                )
+            finally:
+                os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
