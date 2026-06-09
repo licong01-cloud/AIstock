@@ -104,6 +104,17 @@ class SyncSummary:
         }
 
 
+@dataclass(frozen=True)
+class _AttributedTrade:
+    index: int
+    payload: dict[str, Any]
+    trade: RawQmtTrade
+    order: RawQmtOrder
+    strategy_id: str
+    intent_id: str
+    ledger_trade: TradeLedgerRecord
+
+
 class QmtStrategyLedgerSyncService:
     def __init__(
         self,
@@ -252,7 +263,8 @@ class QmtStrategyLedgerSyncService:
         sell_fill_realized_pnl = Decimal("0")
         buy_freeze_released_amount = Decimal("0")
         changed_strategy_ids: set[str] = set()
-        for payload in trades:
+        attributed_trades: list[_AttributedTrade] = []
+        for index, payload in enumerate(trades):
             trade = RawQmtTrade.from_dict(payload)
             order = orders_by_id.get(trade.order_id)
             intent = self._repository.get_order_intent_by_remark(self._account_id, trade.order_remark)
@@ -282,71 +294,78 @@ class QmtStrategyLedgerSyncService:
                 unattributed_trades += 1
                 continue
 
-            ledger_trade, inserted = self._repository.upsert_trade_ledger(
-                TradeLedgerRecord(
-                    trade_id=trade.traded_id,
-                    intent_id=intent.intent_id,
+            if order is None or intent is None or strategy_id is None:
+                continue
+            attributed_trades.append(
+                _AttributedTrade(
+                    index=index,
+                    payload=payload,
+                    trade=trade,
+                    order=order,
                     strategy_id=strategy_id,
-                    qmt_order_id=trade.order_id,
-                    qmt_order_sysid=trade.order_sysid,
-                    symbol=trade.stock_code,
-                    side=_side_from_order_type(trade.order_type),
-                    price=trade.traded_price,
-                    quantity=trade.traded_volume,
-                    amount=trade.traded_amount or trade.traded_price * Decimal(trade.traded_volume),
-                    commission=trade.commission,
-                    trade_date=self._trade_date,
-                    account_id=self._account_id,
-                    trade_time=_parse_trade_time(self._trade_date, trade.traded_time),
-                    order_remark=trade.order_remark,
-                    raw_json=payload,
+                    intent_id=intent.intent_id,
+                    ledger_trade=TradeLedgerRecord(
+                        trade_id=trade.traded_id,
+                        intent_id=intent.intent_id,
+                        strategy_id=strategy_id,
+                        qmt_order_id=trade.order_id,
+                        qmt_order_sysid=trade.order_sysid,
+                        symbol=trade.stock_code,
+                        side=_side_from_order_type(trade.order_type),
+                        price=trade.traded_price,
+                        quantity=trade.traded_volume,
+                        amount=trade.traded_amount or trade.traded_price * Decimal(trade.traded_volume),
+                        commission=trade.commission,
+                        trade_date=self._trade_date,
+                        account_id=self._account_id,
+                        trade_time=_parse_trade_time(self._trade_date, trade.traded_time),
+                        order_remark=trade.order_remark,
+                        raw_json=payload,
+                    ),
                 )
             )
-            self._repository.delete_unattributed_trade(
-                account_id=self._account_id,
-                trade_date=self._trade_date,
-                trade_id=trade.traded_id,
-            )
-            if inserted:
-                trades_inserted += 1
-                if trade.order_type == BUY_ORDER_TYPE:
-                    self._repository.create_position_lot(
-                        PositionLotRecord(
-                            lot_id=_lot_id(self._account_id, self._trade_date, trade.traded_id),
-                            strategy_id=strategy_id,
-                            symbol=trade.stock_code,
-                            open_trade_id=trade.traded_id,
-                            open_date=self._trade_date,
-                            quantity=trade.traded_volume,
-                            available_quantity=0,
-                            remaining_quantity=trade.traded_volume,
-                            avg_cost=trade.traded_price,
-                            cost_amount=trade.traded_amount or trade.traded_price * Decimal(trade.traded_volume),
-                            account_id=self._account_id,
-                            open_time=_parse_trade_time(self._trade_date, trade.traded_time),
-                            metadata={"source": "miniqmt_sync"},
-                        )
-                    )
-                    lots_created += 1
-            else:
-                trades_existing += 1
 
+        for item in sorted(attributed_trades, key=_trade_settlement_sort_key):
+            trade = item.trade
+            ledger_trade = item.ledger_trade
+            inserted_trade = False
+            created_lot = False
+            inserted_cash = False
             if trade.order_type == BUY_ORDER_TYPE:
-                fill_entry, inserted_cash = self._settle_buy_fill_once(strategy_id, intent.intent_id, ledger_trade, order)
+                fill_entry, inserted_trade, created_lot, inserted_cash = self._settle_buy_fill_once(
+                    item.strategy_id,
+                    item.intent_id,
+                    ledger_trade,
+                    item.order,
+                )
                 if inserted_cash:
                     cash_entries_appended += 1
                     buy_fill_settled_amount += abs(fill_entry.frozen_delta)
                     buy_fill_fee_amount += _money(ledger_trade.commission)
-                    changed_strategy_ids.add(strategy_id)
+                    changed_strategy_ids.add(item.strategy_id)
             elif trade.order_type == SELL_ORDER_TYPE:
-                sell_entry, inserted_cash, realized_pnl = self._settle_sell_fill_once(strategy_id, intent.intent_id, ledger_trade)
+                sell_entry, inserted_trade, inserted_cash, realized_pnl = self._settle_sell_fill_once(
+                    item.strategy_id,
+                    item.intent_id,
+                    ledger_trade,
+                )
                 if inserted_cash:
                     cash_entries_appended += 1
                     sell_fill_received_amount += sell_entry.cash_delta
                     sell_fill_fee_amount += _money(ledger_trade.commission)
                     sell_fill_realized_pnl += realized_pnl
-                    changed_strategy_ids.add(strategy_id)
-            _ = ledger_trade
+                    changed_strategy_ids.add(item.strategy_id)
+            self._repository.delete_unattributed_trade(
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                trade_id=trade.traded_id,
+            )
+            if inserted_trade:
+                trades_inserted += 1
+            else:
+                trades_existing += 1
+            if created_lot:
+                lots_created += 1
 
         for order, strategy_id, intent_id in terminal_buy_orders:
             release_entry, inserted_cash = self._release_terminal_buy_freeze_once(strategy_id, intent_id, order)
@@ -411,7 +430,7 @@ class QmtStrategyLedgerSyncService:
         intent_id: str,
         trade: TradeLedgerRecord,
         order: RawQmtOrder,
-    ) -> tuple[CashLedgerEntry, bool]:
+    ) -> tuple[CashLedgerEntry, bool, bool, bool]:
         account = self._repository.get_virtual_account(strategy_id)
         fill_amount = _money(trade.amount)
         fee_amount = _money(trade.commission)
@@ -448,19 +467,46 @@ class QmtStrategyLedgerSyncService:
                 "qmt_order_id": trade.qmt_order_id,
             },
         )
-        _, inserted = self._repository.apply_cash_entry_once(entry, updated)
-        return entry, inserted
+        lot = PositionLotRecord(
+            lot_id=_lot_id(self._account_id, self._trade_date, trade.trade_id),
+            strategy_id=strategy_id,
+            symbol=trade.symbol,
+            open_trade_id=trade.trade_id,
+            open_date=self._trade_date,
+            quantity=trade.quantity,
+            available_quantity=0,
+            remaining_quantity=trade.quantity,
+            avg_cost=trade.price,
+            cost_amount=trade.amount,
+            account_id=self._account_id,
+            open_time=trade.trade_time,
+            metadata={"source": "miniqmt_sync"},
+        )
+        _, trade_inserted, lot_created, _, cash_inserted = self._repository.apply_buy_trade_fill_once(
+            trade,
+            lot,
+            entry,
+            updated,
+        )
+        return entry, trade_inserted, lot_created, cash_inserted
 
     def _settle_sell_fill_once(
         self,
         strategy_id: str,
         intent_id: str,
         trade: TradeLedgerRecord,
-    ) -> tuple[CashLedgerEntry, bool, Decimal]:
+    ) -> tuple[CashLedgerEntry, bool, bool, Decimal]:
         cash_id = _cash_event_id(self._account_id, self._trade_date, "sell_fill", trade.trade_id)
         if self._repository.get_cash_entry(cash_id) is not None:
             existing = self._repository.get_cash_entry(cash_id)
-            return existing, False, _money(Decimal(str(existing.metadata.get("realized_pnl", "0"))))
+            account = self._repository.get_virtual_account(strategy_id)
+            _, trade_inserted, _, cash_inserted = self._repository.apply_sell_trade_fill_once(
+                trade,
+                existing,
+                account,
+                [],
+            )
+            return existing, trade_inserted, cash_inserted, _money(Decimal(str(existing.metadata.get("realized_pnl", "0"))))
 
         fill_amount = _money(trade.amount)
         fee_amount = _money(trade.commission)
@@ -496,8 +542,13 @@ class QmtStrategyLedgerSyncService:
                 "lot_closures": lot_closures,
             },
         )
-        _, inserted = self._repository.apply_cash_entry_and_lots_once(entry, updated, updated_lots)
-        return entry, inserted, realized_pnl if inserted else Decimal("0")
+        _, trade_inserted, _, cash_inserted = self._repository.apply_sell_trade_fill_once(
+            trade,
+            entry,
+            updated,
+            updated_lots,
+        )
+        return entry, trade_inserted, cash_inserted, realized_pnl if cash_inserted else Decimal("0")
 
     def _close_lots_fifo(self, strategy_id: str, trade: TradeLedgerRecord) -> tuple[Decimal, list[dict[str, Any]], list[PositionLotRecord]]:
         remaining_to_close = int(trade.quantity)
@@ -721,6 +772,13 @@ def _side_from_order_type(order_type: int) -> str:
     if order_type == SELL_ORDER_TYPE:
         return "SELL"
     return "UNKNOWN"
+
+
+def _trade_settlement_sort_key(item: _AttributedTrade) -> tuple[int, str, datetime, str, int]:
+    # Same-batch rebalances can be sell-funded; settle sells before buy cash debits.
+    side_priority = 0 if item.trade.order_type == SELL_ORDER_TYPE else 1
+    trade_time = item.ledger_trade.trade_time or datetime.min.replace(tzinfo=UTC)
+    return (side_priority, item.strategy_id, trade_time, item.trade.traded_id, item.index)
 
 
 def _parse_trade_time(trade_date: date, value: str) -> datetime | None:

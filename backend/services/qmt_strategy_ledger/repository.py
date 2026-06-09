@@ -749,68 +749,159 @@ class QmtStrategyLedgerRepository:
     def upsert_trade_ledger(self, trade: TradeLedgerRecord) -> tuple[TradeLedgerRecord, bool]:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO qmt_strategy.trade_ledger (
-                        trade_id, intent_id, strategy_id, qmt_order_id, qmt_order_sysid,
-                        symbol, side, price, quantity, amount, commission, trade_date,
-                        account_id, trade_time, order_remark, raw_json
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (account_id, trade_date, trade_id) DO NOTHING
-                    RETURNING trade_id
-                    """,
-                    (
-                        trade.trade_id,
-                        trade.intent_id,
-                        trade.strategy_id,
-                        trade.qmt_order_id,
-                        trade.qmt_order_sysid,
-                        trade.symbol,
-                        trade.side,
-                        trade.price,
-                        trade.quantity,
-                        trade.amount,
-                        trade.commission,
-                        trade.trade_date,
-                        trade.account_id,
-                        trade.trade_time,
-                        trade.order_remark,
-                        _json(trade.raw_json),
-                    ),
-                )
-                inserted = cur.fetchone() is not None
+                inserted = self._insert_trade_ledger_with_cursor(cur, trade, ignore_conflict=True)
         return trade, inserted
 
     def create_position_lot(self, lot: PositionLotRecord) -> PositionLotRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO qmt_strategy.position_lot (
-                        lot_id, strategy_id, account_id, symbol, open_trade_id, open_date,
-                        open_time, quantity, available_quantity, remaining_quantity,
-                        avg_cost, cost_amount, realized_pnl, status, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        lot.lot_id,
-                        lot.strategy_id,
-                        lot.account_id,
-                        lot.symbol,
-                        lot.open_trade_id,
-                        lot.open_date,
-                        lot.open_time,
-                        lot.quantity,
-                        lot.available_quantity,
-                        lot.remaining_quantity,
-                        lot.avg_cost,
-                        lot.cost_amount,
-                        lot.realized_pnl,
-                        _enum_value(lot.status),
-                        _json(lot.metadata),
-                    ),
-                )
+                self._insert_position_lot_with_cursor(cur, lot, ignore_conflict=False)
         return lot
+
+    def apply_buy_trade_fill_once(
+        self,
+        trade: TradeLedgerRecord,
+        lot: PositionLotRecord,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+    ) -> tuple[TradeLedgerRecord, bool, bool, CashLedgerEntry, bool]:
+        """Atomically persist a BUY trade, its opening lot, and cash movement."""
+
+        with self._conn_factory() as conn:
+            previous_autocommit = getattr(conn, "autocommit", None)
+            if previous_autocommit is not None:
+                conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    cash_exists = self._cash_entry_exists_with_cursor(cur, entry.cash_id)
+                    if not cash_exists:
+                        _validate_virtual_account(account)
+                    trade_inserted = self._insert_trade_ledger_with_cursor(cur, trade, ignore_conflict=True)
+                    lot_created = self._insert_position_lot_with_cursor(cur, lot, ignore_conflict=True)
+                    cash_inserted = False
+                    if not cash_exists:
+                        cash_inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
+                        if cash_inserted:
+                            self._update_virtual_account_with_cursor(cur, account)
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if previous_autocommit is not None:
+                    conn.autocommit = previous_autocommit
+        return trade, trade_inserted, lot_created, entry, cash_inserted
+
+    def apply_sell_trade_fill_once(
+        self,
+        trade: TradeLedgerRecord,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+        lots: list[PositionLotRecord],
+    ) -> tuple[TradeLedgerRecord, bool, CashLedgerEntry, bool]:
+        """Atomically persist a SELL trade, cash proceeds, and closed lots."""
+
+        with self._conn_factory() as conn:
+            previous_autocommit = getattr(conn, "autocommit", None)
+            if previous_autocommit is not None:
+                conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    cash_exists = self._cash_entry_exists_with_cursor(cur, entry.cash_id)
+                    if not cash_exists:
+                        _validate_virtual_account(account)
+                        for lot in lots:
+                            if lot.available_quantity > lot.remaining_quantity:
+                                raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+                    trade_inserted = self._insert_trade_ledger_with_cursor(cur, trade, ignore_conflict=True)
+                    cash_inserted = False
+                    if not cash_exists:
+                        cash_inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
+                        if cash_inserted:
+                            self._update_virtual_account_with_cursor(cur, account)
+                            for lot in lots:
+                                self._update_position_lot_with_cursor(cur, lot)
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if previous_autocommit is not None:
+                    conn.autocommit = previous_autocommit
+        return trade, trade_inserted, entry, cash_inserted
+
+    def _insert_trade_ledger_with_cursor(self, cur: Any, trade: TradeLedgerRecord, *, ignore_conflict: bool) -> bool:
+        conflict_clause = (
+            "ON CONFLICT (account_id, trade_date, trade_id) DO NOTHING RETURNING trade_id"
+            if ignore_conflict
+            else "RETURNING trade_id"
+        )
+        cur.execute(
+            f"""
+            INSERT INTO qmt_strategy.trade_ledger (
+                trade_id, intent_id, strategy_id, qmt_order_id, qmt_order_sysid,
+                symbol, side, price, quantity, amount, commission, trade_date,
+                account_id, trade_time, order_remark, raw_json
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            {conflict_clause}
+            """,
+            (
+                trade.trade_id,
+                trade.intent_id,
+                trade.strategy_id,
+                trade.qmt_order_id,
+                trade.qmt_order_sysid,
+                trade.symbol,
+                trade.side,
+                trade.price,
+                trade.quantity,
+                trade.amount,
+                trade.commission,
+                trade.trade_date,
+                trade.account_id,
+                trade.trade_time,
+                trade.order_remark,
+                _json(trade.raw_json),
+            ),
+        )
+        return cur.fetchone() is not None
+
+    def _insert_position_lot_with_cursor(self, cur: Any, lot: PositionLotRecord, *, ignore_conflict: bool) -> bool:
+        if lot.available_quantity > lot.remaining_quantity:
+            raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+        conflict_clause = "ON CONFLICT (lot_id) DO NOTHING RETURNING lot_id" if ignore_conflict else "RETURNING lot_id"
+        cur.execute(
+            f"""
+            INSERT INTO qmt_strategy.position_lot (
+                lot_id, strategy_id, account_id, symbol, open_trade_id, open_date,
+                open_time, quantity, available_quantity, remaining_quantity,
+                avg_cost, cost_amount, realized_pnl, status, metadata
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            {conflict_clause}
+            """,
+            (
+                lot.lot_id,
+                lot.strategy_id,
+                lot.account_id,
+                lot.symbol,
+                lot.open_trade_id,
+                lot.open_date,
+                lot.open_time,
+                lot.quantity,
+                lot.available_quantity,
+                lot.remaining_quantity,
+                lot.avg_cost,
+                lot.cost_amount,
+                lot.realized_pnl,
+                _enum_value(lot.status),
+                _json(lot.metadata),
+            ),
+        )
+        return cur.fetchone() is not None
 
     def list_position_lots(self, strategy_id: str, symbol: str | None = None) -> list[PositionLotRecord]:
         with self._conn_factory() as conn:
@@ -932,8 +1023,7 @@ class QmtStrategyLedgerRepository:
 
     def _insert_cash_entry_with_cursor(self, cur: Any, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
         if ignore_conflict:
-            cur.execute("SELECT 1 FROM qmt_strategy.cash_ledger WHERE cash_id = %s", (entry.cash_id,))
-            if cur.fetchone() is not None:
+            if self._cash_entry_exists_with_cursor(cur, entry.cash_id):
                 return False
         conflict_clause = "ON CONFLICT (cash_id) DO NOTHING RETURNING cash_id" if ignore_conflict else "RETURNING cash_id"
         cur.execute(
@@ -963,6 +1053,11 @@ class QmtStrategyLedgerRepository:
                 entry.created_at,
             ),
         )
+        return cur.fetchone() is not None
+
+    @staticmethod
+    def _cash_entry_exists_with_cursor(cur: Any, cash_id: str) -> bool:
+        cur.execute("SELECT 1 FROM qmt_strategy.cash_ledger WHERE cash_id = %s", (cash_id,))
         return cur.fetchone() is not None
 
     def list_cash_entries(self, strategy_id: str) -> list[CashLedgerEntry]:
@@ -1560,6 +1655,83 @@ class InMemoryQmtStrategyLedgerRepository:
             raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
         self._position_lots[lot.lot_id] = lot
         return lot
+
+    def apply_buy_trade_fill_once(
+        self,
+        trade: TradeLedgerRecord,
+        lot: PositionLotRecord,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+    ) -> tuple[TradeLedgerRecord, bool, bool, CashLedgerEntry, bool]:
+        cash_exists = entry.cash_id in self._cash_entries
+        if not cash_exists:
+            _validate_virtual_account(account)
+            original = self._virtual_accounts.get(account.strategy_id)
+            if original is None:
+                raise DataUnavailableError(
+                    "qmt strategy virtual account does not exist",
+                    context={"strategy_id": account.strategy_id},
+                )
+            if (original.account_id, original.strategy_name) != (account.account_id, account.strategy_name):
+                raise ValueError("account_id and strategy_name are immutable for virtual account updates")
+        if lot.lot_id not in self._position_lots:
+            if lot.quantity < 0 or lot.available_quantity < 0 or lot.remaining_quantity < 0:
+                raise ValueError("position lot quantities must be non-negative")
+            if lot.available_quantity > lot.remaining_quantity:
+                raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+
+        trade_key = (trade.account_id, trade.trade_date, trade.trade_id)
+        existing_trade = self._trade_ledgers.get(trade_key)
+        trade_inserted = existing_trade is None
+        if trade_inserted:
+            self._trade_ledgers[trade_key] = trade
+        lot_created = lot.lot_id not in self._position_lots
+        if lot_created:
+            self._position_lots[lot.lot_id] = lot
+        if cash_exists:
+            return existing_trade or trade, trade_inserted, lot_created, self._cash_entries[entry.cash_id], False
+        self._append_cash_entry(entry)
+        self._virtual_accounts[account.strategy_id] = account
+        return trade, trade_inserted, lot_created, entry, True
+
+    def apply_sell_trade_fill_once(
+        self,
+        trade: TradeLedgerRecord,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+        lots: list[PositionLotRecord],
+    ) -> tuple[TradeLedgerRecord, bool, CashLedgerEntry, bool]:
+        cash_exists = entry.cash_id in self._cash_entries
+        if not cash_exists:
+            _validate_virtual_account(account)
+            original = self._virtual_accounts.get(account.strategy_id)
+            if original is None:
+                raise DataUnavailableError(
+                    "qmt strategy virtual account does not exist",
+                    context={"strategy_id": account.strategy_id},
+                )
+            if (original.account_id, original.strategy_name) != (account.account_id, account.strategy_name):
+                raise ValueError("account_id and strategy_name are immutable for virtual account updates")
+            for lot in lots:
+                if lot.lot_id not in self._position_lots:
+                    raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
+                if lot.quantity < 0 or lot.available_quantity < 0 or lot.remaining_quantity < 0:
+                    raise ValueError("position lot quantities must be non-negative")
+                if lot.available_quantity > lot.remaining_quantity:
+                    raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+
+        trade_key = (trade.account_id, trade.trade_date, trade.trade_id)
+        existing_trade = self._trade_ledgers.get(trade_key)
+        trade_inserted = existing_trade is None
+        if trade_inserted:
+            self._trade_ledgers[trade_key] = trade
+        if cash_exists:
+            return existing_trade or trade, trade_inserted, self._cash_entries[entry.cash_id], False
+        self._append_cash_entry(entry)
+        self._virtual_accounts[account.strategy_id] = account
+        for lot in lots:
+            self._position_lots[lot.lot_id] = lot
+        return trade, trade_inserted, entry, True
 
     def list_position_lots(self, strategy_id: str, symbol: str | None = None) -> list[PositionLotRecord]:
         lots = [lot for lot in self._position_lots.values() if lot.strategy_id == strategy_id]

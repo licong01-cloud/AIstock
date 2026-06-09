@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+
+import pytest
 
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
@@ -395,6 +398,171 @@ def test_sync_service_settles_unmanaged_buy_fill_against_cash_without_freeze() -
     ).sync_snapshot()
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
+
+
+def test_sync_service_settles_sell_funded_rebalance_before_buy_when_trades_arrive_buy_first() -> None:
+    repo = _repo_with_strategy()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("0"), market_value=Decimal("1000")))
+    _position_lot(repo, lot_id="lot_sell_fund", quantity=100, avg_cost=Decimal("10"))
+    _sell_intent(repo, intent_id="intent_sell_fund", quantity=100, order_remark="remark_sell_fund")
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id="intent_buy_rebalance",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            symbol="600000.SH",
+            side="BUY",
+            order_type=BUY_ORDER_TYPE,
+            quantity=100,
+            price_type=5,
+            order_remark="remark_buy_rebalance",
+            account_id=ACCOUNT_ID,
+            trade_date=NEXT_TRADE_DATE,
+        )
+    )
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_buy_rebalance",
+                "stock_code": "600000.SH",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 100,
+                "price_type": 5,
+                "price": 10,
+                "traded_volume": 100,
+                "traded_price": 10,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_buy_rebalance",
+            },
+            {
+                "order_id": "order_sell_fund",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 100,
+                "price_type": 5,
+                "price": 12,
+                "traded_volume": 100,
+                "traded_price": 12,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell_fund",
+            },
+        ],
+        trades=[
+            {
+                "traded_id": "trade_buy_first",
+                "stock_code": "600000.SH",
+                "order_type": BUY_ORDER_TYPE,
+                "traded_time": "103001",
+                "traded_price": 10,
+                "traded_volume": 100,
+                "traded_amount": 1000,
+                "order_id": "order_buy_rebalance",
+                "commission": 0,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_buy_rebalance",
+            },
+            {
+                "traded_id": "trade_sell_second",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "103000",
+                "traded_price": 12,
+                "traded_volume": 100,
+                "traded_amount": 1200,
+                "order_id": "order_sell_fund",
+                "commission": 0,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell_fund",
+            },
+        ],
+        positions=[{"stock_code": "600000.SH", "quantity": 100, "can_sell": 0}],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    entries = repo.list_cash_entries("strat_a")
+    account = repo.get_virtual_account("strat_a")
+    assert summary.trades_inserted == 2
+    assert summary.lots_created == 1
+    assert summary.cash_entries_appended == 2
+    assert [entry.entry_type for entry in entries] == [CashEntryType.SELL_FILL, CashEntryType.BUY_FILL]
+    assert account.cash == Decimal("200.000000")
+    assert account.realized_pnl == Decimal("200.000000")
+    assert repo.list_position_lots("strat_a", "300604.SZ")[0].remaining_quantity == 0
+    assert repo.list_position_lots("strat_a", "600000.SH")[0].remaining_quantity == 100
+
+    idempotent = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    assert idempotent.trades_existing == 2
+    assert idempotent.lots_created == 0
+    assert idempotent.cash_entries_appended == 0
+    assert repo.get_virtual_account("strat_a") == account
+
+
+def test_sync_service_rolls_back_unfunded_buy_without_partial_trade_or_lot() -> None:
+    repo = _repo_with_strategy()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("0")))
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_unfunded",
+                "stock_code": "300604.SZ",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10,
+                "traded_volume": 1000,
+                "traded_price": 10,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_unfunded",
+                "stock_code": "300604.SZ",
+                "order_type": BUY_ORDER_TYPE,
+                "traded_time": "101530",
+                "traded_price": 10,
+                "traded_volume": 1000,
+                "traded_amount": 10000,
+                "order_id": "order_unfunded",
+                "commission": 0,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        positions=[],
+    )
+
+    with pytest.raises(ValueError, match="cash and frozen_cash must be non-negative"):
+        QmtStrategyLedgerSyncService(
+            repository=repo,
+            qmt_client=client,
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            calendar_provider=CALENDAR,
+        ).sync_snapshot()
+
+    assert repo._trade_ledgers == {}
+    assert repo.list_position_lots("strat_a", "300604.SZ") == []
+    assert repo.list_cash_entries("strat_a") == []
 
 
 def test_sync_service_settles_cheaper_fill_and_releases_cancelled_residual_once() -> None:
