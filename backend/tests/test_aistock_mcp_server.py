@@ -386,6 +386,49 @@ def test_start_validation_execution_posts_minimal_body(mcp_module):
     assert captured["body"] == {"plan_key": "l0", "requested_by": "mcp_agent"}
 
 
+def test_schedule_validation_from_llm_advice_posts_plan_key_gate_body(mcp_module):
+    captured = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["method"] = req.method
+        captured["path"] = req.url.path
+        captured["body"] = json.loads(req.content.decode("utf-8"))
+        return httpx.Response(200, json=_envelope({"schema_version": "aistock_scheduler_decision_v1"}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://127.0.0.1/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+
+    result = mcp_module.schedule_validation_from_llm_advice(
+        provider="deterministic",
+        recent_failure_modules=["validation.runner"],
+        changed_files=["scripts/llm_provider_adapter.py"],
+        codegraph_freshness="fresh",
+        execute=False,
+        failure_event_ref="fe://unit",
+    )
+
+    assert result == {"schema_version": "aistock_scheduler_decision_v1"}
+    assert captured["method"] == "POST"
+    assert captured["path"].endswith("/llm/schedule")
+    assert captured["body"] == {
+        "provider": "deterministic",
+        "trigger": "manual",
+        "changed_files": ["scripts/llm_provider_adapter.py"],
+        "recent_failure_modules": ["validation.runner"],
+        "recent_failure_plan_keys": [],
+        "codegraph_freshness": "fresh",
+        "resource_budget_seconds": 900,
+        "execute": False,
+        "requested_by": "mcp_agent",
+        "failure_event_ref": "fe://unit",
+    }
+
+
 def test_get_validation_execution_log_passes_tail(mcp_module):
     captured = {}
 
