@@ -32,8 +32,8 @@
   "expected": "SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, and TWAP_LITE_MINIQMT have source mapping and attribution to the fixed vn.py/vnpy_algotrading commits; algo core imports no DB/FastAPI/MiniQMT/vn.py runtime; core only emits actions; runtime owns submit/cancel/order/trade/timer routing; characterization and import-boundary tests pass.",
   "first_seen_at": "2026-06-09T02:59:07.755004Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b5f0dba4ba96647fb9d476875572e433d1cb210",
+  "fixed_at": "2026-06-09T11:23:40.446030Z",
   "github_issue_number": 849,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/849",
   "last_seen_at": "2026-06-09T02:59:07.755004Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/861",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -64,6 +65,9 @@
     "fingerprint": "2cecf0d643a33dcd31bf41dd",
     "source_event_id": "FE-20260609-2cecf0d643a3"
   },
+  "validation_evidence": [
+    "PR #861 CI -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
