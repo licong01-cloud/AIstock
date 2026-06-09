@@ -123,7 +123,12 @@ jobs:
             const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
             const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
             const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
-            const body = `${marker}\n${summary}\n\n${codeIntel}\n\nSemgrep and code intelligence are report-only in this rollout; existing AIstock CI remains the blocking gate.`;
+            const maxChars = 55000;
+            const compactFooter = 'Semgrep and code intelligence are report-only in this rollout; existing AIstock CI remains the blocking gate.';
+            let body = `${marker}\n${summary}\n\n${codeIntel}\n\n${compactFooter}`;
+            if (body.length > maxChars) {
+              body = `${marker}\n${summary}\n\nCode intelligence summary was omitted from the PR comment because the compact budget was exceeded. See the uploaded pr-quality artifact for details.\n\n${compactFooter}`;
+            }
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });

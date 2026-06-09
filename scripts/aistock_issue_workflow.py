@@ -281,6 +281,7 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "context_estimated_tokens",
         "artifact_estimated_tokens",
         "top_phase",
+        "token_usage_status",
     )
 
 
@@ -1271,15 +1272,22 @@ def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
 def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifact_metrics: dict[str, Any]) -> dict[str, Any]:
     phase_rows = _phase_cost_table(timing)
     top_phase = max(phase_rows, key=lambda item: item["dominant_seconds"], default=None)
-    context_tokens = sum(
+    context_token_values = [
         int(item.get("estimated_tokens") or 0)
         for item in context_metrics.values()
-        if isinstance(item, dict)
-    )
-    artifact_tokens = sum(
+        if isinstance(item, dict) and item.get("exists") is not False and "estimated_tokens" in item
+    ]
+    artifact_token_values = [
         int(item.get("estimated_tokens") or 0)
         for item in artifact_metrics.values()
-        if isinstance(item, dict)
+        if isinstance(item, dict) and item.get("exists") is not False and "estimated_tokens" in item
+    ]
+    context_tokens: int | None = sum(context_token_values) if context_token_values else None
+    artifact_tokens: int | None = sum(artifact_token_values) if artifact_token_values else None
+    total_tokens: int | None = (
+        (context_tokens or 0) + (artifact_tokens or 0)
+        if context_tokens is not None or artifact_tokens is not None
+        else None
     )
     return {
         "schema_version": "aistock_issue_workflow_h6_summary_v1",
@@ -1289,7 +1297,8 @@ def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifac
         "top_phase": top_phase,
         "context_estimated_tokens": context_tokens,
         "artifact_estimated_tokens": artifact_tokens,
-        "total_estimated_tokens": context_tokens + artifact_tokens,
+        "total_estimated_tokens": total_tokens,
+        "token_usage_status": "estimated" if total_tokens is not None else "unknown",
         "queue_seconds": timing.get("queue_seconds"),
         "active_fix_seconds": timing.get("active_fix_seconds"),
         "local_validation_seconds": timing.get("local_validation_seconds"),
@@ -5600,8 +5609,9 @@ def build_postmortem_plan(
                 "## H6 Cost Summary",
                 "",
                 f"- Top phase: `{(h6_summary.get('top_phase') or {}).get('phase') or 'none'}`",
-                f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens')}`",
-                f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens')}`",
+                f"- Token usage status: `{h6_summary.get('token_usage_status') or 'unknown'}`",
+                f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens') if h6_summary.get('context_estimated_tokens') is not None else 'unknown'}`",
+                f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens') if h6_summary.get('artifact_estimated_tokens') is not None else 'unknown'}`",
                 f"- Queue seconds: `{h6_summary.get('queue_seconds') or 'not_recorded'}`",
                 f"- Active fix seconds: `{h6_summary.get('active_fix_seconds') or 'not_recorded'}`",
                 f"- Local validation seconds: `{h6_summary.get('local_validation_seconds') or 'not_recorded'}`",
