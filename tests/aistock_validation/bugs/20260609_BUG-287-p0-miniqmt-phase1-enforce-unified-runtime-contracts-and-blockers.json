@@ -35,8 +35,8 @@
   "expected": "Phase 1 contract/gate implementation exists with tests for AlphaSignalBook forbidden broker/order fields, MiniQMT V25_* fail-fast, no fixed max_concurrent_packages product gate, and product entrypoints detecting the canonical runtime gate. BUG-286/GitHub #836 is referenced as the Phase 0 architecture gate.",
   "first_seen_at": "2026-06-08T18:27:08.802656Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9c1bfcd02d24f20d6cb50a1901c5a093032e4559",
+  "fixed_at": "2026-06-09T01:37:14.691158Z",
   "github_issue_number": 837,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/837",
   "last_seen_at": "2026-06-08T18:27:08.802656Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/841",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -64,6 +65,16 @@
     "fingerprint": "733df2382b6a8a44bb0d01fe",
     "source_event_id": "FE-20260609-733df2382b6a"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_miniqmt_signal_contract.py backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py backend/tests/simulation_runtime -q -> 102 passed",
+    "python -m pytest backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py -q -> 6 passed",
+    "python -m ruff check changed simulation_runtime files and tests -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 389 passed; coverage passed",
+    "PR #841 CI -> 17 passed, 0 failed, 0 pending"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
