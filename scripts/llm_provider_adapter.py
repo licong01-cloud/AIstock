@@ -258,10 +258,15 @@ def _test_plan_keys(root: Path = ROOT) -> set[str]:
     return {str(plan.get("plan_key")) for plan in plans if isinstance(plan, dict) and plan.get("plan_key")}
 
 
-def _catalog_plans_by_key(root: Path = ROOT, catalog_path: Path | None = None) -> dict[str, dict[str, Any]]:
+def _catalog_plans_by_key(
+    root: Path = ROOT,
+    catalog_path: Path | None = None,
+    *,
+    allowed_command_keys: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
     path = catalog_path or root / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
     try:
-        plans = ValidationPlanCatalog(path).list_plans()
+        plans = ValidationPlanCatalog(path, allowed_command_keys=allowed_command_keys).list_plans()
     except ValidationCatalogError as exc:
         raise ProviderAdapterError(str(exc)) from exc
     return {str(plan["plan_key"]): plan for plan in plans}
@@ -477,6 +482,32 @@ def _nightly_deferred_reason(gate_result: dict[str, Any], *, over_budget: bool) 
     return ",".join(reasons) if reasons else None
 
 
+def _nightly_deferred_reasons(item: dict[str, Any]) -> set[str]:
+    return {
+        reason.strip()
+        for reason in str(item.get("deferred_reason") or "").split(",")
+        if reason.strip()
+    }
+
+
+def _nightly_deferred_is_hard_block(item: dict[str, Any]) -> bool:
+    reasons = _nightly_deferred_reasons(item)
+    hard_reasons = {
+        "unknown_plan_key",
+        "plan_disabled",
+        "writes_business_state",
+        "requires_confirmation",
+        "forbidden_backend_or_market_data_port",
+        "forbidden_frontend_port",
+    }
+    return bool(reasons & hard_reasons)
+
+
+def _nightly_deferred_is_warning(item: dict[str, Any]) -> bool:
+    reasons = _nightly_deferred_reasons(item)
+    return bool(reasons) and reasons != {"resource_budget_exceeded"} and not _nightly_deferred_is_hard_block(item)
+
+
 def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, Any]:
     if provider == "github_models":
         selector = config["providers"]["github_models"]["model_selector"]
@@ -513,6 +544,7 @@ def build_test_plan_advice(
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
+    allowed_command_keys: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build schema-checked test-plan advice without allowing shell commands."""
 
@@ -520,7 +552,7 @@ def build_test_plan_advice(
     provider_summary = _provider_model_summary(config, provider)
     changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
     advised_keys = [str(key) for key in (plan_keys or _default_advised_plan_keys(changed_files, module))]
-    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     selection = _issue_flow_validation_select(changed_files, module)
     selected_by_catalog = set((selection or {}).get("required_plans") or [])
     selected_by_catalog.update((selection or {}).get("recommended_plans") or [])
@@ -600,6 +632,7 @@ def build_nightly_scheduler_advice(
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
+    allowed_command_keys: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic nightly queue without scheduling production actions."""
 
@@ -617,7 +650,7 @@ def build_nightly_scheduler_advice(
         recent_failure_plan_keys=recent_failure_plan_keys,
     )
     plan_keys = [item["plan_key"] for item in intents]
-    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     workspace = _workspace_gate(workspace_path, root=root)
     test_plan_advice = build_test_plan_advice(
         provider,
@@ -628,6 +661,7 @@ def build_nightly_scheduler_advice(
         workspace_path=workspace_path,
         root=root,
         catalog_path=catalog_path,
+        allowed_command_keys=allowed_command_keys,
     )
     advice_by_key = {item["plan_key"]: item for item in test_plan_advice["test_plan_advice"]}
     queue: list[dict[str, Any]] = []
@@ -656,8 +690,9 @@ def build_nightly_scheduler_advice(
         )
     codegraph_warning = freshness in {"missing", "stale", "unknown"}
     allowed_count = len([item for item in queue if item["allowed"]])
-    blocked_by_gate = any(item["deferred_reason"] and "resource_budget_exceeded" not in item["deferred_reason"] for item in queue)
-    workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning else "ready")
+    blocked_by_gate = any(_nightly_deferred_is_hard_block(item) for item in queue)
+    warning_by_gate = any(_nightly_deferred_is_warning(item) for item in queue)
+    workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning or warning_by_gate else "ready")
     advice = {
         "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
@@ -1043,6 +1078,8 @@ def build_guarded_rollout_gate(
         "false_positive_threshold": false_positive_threshold,
         "auto_file_allowed": auto_file_allowed,
         "llm_can_enhance_issue": llm_can_enhance_issue,
+        "llm_enhancement_allowed": auto_file_allowed,
+        "deterministic_issue_creation_unaffected": True,
         "workflow_gate": "ready" if auto_file_allowed else ("off" if effective_mode == "off" else "warning"),
         "rejection_reasons": reasons,
         "fallback": "deterministic_issue_workflow",
@@ -1368,6 +1405,7 @@ def cmd_guarded_rollout_gate(args: argparse.Namespace) -> int:
         "module_allowlisted": gate["module_allowlisted"],
         "auto_file_allowed": gate["auto_file_allowed"],
         "llm_can_enhance_issue": gate["llm_can_enhance_issue"],
+        "llm_enhancement_allowed": gate["llm_enhancement_allowed"],
         "rejection_reasons": gate["rejection_reasons"],
         "llm_invoked": gate["llm_invocation_evidence"]["invoked"],
         "artifact": args.output,

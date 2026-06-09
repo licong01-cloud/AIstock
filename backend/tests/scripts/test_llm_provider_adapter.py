@@ -460,6 +460,8 @@ def test_guarded_rollout_gate_kill_switch_and_allowlist_are_safe():
     )
     assert off["workflow_gate"] == "off"
     assert off["auto_file_allowed"] is False
+    assert off["llm_enhancement_allowed"] is False
+    assert off["deterministic_issue_creation_unaffected"] is True
     assert off["fallback"] == "deterministic_issue_workflow"
 
     not_allowlisted = adapter.build_guarded_rollout_gate(
@@ -472,6 +474,28 @@ def test_guarded_rollout_gate_kill_switch_and_allowlist_are_safe():
     )
     assert not_allowlisted["auto_file_allowed"] is False
     assert "module_not_allowlisted" in not_allowlisted["rejection_reasons"]
+
+
+def test_guarded_rollout_gate_false_positive_threshold_keeps_deterministic_fallback():
+    sections = list(adapter.EVALUATION_ISSUE_BODY_SECTIONS)
+
+    gate = adapter.build_guarded_rollout_gate(
+        "deterministic",
+        adapter.load_config(),
+        mode="opt_in_auto_file",
+        opt_in=True,
+        module="validation.runner",
+        issue_sections=sections,
+        false_positive_rate=0.2,
+        false_positive_threshold=0.1,
+    )
+
+    assert gate["workflow_gate"] == "warning"
+    assert gate["auto_file_allowed"] is False
+    assert gate["llm_enhancement_allowed"] is False
+    assert gate["deterministic_issue_creation_unaffected"] is True
+    assert gate["fallback"] == "deterministic_issue_workflow"
+    assert "false_positive_threshold_exceeded" in gate["rejection_reasons"]
 
 
 def test_guarded_rollout_gate_cli_uses_compact_success_output(capsys, tmp_path):
@@ -499,5 +523,6 @@ def test_guarded_rollout_gate_cli_uses_compact_success_output(capsys, tmp_path):
     assert exit_code == 0
     assert '"check": "guarded-rollout-gate"' in captured.out
     assert '"auto_file_allowed": true' in captured.out
+    assert '"llm_enhancement_allowed": true' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()

@@ -57,6 +57,8 @@ class AdvisoryCloneRequest(BaseModel):
 
 class AdvisoryReviewRequest(BaseModel):
     trade_date: date
+    target_trade_date: date | None = None
+    selection_as_of_trade_date: date | None = None
     selection_run_id: str | None = None
     data_source: str = "DB_HISTORICAL"
     runtime_config: dict[str, Any] = Field(default_factory=dict)

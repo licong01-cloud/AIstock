@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { Suspense, useEffect, useState, useCallback, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import FactorList from "../components/FactorList";
 import ModelList from "../components/ModelList";
@@ -83,6 +84,9 @@ type ConfigResult = {
   experiment_id?: string;
   experiment_dir?: string;
   wsl_command?: string;
+  operation?: string;
+  editable?: boolean;
+  startable?: boolean;
   error?: string;
   // 多Alpha 特有字段
   alpha_mode?: string;
@@ -100,7 +104,10 @@ const TYPE_COLORS: Record<string, { bg: string; text: string; label: string }> =
   intraday: { bg: "#fef3c7", text: "#d97706", label: "日内" },
 };
 
-export default function ComposePage() {
+function ComposePageContent() {
+  const searchParams = useSearchParams();
+  const editExperimentId = searchParams.get("edit_experiment_id") || "";
+  const isEditPendingExperiment = Boolean(editExperimentId);
   const [currentStep, setCurrentStep] = useState(1);
   const STEPS = ["因子选择", "模型选择", "策略选择", "组合配置与评估", "生成执行与下发"];
 
@@ -286,6 +293,8 @@ export default function ComposePage() {
   const [configResult, setConfigResult] = useState<ConfigResult | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [logsVisible, setLogsVisible] = useState(false); // 日志面板默认关闭
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editConfigLoaded, setEditConfigLoaded] = useState(false);
 
   /* ── 单次实验执行（共享 Hook） ── */
   const sse = useExperimentSSE({ pollAfterDisconnect: true });
@@ -337,6 +346,84 @@ export default function ComposePage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const applySingleExperimentConfig = useCallback((exp: any) => {
+    setAlphaMode("single");
+    setMultiAlphaConfig(null);
+    const factorNames: string[] = Array.isArray(exp.factor_names) ? exp.factor_names : [];
+    const factorSources = exp.factor_sources || exp.custom_params?.qe_factor_sources || {};
+    const keys = new Set<string>();
+    for (const name of factorNames) {
+      const source = factorSources[name] || factors.find((f: Factor) => f.factor_name === name)?.source;
+      keys.add(source ? `${name}||${source}` : name);
+    }
+    setSelectedFactors(keys);
+    setSelectedModel(exp.model_id || "");
+    setSelectedStrategy(exp.strategy_id || "");
+    if (exp.data_split) setDataSplit(withSafeBacktestEnd(exp.data_split));
+    const cp = exp.custom_params || {};
+    if (cp.topk) setTopk(cp.topk);
+    if (cp.n_drop) setNDrop(cp.n_drop);
+    if (cp.hold_thresh) setHoldThresh(cp.hold_thresh);
+    if (cp.random_seed !== undefined) {
+      setRandomSeed(parseQeRandomSeedInput(String(cp.random_seed), DEFAULT_QE_RANDOM_SEED));
+    }
+    setDisableAlphaBaseline(!!cp.disable_alpha158);
+    setQuickTrain(!!cp.quick_train);
+    setLabelType((["close", "open", "vwap"].includes(cp.label_type) ? cp.label_type : "close") as "close" | "open" | "vwap");
+    setLabelHorizon(([1, 3, 5, 10, 20].includes(Number(cp.label_horizon || 1)) ? Number(cp.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20);
+    setExecutionAlgo(cp.execution_algo || "");
+    setExecutionAlgoParams(cp.execution_algo_params || {});
+    setBacktestFreq(cp.execution_algo === "CLOSE_PRICE" || cp.backtest_freq === "day" ? "day" : "1min");
+    setFilterSuspendedOnSignal(!!(cp.filter_suspended_on_signal || cp.exclude_suspended));
+    setSuspendFilterStrict(cp.suspend_filter_strict !== false);
+    setBlacklistEnabled(!!cp.stock_pool);
+    setStockPoolPath(cp.stock_pool || null);
+    setBlacklistSnapshot(cp.sector_blacklist_snapshot || null);
+    setEnableSectorHmm(!!cp.enable_sector_hmm);
+    setHmmModelVersionId(cp.hmm_model_version_id || "");
+    setHmmSignalPreset(cp.hmm_signal_preset || "preset_A");
+    setUnfilledHandler(cp.unfilled_handler || "");
+    setUnfilledBackupDepth(Number(cp.unfilled_backup_depth || 15));
+    setConfigResult({
+      ok: true,
+      experiment_id: exp.experiment_id,
+      operation: "edit_pending_config",
+      editable: exp.editable,
+      startable: exp.startable,
+    });
+    setCurrentStep(5);
+  }, [factors]);
+
+  useEffect(() => {
+    if (!isEditPendingExperiment || editConfigLoaded || loading) return;
+    let cancelled = false;
+    async function loadEditableExperiment() {
+      try {
+        const res = await fetch(`${API}/quantevolver/experiments/${editExperimentId}/editable-config`);
+        const data = await res.json();
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+        }
+        const editable = data.data || data.experiment || data;
+        if (!editable.editable) {
+          throw new Error(editable.start_reason || "该实验已经启动，不能全量编辑");
+        }
+        if (!cancelled) {
+          applySingleExperimentConfig(editable);
+          setEditConfigLoaded(true);
+          setEditLoadError(null);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setEditLoadError(err?.message || "加载待启动实验配置失败");
+          setEditConfigLoaded(true);
+        }
+      }
+    }
+    void loadEditableExperiment();
+    return () => { cancelled = true; };
+  }, [applySingleExperimentConfig, editConfigLoaded, editExperimentId, isEditPendingExperiment, loading]);
 
   /* ── 加载 RDAgent Task 列表 ── */
   useEffect(() => {
@@ -695,11 +782,26 @@ export default function ComposePage() {
       const factorNames = alphaMode === "multi" && multiAlphaConfig
         ? [...new Set(multiAlphaConfig.alpha_groups.flatMap(g => g.factor_names))]
         : Array.from(selectedFactors).map(k => k.split("||")[0]);
+      const factorSources = alphaMode === "single"
+        ? Object.fromEntries(
+            Array.from(selectedFactors)
+              .map(k => k.split("||"))
+              .filter(parts => parts[0] && parts[1])
+              .map(([name, source]) => [name, source]),
+          )
+        : undefined;
 
-      const res = await fetch(`${API}/quantevolver/config/generate`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const usePendingExperimentEndpoint = alphaMode === "single" && dispatchMode === "independent";
+      const endpoint = isEditPendingExperiment
+        ? `${API}/quantevolver/experiments/${editExperimentId}/editable-config`
+        : usePendingExperimentEndpoint
+          ? `${API}/quantevolver/experiments/pending`
+          : `${API}/quantevolver/config/generate`;
+      const res = await fetch(endpoint, {
+        method: isEditPendingExperiment ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           factor_names: factorNames,
+          factor_sources: factorSources,
           model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
           strategy_id: selectedStrategy || undefined,
           data_split: withSafeBacktestEnd(dataSplit), custom_params: buildRuntimeCustomParams(),
@@ -790,8 +892,13 @@ export default function ComposePage() {
     }}>
       {/* 顶部标题区 */}
       <div style={{ marginBottom: "24px" }}>
-        <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#ffffff", textShadow: "0 1px 3px rgba(0,0,0,0.15)" }}>QE实验设计</h1>
-        <p style={{ margin: "8px 0 0", fontSize: "14px", color: "rgba(255,255,255,0.75)" }}>双轨驱动：支持AI智能生成配置与人工分步流程式选择，为您构建优质的因子组合与模型演进任务。</p>
+        <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#ffffff", textShadow: "0 1px 3px rgba(0,0,0,0.15)" }}>{isEditPendingExperiment ? "编辑待启动 QE 实验" : "QE实验设计"}</h1>
+        <p style={{ margin: "8px 0 0", fontSize: "14px", color: "rgba(255,255,255,0.75)" }}>{isEditPendingExperiment ? `正在编辑 ${editExperimentId}，保存后仍保持待启动，不会自动执行。` : "双轨驱动：支持AI智能生成配置与人工分步流程式选择，为您构建优质的因子组合与模型演进任务。"}</p>
+        {editLoadError && (
+          <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: "#fee2e2", color: "#991b1b", fontSize: 13, fontWeight: 600 }}>
+            加载待启动实验失败：{editLoadError}
+          </div>
+        )}
       </div>
       
       {/* AI 智能实验设计区 */}
@@ -1880,7 +1987,7 @@ export default function ComposePage() {
                   {configResult.alpha_mode === "multi" ? "多Alpha 实验已生成！" : "任务已成功生成！"}
                 </h3>
                 <p style={{ margin: "0 0 4px", fontSize: "13px", color: configResult.alpha_mode === "multi" ? "#6d28d9" : "#15803d" }}><strong>Experiment ID:</strong> {configResult.experiment_id}</p>
-                <p style={{ margin: "0 0 4px", fontSize: "13px", color: configResult.alpha_mode === "multi" ? "#6d28d9" : "#15803d" }}><strong>工作目录:</strong> {configResult.experiment_dir}</p>
+                {configResult.experiment_dir && <p style={{ margin: "0 0 4px", fontSize: "13px", color: configResult.alpha_mode === "multi" ? "#6d28d9" : "#15803d" }}><strong>工作目录:</strong> {configResult.experiment_dir}</p>}
 
                 {/* 多Alpha 节点分配展示 */}
                 {configResult.alpha_mode === "multi" && configResult.node_distribution && (
@@ -1900,12 +2007,16 @@ export default function ComposePage() {
                   </div>
                 )}
 
-                <div style={{ backgroundColor: "#0f172a", borderRadius: "6px", padding: "12px", overflowX: "auto" }}>
-                  <pre style={{ margin: 0, fontSize: "12px", color: configResult.alpha_mode === "multi" ? "#c4b5fd" : "#4ade80", fontFamily: "'Fira Code', Consolas, monospace", whiteSpace: "pre-wrap" }}>{configResult.wsl_command}</pre>
-                </div>
+                {configResult.wsl_command && (
+                  <div style={{ backgroundColor: "#0f172a", borderRadius: "6px", padding: "12px", overflowX: "auto" }}>
+                    <pre style={{ margin: 0, fontSize: "12px", color: configResult.alpha_mode === "multi" ? "#c4b5fd" : "#4ade80", fontFamily: "'Fira Code', Consolas, monospace", whiteSpace: "pre-wrap" }}>{configResult.wsl_command}</pre>
+                  </div>
+                )}
                 <div style={{ marginTop: "12px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                  <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
-                    style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
+                  {configResult.wsl_command && (
+                    <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
+                      style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
+                  )}
                   {dispatchMode === "independent" && configResult.experiment_id && (
                     <>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -1936,7 +2047,7 @@ export default function ComposePage() {
                           opacity: sse.runStatus === "running" || sse.runStatus === "starting" ? 0.7 : 1,
                         }}
                       >
-                        {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "一键执行回测"}
+                        {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "启动"}
                       </button>
                     </>
                   )}
@@ -2116,11 +2227,11 @@ export default function ComposePage() {
                   padding: "12px 32px",
                   fontSize: "15px",
                   fontWeight: 700,
-                  backgroundColor: alphaMode === "multi" ? "#7c3aed" : "#1e293b",
+                  backgroundColor: isEditPendingExperiment ? "#059669" : alphaMode === "multi" ? "#7c3aed" : "#1e293b",
                   boxShadow: alphaMode === "multi" ? "0 4px 12px rgba(124, 58, 237, 0.25)" : "0 4px 12px rgba(0, 0, 0, 0.15)",
                   opacity: (actionLoading === "generate" || (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig)) ? 0.5 : 1,
                 }}>
-                {actionLoading === "generate" ? "正在执行生成中..." : alphaMode === "multi" ? (dispatchMode === "independent" ? "执行多Alpha实验 (Multi-Alpha)" : "启动多Alpha演进 (Multi-Alpha Evolution)") : (dispatchMode === "independent" ? "执行独立任务 (Generate)" : "启动 QE 自动演进 (Start Evolution)")}
+                {actionLoading === "generate" ? (isEditPendingExperiment ? "正在保存..." : "正在执行生成中...") : isEditPendingExperiment ? "保存待启动配置" : alphaMode === "multi" ? (dispatchMode === "independent" ? "执行多Alpha实验 (Multi-Alpha)" : "启动多Alpha演进 (Multi-Alpha Evolution)") : (dispatchMode === "independent" ? "创建待启动单次任务" : "启动 QE 自动演进 (Start Evolution)")}
               </button>
             </div>
           </div>
@@ -2135,5 +2246,13 @@ export default function ComposePage() {
         }
       `}</style>
     </div>
+  );
+}
+
+export default function ComposePage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#475569" }}>Loading QE composer...</div>}>
+      <ComposePageContent />
+    </Suspense>
   );
 }

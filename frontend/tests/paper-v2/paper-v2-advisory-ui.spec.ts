@@ -318,7 +318,7 @@ function json(route: Route, data: unknown, status = 200) {
   });
 }
 
-async function mockShellApis(page: Page) {
+async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
   const watchlistCalls: string[] = [];
   const watchlistBodies: JsonObject[] = [];
   let watchlistCategories: JsonObject[] = [];
@@ -328,12 +328,18 @@ async function mockShellApis(page: Page) {
   });
   await page.route("**/api/v1/paper-v2/trading-days/defaults**", async (route) => json(route, {
     as_of_date: "2026-06-08",
+    trading_day_status: {
+      is_trading_day: true,
+      previous_trading_day: "2026-06-05",
+      next_trading_day: "2026-06-09",
+    },
     lookback_trading_days: 10,
     latest_trading_day: "2026-06-08",
     replay_start_date: "2026-05-25",
     replay_end_date: "2026-06-08",
     available_trading_day_count: 10,
     next_trading_day: "2026-06-09",
+    ...tradingDefaults,
   }));
   await page.route("**/api/v1/selection-center/selectable-packages**", async (route) => json(route, {
     ok: true,
@@ -370,40 +376,44 @@ async function mockShellApis(page: Page) {
   return { watchlistCalls, watchlistBodies };
 }
 
-async function mockAdvisoryApis(page: Page) {
+async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeDate?: string | null; initialLastReviewStatus?: string | null } = {}) {
   const calls: string[] = [];
   const reviewBodies: JsonObject[] = [];
-  let latestReviewTradeDate = program.latest_review_trade_date;
-  let lastReviewStatus = program.last_review_status;
+  let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
+  let lastReviewStatus = options.initialLastReviewStatus ?? program.last_review_status;
+  let lastReviewTargetDate = "2026-06-08";
   const enabledProgram = () => ({
     ...program,
     status: "ENABLED",
     last_review_status: lastReviewStatus,
     latest_review_trade_date: latestReviewTradeDate,
   });
-  const reviewPayload = (preview: boolean) => ({
+  const reviewPayload = (preview: boolean, tradeDate = lastReviewTargetDate) => {
+    const suffix = tradeDate.replaceAll("-", "");
+    return ({
     ok: true,
     review: {
       program: enabledProgram(),
-      trade_date: "2026-06-08",
+      trade_date: tradeDate,
       review_status: "SUCCEEDED",
-      decisions: reviews.slice(0, 2).map((row) => ({ ...row, trade_date: "2026-06-08" })),
+      decisions: reviews.slice(0, 2).map((row) => ({ ...row, trade_date: tradeDate })),
       active_pool: activePool,
       metrics: { win_rate: 0.64 },
       preview,
       binding_version_id: activeBinding.binding_version_id,
-      review_run_id: preview ? "advrun_preview_20260608" : "advrun_20260608",
-      list_version_id: preview ? "advlv_preview_20260608" : "advlv_20260608",
+      review_run_id: preview ? `advrun_preview_${suffix}` : `advrun_${suffix}`,
+      list_version_id: preview ? `advlv_preview_${suffix}` : `advlv_${suffix}`,
       change_summary: { entered_count: 1, held_count: 1, exited_count: 0, waiting_count: 0, turnover_rate: 0.05, overlap_rate: 0.95 },
       list_items: listItems.slice(0, 1).map((item) => ({
         ...item,
         list_item_id: preview ? "advli_preview_000001" : "advli_run_000001",
-        list_version_id: preview ? "advlv_preview_20260608" : "advlv_20260608",
+        list_version_id: preview ? `advlv_preview_${suffix}` : `advlv_${suffix}`,
         action: preview ? "HOLD" : "ENTER",
         operation_advice_json: { advice_type: preview ? "HOLD" : "ENTER", human_label: preview ? "preview hold" : "enter list", reason_summary: "KEEP_TOPK" },
       })),
     },
   });
+  };
   let currentListVersions: JsonObject[] = [...listVersions];
   let detailByVersion: Record<string, { list_version: JsonObject; items: JsonObject[] }> = {
     advlv_20260605: { list_version: listVersions[0], items: listItems },
@@ -472,34 +482,39 @@ async function mockAdvisoryApis(page: Page) {
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews/preview`) && method === "POST") {
-      reviewBodies.push(request.postDataJSON() as JsonObject);
-      return json(route, reviewPayload(true));
+      const body = request.postDataJSON() as JsonObject;
+      reviewBodies.push(body);
+      lastReviewTargetDate = String(body.trade_date || lastReviewTargetDate);
+      return json(route, reviewPayload(true, lastReviewTargetDate));
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews/run`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
       reviewBodies.push(body);
-      latestReviewTradeDate = String(body.trade_date || latestReviewTradeDate);
+      lastReviewTargetDate = String(body.trade_date || lastReviewTargetDate);
+      latestReviewTradeDate = lastReviewTargetDate;
       lastReviewStatus = "SUCCEEDED";
+      const suffix = lastReviewTargetDate.replaceAll("-", "");
       currentListVersions = [{
         ...initialListVersion,
-        list_version_id: "advlv_20260608",
-        review_run_id: "advrun_20260608",
+        list_version_id: `advlv_${suffix}`,
+        review_run_id: `advrun_${suffix}`,
+        trade_date: lastReviewTargetDate,
         previous_list_version_id: currentListVersions[0]?.list_version_id || null,
       }, ...currentListVersions];
       detailByVersion = {
         ...detailByVersion,
-        advlv_20260608: {
+        [`advlv_${suffix}`]: {
           list_version: currentListVersions[0],
           items: listItems.slice(0, 1).map((item) => ({
             ...item,
             list_item_id: "advli_run_000001",
-            list_version_id: "advlv_20260608",
+            list_version_id: `advlv_${suffix}`,
             action: "ENTER",
             operation_advice_json: { advice_type: "ENTER", human_label: "enter list", reason_summary: "KEEP_TOPK" },
           })),
         },
       };
-      return json(route, reviewPayload(false));
+      return json(route, reviewPayload(false, lastReviewTargetDate));
     }
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
@@ -551,7 +566,8 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
   await expect(page.getByTestId("advisory-package-select-pkg-1").locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
   await expect(page.locator("body")).not.toContainText("JSON");
-  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-09");
+  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-08");
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("平安银行");
@@ -562,14 +578,21 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
-  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_20260608");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_20260609");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("preview hold");
   expect(reviewBodies.at(-1)).toMatchObject({
-    trade_date: "2026-06-08",
+    trade_date: "2026-06-09",
+    target_trade_date: "2026-06-09",
+    selection_as_of_trade_date: "2026-06-08",
     runtime_config: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-09",
+        selection_as_of_trade_date: "2026-06-08",
+      },
       selection_artifact_config: {
         auto_generate: true,
         pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+        cutoff_date: "2026-06-08",
       },
     },
   });
@@ -579,7 +602,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("已复评");
-  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260608");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260609");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("enter list");
 
   await page.getByTestId("advisory-view-list-version-advlv_20260605").click();
@@ -654,6 +677,62 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   expect(badResponses).toEqual([]);
 });
 
+test("Advisory review defaults to next target date after current target was published", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+
+  await mockShellApis(page, {
+    as_of_date: "2026-06-09",
+    latest_trading_day: "2026-06-09",
+    replay_end_date: "2026-06-09",
+    next_trading_day: "2026-06-10",
+    trading_day_status: {
+      is_trading_day: true,
+      previous_trading_day: "2026-06-08",
+      next_trading_day: "2026-06-10",
+    },
+  });
+  const { calls, reviewBodies } = await mockAdvisoryApis(page, {
+    initialLatestReviewTradeDate: "2026-06-09",
+    initialLastReviewStatus: "SUCCEEDED",
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-10");
+  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-09");
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeEnabled();
+
+  await page.getByTestId(`advisory-run-${PROGRAM_ID}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
+  expect(reviewBodies.at(-1)).toMatchObject({
+    trade_date: "2026-06-10",
+    target_trade_date: "2026-06-10",
+    selection_as_of_trade_date: "2026-06-09",
+    runtime_config: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-10",
+        selection_as_of_trade_date: "2026-06-09",
+      },
+      selection_artifact_config: {
+        cutoff_date: "2026-06-09",
+        cutoff_policy: "FIXED_CUTOFF",
+      },
+    },
+  });
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260610");
+
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
 test("Advisory page exposes initial list generation when a new program has no list versions", async ({ page }) => {
   const newProgramId = "adv_new_initial_program";
   const calls: string[] = [];
@@ -662,6 +741,7 @@ test("Advisory page exposes initial list generation when a new program has no li
   const badResponses: string[] = [];
   let latestReviewTradeDate: string | null = null;
   let lastReviewStatus: string | null = null;
+  let initialTargetDate = "2026-06-08";
   let currentListVersions: JsonObject[] = [];
   let detailByVersion: Record<string, { list_version: JsonObject; items: JsonObject[] }> = {};
   const newBinding = { ...activeBinding, program_id: newProgramId, binding_version_id: "advb_new_initial" };
@@ -673,15 +753,16 @@ test("Advisory page exposes initial list generation when a new program has no li
     latest_review_trade_date: latestReviewTradeDate,
     last_review_status: lastReviewStatus,
   });
-  const initialPayload = (preview: boolean) => {
-    const listVersionId = preview ? "advlv_preview_initial_20260608" : "advlv_initial_20260608";
+  const initialPayload = (preview: boolean, tradeDate = initialTargetDate) => {
+    const suffix = tradeDate.replaceAll("-", "");
+    const listVersionId = preview ? `advlv_preview_initial_${suffix}` : `advlv_initial_${suffix}`;
     return {
       ok: true,
       review: {
         program: enabledProgram(),
-        trade_date: "2026-06-08",
+        trade_date: tradeDate,
         review_status: "SUCCEEDED",
-        decisions: reviews.slice(0, 1).map((row) => ({ ...row, trade_date: "2026-06-08", action: "ENTER" })),
+        decisions: reviews.slice(0, 1).map((row) => ({ ...row, trade_date: tradeDate, action: "ENTER" })),
         active_pool: [],
         metrics: {},
         preview,
@@ -757,15 +838,24 @@ test("Advisory page exposes initial list generation when a new program has no li
       return json(route, { ok: true, returns: [], metrics: {} });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {
-      reviewBodies.push(request.postDataJSON() as JsonObject);
-      return json(route, initialPayload(true));
+      const body = request.postDataJSON() as JsonObject;
+      reviewBodies.push(body);
+      initialTargetDate = String(body.trade_date || initialTargetDate);
+      return json(route, initialPayload(true, initialTargetDate));
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/run`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
       reviewBodies.push(body);
-      latestReviewTradeDate = String(body.trade_date || "2026-06-08");
+      initialTargetDate = String(body.trade_date || initialTargetDate);
+      latestReviewTradeDate = initialTargetDate;
       lastReviewStatus = "SUCCEEDED";
-      const published = { ...initialListVersion, program_id: newProgramId, binding_version_id: newBinding.binding_version_id };
+      const published = {
+        ...initialListVersion,
+        list_version_id: `advlv_initial_${initialTargetDate.replaceAll("-", "")}`,
+        trade_date: initialTargetDate,
+        program_id: newProgramId,
+        binding_version_id: newBinding.binding_version_id,
+      };
       const publishedItems = initialListItems.map((item) => ({
         ...item,
         program_id: newProgramId,
@@ -773,7 +863,7 @@ test("Advisory page exposes initial list generation when a new program has no li
       }));
       currentListVersions = [published];
       detailByVersion = { [String(published.list_version_id)]: { list_version: published, items: publishedItems } };
-      return json(route, initialPayload(false));
+      return json(route, initialPayload(false, initialTargetDate));
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
@@ -804,7 +894,7 @@ test("Advisory page exposes initial list generation when a new program has no li
   await page.getByTestId("advisory-selected-run").click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${newProgramId}/reviews/run`)).length).toBe(1);
   await expect(page.getByTestId("advisory-selected-run")).toHaveText("已复评");
-  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_initial_20260608");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_initial_20260609");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("initial enter");
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(1);
 

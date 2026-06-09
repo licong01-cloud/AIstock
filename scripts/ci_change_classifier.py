@@ -27,6 +27,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "configs/validation/llm_triage.yaml",
     "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
@@ -43,6 +44,12 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/ci_failure_issue_summary.py",
     "scripts/code_intelligence_adapter.py",
     "scripts/issue_flow.py",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+}
+PROMPT_EVALUATION_PATH_PREFIXES = ("prompt_packs/validation_llm/",)
+PROMPT_EVALUATION_FILES = {
+    "configs/validation/llm_triage.yaml",
     "scripts/llm_provider_adapter.py",
 }
 
@@ -91,6 +98,10 @@ def _workflow_validation_fast_lane(path: str) -> bool:
     return path in WORKFLOW_VALIDATION_FAST_LANE_FILES
 
 
+def _prompt_evaluation_required(path: str) -> bool:
+    return path in PROMPT_EVALUATION_FILES or path.startswith(PROMPT_EVALUATION_PATH_PREFIXES)
+
+
 def _is_bug_registry_metadata_path(path: str) -> bool:
     return path.startswith(BUG_REGISTRY_PREFIX)
 
@@ -126,6 +137,7 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     blocking: list[str] = []
     bug_registry_files = [path for path in normalized if path.startswith(BUG_REGISTRY_PREFIX)]
     non_bug_registry_files = [path for path in normalized if not path.startswith(BUG_REGISTRY_PREFIX)]
+    prompt_evaluation_files = [path for path in normalized if _prompt_evaluation_required(path)]
 
     if not normalized:
         reasons.append("no changed files detected; keep full backend CI")
@@ -179,6 +191,8 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     )
     if workflow_validation_only:
         reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
+    if prompt_evaluation_files:
+        reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
 
     backend_required = not (close_sync_metadata_only or workflow_validation_only)
     classification = "full_ci_required"
@@ -198,6 +212,8 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
         "workflow_bug_metadata_files": workflow_bug_metadata_files,
         "workflow_validation_only": workflow_validation_only,
         "workflow_validation_required": workflow_validation_only,
+        "prompt_evaluation_files": prompt_evaluation_files,
+        "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "static_gate_required": True,
         "pr_quality_required": True,
@@ -218,6 +234,7 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"backend_required={str(payload['backend_required']).lower()}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
+        f"prompt_evaluation_required={str(payload['prompt_evaluation_required']).lower()}",
         f"classification={payload['classification']}",
     ]
     with open(path, "a", encoding="utf-8") as handle:
@@ -243,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
         "workflow_validation_required": payload["workflow_validation_required"],
+        "prompt_evaluation_required": payload["prompt_evaluation_required"],
         "changed_file_count": payload["changed_file_count"],
     }, ensure_ascii=False, sort_keys=True))
     return 0

@@ -22,6 +22,18 @@ on:
         description: 'Build CodeGraph / Understand Anything warning-only artifacts.'
         type: boolean
         default: true
+      llm_triage_mode:
+        description: 'LLM guarded rollout mode for issue intake.'
+        type: choice
+        default: warning_only
+        options:
+          - off
+          - warning_only
+          - opt_in_auto_file
+      llm_auto_file_opt_in:
+        description: 'Explicitly allow LLM issue-content enhancement when mode is opt_in_auto_file.'
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -363,6 +375,33 @@ jobs:
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
 
+      - name: Build Nightly adaptive scheduler warning report
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $changedFile = "$outDir/nightly-changed-files.txt"
+          $changedFiles = @()
+          try {
+            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $changedFiles = @()
+              $global:LASTEXITCODE = 0
+            }
+          } catch {
+            $changedFiles = @()
+          }
+          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+            --provider github_models `
+            --changed-files-file $changedFile `
+            --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --resource-budget-seconds 900 `
+            --output "$outDir/llm-nightly-adaptive-scheduler.json" `
+            --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+          if (Test-Path -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md") {
+            Get-Content -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md"
+          }
+
       - name: Build LLM prompt evaluation smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -493,8 +532,14 @@ jobs:
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
           CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LLM_TRIAGE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode || 'warning_only' }}
+          LLM_AUTO_FILE_OPT_IN: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_auto_file_opt_in || false }}
         run: |
           mkdir -p tmp/validation/nightly_failure_issue
+          LLM_ARGS=(--llm-triage-mode "${LLM_TRIAGE_MODE}")
+          if [ "${LLM_AUTO_FILE_OPT_IN}" = "true" ]; then
+            LLM_ARGS+=(--llm-auto-file-opt-in)
+          fi
           cat > tmp/validation/nightly_failure_issue/status.json <<EOF
           {
             "statuses": {
@@ -524,6 +569,7 @@ jobs:
             --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
             --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
             --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
+            "${LLM_ARGS[@]}" \
             --stdout-format compact
 
       - name: Upload Nightly failure issue context

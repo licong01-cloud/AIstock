@@ -41,6 +41,19 @@ class DummyScheduler:
         self.calls.append(("selected", args, kwargs))
         return {"submitted_loop_ids": []}
 
+    async def update_custom_evo_editable_config(self, **kwargs):
+        self.calls.append(("update", kwargs))
+        return {
+            "task_id": kwargs["task_id"],
+            "operation": "update_pending_config",
+            "total_loops": len(kwargs["loops_config"]),
+            "node_parallelism": kwargs.get("node_parallelism") or {},
+        }
+
+    async def submit_custom_evo_all_loops(self, *args, **kwargs):
+        self.calls.append(("all", args, kwargs))
+        return {"submitted_loop_ids": []}
+
 
 def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None):
     runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
@@ -250,6 +263,90 @@ def test_custom_evo_append_keeps_existing_distributed_parallelism(monkeypatch):
     assert dummy.calls[1][1]["node_parallelism"] == {"node-a": 2, "node-b": 3}
     assert dummy.calls[1][1]["loops_config"][0]["node_id"] == "node-b"
     assert background_tasks.tasks[0].args == ("task-a", [4, 5])
+
+
+def test_custom_evo_update_pending_config_uses_put_path_without_scheduling(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler({
+        "task_id": "task-a",
+        "node_id": "node-a",
+        "status": "pending",
+        "editable": True,
+        "startable": True,
+        "loops": [],
+    })
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    req = qe.CustomEvoConfigUpdateRequest(
+        task_name="edited pending",
+        target_desc="save only",
+        loops=[_loop("edited", node_id="node-a")],
+        node_parallelism={"node-a": 2},
+    )
+    result = asyncio.run(qe.update_custom_evo_config("task-a", req))
+
+    assert result["status"] == "success"
+    assert result["operation"] == "update_pending_config"
+    assert [call[0] for call in dummy.calls] == ["update"]
+    assert dummy.calls[0][1]["task_name"] == "edited pending"
+    assert dummy.calls[0][1]["loops_config"][0]["node_id"] == "node-a"
+
+
+def test_custom_evo_start_rejects_already_started_task(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler({
+        "task_id": "task-a",
+        "task_type": "custom_evo",
+        "node_id": "node-a",
+        "status": "failed",
+        "startable": False,
+        "start_reason": "1 loop rows already exist",
+        "loops": [
+            {
+                "loop_index": 1,
+                "factor_keys": ["alpha_factor||catalog"],
+                "model_id": "xgboost_v1",
+                "runtime_flags": {"random_seed": 42},
+            }
+        ],
+    })
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    req = qe.CustomEvoRunRequest(confirm_custom_evo="QE_CUSTOM_EVO_RUN")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.run_custom_evo_task("task-a", req, BackgroundTasks()))
+
+    assert exc.value.status_code == 409
+    assert "use resume/append/rerun" in str(exc.value.detail)
+    assert [call[0] for call in dummy.calls] == ["config"]
+
+
+def test_custom_evo_start_returns_operation_start(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler({
+        "task_id": "task-a",
+        "task_type": "custom_evo",
+        "node_id": "node-a",
+        "status": "pending",
+        "startable": True,
+        "loops": [
+            {
+                "loop_index": 1,
+                "factor_keys": ["alpha_factor||catalog"],
+                "model_id": "xgboost_v1",
+                "runtime_flags": {"random_seed": 42},
+            }
+        ],
+    })
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    background_tasks = BackgroundTasks()
+
+    req = qe.CustomEvoRunRequest(confirm_custom_evo="QE_CUSTOM_EVO_RUN")
+    result = asyncio.run(qe.run_custom_evo_task("task-a", req, background_tasks))
+
+    assert result["operation"] == "start"
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].args == ("task-a",)
 
 
 def test_prepare_custom_evo_loop_configs_syncs_each_stock_pool_once_per_node(monkeypatch):

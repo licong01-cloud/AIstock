@@ -8,6 +8,7 @@ from backend.services.validation.finding_store import ValidationFindingStore
 from backend.services.validation.git_activity_provider import GitActivityProviderError, GitCommitActivityProvider
 from backend.services.validation.git_status_provider import GitStatusProviderError, GitWorkspaceStatusProvider
 from backend.services.validation.history_store import ValidationHistoryStore
+from backend.services.validation.llm_schedule_service import ValidationLlmScheduleError, ValidationLlmScheduleService
 from backend.services.validation.models import ValidationResponse
 from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
@@ -83,6 +84,28 @@ class ValidationExecutionStartRequest(BaseModel):
     workspace_path: str | None = None
     expected_branch: str | None = None
     expected_commit: str | None = None
+
+
+class ValidationLlmScheduleRequest(BaseModel):
+    provider: str = Field("github_models", min_length=1)
+    trigger: str = Field("manual", min_length=1, max_length=80)
+    changed_files: list[str] = Field(default_factory=list)
+    recent_failure_modules: list[str] = Field(default_factory=list)
+    recent_failure_plan_keys: list[str] = Field(default_factory=list)
+    codegraph_freshness: str = "unknown"
+    resource_budget_seconds: int = Field(900, ge=0)
+    workspace_path: str | None = None
+    execute: bool = False
+    requested_by: str = Field("llm_schedule_gate", min_length=1, max_length=80)
+    backend_port: int | None = None
+    frontend_port: int | None = None
+    timeout_seconds: int | None = Field(None, gt=0)
+    expected_branch: str | None = None
+    expected_commit: str | None = None
+    failure_event_ref: str | None = None
+    bug_id: str | None = None
+    github_issue_number: int | None = None
+    github_issue_url: str | None = None
 
 
 def _success(data):
@@ -785,6 +808,44 @@ def start_validation_execution(
             )
         )
     except ValidationRunnerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/llm/schedule", response_model=ValidationResponse, summary="Gate LLM-suggested validation plans")
+def schedule_llm_validation(
+    request: ValidationLlmScheduleRequest,
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+    plan_catalog: ValidationPlanCatalog = Depends(get_plan_catalog),
+):
+    service = ValidationLlmScheduleService(
+        plan_catalog=plan_catalog,
+        execution_runner=execution_runner,
+    )
+    try:
+        return _success(
+            service.schedule(
+                provider=request.provider,
+                trigger=request.trigger,
+                changed_files=request.changed_files,
+                recent_failure_modules=request.recent_failure_modules,
+                recent_failure_plan_keys=request.recent_failure_plan_keys,
+                codegraph_freshness=request.codegraph_freshness,
+                resource_budget_seconds=request.resource_budget_seconds,
+                workspace_path=request.workspace_path,
+                execute=request.execute,
+                requested_by=request.requested_by,
+                backend_port=request.backend_port,
+                frontend_port=request.frontend_port,
+                timeout_seconds=request.timeout_seconds,
+                expected_branch=request.expected_branch,
+                expected_commit=request.expected_commit,
+                failure_event_ref=request.failure_event_ref,
+                bug_id=request.bug_id,
+                github_issue_number=request.github_issue_number,
+                github_issue_url=request.github_issue_url,
+            )
+        )
+    except ValidationLlmScheduleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

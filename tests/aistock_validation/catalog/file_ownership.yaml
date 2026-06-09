@@ -80,6 +80,7 @@ rules:
       - scripts/issue_flow.py
       - scripts/code_intelligence_adapter.py
       - scripts/ci_failure_issue_summary.py
+      - scripts/nightly_adaptive_scheduler.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
     impact_modules: [validation.center, validation.runner, validation.module_quality]

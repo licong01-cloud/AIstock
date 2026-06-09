@@ -27,7 +27,7 @@ def _tool_names_from_module_constant(path: str) -> set[str]:
 def test_legacy_validation_inventory_migrated_to_gateway_module() -> None:
     legacy = _tool_names_from_standalone_script("scripts/aistock_mcp_server.py")
     migrated = _tool_names_from_module_constant("backend/mcp/modules/validation.py")
-    assert len(legacy) == 19
+    assert len(legacy) == 20
     assert legacy == migrated == set(MODULE_TOOL_NAMES["validation"])
 
 
@@ -37,7 +37,14 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
     assert len(qe_experiment) == 27
     assert len(qe_archive) == 28
     assert qe_experiment < set(MODULE_TOOL_NAMES["qe_experiment"])
-    assert set(MODULE_TOOL_NAMES["qe_experiment"]) - qe_experiment == {"qe_template_create_and_run_confirmed"}
+    assert set(MODULE_TOOL_NAMES["qe_experiment"]) - qe_experiment == {
+        "qe_template_create_and_run_confirmed",
+        "qe_single_experiment_create_pending",
+        "qe_single_experiment_get_config",
+        "qe_single_experiment_update_config_confirmed",
+        "qe_custom_evo_create_pending",
+        "qe_custom_evo_update_config_confirmed",
+    }
     assert qe_archive == set(MODULE_TOOL_NAMES["qe_archive"])
 
 
