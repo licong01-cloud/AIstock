@@ -52,18 +52,22 @@ def test_frontend_node_modules_install_runs_only_when_playwright_missing(
 ) -> None:
     frontend = tmp_path / "frontend"
     frontend.mkdir()
+    caller_cwd = tmp_path / "caller"
+    caller_cwd.mkdir()
+    monkeypatch.chdir(caller_cwd)
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
-    calls: list[tuple[str, ...]] = []
+    calls: list[tuple[tuple[str, ...], Path, dict[str, object]]] = []
 
     class DummySession:
         def log(self, message: str) -> None:
-            calls.append(("log", message))
+            calls.append((("log", message), Path.cwd(), {}))
 
         def run(self, *args: str, **kwargs: object) -> None:
-            calls.append(tuple(args))
+            calls.append((tuple(args), Path.cwd(), dict(kwargs)))
 
     noxfile._ensure_frontend_node_modules(DummySession())
-    assert ("npm", "ci") in calls
+    assert (("npm", "ci"), frontend, {"external": True}) in calls
+    assert Path.cwd() == caller_cwd
 
     calls.clear()
     bin_dir = frontend / "node_modules" / ".bin"

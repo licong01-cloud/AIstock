@@ -184,7 +184,12 @@ def _ensure_frontend_node_modules(session: nox.Session) -> None:
     if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
         return
     session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
-    session.run("npm", "ci", cwd=frontend, external=True)
+    old_cwd = Path.cwd()
+    os.chdir(frontend)
+    try:
+        session.run("npm", "ci", external=True)
+    finally:
+        os.chdir(old_cwd)
 
 
 def _codex_quick_validate_script() -> Path:
