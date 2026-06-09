@@ -5643,7 +5643,7 @@ def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
     ]
     if any(token in title_body or token in errors for token in infra_signatures):
         return "infra_blocker"
-    if any(token in title_body for token in ["flaky", "timeout", "network", "runner"]):
+    if any(token in title_body for token in ["flaky", "timeout", "network"]):
         return "infra_flaky"
     if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
         return "test_fixture_gap_or_real_regression"

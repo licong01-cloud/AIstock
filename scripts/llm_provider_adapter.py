@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,9 @@ from backend.infra.deepseek_config import (  # noqa: E402
     redact_secret_text,
     resolve_deepseek_config,
 )
+
+GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY = "deepseek-r1"
+GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
@@ -56,8 +60,11 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ProviderAdapterError("deepseek_api must be disabled by default")
     github_models = providers.get("github_models") or {}
     selector = (github_models.get("model_selector") or {})
-    if selector.get("required_model_family") != DEFAULT_DEEPSEEK_MODEL:
-        raise ProviderAdapterError("github_models required_model_family must be deepseek-v4-pro")
+    if selector.get("required_model_family") != GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY:
+        raise ProviderAdapterError("github_models required_model_family must be deepseek-r1")
+    preferred_models = selector.get("preferred_models") or []
+    if GITHUB_MODELS_DEEPSEEK_MODEL_ID not in preferred_models:
+        raise ProviderAdapterError("github_models preferred_models must include deepseek/deepseek-r1")
     if selector.get("allow_lower_tier_fallback") is not False:
         raise ProviderAdapterError("lower-tier model fallback must be disabled")
     limits = config.get("limits") or {}
@@ -163,8 +170,15 @@ def fetch_github_models_catalog(config: dict[str, Any], *, token: str | None = N
     request = urllib.request.Request(url)
     request.add_header("Authorization", f"Bearer {auth_token}")
     request.add_header("Accept", "application/json")
-    with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        retry_after = exc.headers.get("retry-after") or exc.headers.get("Retry-After")
+        suffix = f" retry_after={retry_after}" if retry_after else ""
+        raise ProviderAdapterError(f"GitHub Models catalog request failed status={exc.code}{suffix}") from exc
+    except urllib.error.URLError as exc:
+        raise ProviderAdapterError(f"GitHub Models catalog request failed: {exc.reason}") from exc
 
 
 def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool) -> dict[str, Any]:

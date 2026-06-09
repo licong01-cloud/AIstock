@@ -5212,6 +5212,28 @@ def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> Non
     assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
 
 
+def test_triage_ci_issue_classification_ignores_nightly_runner_success_status() -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [
+            {
+                "error_signature": "Nightly failed: nightly_l3=failure",
+                "key_log_excerpt": [
+                    "runner_preflight: success",
+                    "nightly_l3: failure",
+                    "paper_v2_live: skipped",
+                ],
+            }
+        ],
+    }
+    issue = {
+        "title": "P1 Nightly failed: runner=success dr=success/success l3=failure live=skipped code=success",
+        "body": "Diagnostic status: `complete`",
+    }
+
+    assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
+
+
 def test_ci_issue_janitor_dry_run_does_not_close_superseded_issue(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int | str] = []
 
