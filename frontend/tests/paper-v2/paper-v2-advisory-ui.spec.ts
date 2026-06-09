@@ -38,6 +38,52 @@ const program = {
   latest_review_trade_date: "2026-06-03",
 };
 
+
+const selectablePackages = [
+  {
+    package_id: "pkg_codex_smoke",
+    package_name: "Codex Smoke Top20",
+    package_version: "v1",
+    package_status: "ACTIVE",
+    source_type: "qe_experiment",
+    source_id: "qe_codex_smoke",
+    manifest_sha256: "sha_codex_smoke",
+    alpha_mode: "alphas158",
+    alpha_count: 158,
+    portfolio_topk: 20,
+    metrics_summary: { ic: 0.06 },
+    asset_eligibility: {},
+    model_state: {},
+    selection_health: { status: "RUNNABLE" },
+    latest_selection_run: {
+      run_id: "sel_codex_smoke_20260605",
+      mode: "SINGLE_PACKAGE",
+      trade_date: "2026-06-05",
+      data_source: "DB_HISTORICAL",
+      status: "SUCCEEDED",
+      candidate_count: 20,
+      completed_at: "2026-06-05T18:00:00+08:00",
+    },
+  },
+  {
+    package_id: "pkg_second_candidate",
+    package_name: "Second Candidate Package",
+    package_version: "v2",
+    package_status: "ACTIVE",
+    source_type: "qe_evolution_loop",
+    source_id: "qe_second",
+    manifest_sha256: "sha_second",
+    alpha_mode: "custom",
+    alpha_count: 12,
+    portfolio_topk: 20,
+    metrics_summary: {},
+    asset_eligibility: {},
+    model_state: {},
+    selection_health: { status: "RUNNABLE" },
+    latest_selection_run: null,
+  },
+];
+
 const activePool = [
   {
     episode_id: "episode_002",
@@ -248,6 +294,10 @@ async function mockShellApis(page: Page) {
     available_trading_day_count: 10,
     next_trading_day: "2026-06-09",
   }));
+  await page.route("**/api/v1/selection-center/selectable-packages**", async (route) => json(route, {
+    ok: true,
+    packages: selectablePackages,
+  }));
 }
 
 async function mockAdvisoryApis(page: Page) {
@@ -399,6 +449,9 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByText("高级行情")).toHaveCount(0);
   await expect(page.getByText("选股运行 ID")).toHaveCount(0);
   await expect(page.locator("textarea")).toHaveCount(0);
+  await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
+  await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
+  await expect(page.getByTestId("advisory-package-select-pkg-1").locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
   await expect(page.locator("body")).not.toContainText("JSON");
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
@@ -469,7 +522,8 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
     expect(dialog.message()).toContain("确认创建并启用荐股任务");
     await dialog.accept();
   });
-  await page.getByPlaceholder("strategy_package_id").fill("pkg_codex_smoke");
+  await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
+  await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
   await page.getByRole("button", { name: "创建并启用" }).click();
   await expect.poll(() => calls.filter((entry) => entry === "POST /api/v1/advisory/programs").length).toBe(1);
 
