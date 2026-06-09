@@ -717,6 +717,10 @@ def test_pr_check_includes_compact_llm_summary_without_prompt(
     assert llm_summary["prompt_persisted"] is False
     assert llm_summary["input_policy"] == "pr_metadata_changed_files_catalog_summary_only"
     assert llm_summary["estimated_prompt_tokens"] > 0
+    assert llm_summary["token_usage_status"] == "estimated"
+    assert llm_summary["compact_summary_chars"] > 0
+    assert llm_summary["full_json_included"] is False
+    assert llm_summary["status_check_rollup_included"] is False
     assert "prompt" not in llm_summary
 
 
@@ -736,6 +740,8 @@ def test_pr_quality_markdown_is_compact_and_comment_budget_is_checked(
 
     assert "### Compact LLM Summary" in markdown
     assert "prompt_persisted" in markdown
+    assert "full_json_included" in markdown
+    assert "status_check_rollup_included" in markdown
     assert budget["workflow_gate"] == "warning"
     assert budget["truncated"] is True
 

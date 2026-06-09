@@ -1094,7 +1094,12 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
             "fallback_reason": "code_intelligence_artifact_built_in_separate_pr_quality_step",
         },
     }
-    compact["estimated_prompt_tokens"] = _estimate_tokens(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+    prompt_payload = json.dumps(compact, ensure_ascii=False, sort_keys=True)
+    compact["compact_summary_chars"] = len(prompt_payload)
+    compact["estimated_prompt_tokens"] = _estimate_tokens(prompt_payload)
+    compact["token_usage_status"] = "estimated"
+    compact["full_json_included"] = False
+    compact["status_check_rollup_included"] = False
     compact["estimated_completion_tokens"] = None
     compact["estimated_cost_usd"] = None
     return compact
@@ -1213,7 +1218,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
         *gates,
-        f"- llm_summary: provider=`{llm_summary.get('provider') or 'none'}` invoked=`{llm_summary.get('invoked')}` prompt_tokens=`{llm_summary.get('estimated_prompt_tokens')}`",
+        f"- llm_summary: provider=`{llm_summary.get('provider') or 'none'}` invoked=`{llm_summary.get('invoked')}` prompt_tokens=`{llm_summary.get('estimated_prompt_tokens')}` token_status=`{llm_summary.get('token_usage_status') or 'unknown'}`",
         "",
     ]
     violations = (summary.get("scope_check") or {}).get("violations") or []
@@ -1233,6 +1238,8 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
                 f"- changed_file_count: `{llm_summary.get('changed_file_count')}`",
                 f"- required_validation_count: `{llm_summary.get('required_validation_count')}`",
                 f"- code_intelligence: `{(llm_summary.get('code_intelligence') or {}).get('used')}`",
+                f"- full_json_included: `{llm_summary.get('full_json_included')}`",
+                f"- status_check_rollup_included: `{llm_summary.get('status_check_rollup_included')}`",
                 "",
             ]
         )

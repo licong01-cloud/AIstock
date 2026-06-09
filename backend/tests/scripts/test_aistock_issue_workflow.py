@@ -2181,6 +2181,16 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
                 "context_pack_md": {"estimated_tokens": 12},
                 "fix_ready_json": {"estimated_tokens": 8},
             },
+            "code_intelligence": {
+                "status": "ready",
+                "context_ref": "tmp/issue_workflow/BUG-199/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/BUG-199/affected-tests.json",
+                "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
+                "fallback_used": False,
+                "affected_tests_count": 2,
+                "affected_tests": {"suggested_tests": ["backend/tests/scripts/test_issue_flow.py"]},
+                "understand_anything": {"status": "ready", "graph_exists": True},
+            },
             "production_gates": {"production_ddl_gate": "noop"},
         },
     )
@@ -2233,6 +2243,10 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
     assert payload["phase_cost_table"]
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
+    assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is True
+    assert payload["code_intelligence_efficiency"]["estimated_broad_scan_tokens_avoided"] == 8000
+    assert payload["code_intelligence_efficiency"]["full_graph_payload_included"] is False
+    assert payload["flow_overhead_estimate"]["code_intelligence_broad_scan_avoided"] is True
     assert payload["duplicate_active_count"] == 1
     postmortem_md = isolated_workflow_root / payload["postmortem_md_path"]
     assert (isolated_workflow_root / payload["postmortem_json_path"]).exists()
@@ -2240,6 +2254,7 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     md_text = postmortem_md.read_text(encoding="utf-8")
     assert "## H6 Cost Summary" in md_text
     assert "## H7 Code Intelligence" in md_text
+    assert "broad_scan_avoided" in md_text
 
 
 def test_postmortem_defaults_to_compact_success_without_artifacts(
@@ -2279,6 +2294,7 @@ def test_postmortem_defaults_to_compact_success_without_artifacts(
     assert payload["artifact_policy"] == "compact_success_no_artifact"
     assert payload["h6_summary"]["token_usage_status"] == "unknown"
     assert payload["h6_summary"]["total_estimated_tokens"] is None
+    assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is False
     assert "postmortem_json_path" not in payload
     assert "postmortem_md_path" not in payload
     assert not (workflow_root / "postmortem.json").exists()
