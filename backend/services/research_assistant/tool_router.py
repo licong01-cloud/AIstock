@@ -31,6 +31,7 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("overfit", "suspicious", "red flag", "过拟合", "红旗"), "qe_archive_query_overfit_flags"),
     (McpDomain.QE_WAREHOUSE, ("promotion candidate", "promote candidate", "晋升候选", "晋升榜"), "qe_archive_query_promotion_candidates"),
     (McpDomain.QE_WAREHOUSE, ("lineage", "evolution lineage", "演进血缘", "血缘"), "qe_archive_query_evolution_lineage"),
+    (McpDomain.QE_EXPERIMENT, ("create and run", "generate and run", "direct run", "direct experiment"), "qe_template_create_and_run_confirmed"),
     (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
     (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),

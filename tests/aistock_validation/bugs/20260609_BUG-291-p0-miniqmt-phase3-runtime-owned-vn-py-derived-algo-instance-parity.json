@@ -1,41 +1,42 @@
 {
-  "actual": "Phase 0/1 only introduced design/contracts/gates. There is not yet a durable MiniQMTExecutionRuntime event-loop skeleton that owns gateway, OMS and restart recovery.",
+  "actual": "Phase 3 is not implemented yet. Existing MiniQMT execution development has design/contracts/runtime skeleton only; without this phase, vn.py-style algorithm behavior can drift or remain synchronous execute_intent style instead of runtime-owned event-driven algo instances.",
   "allowed_write_scope": [
     "backend/services/miniqmt_execution_runtime",
+    "backend/execution_algos/vnpy_style",
     "backend/tests/miniqmt_execution_runtime",
     "tests/aistock_validation/history/paper_v2_miniqmt_unified",
-    "tests/aistock_validation/bugs/20260609_BUG-290-p0-miniqmt-phase2-miniqmtexecutionruntime-durable-event-loop-skeleton.json",
+    "tests/aistock_validation/bugs/20260609_BUG-291-p0-miniqmt-phase3-runtime-owned-vn-py-derived-algo-instance-parity.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-290",
+  "bug_id": "BUG-291",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-06-09T01:56:01.292837Z",
-  "description": "Phase 0/1 only introduced design/contracts/gates. There is not yet a durable MiniQMTExecutionRuntime event-loop skeleton that owns gateway, OMS and restart recovery.",
+  "created_at": "2026-06-09T02:59:07.755004Z",
+  "description": "Phase 3 is not implemented yet. Existing MiniQMT execution development has design/contracts/runtime skeleton only; without this phase, vn.py-style algorithm behavior can drift or remain synchronous execute_intent style instead of runtime-owned event-driven algo instances.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260609-91de440b37af",
-      "timestamp": "2026-06-09T01:56:01.292833Z"
+      "note": "Promoted from IC-20260609-2cecf0d643a3",
+      "timestamp": "2026-06-09T02:59:07.755001Z"
     }
   ],
   "evidence_uris": [
-    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:512"
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:529"
   ],
-  "expected": "tick/order/trade/timer/reconcile/operator events are durably recorded through the runtime repository; active orders and algo instances can be reconstructed before broker sync; restart recovery syncs broker facts first and does not duplicate child orders; production DDL gate is explicit.",
-  "first_seen_at": "2026-06-09T01:56:01.292837Z",
+  "expected": "SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, and TWAP_LITE_MINIQMT have source mapping and attribution to the fixed vn.py/vnpy_algotrading commits; algo core imports no DB/FastAPI/MiniQMT/vn.py runtime; core only emits actions; runtime owns submit/cancel/order/trade/timer routing; characterization and import-boundary tests pass.",
+  "first_seen_at": "2026-06-09T02:59:07.755004Z",
   "fix_branch": null,
   "fix_commit": "0b5f0dba4ba96647fb9d476875572e433d1cb210",
-  "fixed_at": "2026-06-09T11:23:41.463259Z",
-  "github_issue_number": 847,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/847",
-  "last_seen_at": "2026-06-09T01:56:01.292837Z",
+  "fixed_at": "2026-06-09T11:23:40.446030Z",
+  "github_issue_number": 849,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/849",
+  "last_seen_at": "2026-06-09T02:59:07.755004Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -44,9 +45,12 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "n/a - architecture implementation phase",
   "required_verification": [
     "l0",
+    "paper_v2_l3",
+    "qe_read_l3",
+    "paper_v2_backend",
     "validation_center_backend"
   ],
   "risk_area": "bug",
@@ -56,10 +60,10 @@
   "suspected_modules": [
     "simulation_runtime"
   ],
-  "title": "[P0][MiniQMT][Phase2] MiniQMTExecutionRuntime durable event loop skeleton",
+  "title": "[P0][MiniQMT][Phase3] Runtime-owned vn.py-derived algo instance parity",
   "trigger_condition": {
-    "fingerprint": "91de440b37afb0825499c2fe",
-    "source_event_id": "FE-20260609-91de440b37af"
+    "fingerprint": "2cecf0d643a33dcd31bf41dd",
+    "source_event_id": "FE-20260609-2cecf0d643a3"
   },
   "validation_evidence": [
     "PR #861 CI -> 16 passed, 0 failed"

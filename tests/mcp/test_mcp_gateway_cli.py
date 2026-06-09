@@ -21,10 +21,10 @@ def test_gateway_cli_list_tools_profiles() -> None:
     validation = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=validation")
     qe = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qe")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 203
-    assert full["tool_count"] == 209
+    assert full["legacy_tool_count"] == 205
+    assert full["tool_count"] == 211
     assert validation["tool_count"] == 19
-    assert qe["tool_count"] == 63
+    assert qe["tool_count"] == 65
 
 
 def test_gateway_cli_startup_summary_is_structured() -> None:
@@ -116,6 +116,36 @@ enabled = true
     assert payload["status"] == "pass"
     assert payload["client_configs"]["status"] == "warn"
     assert payload["client_configs"]["finding_count"] == 1
+    assert payload["client_configs"]["findings"][0]["code"] == "legacy_standalone_mcp_config"
+
+
+def test_gateway_doctor_flags_legacy_claude_json_config(tmp_path: Path) -> None:
+    config = tmp_path / ".mcp.json"
+    config.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "aistock-qe-experiment": {
+                        "command": "python",
+                        "args": ["F:/Dev/AIstock/scripts/aistock_qe_experiment_mcp_server.py"],
+                        "env": {"AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8001/api/v1"},
+                    },
+                    "aistock-qe": {
+                        "command": "python",
+                        "args": ["F:/Dev/AIstock/scripts/aistock_mcp_gateway.py", "--profile=qe"],
+                        "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = run_doctor(client_config_paths=[config])
+
+    assert payload["client_configs"]["status"] == "warn"
+    assert payload["client_configs"]["finding_count"] == 1
+    assert payload["client_configs"]["findings"][0]["server"] == "aistock-qe-experiment"
     assert payload["client_configs"]["findings"][0]["code"] == "legacy_standalone_mcp_config"
 
 

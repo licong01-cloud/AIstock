@@ -755,8 +755,8 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "no direct warehouse tool" not in text
     catalog = result["cards"]["runtime_mcp_catalog"]
     assert catalog["source"] == "gateway_manifest_derived_catalog"
-    assert catalog["manifest_tool_count"] == 210
-    assert catalog["tool_count"] == 210
+    assert catalog["manifest_tool_count"] == 211
+    assert catalog["tool_count"] == 211
     assert result["mode_decision"]["intent_type"] == "capability_inquiry"
     assert result["cards"]["action_proposals"] == []
 

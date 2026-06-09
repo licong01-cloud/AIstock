@@ -18,6 +18,14 @@ class MiniQMTGatewayOrderAck:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class MiniQMTGatewayCancelAck:
+    accepted: bool
+    broker_order_id: str | None
+    message: str
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
 class MiniQMTGateway(Protocol):
     def connect(self, *, runtime_id: str) -> None:
         ...
@@ -34,6 +42,9 @@ class MiniQMTGateway(Protocol):
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:
         ...
 
+    def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
+        ...
+
 
 class FakeMiniQMTGateway:
     """Controlled fake broker; no production MiniQMT process is touched."""
@@ -48,6 +59,7 @@ class FakeMiniQMTGateway:
     ) -> None:
         self.connected_runtime_ids: list[str] = []
         self.submitted_orders: list[MiniQMTChildOrder] = []
+        self.cancelled_orders: list[MiniQMTChildOrder] = []
         self._orders = list(orders or [])
         self._trades = list(trades or [])
         self._positions = list(positions or [])
@@ -93,4 +105,17 @@ class FakeMiniQMTGateway:
             broker_order_id=broker_order_id,
             message="fake broker accepted child order",
             raw={"gateway": "fake_miniqmt", "order_type": side_code},
+        )
+
+    def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
+        self.cancelled_orders.append(order)
+        for broker_order in self._orders:
+            if broker_order.get("broker_order_id") == order.broker_order_id:
+                broker_order["status"] = "CANCEL_REQUESTED"
+                broker_order["cancel_reason"] = reason
+        return MiniQMTGatewayCancelAck(
+            accepted=True,
+            broker_order_id=order.broker_order_id,
+            message="fake broker accepted cancel request",
+            raw={"gateway": "fake_miniqmt", "cancel_reason": reason},
         )

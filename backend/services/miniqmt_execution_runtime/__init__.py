@@ -1,6 +1,15 @@
 """MiniQMT unified execution runtime public API."""
 
-from .gateway import FakeMiniQMTGateway, MiniQMTGateway, MiniQMTGatewayOrderAck
+from .client import (
+    MiniQMTExecutionRuntimeClient,
+    MiniQMTPlanPreviewResult,
+    MiniQMTRuntimeEvidence,
+    MiniQMTRuntimeManagedBatchSubmitResult,
+    PaperMiniQMTRuntimeChildResult,
+    PaperMiniQMTRuntimeSubmitResult,
+    PaperV2MiniQMTRuntimeGateway,
+)
+from .gateway import FakeMiniQMTGateway, MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
 from .models import (
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrder,
@@ -25,6 +34,13 @@ from .repository import (
 from .runtime import MiniQMTExecutionEventLoop, MiniQMTExecutionRuntime
 
 __all__ = [
+    "PaperV2MiniQMTRuntimeGateway",
+    "PaperMiniQMTRuntimeSubmitResult",
+    "PaperMiniQMTRuntimeChildResult",
+    "MiniQMTRuntimeManagedBatchSubmitResult",
+    "MiniQMTRuntimeEvidence",
+    "MiniQMTPlanPreviewResult",
+    "MiniQMTExecutionRuntimeClient",
     "FakeMiniQMTGateway",
     "InMemoryMiniQMTExecutionRuntimeRepository",
     "JsonFileMiniQMTExecutionRuntimeRepository",
@@ -42,6 +58,7 @@ __all__ = [
     "MiniQMTExecutionRuntimeRepository",
     "MiniQMTExecutionRuntimeState",
     "MiniQMTGateway",
+    "MiniQMTGatewayCancelAck",
     "MiniQMTGatewayOrderAck",
     "MiniQMTGatewayState",
     "MiniQMTOmsLedger",
