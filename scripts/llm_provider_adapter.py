@@ -258,10 +258,15 @@ def _test_plan_keys(root: Path = ROOT) -> set[str]:
     return {str(plan.get("plan_key")) for plan in plans if isinstance(plan, dict) and plan.get("plan_key")}
 
 
-def _catalog_plans_by_key(root: Path = ROOT, catalog_path: Path | None = None) -> dict[str, dict[str, Any]]:
+def _catalog_plans_by_key(
+    root: Path = ROOT,
+    catalog_path: Path | None = None,
+    *,
+    allowed_command_keys: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
     path = catalog_path or root / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
     try:
-        plans = ValidationPlanCatalog(path).list_plans()
+        plans = ValidationPlanCatalog(path, allowed_command_keys=allowed_command_keys).list_plans()
     except ValidationCatalogError as exc:
         raise ProviderAdapterError(str(exc)) from exc
     return {str(plan["plan_key"]): plan for plan in plans}
@@ -513,6 +518,7 @@ def build_test_plan_advice(
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
+    allowed_command_keys: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build schema-checked test-plan advice without allowing shell commands."""
 
@@ -520,7 +526,7 @@ def build_test_plan_advice(
     provider_summary = _provider_model_summary(config, provider)
     changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
     advised_keys = [str(key) for key in (plan_keys or _default_advised_plan_keys(changed_files, module))]
-    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     selection = _issue_flow_validation_select(changed_files, module)
     selected_by_catalog = set((selection or {}).get("required_plans") or [])
     selected_by_catalog.update((selection or {}).get("recommended_plans") or [])
@@ -600,6 +606,7 @@ def build_nightly_scheduler_advice(
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
+    allowed_command_keys: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic nightly queue without scheduling production actions."""
 
@@ -617,7 +624,7 @@ def build_nightly_scheduler_advice(
         recent_failure_plan_keys=recent_failure_plan_keys,
     )
     plan_keys = [item["plan_key"] for item in intents]
-    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     workspace = _workspace_gate(workspace_path, root=root)
     test_plan_advice = build_test_plan_advice(
         provider,
@@ -628,6 +635,7 @@ def build_nightly_scheduler_advice(
         workspace_path=workspace_path,
         root=root,
         catalog_path=catalog_path,
+        allowed_command_keys=allowed_command_keys,
     )
     advice_by_key = {item["plan_key"]: item for item in test_plan_advice["test_plan_advice"]}
     queue: list[dict[str, Any]] = []

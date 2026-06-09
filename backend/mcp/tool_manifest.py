@@ -241,6 +241,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'catalog': ('mcp_gateway_health
                 'get_bug_agent_context',
                 'get_module_quality_summary',
                 'start_validation_execution',
+                'schedule_validation_from_llm_advice',
                 'get_validation_execution_status',
                 'get_validation_execution_log',
                 'report_bug',
@@ -320,6 +321,7 @@ WRITE_TOKENS = (
     "assign_bug",
     "update_bug_status",
     "start_validation_execution",
+    "schedule_validation_from_llm_advice",
     "mcp_github_issue_create",
     "mcp_github_issue_sync_bug",
 )
@@ -341,6 +343,7 @@ SIDE_EFFECT_NAME_TOKENS = (
     "assign",
     "update_bug",
     "start_validation_execution",
+    "schedule_validation_from_llm_advice",
     "github_issue_create",
 )
 NON_DIRECT_RISK_LEVELS = {"write_confirmed", "long_running", "production_adjacent", "external_network"}

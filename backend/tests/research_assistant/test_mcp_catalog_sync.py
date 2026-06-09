@@ -53,7 +53,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     catalog = load_catalog()
     assert catalog["catalog_source"] == "gateway_manifest_derived_catalog"
     assert catalog["server_count"] == 9
-    assert catalog["tool_count"] == len(TOOL_MANIFEST) == 211
+    assert catalog["tool_count"] == len(TOOL_MANIFEST) == 212
     assert {item["server_key"] for item in default_mcp_servers()} == {
         "aistock-gateway-lite",
         "research-assistant",
@@ -123,10 +123,10 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
     assert result["seeded"]["mcp_servers"] == 9
-    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST) == 211
+    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST) == 212
 
     tools = svc.repository.list_records("mcp_tools", limit=300)["items"]
-    assert len(tools) == 211
+    assert len(tools) == 212
     assert any(tool["server_key"] == "aistock-gateway-lite" and tool["tool_name"] == "mcp_gateway_health" for tool in tools)
     assert any(tool["server_key"] == "aistock-factor" and tool["tool_name"] == "factor_library_list" for tool in tools)
     assert any(tool["server_key"] == "aistock-qe" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
