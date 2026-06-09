@@ -1354,6 +1354,44 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
     }
 
 
+def _code_intelligence_efficiency_summary(code_intel: dict[str, Any] | None) -> dict[str, Any]:
+    """Record graph-first usage without expanding graph artifacts in successful output."""
+
+    code_intel = code_intel or {}
+    affected_tests = code_intel.get("affected_tests") if isinstance(code_intel.get("affected_tests"), dict) else {}
+    context = code_intel.get("context") if isinstance(code_intel.get("context"), dict) else {}
+    fallback = context.get("fallback") if isinstance(context.get("fallback"), dict) else {}
+    ua = code_intel.get("understand_anything") if isinstance(code_intel.get("understand_anything"), dict) else {}
+    context_ref = code_intel.get("context_ref")
+    affected_tests_ref = code_intel.get("affected_tests_ref")
+    ua_summary_ref = code_intel.get("understand_anything_summary_ref")
+    graph_refs = [item for item in (context_ref, affected_tests_ref, ua_summary_ref) if item]
+    fallback_used = bool(
+        code_intel.get("fallback_used")
+        or fallback.get("used")
+        or str(code_intel.get("status") or "").lower() == "fallback"
+    )
+    fallback_reason = fallback.get("reason") or code_intel.get("fallback_reason")
+    if not fallback_reason and fallback_used:
+        fallback_reason = "graph_context_fallback"
+    broad_scan_avoided = bool(graph_refs) and not fallback_used
+    return {
+        "schema_version": "aistock_issue_workflow_code_intelligence_efficiency_v1",
+        "graph_first_context_used": broad_scan_avoided,
+        "codegraph_context_ref": context_ref,
+        "affected_tests_ref": affected_tests_ref,
+        "understand_anything_summary_ref": ua_summary_ref,
+        "affected_tests_count": code_intel.get("affected_tests_count") or len(affected_tests.get("suggested_tests") or []),
+        "affected_quality": code_intel.get("affected_quality"),
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "broad_scan_avoided": broad_scan_avoided,
+        "estimated_broad_scan_tokens_avoided": 8000 if broad_scan_avoided else None,
+        "understand_anything_status": ua.get("status"),
+        "full_graph_payload_included": False,
+    }
+
+
 def _code_intelligence_hint(root: Path | None = None) -> dict[str, Any]:
     freshness = code_intelligence.latest_codegraph_freshness(root or REPO_ROOT)
     latest = freshness.get("latest") if isinstance(freshness.get("latest"), dict) else {}
@@ -5545,6 +5583,7 @@ def build_postmortem_plan(
     phase_cost_table = _phase_cost_table(timing)
     h6_summary = _h6_summary(timing, context_metrics, artifact_metrics)
     h7_code_intelligence = _code_intelligence_readiness(state.get("code_intelligence") or {})
+    code_intelligence_efficiency = _code_intelligence_efficiency_summary(state.get("code_intelligence") or {})
     payload = {
         "schema_version": "aistock_issue_workflow_postmortem_v1",
         "generated_at": _utc_now(),
@@ -5564,6 +5603,7 @@ def build_postmortem_plan(
         "context_metrics": context_metrics,
         "artifact_metrics": artifact_metrics,
         "h7_code_intelligence": h7_code_intelligence,
+        "code_intelligence_efficiency": code_intelligence_efficiency,
         "active_workflows": active,
         "duplicate_active_count": duplicate_active_count,
         "stale_pr_check": stale_pr_check,
@@ -5573,6 +5613,8 @@ def build_postmortem_plan(
             "event_count": timing.get("event_count"),
             "context_estimated_tokens": h6_summary.get("context_estimated_tokens"),
             "artifact_estimated_tokens": h6_summary.get("artifact_estimated_tokens"),
+            "code_intelligence_broad_scan_avoided": code_intelligence_efficiency.get("broad_scan_avoided"),
+            "estimated_broad_scan_tokens_avoided": code_intelligence_efficiency.get("estimated_broad_scan_tokens_avoided"),
             "top_phase": h6_summary.get("top_phase"),
         },
         "production_gates": state.get("production_gates") or {},
@@ -5630,6 +5672,8 @@ def build_postmortem_plan(
                 f"- understand_anything_next_command: `{h7_code_intelligence.get('understand_anything_next_command') or 'not_required'}`",
                 f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
                 f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
+                f"- broad_scan_avoided: `{str(bool(code_intelligence_efficiency.get('broad_scan_avoided'))).lower()}`",
+                f"- estimated_broad_scan_tokens_avoided: `{code_intelligence_efficiency.get('estimated_broad_scan_tokens_avoided') if code_intelligence_efficiency.get('estimated_broad_scan_tokens_avoided') is not None else 'unknown'}`",
                 "",
                 "## Production Gates",
                 "",
