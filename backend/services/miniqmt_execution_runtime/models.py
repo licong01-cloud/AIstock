@@ -55,8 +55,10 @@ class MiniQMTExecutionEventType(str, Enum):
     ALGO_INSTANCE_CREATED = "ALGO_INSTANCE_CREATED"
     TIMER = "TIMER"
     TICK = "TICK"
+    ALGO_ACTION_EMITTED = "ALGO_ACTION_EMITTED"
     CHILD_ORDER_SUBMITTED = "CHILD_ORDER_SUBMITTED"
     CHILD_ORDER_REJECTED = "CHILD_ORDER_REJECTED"
+    CHILD_ORDER_CANCEL_REQUESTED = "CHILD_ORDER_CANCEL_REQUESTED"
     ORDER_EVENT = "ORDER_EVENT"
     TRADE_EVENT = "TRADE_EVENT"
     RECONCILE_STARTED = "RECONCILE_STARTED"
@@ -168,7 +170,7 @@ class MiniQMTExecutionAlgoInstance(BaseModel):
     symbol: str
     side: OrderSide
     target_quantity: int = Field(gt=0)
-    remaining_quantity: int = Field(gt=0)
+    remaining_quantity: int = Field(ge=0)
     algo_code: str
     status: MiniQMTAlgoInstanceStatus = MiniQMTAlgoInstanceStatus.ACTIVE
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -203,7 +205,7 @@ class MiniQMTChildOrder(BaseModel):
     symbol: str
     side: OrderSide
     quantity: int = Field(gt=0)
-    price: float = Field(gt=0)
+    price: float = Field(ge=0)
     price_type: int = 11
     status: MiniQMTChildOrderStatus = MiniQMTChildOrderStatus.SUBMITTING
     broker_order_id: str | None = None

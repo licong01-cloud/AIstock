@@ -1,6 +1,7 @@
 """Simulation runtime release and binding services."""
 
-from .bridges import LocalSimExecutionBridge, LocalSimPlanSubmitResult, MiniQMTExecutionBridge, MiniQMTPlanPreviewResult
+from backend.services.miniqmt_execution_runtime import MiniQMTPlanPreviewResult
+from .bridges import LocalSimExecutionBridge, LocalSimPlanSubmitResult, MiniQMTExecutionBridge
 from .decision import (
     ExecutionPlanCompiler,
     RebalanceIntentResult,
