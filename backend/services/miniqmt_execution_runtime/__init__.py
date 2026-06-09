@@ -1,6 +1,6 @@
 """MiniQMT unified execution runtime public API."""
 
-from .gateway import FakeMiniQMTGateway, MiniQMTGateway, MiniQMTGatewayOrderAck
+from .gateway import FakeMiniQMTGateway, MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
 from .models import (
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrder,
@@ -42,6 +42,7 @@ __all__ = [
     "MiniQMTExecutionRuntimeRepository",
     "MiniQMTExecutionRuntimeState",
     "MiniQMTGateway",
+    "MiniQMTGatewayCancelAck",
     "MiniQMTGatewayOrderAck",
     "MiniQMTGatewayState",
     "MiniQMTOmsLedger",
