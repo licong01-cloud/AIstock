@@ -45,3 +45,30 @@ def test_managed_backend_refuses_production_port() -> None:
     with pytest.raises(RuntimeError, match="production port 8001"):
         with noxfile._managed_validation_backend(DummySession(), "8001"):
             pass
+
+
+def test_frontend_node_modules_install_runs_only_when_playwright_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def log(self, message: str) -> None:
+            calls.append(("log", message))
+
+        def run(self, *args: str, **kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    noxfile._ensure_frontend_node_modules(DummySession())
+    assert ("npm", "ci") in calls
+
+    calls.clear()
+    bin_dir = frontend / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / ("playwright.cmd" if os.name == "nt" else "playwright")).write_text("", encoding="utf-8")
+
+    noxfile._ensure_frontend_node_modules(DummySession())
+    assert calls == []

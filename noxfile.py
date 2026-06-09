@@ -179,6 +179,14 @@ def _managed_validation_backend(session: nox.Session, backend_port: str):
         log_file.close()
 
 
+def _ensure_frontend_node_modules(session: nox.Session) -> None:
+    frontend = ROOT / "frontend"
+    if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
+        return
+    session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
+    session.run("npm", "ci", cwd=frontend, external=True)
+
+
 def _codex_quick_validate_script() -> Path:
     codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     return codex_home / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
@@ -510,6 +518,7 @@ def paper_v2_ui(session: nox.Session) -> None:
         old_cwd = Path.cwd()
         os.chdir(ROOT / "frontend")
         try:
+            _ensure_frontend_node_modules(session)
             session.run(
                 "npm",
                 "run",
