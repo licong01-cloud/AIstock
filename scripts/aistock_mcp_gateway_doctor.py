@@ -23,6 +23,7 @@ from backend.mcp.gateway import list_profiles_payload, self_check_payload
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_MCP = REPO_ROOT / ".mcp.json"
 USER_CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+USER_CLAUDE_MCP_CONFIG = Path.home() / ".mcp.json"
 LEGACY_STANDALONE_SCRIPTS = {
     "scripts/aistock_mcp_server.py",
     "scripts/aistock_qe_experiment_mcp_server.py",
@@ -248,8 +249,107 @@ def _scan_codex_config(path: Path) -> dict[str, Any]:
     }
 
 
+def _scan_json_mcp_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "exists": False, "status": "missing", "servers": [], "findings": [], "finding_count": 0}
+
+    findings: list[dict[str, Any]] = []
+    servers: list[dict[str, Any]] = []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return {
+            "path": str(path),
+            "exists": True,
+            "status": "warn",
+            "servers": [],
+            "findings": [{"severity": "warning", "code": "client_config_parse_failed", "message": str(exc)}],
+            "finding_count": 1,
+        }
+
+    for name, spec in sorted((data.get("mcpServers") or {}).items()):
+        if not isinstance(spec, dict) or not _looks_like_aistock_mcp_server(name, spec):
+            continue
+        args = [_normalize_arg_path(str(arg)) for arg in spec.get("args") or []]
+        env = spec.get("env") or {}
+        profile = _profile_from_args(args)
+        modules = _modules_from_args(args)
+        legacy_args = _arg_endswith_any(args, LEGACY_STANDALONE_SCRIPTS)
+        uses_gateway = any(arg.endswith("scripts/aistock_mcp_gateway.py") for arg in args)
+        detail = {
+            "server": name,
+            "command": _normalize_arg_path(str(spec.get("command") or "")),
+            "args": args,
+            "profile": profile,
+            "modules": modules,
+            "uses_gateway": uses_gateway,
+            "legacy_args": legacy_args,
+        }
+        servers.append(detail)
+        if legacy_args:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "code": "legacy_standalone_mcp_config",
+                    "server": name,
+                    "message": f"{name} still points at legacy standalone MCP script: {legacy_args}",
+                }
+            )
+        elif not uses_gateway:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "code": "aistock_mcp_not_gateway",
+                    "server": name,
+                    "message": f"{name} is AIstock-related but does not use scripts/aistock_mcp_gateway.py",
+                }
+            )
+        if profile == "full":
+            findings.append(
+                {
+                    "severity": "error",
+                    "code": "full_profile_client_config",
+                    "server": name,
+                    "message": f"{name} uses full profile; full must remain controlled-debug only",
+                }
+            )
+        if modules:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "code": "modules_arg_client_config",
+                    "server": name,
+                    "message": f"{name} uses --modules={modules}; prefer canonical --profile entries for client configs",
+                }
+            )
+        for env_name in ("AISTOCK_MCP_BASE_URL", "AISTOCK_VALIDATION_BASE_URL", "AISTOCK_QE_EXPERIMENT_BASE_URL", "AISTOCK_QE_ARCHIVE_BASE_URL"):
+            base_url = env.get(env_name)
+            if not base_url:
+                continue
+            try:
+                assert_loopback_url(str(base_url), env_name=f"{name}.{env_name}")
+            except ValueError as exc:
+                findings.append({"severity": "error", "code": "non_loopback_client_base_url", "server": name, "message": str(exc)})
+
+    return {
+        "path": str(path),
+        "exists": True,
+        "status": "warn" if findings else "pass",
+        "servers": servers,
+        "aistock_server_count": len(servers),
+        "findings": findings,
+        "finding_count": len(findings),
+    }
+
+
+def _scan_client_config(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".json":
+        return _scan_json_mcp_config(path)
+    return _scan_codex_config(path)
+
+
 def _scan_client_configs(paths: list[Path]) -> dict[str, Any]:
-    configs = [_scan_codex_config(path) for path in paths]
+    configs = [_scan_client_config(path) for path in paths]
     findings = [finding for config in configs for finding in config.get("findings") or []]
     return {
         "status": "warn" if findings else "pass",
@@ -406,7 +506,7 @@ def run_doctor(
         errors.append(f"git metadata unavailable: {exc}")
 
     project_servers, project_errors, project_warnings = _check_project_mcp()
-    client_configs = _scan_client_configs(client_config_paths or [USER_CODEX_CONFIG])
+    client_configs = _scan_client_configs(client_config_paths or [USER_CODEX_CONFIG, USER_CLAUDE_MCP_CONFIG])
     static_findings, static_errors, static_guardrail = _check_static_no_llm()
     gateway = self_check_payload(profile="lite", check_backend=check_backend)
     profiles = list_profiles_payload()

@@ -74,7 +74,7 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         synonyms=("qe", "quantevolver", "experiment", "custom_evo", "loop", "template", "materialize", "run experiment", "evolution", "qe task"),
         read_tools=("qe_experiment_list", "qe_experiment_get", "qe_custom_evo_get_task", "qe_custom_evo_loop_comparison"),
         plan_tools=("qe_template_create", "qe_template_validate"),
-        confirmed_tools=("qe_template_materialize_confirmed", "qe_template_run_confirmed"),
+        confirmed_tools=("qe_template_materialize_confirmed", "qe_template_run_confirmed", "qe_template_create_and_run_confirmed"),
         prompt_key="domain.qe_experiment",
     ),
     McpDomain.QE_WAREHOUSE: DomainSpec(

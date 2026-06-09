@@ -218,7 +218,55 @@ def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
             "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
         }
     ]
-    assert qe_experiment.TOOL_COUNT == 27
+    assert qe_experiment.TOOL_COUNT == 28
+
+
+def test_qe_experiment_template_create_and_run_tool_confirms_before_http() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+    payload = {
+        "template_kind": "single_experiment",
+        "title": "direct smoke",
+        "config_json": {
+            "factor_names": ["Alpha001"],
+            "model_id": "model_lgbm_v1",
+            "custom_params": {"random_seed": 42},
+        },
+        "node_id": "node_1",
+    }
+
+    with pytest.raises(ValueError, match=qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM):
+        mcp.tools["qe_template_create_and_run_confirmed"](**payload, confirm_direct_run="WRONG")
+    assert calls == []
+
+    mcp.tools["qe_template_create_and_run_confirmed"](
+        **payload,
+        confirm_direct_run=qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+        approval_note="unit",
+    )
+
+    assert calls == [
+        {
+            "method": "POST",
+            "path": "/api/v1/qe-templates/create-and-run",
+            "query": {},
+            "body": {
+                "template_kind": "single_experiment",
+                "title": "direct smoke",
+                "description": None,
+                "config_json": {
+                    "factor_names": ["Alpha001"],
+                    "model_id": "model_lgbm_v1",
+                    "custom_params": {"random_seed": 42},
+                },
+                "archive_policy": "AUTO",
+                "confirm_direct_run": qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+                "node_id": "node_1",
+                "force_full_train": False,
+                "approved_by": "mcp_gateway",
+                "approval_note": "unit",
+            },
+        }
+    ]
 
 
 
