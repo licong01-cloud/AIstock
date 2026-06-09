@@ -74,3 +74,40 @@ def test_validate_config_cli_uses_compact_success_output(capsys):
     assert exit_code == 0
     assert '"gate": "passed"' in captured.out
     assert "DEEPSEEK_API_KEY" not in captured.out
+
+
+def test_triage_quality_smoke_has_schema_issue_draft_and_allowlisted_plans():
+    payload = adapter.build_triage_quality_smoke("github_models", adapter.load_config())
+
+    assert payload["schema_version"] == adapter.TRIAGE_ADVICE_SCHEMA_VERSION
+    assert payload["provider"] == "github_models"
+    assert payload["model"] == "deepseek/deepseek-r1"
+    assert payload["actionability"]["is_actionable"] is True
+    assert payload["issue_draft"]["contains_reproduce_command"] is True
+    assert payload["issue_draft"]["full_logs_included"] is False
+    assert payload["prompt_quality"]["full_repo_scan_allowed"] is False
+    assert [item["plan_key"] for item in payload["test_plan_advice"]] == ["validation_module_registry_l0", "l0"]
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert payload["deterministic_gate"]["plan_keys_allowlisted"] is True
+
+
+def test_triage_quality_smoke_cli_uses_compact_success_output(capsys, tmp_path):
+    output = tmp_path / "triage-advice.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "triage-quality-smoke",
+            "--provider",
+            "github_models",
+            "--output",
+            str(output),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"check": "triage-quality-smoke"' in captured.out
+    assert '"suggested_plan_count": 2' in captured.out
+    assert "DeepSeek API key" not in captured.out
+    assert output.exists()

@@ -4,7 +4,24 @@ on:
   schedule:
     # 19:07 UTC = 03:07 China Standard Time (UTC+8) -- after market close + log rotation
     - cron: '7 19 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      run_dr:
+        description: 'Run DR snapshot + validation. Scheduled Nightly always runs DR; manual validation can skip it.'
+        type: boolean
+        default: false
+      run_nightly_l3:
+        description: 'Run Nightly L3 validations. Disable only for CI/LLM/code-intelligence smoke runs.'
+        type: boolean
+        default: true
+      run_paper_v2_live:
+        description: 'Run Paper v2 live catch-up after L3. Scheduled Nightly always runs it.'
+        type: boolean
+        default: false
+      run_code_intelligence:
+        description: 'Build CodeGraph / Understand Anything warning-only artifacts.'
+        type: boolean
+        default: true
 
 defaults:
   run:
@@ -64,6 +81,7 @@ jobs:
   dr-snapshot:
     name: DR snapshot prod DB
     needs: runner-preflight
+    if: github.event_name != 'workflow_dispatch' || inputs.run_dr
     # self-hosted is mandatory because the DR job needs to read the local
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
     runs-on: [self-hosted, windows]
@@ -131,15 +149,16 @@ jobs:
         if: always()
         run: |
           if (Test-Path -LiteralPath "tmp/dr") {
-            Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File | ForEach-Object {
-              Write-Host $_.FullName
-              Get-Content -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-            }
+            $files = Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File
+            $count = ($files | Measure-Object).Count
+            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+            Write-Host "gate=metadata_captured artifact_dir=tmp/dr file_count=$count bytes=$bytes"
           }
 
   dr-validate:
     name: DR validation (dump validity + schema diff + retention)
     needs: dr-snapshot
+    if: github.event_name != 'workflow_dispatch' || inputs.run_dr
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
     defaults:
@@ -167,10 +186,10 @@ jobs:
         if: always()
         run: |
           if (Test-Path -LiteralPath "tmp/dr") {
-            Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File | ForEach-Object {
-              Write-Host $_.FullName
-              Get-Content -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-            }
+            $files = Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File
+            $count = ($files | Measure-Object).Count
+            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+            Write-Host "gate=dr_validate_evidence artifact_dir=tmp/dr file_count=$count bytes=$bytes"
           }
 
   nightly-l3:
@@ -180,7 +199,8 @@ jobs:
     # full-summary. Previously dr-snapshot and dr-validate ran in
     # parallel with nightly-l3, which let a failing snapshot still
     # produce green L3/live reports.
-    needs: dr-validate
+    needs: [runner-preflight, dr-validate]
+    if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3) && (needs.dr-validate.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_dr))
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     defaults:
@@ -236,13 +256,15 @@ jobs:
         if: always()
         run: |
           if (Test-Path -LiteralPath "tests/aistock_validation/history") {
-            Get-ChildItem -LiteralPath "tests/aistock_validation/history" -Recurse -File |
-              Select-Object -First 100 -ExpandProperty FullName
+            $files = Get-ChildItem -LiteralPath "tests/aistock_validation/history" -Recurse -File
+            $count = ($files | Measure-Object).Count
+            Write-Host "gate=validation_history_captured root=tests/aistock_validation/history file_count=$count manifest=omitted_on_success"
           }
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
     needs: nightly-l3
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live)
     runs-on: [self-hosted, windows]
     timeout-minutes: 60
     defaults:
@@ -269,14 +291,15 @@ jobs:
         if: always()
         run: |
           if (Test-Path -LiteralPath "tmp/paper_v2") {
-            Get-ChildItem -LiteralPath "tmp/paper_v2" -Recurse -File |
-              Select-Object -First 100 -ExpandProperty FullName
+            $files = Get-ChildItem -LiteralPath "tmp/paper_v2" -Recurse -File
+            $count = ($files | Measure-Object).Count
+            Write-Host "gate=paper_v2_live_evidence root=tmp/paper_v2 file_count=$count manifest=omitted_on_success"
           }
 
   code-intelligence-weekly:
     name: Code intelligence weekly graph summary
     needs: runner-preflight
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || inputs.run_code_intelligence
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
     defaults:
@@ -309,6 +332,14 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
+      - name: Build LLM triage quality smoke
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json triage-quality-smoke `
+            --provider github_models `
+            --output "$outDir/llm-triage-quality.json"
+
       - name: Build Understand Anything readiness summaries
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -324,8 +355,9 @@ jobs:
         if: always()
         run: |
           if (Test-Path -LiteralPath "tmp/validation/code-intelligence") {
-            Get-ChildItem -LiteralPath "tmp/validation/code-intelligence" -Recurse -File |
-              Select-Object -First 100 -ExpandProperty FullName
+            $files = Get-ChildItem -LiteralPath "tmp/validation/code-intelligence" -Recurse -File
+            $count = ($files | Measure-Object).Count
+            Write-Host "gate=code_intelligence_artifacts root=tmp/validation/code-intelligence file_count=$count manifest=omitted_on_success"
           }
 
       - name: Build code intelligence upload manifest
@@ -380,6 +412,10 @@ jobs:
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
           CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
+          RUN_DR_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_dr }}
+          RUN_L3_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3 }}
+          RUN_LIVE_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_paper_v2_live }}
+          RUN_CODE_INTELLIGENCE_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_code_intelligence }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -395,6 +431,10 @@ jobs:
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
           - code-intelligence-weekly: ${CODE_INTELLIGENCE_RESULT}
+          - run_dr_requested: ${RUN_DR_INPUT}
+          - run_nightly_l3_requested: ${RUN_L3_INPUT}
+          - run_paper_v2_live_requested: ${RUN_LIVE_INPUT}
+          - run_code_intelligence_requested: ${RUN_CODE_INTELLIGENCE_INPUT}
 
           Run: ${RUN_URL}
           EOF

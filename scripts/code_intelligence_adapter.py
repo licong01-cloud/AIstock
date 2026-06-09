@@ -1353,6 +1353,7 @@ def build_summary(
         skip_external=skip_external,
     )
     ua_status = understand_anything_status(root, skip_external=True)
+    freshness = latest_codegraph_freshness(root, live_status=context.get("status_check"))
     ua_summary: dict[str, Any] | None = None
     if module:
         ua_payload = build_understand_anything_summary(
@@ -1387,6 +1388,10 @@ def build_summary(
         "fallback_used": bool(context.get("fallback", {}).get("used") and affected.get("fallback", {}).get("used")),
         "graph_root": context.get("graph_root") or affected.get("graph_root"),
         "graph_root_source": context.get("graph_root_source") or affected.get("graph_root_source"),
+        "latest_freshness": (freshness.get("effective") or {}).get("freshness") if isinstance(freshness, dict) else None,
+        "latest_freshness_ref": ((freshness.get("effective") or {}).get("artifact_path") if isinstance(freshness, dict) else None),
+        "latest_freshness_source": freshness.get("effective_source") if isinstance(freshness, dict) else None,
+        "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
         "context": context,
         "affected_tests": affected,
         "understand_anything": ua_status,
@@ -1426,6 +1431,9 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
         f"- context_ref: `{payload.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{payload.get('affected_tests_ref') or 'not_generated'}`",
         f"- affected_tests_count: `{payload.get('affected_tests_count', 0)}`",
+        f"- latest_freshness: `{payload.get('latest_freshness') or 'not_available'}`",
+        f"- latest_freshness_ref: `{payload.get('latest_freshness_ref') or 'not_available'}`",
+        f"- consume_command: `{payload.get('consume_command') or 'python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale'}`",
         f"- changed_files: `{_inline(affected.get('changed_files') or context.get('changed_files'))}`",
         f"- understand_anything_status: `{ua.get('status') or 'unknown'}`",
         f"- understand_anything_summary_ref: `{payload.get('understand_anything_summary_ref') or 'not_generated'}`",

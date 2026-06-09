@@ -3424,6 +3424,9 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
         "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "latest_freshness": code_intelligence_summary.get("latest_freshness"),
+        "latest_freshness_ref": code_intelligence_summary.get("latest_freshness_ref"),
+        "consume_command": code_intelligence_summary.get("consume_command"),
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
@@ -3550,6 +3553,9 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- context_ref: `{code_intel.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
         f"- affected_tests_count: `{code_intel.get('affected_tests_count', 0)}`",
+        f"- latest_freshness: `{code_intel.get('latest_freshness') or 'not_available'}`",
+        f"- latest_freshness_ref: `{code_intel.get('latest_freshness_ref') or 'not_available'}`",
+        f"- consume_command: `{code_intel.get('consume_command') or 'python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale'}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
         f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
         f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
@@ -3982,11 +3988,13 @@ def build_workflow_smoke_plan(
     blocking: list[str] = []
     warnings: list[str] = []
     dirty_before = _git_status_paths(REPO_ROOT)
+    doctor_payload: dict[str, Any] | None = None
     fast_path: dict[str, Any] | None = None
     start: dict[str, Any] | None = None
     finish: dict[str, Any] | None = None
     postmortem_preview: dict[str, Any] | None = None
     try:
+        doctor_payload = build_doctor_report(skip_external=True)
         fast_path = build_fast_path_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -4055,6 +4063,9 @@ def build_workflow_smoke_plan(
         "dirty_paths_after": dirty_after,
         "new_dirty_paths": new_paths,
         "unexpected_dirty_paths": unexpected,
+        "client_manifest": (doctor_payload or {}).get("client_manifest"),
+        "restart_recommended": (doctor_payload or {}).get("restart_recommended"),
+        "h7_code_intelligence": (doctor_payload or {}).get("h7_code_intelligence"),
         "fast_path": fast_path,
         "start": start,
         "finish": finish,
@@ -4075,6 +4086,7 @@ def _smoke_nightly_status_payload() -> dict[str, Any]:
             "drValidate": "success",
             "nightlyL3": "failure",
             "paperV2Live": "skipped",
+            "codeIntelligence": "success",
         },
         "run_id": "999999999",
         "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
