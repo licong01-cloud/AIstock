@@ -89,6 +89,7 @@ const activePool = [
     episode_id: "episode_002",
     program_id: PROGRAM_ID,
     symbol: "000002.SZ",
+    stock_name: "万科A",
     status: "ACTIVE",
     signal_date: "2026-05-29",
     effective_entry_date: "2026-06-01",
@@ -106,6 +107,7 @@ const activePool = [
     episode_id: "episode_001",
     program_id: PROGRAM_ID,
     symbol: "000001.SZ",
+    stock_name: "平安银行",
     status: "ACTIVE",
     signal_date: "2026-05-28",
     effective_entry_date: "2026-05-29",
@@ -123,6 +125,7 @@ const activePool = [
     episode_id: "episode_003",
     program_id: PROGRAM_ID,
     symbol: "000003.SZ",
+    stock_name: "测试三号",
     status: "ACTIVE",
     signal_date: "2026-06-02",
     effective_entry_date: "2026-06-03",
@@ -140,6 +143,7 @@ const activePool = [
 
 const reviews = Array.from({ length: REVIEW_COUNT }, (_, index) => ({
   symbol: `000${String(index + 1).padStart(3, "0")}.SZ`,
+  stock_name: `复评股票${index + 1}`,
   action: index % 5 === 0 ? "EXIT" : "HOLD",
   reason_code: index % 5 === 0 ? "TAKE_PROFIT" : "KEEP_TOPK",
   review_status: "SUCCEEDED",
@@ -222,6 +226,7 @@ const listItems = [
     binding_version_id: activeBinding.binding_version_id,
     episode_id: "episode_001",
     symbol: "000001.SZ",
+    stock_name: "平安银行",
     item_state: "ACTIVE",
     action: "HOLD",
     previous_action: "ENTER",
@@ -246,6 +251,7 @@ const listItems = [
     binding_version_id: activeBinding.binding_version_id,
     episode_id: "episode_exit",
     symbol: "000099.SZ",
+    stock_name: "退出样本",
     item_state: "EXITED",
     action: "EXIT",
     previous_action: "HOLD",
@@ -313,6 +319,9 @@ function json(route: Route, data: unknown, status = 200) {
 }
 
 async function mockShellApis(page: Page) {
+  const watchlistCalls: string[] = [];
+  const watchlistBodies: JsonObject[] = [];
+  let watchlistCategories: JsonObject[] = [];
   await page.route("**/api/ingestion/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     return json(route, path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] });
@@ -330,6 +339,35 @@ async function mockShellApis(page: Page) {
     ok: true,
     packages: selectablePackages,
   }));
+  await page.route("**/api/v1/watchlist/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    watchlistCalls.push(`${method} ${path}`);
+    if (path.endsWith("/api/v1/watchlist/categories") && method === "GET") {
+      return json(route, watchlistCategories);
+    }
+    if (path.endsWith("/api/v1/watchlist/categories") && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      watchlistBodies.push(body);
+      const category = {
+        id: 700 + watchlistCategories.length,
+        name: String(body.name || ""),
+        description: body.description ?? null,
+      };
+      watchlistCategories = [...watchlistCategories, category];
+      return json(route, { id: category.id });
+    }
+    if (path.endsWith("/api/v1/watchlist/items/bulk-add") && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      watchlistBodies.push(body);
+      const codes = Array.isArray(body.codes) ? body.codes : [];
+      return json(route, { added: codes.length, skipped: 0, moved: 0 });
+    }
+    return json(route, { detail: `unexpected watchlist route: ${method} ${path}` }, 404);
+  });
+  return { watchlistCalls, watchlistBodies };
 }
 
 async function mockAdvisoryApis(page: Page) {
@@ -481,7 +519,8 @@ async function mockAdvisoryApis(page: Page) {
 }
 
 async function activeSymbols(page: Page) {
-  return page.getByTestId("advisory-active-cell-symbol").allTextContents();
+  const texts = await page.getByTestId("advisory-active-cell-symbol").allTextContents();
+  return texts.map((text) => text.match(/\d{6}\.(?:SZ|SH|BJ)/)?.[0] ?? text.trim());
 }
 
 test("Advisory page confirms enable, paginates reviews, sorts active pool, and hides raw payload editors", async ({ page }) => {
@@ -498,7 +537,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
     }
   });
 
-  await mockShellApis(page);
+  const shell = await mockShellApis(page);
   const { calls, reviewBodies } = await mockAdvisoryApis(page);
   await page.goto("/paper-v2/advisory");
 
@@ -515,7 +554,9 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("平安银行");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("000099.SZ");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("退出样本");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("EXIT");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("exit from list");
 
@@ -548,6 +589,18 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("exit from list");
   await expect(page.getByTestId("advisory-list-items-table")).not.toContainText("enter list");
+  await expect(page.getByTestId("advisory-watchlist-category-hint")).toContainText("codex_smoke_20260604 2026-06-05");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("自选股票池分类");
+    expect(dialog.message()).toContain("codex_smoke_20260604 2026-06-05");
+    await dialog.accept();
+  });
+  await page.getByTestId("advisory-add-final-watchlist").click();
+  await expect.poll(() => shell.watchlistCalls.filter((entry) => entry === "POST /api/v1/watchlist/items/bulk-add").length).toBe(1);
+  expect(shell.watchlistBodies.at(-1)).toMatchObject({
+    codes: ["000001.SZ"],
+    on_conflict: "ignore",
+  });
 
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
@@ -562,6 +615,8 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   for (const column of ACTIVE_SORT_COLUMNS) {
     await expect(page.getByTestId(`advisory-active-sort-${column}`)).toBeVisible();
   }
+  await expect(page.getByTestId("advisory-active-table")).toContainText("平安银行");
+  await expect(page.getByTestId("advisory-active-table")).toContainText("000001.SZ");
   await expect.poll(() => activeSymbols(page)).toEqual(["000002.SZ", "000001.SZ", "000003.SZ"]);
   await page.getByTestId("advisory-active-sort-symbol").click();
   await expect.poll(() => activeSymbols(page)).toEqual(["000001.SZ", "000002.SZ", "000003.SZ"]);

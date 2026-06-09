@@ -32,6 +32,11 @@ class FakeTradingCalendar:
         self.requests.append((start_date, end_date))
         return [day for day in self.trading_days if start_date <= day <= end_date]
 
+    def next_trading_day(self, anchor_date: date, *, inclusive: bool = False) -> date:
+        start = anchor_date if inclusive else anchor_date + timedelta(days=1)
+        eligible = [day for day in self.trading_days if day >= start]
+        return eligible[0] if eligible else start
+
 
 def _calendar_days(start_date: date, end_date: date) -> list[date]:
     current = start_date
@@ -110,6 +115,41 @@ def test_advisory_program_create_validates_single_fusion_version_and_clone() -> 
         service.create_program(program_name="bad", package_mode=PACKAGE_MODE_SINGLE, package_ids=["pkg_a", "pkg_b"])
     with pytest.raises(UnsupportedFeatureError):
         service.create_program(program_name="future", package_mode="sleeve_mode_future", package_ids=["pkg_a", "pkg_b"])
+
+
+def test_advisory_list_items_show_stock_name_and_effective_date_uses_candidate_data_day_next_trading_day() -> None:
+    trading_days = [date(2026, 6, 5), date(2026, 6, 8), date(2026, 6, 9)]
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar(trading_days),
+    )
+    program = _program(service, target_count=1)
+
+    result = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 8),
+        candidates=[
+            {
+                "symbol": "000001.SZ",
+                "stock_name": "平安银行",
+                "rank": 1,
+                "score": 0.9,
+                "reference_price": 10,
+                "next_open_executable": 10,
+                "selection_entry_price_time": "2026-06-05",
+            }
+        ],
+        preview=False,
+    )
+
+    assert result.active_pool[0].stock_name == "平安银行"
+    assert result.active_pool[0].effective_entry_date == date(2026, 6, 8)
+    assert result.list_items[0].stock_name == "平安银行"
+    assert result.list_items[0].effective_trade_date == date(2026, 6, 8)
+    detail = service.recommendation_list_version_detail(result.list_version_id or "")
+    assert detail["items"][0]["stock_name"] == "平安银行"
+    assert detail["items"][0]["symbol_name"] == "平安银行"
 
 
 def test_top20_review_merges_active_pool_hysteresis_and_budget() -> None:
@@ -228,7 +268,7 @@ def test_same_day_stop_loss_is_deferred_until_effective_t1_entry() -> None:
         trade_date=date(2026, 6, 1),
         candidates=[_candidate("000001.SZ", 1, 9.0)],
         market_by_symbol={"000001.SZ": {"next_open_executable": 9.0}},
-        preview=False,
+        preview=True,
     )
 
     episode = result.active_pool[0]

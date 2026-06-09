@@ -58,6 +58,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
             "candidates": [
                 {
                     "symbol": "000001.SZ",
+                    "stock_name": "平安银行",
                     "rank": 1,
                     "score": 0.9,
                     "next_open_executable": 10,
@@ -75,11 +76,13 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     payload = review.json()["review"]
     assert payload["review_status"] == "SUCCEEDED"
     assert payload["active_pool"][0]["symbol"] == "000001.SZ"
+    assert payload["active_pool"][0]["stock_name"] == "平安银行"
     assert payload["binding_version_id"] == bindings.json()["bindings"][0]["binding_version_id"]
     assert payload["review_run_id"].startswith("advrun_")
     assert payload["list_version_id"].startswith("advlv_")
     assert payload["change_summary"]["entered_count"] == 1
     assert payload["list_items"][0]["action"] == "ENTER"
+    assert payload["list_items"][0]["stock_name"] == "平安银行"
     assert payload["list_items"][0]["operation_advice_json"]["advice_type"] == "ENTER"
 
     second_review = client.post(
@@ -89,6 +92,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
             "candidates": [
                 {
                     "symbol": "000001.SZ",
+                    "stock_name": "平安银行",
                     "rank": 1,
                     "score": 0.8,
                     "next_open_executable": 11,
@@ -113,6 +117,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     assert detail.status_code == 200
     assert detail.json()["list_version"]["list_version_id"] == payload["list_version_id"]
     assert detail.json()["items"][0]["symbol"] == "000001.SZ"
+    assert detail.json()["items"][0]["stock_name"] == "平安银行"
 
     review_page = client.get(f"/api/v1/advisory/programs/{program['program_id']}/reviews?limit=1&offset=1")
     assert review_page.status_code == 200
@@ -121,6 +126,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     assert review_page_payload["limit"] == 1
     assert review_page_payload["offset"] == 1
     assert [row["trade_date"] for row in review_page_payload["reviews"]] == ["2026-06-01"]
+    assert review_page_payload["reviews"][0]["stock_name"] == "平安银行"
 
     board = client.get("/api/v1/advisory/leaderboard")
     assert board.status_code == 200
