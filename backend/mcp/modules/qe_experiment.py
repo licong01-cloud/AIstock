@@ -17,6 +17,7 @@ QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
 QE_CUSTOM_EVO_DELETE_CONFIRM = "QE_CUSTOM_EVO_DELETE"
 QE_TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
 QE_TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
+QE_TEMPLATE_CREATE_AND_RUN_CONFIRM = "QE_TEMPLATE_CREATE_AND_RUN"
 
 TOOL_NAMES = (
     "qe_experiment_list",
@@ -46,6 +47,7 @@ TOOL_NAMES = (
     "qe_template_materialize_confirmed",
     "qe_template_delete_confirmed",
     "qe_template_run_confirmed",
+    "qe_template_create_and_run_confirmed",
 )
 TOOL_COUNT = len(TOOL_NAMES)
 
@@ -291,5 +293,37 @@ def register(registry: "ModuleRegistry") -> None:
         if confirm_run not in {QE_EXPERIMENT_RUN_CONFIRM, QE_CUSTOM_EVO_RUN_CONFIRM}:
             raise ValueError("confirm_run must equal QE_EXPERIMENT_RUN or QE_CUSTOM_EVO_RUN")
         return client.post(f"/qe-templates/{safe}/run", {"confirm_run": confirm_run, "node_id": safe_node})
+
+    @registry.mcp.tool(name="qe_template_create_and_run_confirmed")
+    def qe_template_create_and_run_confirmed(
+        template_kind: str,
+        title: str,
+        config_json: dict[str, Any],
+        confirm_direct_run: str | None = None,
+        archive_policy: str = "AUTO",
+        description: str | None = None,
+        node_id: str | None = None,
+        force_full_train: bool = False,
+        approved_by: str = "mcp_gateway",
+        approval_note: str | None = None,
+    ) -> Any:
+        registry.confirm(confirm_direct_run, QE_TEMPLATE_CREATE_AND_RUN_CONFIRM, "confirm_direct_run")
+        normalized_config = _normalize_template_config(template_kind, config_json or {})
+        safe_node = registry.sanitize(node_id, "node_id") if node_id else None
+        return client.post(
+            "/qe-templates/create-and-run",
+            {
+                "template_kind": template_kind,
+                "title": title,
+                "description": description,
+                "config_json": normalized_config,
+                "archive_policy": archive_policy,
+                "confirm_direct_run": QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+                "node_id": safe_node,
+                "force_full_train": force_full_train,
+                "approved_by": approved_by,
+                "approval_note": approval_note,
+            },
+        )
 
     registry.register_tool_count("qe_experiment", TOOL_COUNT)

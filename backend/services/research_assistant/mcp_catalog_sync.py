@@ -114,6 +114,7 @@ REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
     "qe_template_validate": ["template_id"],
     "qe_template_materialize_confirmed": ["template_id", "confirm_template"],
     "qe_template_run_confirmed": ["template_id", "confirm_run"],
+    "qe_template_create_and_run_confirmed": ["template_kind", "title", "config_json", "confirm_direct_run"],
     "local_data_get_dataset_status": ["dataset"],
     "local_data_apply_repair_confirmed": ["plan_id", "confirmation_text"],
 }
@@ -124,6 +125,7 @@ PREFLIGHT_CHECKS_BY_TOOL: dict[str, list[str]] = {
     "qe_template_validate": ["template_exists", "schema", "diff_summary"],
     "qe_template_materialize_confirmed": ["stock_pool", "node_health", "cost", "approval"],
     "qe_template_run_confirmed": ["materialized_template", "cost_guard", "node_health", "approval"],
+    "qe_template_create_and_run_confirmed": ["schema", "fixed_seed", "approval", "cost_guard", "node_health"],
     "local_data_apply_repair_confirmed": ["confirmation_text", "plan_id", "facade", "approval"],
 }
 
@@ -133,6 +135,7 @@ CONFIRMATIONS_BY_TOOL = {
     "qe_template_validate": ["CONFIRM_QE_VALIDATE"],
     "qe_template_materialize_confirmed": ["CONFIRM_QE_MATERIALIZE", "MATERIALIZE_QE_TEMPLATE"],
     "qe_template_run_confirmed": ["CONFIRM_QE_RUN", "QE_EXPERIMENT_RUN"],
+    "qe_template_create_and_run_confirmed": ["QE_TEMPLATE_CREATE_AND_RUN"],
     "factor_library_register_confirmed": ["REGISTER_FACTOR"],
     "factor_library_deprecate_confirmed": ["DEPRECATE_FACTOR"],
     "factor_metrics_submit_confirmed": ["SUBMIT_FACTOR_METRICS"],

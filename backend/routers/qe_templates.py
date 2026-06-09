@@ -20,6 +20,7 @@ TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
 TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
+QE_TEMPLATE_CREATE_AND_RUN_CONFIRM = "QE_TEMPLATE_CREATE_AND_RUN"
 
 EDITABLE_TEMPLATE_STATUSES = {"draft", "ready_for_review", "approved"}
 CONFIG_MUTATION_FIELDS = {"config_json", "archive_policy", "archive_reason", "data_versions_json"}
@@ -108,8 +109,71 @@ class QETemplateRunRequest(BaseModel):
     force_full_train: bool = False
 
 
+class QETemplateCreateAndRunRequest(QETemplateCreateRequest):
+    confirm_direct_run: str = ""
+    node_id: str | None = None
+    force_full_train: bool = False
+    approved_by: str = "mcp_gateway"
+    approval_note: str | None = None
+
+
 def _repo() -> QETemplateRepository:
     return QETemplateRepository()
+
+
+def _approve_template_row(
+    repo: QETemplateRepository,
+    template_id: str,
+    existing: dict[str, Any],
+    *,
+    approved_by: str,
+    approval_note: str | None,
+    review_channel: str,
+) -> dict[str, Any]:
+    validation = validate_template_payload(str(existing.get("template_kind")), existing.get("config_json") or {})
+    if not validation["valid"]:
+        raise ValueError("template validation failed: " + "; ".join(validation["errors"]))
+    approval = {
+        "approved_by": approved_by,
+        "approval_note": approval_note,
+        "approved_at": _utc_now_iso(),
+        "review_channel": review_channel,
+    }
+    return repo.update(template_id, {"status": "approved", "validation_json": validation, "approval_json": approval})
+
+
+async def _run_materialized_qe_template(
+    template_id: str,
+    request: QETemplateRunRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    row = _repo().get(template_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
+    if row.get("template_kind") == "single_experiment":
+        if request.confirm_run != QE_EXPERIMENT_RUN_CONFIRM:
+            raise HTTPException(status_code=400, detail=f"confirm_run must equal {QE_EXPERIMENT_RUN_CONFIRM}")
+        experiment_id = row.get("submitted_experiment_id")
+        if not experiment_id:
+            raise HTTPException(status_code=400, detail="template must be materialized before run")
+        _repo().update(template_id, {"status": "run_requested"})
+        result = await quantevolver.run_experiment(str(experiment_id), engine_mode="unified", node_id=request.node_id)
+        return {"template_id": template_id, "run_result": result}
+    if request.confirm_run != QE_CUSTOM_EVO_RUN_CONFIRM:
+        raise HTTPException(status_code=400, detail=f"confirm_run must equal {QE_CUSTOM_EVO_RUN_CONFIRM}")
+    task_id = row.get("submitted_task_id")
+    if not task_id:
+        raise HTTPException(status_code=400, detail="template must be materialized before run")
+    _repo().update(template_id, {"status": "run_requested"})
+    result = await quantevolver_evolution.run_custom_evo_task(
+        str(task_id),
+        quantevolver_evolution.CustomEvoRunRequest(
+            confirm_custom_evo=QE_CUSTOM_EVO_RUN_CONFIRM,
+            force_full_train=request.force_full_train,
+        ),
+        background_tasks,
+    )
+    return {"template_id": template_id, "run_result": result}
 
 
 @router.get("")
@@ -189,11 +253,14 @@ def approve_qe_template(template_id: str, request: QETemplateApprovalRequest):
         existing = repo.get(template_id)
         if not existing:
             raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
-        validation = validate_template_payload(str(existing.get("template_kind")), existing.get("config_json") or {})
-        if not validation["valid"]:
-            raise ValueError("template validation failed: " + "; ".join(validation["errors"]))
-        approval = {**request.model_dump(), "approved_at": _utc_now_iso(), "review_channel": "ui_or_api"}
-        row = repo.update(template_id, {"status": "approved", "validation_json": validation, "approval_json": approval})
+        row = _approve_template_row(
+            repo,
+            template_id,
+            existing,
+            approved_by=request.approved_by,
+            approval_note=request.approval_note,
+            review_channel="ui_or_api",
+        )
         return {"status": "success", "data": row}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -211,33 +278,61 @@ async def materialize_qe_template(template_id: str, request: QETemplateMateriali
 
 @router.post("/{template_id}/run")
 async def run_qe_template(template_id: str, request: QETemplateRunRequest, background_tasks: BackgroundTasks):
-    row = _repo().get(template_id)
-    if not row:
-        raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
-    if row.get("template_kind") == "single_experiment":
-        if request.confirm_run != QE_EXPERIMENT_RUN_CONFIRM:
-            raise HTTPException(status_code=400, detail=f"confirm_run must equal {QE_EXPERIMENT_RUN_CONFIRM}")
-        experiment_id = row.get("submitted_experiment_id")
-        if not experiment_id:
-            raise HTTPException(status_code=400, detail="template must be materialized before run")
-        _repo().update(template_id, {"status": "run_requested"})
-        result = await quantevolver.run_experiment(str(experiment_id), engine_mode="unified", node_id=request.node_id)
-        return {"status": "success", "data": {"template_id": template_id, "run_result": result}}
-    if request.confirm_run != QE_CUSTOM_EVO_RUN_CONFIRM:
-        raise HTTPException(status_code=400, detail=f"confirm_run must equal {QE_CUSTOM_EVO_RUN_CONFIRM}")
-    task_id = row.get("submitted_task_id")
-    if not task_id:
-        raise HTTPException(status_code=400, detail="template must be materialized before run")
-    _repo().update(template_id, {"status": "run_requested"})
-    result = await quantevolver_evolution.run_custom_evo_task(
-        str(task_id),
-        quantevolver_evolution.CustomEvoRunRequest(
-            confirm_custom_evo=QE_CUSTOM_EVO_RUN_CONFIRM,
-            force_full_train=request.force_full_train,
-        ),
-        background_tasks,
-    )
-    return {"status": "success", "data": {"template_id": template_id, "run_result": result}}
+    return {"status": "success", "data": await _run_materialized_qe_template(template_id, request, background_tasks)}
+
+
+@router.post("/create-and-run")
+async def create_and_run_qe_template(request: QETemplateCreateAndRunRequest, background_tasks: BackgroundTasks):
+    if request.confirm_direct_run != QE_TEMPLATE_CREATE_AND_RUN_CONFIRM:
+        raise HTTPException(status_code=400, detail=f"confirm_direct_run must equal {QE_TEMPLATE_CREATE_AND_RUN_CONFIRM}")
+    try:
+        repo = _repo()
+        payload = request.model_dump(
+            exclude={
+                "confirm_direct_run",
+                "node_id",
+                "force_full_train",
+                "approved_by",
+                "approval_note",
+            }
+        )
+        payload["config_json"] = normalize_template_config(request.template_kind, request.config_json)
+        if request.template_kind == "custom_evo" and request.node_id and not payload["config_json"].get("node_id"):
+            payload["config_json"]["node_id"] = request.node_id
+        validation = validate_template_payload(request.template_kind, payload["config_json"])
+        if not validation["valid"]:
+            raise ValueError("template validation failed: " + "; ".join(validation["errors"]))
+        created = repo.create(QETemplateRecord(**payload))
+        approved = _approve_template_row(
+            repo,
+            str(created["template_id"]),
+            created,
+            approved_by=request.approved_by,
+            approval_note=request.approval_note,
+            review_channel="mcp_gateway_direct_run",
+        )
+        materialized = await QETemplateMaterializer().materialize(str(created["template_id"]))
+        confirm_run = QE_EXPERIMENT_RUN_CONFIRM if request.template_kind == "single_experiment" else QE_CUSTOM_EVO_RUN_CONFIRM
+        run_result = await _run_materialized_qe_template(
+            str(created["template_id"]),
+            QETemplateRunRequest(
+                confirm_run=confirm_run,
+                node_id=request.node_id,
+                force_full_train=request.force_full_train,
+            ),
+            background_tasks,
+        )
+        return {
+            "status": "success",
+            "data": {
+                "template": approved,
+                "materialized": materialized,
+                "run": run_result,
+                "direct_run": True,
+            },
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{template_id}/supersede")
