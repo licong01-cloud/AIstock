@@ -886,6 +886,8 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "llm-triage-quality.json" in code_steps
     assert "test-plan-advice" in code_steps
     assert "llm-test-plan-advice.json" in code_steps
+    assert "nightly-scheduler-advice" in code_steps
+    assert "llm-nightly-scheduler-advice.json" in code_steps
     summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run

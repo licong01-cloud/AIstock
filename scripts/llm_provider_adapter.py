@@ -38,10 +38,12 @@ GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY = "deepseek-r1"
 GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
 TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
 TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
+NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_advice_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
+CODEGRAPH_FRESHNESS_VALUES = {"fresh", "stale", "missing", "unknown"}
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
@@ -348,6 +350,88 @@ def _default_advised_plan_keys(changed_files: list[str], module: str | None) -> 
     return keys or ["l0"]
 
 
+def _priority_rank(priority: str) -> int:
+    return {"high": 0, "medium": 1, "low": 2, "baseline": 3}.get(priority, 9)
+
+
+def _append_unique(items: list[dict[str, str]], plan_key: str, *, priority: str, reason: str) -> None:
+    if any(item["plan_key"] == plan_key for item in items):
+        return
+    items.append({"plan_key": plan_key, "priority": priority, "reason": reason})
+
+
+def _module_scheduler_plan_intents(module: str) -> list[dict[str, str]]:
+    module_key = module.strip().lower()
+    items: list[dict[str, str]] = []
+    if not module_key:
+        return items
+    if "qe" in module_key and ("ui" in module_key or "archive" in module_key or "l3" in module_key):
+        _append_unique(items, "qe_archive_l3", priority="high", reason=f"recent failure module={module}")
+        _append_unique(items, "qe_archive_backend", priority="high", reason=f"safe runner fallback for module={module}")
+        return items
+    if "qe" in module_key:
+        _append_unique(items, "qe_mcp_backend", priority="high", reason=f"recent failure module={module}")
+        _append_unique(items, "qe_archive_backend", priority="medium", reason=f"QE archive contract coverage for module={module}")
+        return items
+    if "paper" in module_key or "watchlist" in module_key or "simulation" in module_key:
+        _append_unique(items, "paper_v2_l3", priority="high", reason=f"recent failure module={module}")
+        _append_unique(items, "simulation_core_l2", priority="high", reason=f"safe runner fallback for module={module}")
+        return items
+    if "research_assistant" in module_key or module_key.startswith("ra"):
+        _append_unique(items, "research_assistant_backend", priority="high", reason=f"recent failure module={module}")
+        return items
+    if "validation" in module_key or "workflow" in module_key or "runner" in module_key:
+        _append_unique(items, "validation_catalog_integrity", priority="high", reason=f"recent failure module={module}")
+        _append_unique(items, "validation_center_backend", priority="medium", reason=f"validation backend coverage for module={module}")
+        return items
+    if "data" in module_key:
+        _append_unique(items, "data_quality_deep", priority="high", reason=f"recent failure module={module}")
+        return items
+    _append_unique(items, "l0", priority="medium", reason=f"generic recent failure module={module}")
+    return items
+
+
+def _changed_file_scheduler_plan_intents(changed_files: list[str]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    default_keys = _default_advised_plan_keys(changed_files, module=None) if changed_files else []
+    for plan_key in default_keys:
+        _append_unique(items, plan_key, priority="medium", reason="changed file validation selector")
+    lowered = [path.replace("\\", "/").lower() for path in changed_files]
+    if any(path.startswith("frontend/src/app/quantevolver") or "/qe" in path for path in lowered):
+        _append_unique(items, "qe_archive_backend", priority="medium", reason="QE UI/archive changed file")
+    if any(path.startswith("scripts/") or path.startswith(".github/workflows/") for path in lowered):
+        _append_unique(items, "validation_catalog_integrity", priority="medium", reason="workflow/script changed file")
+    if any(path.startswith("backend/") and "validation" in path for path in lowered):
+        _append_unique(items, "validation_center_backend", priority="medium", reason="validation backend changed file")
+    return items
+
+
+def _nightly_scheduler_intents(
+    *,
+    changed_files: list[str],
+    recent_failure_modules: list[str],
+    recent_failure_plan_keys: list[str],
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for plan_key in recent_failure_plan_keys:
+        _append_unique(items, plan_key, priority="high", reason="recent failure plan key")
+    for module in recent_failure_modules:
+        for item in _module_scheduler_plan_intents(module):
+            _append_unique(items, item["plan_key"], priority=item["priority"], reason=item["reason"])
+    for item in _changed_file_scheduler_plan_intents(changed_files):
+        _append_unique(items, item["plan_key"], priority=item["priority"], reason=item["reason"])
+    if not items:
+        _append_unique(items, "l0", priority="baseline", reason="fixed nightly baseline")
+    return sorted(items, key=lambda item: (_priority_rank(item["priority"]), item["plan_key"]))
+
+
+def _nightly_deferred_reason(gate_result: dict[str, Any], *, over_budget: bool) -> str | None:
+    reasons = list(gate_result.get("rejection_reasons") or [])
+    if over_budget:
+        reasons.append("resource_budget_exceeded")
+    return ",".join(reasons) if reasons else None
+
+
 def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, Any]:
     if provider == "github_models":
         selector = config["providers"]["github_models"]["model_selector"]
@@ -457,6 +541,151 @@ def validate_test_plan_advice(advice: dict[str, Any]) -> None:
         raise ProviderAdapterError("test plan advice missing deterministic_gate")
     if advice["deterministic_gate"].get("shell_commands_allowed") is not False:
         raise ProviderAdapterError("test plan advice must keep shell command execution disabled")
+
+
+def build_nightly_scheduler_advice(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    changed_files: list[str] | None = None,
+    recent_failure_modules: list[str] | None = None,
+    recent_failure_plan_keys: list[str] | None = None,
+    codegraph_freshness: str = "unknown",
+    resource_budget_seconds: int | None = None,
+    workspace_path: str | None = None,
+    root: Path = ROOT,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic nightly queue without scheduling production actions."""
+
+    validate_config(config)
+    provider_summary = _provider_model_summary(config, provider)
+    changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
+    recent_failure_modules = [str(item) for item in recent_failure_modules or [] if str(item).strip()]
+    recent_failure_plan_keys = [str(item) for item in recent_failure_plan_keys or [] if str(item).strip()]
+    freshness = codegraph_freshness if codegraph_freshness in CODEGRAPH_FRESHNESS_VALUES else "unknown"
+    budget = int(resource_budget_seconds) if resource_budget_seconds is not None else 900
+    budget = max(0, budget)
+    intents = _nightly_scheduler_intents(
+        changed_files=changed_files,
+        recent_failure_modules=recent_failure_modules,
+        recent_failure_plan_keys=recent_failure_plan_keys,
+    )
+    plan_keys = [item["plan_key"] for item in intents]
+    plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path)
+    workspace = _workspace_gate(workspace_path, root=root)
+    test_plan_advice = build_test_plan_advice(
+        provider,
+        config,
+        plan_keys=plan_keys,
+        changed_files=[],
+        module=None,
+        workspace_path=workspace_path,
+        root=root,
+        catalog_path=catalog_path,
+    )
+    advice_by_key = {item["plan_key"]: item for item in test_plan_advice["test_plan_advice"]}
+    queue: list[dict[str, Any]] = []
+    elapsed_budget = 0
+    for intent in intents:
+        plan_key = intent["plan_key"]
+        plan = plans_by_key.get(plan_key) or {}
+        duration = int(plan.get("max_duration_seconds") or 300)
+        gate_result = advice_by_key.get(plan_key) or _plan_gate(plan_key, None)
+        over_budget = elapsed_budget + duration > budget and intent["priority"] != "baseline"
+        allowed = bool(gate_result.get("allowed")) and workspace["allowed"] and not over_budget
+        if allowed:
+            elapsed_budget += duration
+        queue.append(
+            {
+                "plan_key": plan_key,
+                "priority": intent["priority"],
+                "reason": intent["reason"],
+                "budget_seconds": duration,
+                "allowed": allowed,
+                "deferred_reason": _nightly_deferred_reason(gate_result, over_budget=over_budget),
+                "module": plan.get("module"),
+                "level": plan.get("level"),
+                "runner_enabled": bool(plan.get("runner_enabled")),
+            }
+        )
+    codegraph_warning = freshness in {"missing", "stale", "unknown"}
+    allowed_count = len([item for item in queue if item["allowed"]])
+    blocked_by_gate = any(item["deferred_reason"] and "resource_budget_exceeded" not in item["deferred_reason"] for item in queue)
+    workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning else "ready")
+    advice = {
+        "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
+        "provider": provider_summary["provider"],
+        "model": provider_summary["model"],
+        "changed_files": changed_files,
+        "recent_failures": {
+            "modules": recent_failure_modules,
+            "plan_keys": recent_failure_plan_keys,
+        },
+        "codegraph": {
+            "freshness": freshness,
+            "warning_only": codegraph_warning,
+            "warning": "codegraph_freshness_not_fresh" if codegraph_warning else None,
+        },
+        "resource_budget_seconds": budget,
+        "queue": queue,
+        "test_plan_advice_gate": {
+            "workflow_gate": test_plan_advice["deterministic_gate"]["workflow_gate"],
+            "shell_commands_allowed": test_plan_advice["deterministic_gate"]["shell_commands_allowed"],
+            "llm_invoked": test_plan_advice["llm_invocation_evidence"]["invoked"],
+        },
+        "workspace_gate": workspace,
+        "llm_invocation_evidence": {
+            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
+            "provider": provider_summary["provider"],
+            "model": provider_summary["model"],
+            "invoked": False,
+            "reason": "nightly_scheduler_dry_run_no_network",
+            "credential_source": provider_summary["credential_source"],
+            "input_policy": "changed_files_recent_failures_codegraph_freshness_catalog_only",
+            "redaction_applied": True,
+        },
+        "deterministic_gate": {
+            "workflow_gate": workflow_gate,
+            "schema_valid": True,
+            "queue_only_plan_keys": True,
+            "allowed_plan_count": allowed_count,
+            "deferred_plan_count": len(queue) - allowed_count,
+            "workspace_path_allowed": workspace["allowed"],
+            "resource_budget_enforced": True,
+            "codegraph_warning_only": codegraph_warning,
+            "shell_commands_allowed": False,
+            "production_actions_allowed": False,
+            "production_gates": {
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            },
+        },
+    }
+    validate_nightly_scheduler_advice(advice)
+    return advice
+
+
+def validate_nightly_scheduler_advice(advice: dict[str, Any]) -> None:
+    if advice.get("schema_version") != NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION:
+        raise ProviderAdapterError("nightly scheduler advice schema_version invalid")
+    if not isinstance(advice.get("queue"), list):
+        raise ProviderAdapterError("nightly scheduler advice missing queue")
+    if not _no_shell_commands(advice):
+        raise ProviderAdapterError("nightly scheduler advice must not contain shell command fields")
+    for item in advice["queue"]:
+        if not isinstance(item, dict) or not item.get("plan_key"):
+            raise ProviderAdapterError("nightly scheduler queue entries must contain plan_key")
+        if item.get("allowed") and item.get("deferred_reason"):
+            raise ProviderAdapterError("allowed nightly queue item cannot include deferred_reason")
+    gate = advice.get("deterministic_gate")
+    if not isinstance(gate, dict):
+        raise ProviderAdapterError("nightly scheduler advice missing deterministic_gate")
+    if gate.get("shell_commands_allowed") is not False:
+        raise ProviderAdapterError("nightly scheduler must keep shell command execution disabled")
+    if gate.get("production_actions_allowed") is not False:
+        raise ProviderAdapterError("nightly scheduler must not allow production actions")
 
 
 def build_triage_quality_smoke(provider: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -668,6 +897,39 @@ def cmd_test_plan_advice(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    provider = args.provider or str(config.get("default_provider") or "deterministic")
+    advice = build_nightly_scheduler_advice(
+        provider,
+        config,
+        changed_files=_split_csv(args.changed_file),
+        recent_failure_modules=_split_csv(args.recent_failure_module),
+        recent_failure_plan_keys=_split_csv(args.recent_failure_plan_key),
+        codegraph_freshness=args.codegraph_freshness,
+        resource_budget_seconds=args.resource_budget_seconds,
+        workspace_path=args.workspace_path,
+    )
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    gate = advice["deterministic_gate"]
+    compact = {
+        "provider": advice["provider"],
+        "model": advice["model"],
+        "schema_version": advice["schema_version"],
+        "workflow_gate": gate["workflow_gate"],
+        "queue_count": len(advice["queue"]),
+        "allowed_plan_count": gate["allowed_plan_count"],
+        "deferred_plan_count": gate["deferred_plan_count"],
+        "codegraph_warning": advice["codegraph"]["warning"],
+        "llm_invoked": advice["llm_invocation_evidence"]["invoked"],
+        "artifact": args.output,
+    }
+    _print_success("nightly-scheduler-advice", compact, as_json=args.json)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock validation LLM provider adapter")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
@@ -704,6 +966,28 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--workspace-path", default=None)
     plan.add_argument("--output", default=None, help="Optional ignored artifact path for full test-plan advice JSON.")
     plan.set_defaults(func=cmd_test_plan_advice)
+
+    scheduler = subparsers.add_parser("nightly-scheduler-advice")
+    scheduler.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit compact JSON output")
+    scheduler.add_argument("--provider", choices=["deterministic", "github_models", "deepseek_api"], default=None)
+    scheduler.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
+    scheduler.add_argument(
+        "--recent-failure-module",
+        action="append",
+        default=None,
+        help="Recent failed module; may be repeated or comma-separated.",
+    )
+    scheduler.add_argument(
+        "--recent-failure-plan-key",
+        action="append",
+        default=None,
+        help="Recent failed plan_key; may be repeated or comma-separated.",
+    )
+    scheduler.add_argument("--codegraph-freshness", choices=sorted(CODEGRAPH_FRESHNESS_VALUES), default="unknown")
+    scheduler.add_argument("--resource-budget-seconds", type=int, default=900)
+    scheduler.add_argument("--workspace-path", default=None)
+    scheduler.add_argument("--output", default=None, help="Optional ignored artifact path for full scheduler advice JSON.")
+    scheduler.set_defaults(func=cmd_nightly_scheduler_advice)
     return parser
 
 
