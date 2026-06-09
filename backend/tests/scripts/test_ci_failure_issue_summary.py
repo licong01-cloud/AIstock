@@ -185,6 +185,8 @@ def test_github_issue_payload_contains_dedupe_marker_and_labels() -> None:
     assert "Latest run" in issue_payload["recurrence_comment"]
     assert payload["llm_guarded_rollout_gate"]["workflow_gate"] == "warning"
     assert payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
+    assert issue_payload["llm_enhancement"]["allowed"] is False
+    assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
     assert "## LLM Guarded Rollout" in issue_payload["body"]
 
 
@@ -214,6 +216,85 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_payload["dedupe"]["fingerprint"].startswith("ci-")
     assert "aistock-ci-failure-fingerprint" in issue_payload["body"]
+
+
+def test_cli_llm_kill_switch_still_writes_deterministic_issue_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log_path = tmp_path / "job.log"
+    issue_payload_path = tmp_path / "issue-payload.json"
+    log_path.write_text(CI_LOG, encoding="utf-8")
+
+    assert summary.main(
+        [
+            "--log-file",
+            str(log_path),
+            "--job-name",
+            "Backend tests (paper_v2_backend)",
+            "--source-name",
+            "AIstock CI",
+            "--run-id",
+            "26378872481",
+            "--branch",
+            "main",
+            "--commit",
+            "62dc1b12",
+            "--llm-triage-mode",
+            "off",
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "off"
+    assert stdout_payload["artifacts"]["github_issue_payload"] == str(issue_payload_path)
+    assert issue_payload["llm_enhancement"]["allowed"] is False
+    assert issue_payload["llm_enhancement"]["fallback"] == "deterministic_issue_workflow"
+    assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
+    assert "## Failure Summary" in issue_payload["body"]
+
+
+def test_cli_opt_in_rollout_allows_llm_issue_enhancement(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log_path = tmp_path / "job.log"
+    issue_payload_path = tmp_path / "issue-payload.json"
+    log_path.write_text(CI_LOG, encoding="utf-8")
+
+    assert summary.main(
+        [
+            "--log-file",
+            str(log_path),
+            "--job-name",
+            "Backend tests (paper_v2_backend)",
+            "--source-name",
+            "AIstock CI",
+            "--run-id",
+            "26378872481",
+            "--branch",
+            "main",
+            "--commit",
+            "62dc1b12",
+            "--llm-triage-mode",
+            "opt_in_auto_file",
+            "--llm-auto-file-opt-in",
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "ready"
+    assert stdout_payload["llm_guarded_rollout"]["auto_file_allowed"] is True
+    assert issue_payload["llm_enhancement"]["allowed"] is True
+    assert issue_payload["llm_enhancement"]["mode"] == "opt_in_auto_file"
 
 
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -846,6 +927,10 @@ def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None
     build_step = workflow["jobs"]["file-p0-p1-issue"]["steps"][1]["run"]
 
     assert "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json" in build_step
+    assert "INPUT_LLM_TRIAGE_MODE" in build_step
+    assert "INPUT_LLM_AUTO_FILE_OPT_IN" in build_step
+    assert 'LLM_ARGS=(--llm-triage-mode "${INPUT_LLM_TRIAGE_MODE}")' in build_step
+    assert '"${LLM_ARGS[@]}"' in build_step
     assert "--wait-for-completion" in build_step
     assert "--wait-attempts 2" in build_step
     assert "--log-attempts 3" in build_step
@@ -881,6 +966,8 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert dispatch_inputs["run_nightly_l3"]["default"] is True
     assert dispatch_inputs["run_paper_v2_live"]["default"] is False
     assert dispatch_inputs["run_code_intelligence"]["default"] is True
+    assert dispatch_inputs["llm_triage_mode"]["default"] == "warning_only"
+    assert dispatch_inputs["llm_auto_file_opt_in"]["default"] is False
     assert "inputs.run_dr" in workflow["jobs"]["dr-snapshot"]["if"]
     assert "inputs.run_dr" in workflow["jobs"]["dr-validate"]["if"]
     assert "inputs.run_nightly_l3" in workflow["jobs"]["nightly-l3"]["if"]
@@ -901,6 +988,10 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run
+    failure_run = workflow["jobs"]["full-summary"]["steps"][2]["run"]
+    assert "LLM_TRIAGE_MODE" in workflow["jobs"]["full-summary"]["steps"][2]["env"]
+    assert 'LLM_ARGS=(--llm-triage-mode "${LLM_TRIAGE_MODE}")' in failure_run
+    assert '"${LLM_ARGS[@]}"' in failure_run
 
 
 def test_nightly_workflow_success_manifests_are_compact() -> None:
