@@ -363,6 +363,33 @@ jobs:
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
 
+      - name: Build Nightly adaptive scheduler warning report
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $changedFile = "$outDir/nightly-changed-files.txt"
+          $changedFiles = @()
+          try {
+            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $changedFiles = @()
+              $global:LASTEXITCODE = 0
+            }
+          } catch {
+            $changedFiles = @()
+          }
+          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+            --provider github_models `
+            --changed-files-file $changedFile `
+            --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --resource-budget-seconds 900 `
+            --output "$outDir/llm-nightly-adaptive-scheduler.json" `
+            --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+          if (Test-Path -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md") {
+            Get-Content -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md"
+          }
+
       - name: Build LLM prompt evaluation smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"

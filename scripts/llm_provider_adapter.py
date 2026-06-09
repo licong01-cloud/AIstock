@@ -482,6 +482,32 @@ def _nightly_deferred_reason(gate_result: dict[str, Any], *, over_budget: bool) 
     return ",".join(reasons) if reasons else None
 
 
+def _nightly_deferred_reasons(item: dict[str, Any]) -> set[str]:
+    return {
+        reason.strip()
+        for reason in str(item.get("deferred_reason") or "").split(",")
+        if reason.strip()
+    }
+
+
+def _nightly_deferred_is_hard_block(item: dict[str, Any]) -> bool:
+    reasons = _nightly_deferred_reasons(item)
+    hard_reasons = {
+        "unknown_plan_key",
+        "plan_disabled",
+        "writes_business_state",
+        "requires_confirmation",
+        "forbidden_backend_or_market_data_port",
+        "forbidden_frontend_port",
+    }
+    return bool(reasons & hard_reasons)
+
+
+def _nightly_deferred_is_warning(item: dict[str, Any]) -> bool:
+    reasons = _nightly_deferred_reasons(item)
+    return bool(reasons) and reasons != {"resource_budget_exceeded"} and not _nightly_deferred_is_hard_block(item)
+
+
 def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, Any]:
     if provider == "github_models":
         selector = config["providers"]["github_models"]["model_selector"]
@@ -664,8 +690,9 @@ def build_nightly_scheduler_advice(
         )
     codegraph_warning = freshness in {"missing", "stale", "unknown"}
     allowed_count = len([item for item in queue if item["allowed"]])
-    blocked_by_gate = any(item["deferred_reason"] and "resource_budget_exceeded" not in item["deferred_reason"] for item in queue)
-    workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning else "ready")
+    blocked_by_gate = any(_nightly_deferred_is_hard_block(item) for item in queue)
+    warning_by_gate = any(_nightly_deferred_is_warning(item) for item in queue)
+    workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning or warning_by_gate else "ready")
     advice = {
         "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
