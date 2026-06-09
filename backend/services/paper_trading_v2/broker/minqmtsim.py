@@ -604,9 +604,10 @@ class MiniQMTSimBackend(BrokerBackend):
         if not self._is_legacy_account_mode:
             return BrokerBindCapacity(
                 backend_id=self.backend_id,
-                max_concurrent_packages=64,
+                max_concurrent_packages=1_000_000_000,
                 rejection_reason_if_exceeded=(
-                    "MiniQMTSim account_group_slots capacity is governed by account-group slot funds and preflight"
+                    "MiniQMTSim account_group_slots does not enforce a fixed strategy count; "
+                    "slot capacity is governed by funds and trading-rule preflight"
                 ),
             )
         return BrokerBindCapacity(
