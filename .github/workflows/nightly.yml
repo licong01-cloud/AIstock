@@ -372,6 +372,17 @@ jobs:
             --changed-file prompt_packs/validation_llm/triage_failure.prompt.yml `
             --output "$outDir/llm-prompt-evaluation.json"
 
+      - name: Build LLM guarded rollout gate smoke
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json guarded-rollout-gate `
+            --provider github_models `
+            --mode warning_only `
+            --module validation.runner `
+            --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `
+            --output "$outDir/llm-guarded-rollout-gate.json"
+
       - name: Build Understand Anything readiness summaries
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"

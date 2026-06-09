@@ -40,11 +40,13 @@ TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
 TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
 NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_advice_v1"
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
+GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
 CODEGRAPH_FRESHNESS_VALUES = {"fresh", "stale", "missing", "unknown"}
+GUARDED_ROLLOUT_MODES = {"off", "warning_only", "opt_in_auto_file"}
 EVALUATION_INFRA_SIGNATURE_TOKENS = (
     "self-hosted runner unavailable",
     "runner unavailable",
@@ -117,6 +119,16 @@ def validate_config(config: dict[str, Any]) -> None:
     limits = config.get("limits") or {}
     if limits.get("fail_closed_when_schema_invalid") is not True:
         raise ProviderAdapterError("invalid schema handling must fail closed")
+    rollout = config.get("guarded_rollout") or {}
+    if rollout:
+        default_mode = str(rollout.get("default_mode") or "")
+        if default_mode not in GUARDED_ROLLOUT_MODES:
+            raise ProviderAdapterError("guarded_rollout.default_mode invalid")
+        supported_modes = set(str(item) for item in rollout.get("supported_modes") or [])
+        if supported_modes and not GUARDED_ROLLOUT_MODES.issubset(supported_modes):
+            raise ProviderAdapterError("guarded_rollout.supported_modes must include all guarded rollout modes")
+        if rollout.get("deterministic_auto_file_preserved") is not True:
+            raise ProviderAdapterError("guarded rollout must preserve deterministic auto-file behavior")
 
 
 def _model_id(model: dict[str, Any]) -> str:
@@ -753,6 +765,42 @@ def _safe_repo_rel(path: Path) -> str:
         return str(path)
 
 
+def _config_guarded_rollout(config: dict[str, Any]) -> dict[str, Any]:
+    rollout = config.get("guarded_rollout") if isinstance(config.get("guarded_rollout"), dict) else {}
+    return rollout or {
+        "default_mode": "warning_only",
+        "mode_env": "AISTOCK_LLM_TRIAGE_MODE",
+        "opt_in_env": "AISTOCK_LLM_AUTO_FILE",
+        "module_allowlist": [],
+        "required_issue_sections": list(EVALUATION_ISSUE_BODY_SECTIONS),
+    }
+
+
+def _guarded_rollout_mode(config: dict[str, Any], explicit_mode: str | None = None) -> str:
+    rollout = _config_guarded_rollout(config)
+    mode_env = str(rollout.get("mode_env") or "AISTOCK_LLM_TRIAGE_MODE")
+    mode = str(explicit_mode or os.environ.get(mode_env) or rollout.get("default_mode") or "warning_only")
+    if mode not in GUARDED_ROLLOUT_MODES:
+        raise ProviderAdapterError(f"unsupported guarded rollout mode: {mode}")
+    return mode
+
+
+def _guarded_rollout_opted_in(config: dict[str, Any], explicit_opt_in: bool | None = None) -> bool:
+    if explicit_opt_in is not None:
+        return explicit_opt_in
+    rollout = _config_guarded_rollout(config)
+    opt_in_env = str(rollout.get("opt_in_env") or "AISTOCK_LLM_AUTO_FILE")
+    return str(os.environ.get(opt_in_env) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _module_in_guarded_allowlist(module: str | None, allowlist: list[str]) -> bool:
+    module_key = str(module or "").strip().lower()
+    if not module_key:
+        return False
+    normalized = [str(item).strip().lower() for item in allowlist if str(item).strip()]
+    return any(module_key == item or module_key.startswith(f"{item}.") or item in module_key for item in normalized)
+
+
 def _evaluation_actionable(event: dict[str, Any]) -> bool:
     signature = str(event.get("error_signature") or "").lower()
     failed_job = str(event.get("failed_job") or "").lower()
@@ -930,6 +978,88 @@ def build_prompt_evaluation(
             "redaction_applied": True,
         },
         "rows": rows,
+    }
+
+
+def build_guarded_rollout_gate(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    mode: str | None = None,
+    opt_in: bool | None = None,
+    module: str | None = None,
+    issue_sections: list[str] | None = None,
+    deterministic_issue_allowed: bool = True,
+    llm_workflow_gate: str = "ready",
+    false_positive_rate: float | None = None,
+    false_positive_threshold: float = 0.10,
+) -> dict[str, Any]:
+    """Decide whether LLM advice may influence auto-file behavior without replacing deterministic gates."""
+
+    validate_config(config)
+    provider_summary = _provider_model_summary(config, provider)
+    rollout = _config_guarded_rollout(config)
+    effective_mode = _guarded_rollout_mode(config, explicit_mode=mode)
+    explicit_opt_in = _guarded_rollout_opted_in(config, explicit_opt_in=opt_in)
+    allowlist = [str(item) for item in rollout.get("module_allowlist") or []]
+    required_sections = [str(item) for item in rollout.get("required_issue_sections") or EVALUATION_ISSUE_BODY_SECTIONS]
+    sections = [str(item) for item in issue_sections or [] if str(item).strip()]
+    missing_sections = [section for section in required_sections if section not in sections]
+    module_allowed = _module_in_guarded_allowlist(module, allowlist)
+    fp_rate = 0.0 if false_positive_rate is None else float(false_positive_rate)
+    reasons: list[str] = []
+    if effective_mode == "off":
+        reasons.append("llm_triage_mode_off")
+    if effective_mode != "opt_in_auto_file":
+        reasons.append("llm_auto_file_not_in_opt_in_mode")
+    if not explicit_opt_in:
+        reasons.append("llm_auto_file_not_explicitly_opted_in")
+    if not module_allowed:
+        reasons.append("module_not_allowlisted")
+    if missing_sections:
+        reasons.append("issue_body_missing_required_sections")
+    if not deterministic_issue_allowed:
+        reasons.append("deterministic_issue_policy_denied")
+    if llm_workflow_gate not in {"ready", "passed"}:
+        reasons.append("llm_workflow_gate_not_ready")
+    if fp_rate > false_positive_threshold:
+        reasons.append("false_positive_threshold_exceeded")
+    llm_can_enhance_issue = effective_mode != "off" and not missing_sections and llm_workflow_gate in {"ready", "passed"}
+    auto_file_allowed = not reasons
+    return {
+        "schema_version": GUARDED_ROLLOUT_SCHEMA_VERSION,
+        "provider": provider_summary["provider"],
+        "model": provider_summary["model"],
+        "mode": effective_mode,
+        "opt_in": explicit_opt_in,
+        "module": module,
+        "module_allowlist": allowlist,
+        "module_allowlisted": module_allowed,
+        "deterministic_issue_allowed": deterministic_issue_allowed,
+        "llm_workflow_gate": llm_workflow_gate,
+        "issue_sections_present": sections,
+        "missing_required_issue_sections": missing_sections,
+        "false_positive_auto_file_rate": fp_rate,
+        "false_positive_threshold": false_positive_threshold,
+        "auto_file_allowed": auto_file_allowed,
+        "llm_can_enhance_issue": llm_can_enhance_issue,
+        "workflow_gate": "ready" if auto_file_allowed else ("off" if effective_mode == "off" else "warning"),
+        "rejection_reasons": reasons,
+        "fallback": "deterministic_issue_workflow",
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+        "llm_invocation_evidence": {
+            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
+            "provider": provider_summary["provider"],
+            "model": provider_summary["model"],
+            "invoked": False,
+            "reason": "guarded_rollout_policy_gate_no_network",
+            "input_policy": "mode_module_issue_sections_evaluation_metrics_only",
+            "redaction_applied": True,
+        },
     }
 
 
@@ -1210,6 +1340,42 @@ def cmd_prompt_evaluation(args: argparse.Namespace) -> int:
     return 2 if evaluation["policy_gate"]["workflow_gate"] == "blocked" else 0
 
 
+def cmd_guarded_rollout_gate(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    provider = args.provider or str(config.get("default_provider") or "deterministic")
+    gate = build_guarded_rollout_gate(
+        provider,
+        config,
+        mode=args.mode,
+        opt_in=args.opt_in,
+        module=args.module,
+        issue_sections=_split_csv(args.issue_section),
+        deterministic_issue_allowed=not args.deterministic_denied,
+        llm_workflow_gate=args.llm_workflow_gate,
+        false_positive_rate=args.false_positive_rate,
+        false_positive_threshold=args.false_positive_threshold,
+    )
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    compact = {
+        "provider": gate["provider"],
+        "model": gate["model"],
+        "schema_version": gate["schema_version"],
+        "workflow_gate": gate["workflow_gate"],
+        "mode": gate["mode"],
+        "opt_in": gate["opt_in"],
+        "module_allowlisted": gate["module_allowlisted"],
+        "auto_file_allowed": gate["auto_file_allowed"],
+        "llm_can_enhance_issue": gate["llm_can_enhance_issue"],
+        "rejection_reasons": gate["rejection_reasons"],
+        "llm_invoked": gate["llm_invocation_evidence"]["invoked"],
+        "artifact": args.output,
+    }
+    _print_success("guarded-rollout-gate", compact, as_json=args.json)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock validation LLM provider adapter")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
@@ -1278,6 +1444,20 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--false-positive-threshold", type=float, default=0.10)
     evaluation.add_argument("--output", default=None, help="Optional ignored artifact path for full prompt evaluation JSON.")
     evaluation.set_defaults(func=cmd_prompt_evaluation)
+
+    rollout = subparsers.add_parser("guarded-rollout-gate")
+    rollout.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit compact JSON output")
+    rollout.add_argument("--provider", choices=["deterministic", "github_models", "deepseek_api"], default=None)
+    rollout.add_argument("--mode", choices=sorted(GUARDED_ROLLOUT_MODES), default=None)
+    rollout.add_argument("--opt-in", action="store_true", default=None)
+    rollout.add_argument("--module", default=None)
+    rollout.add_argument("--issue-section", action="append", default=None, help="Issue section; may be repeated or comma-separated.")
+    rollout.add_argument("--deterministic-denied", action="store_true")
+    rollout.add_argument("--llm-workflow-gate", default="ready")
+    rollout.add_argument("--false-positive-rate", type=float, default=0.0)
+    rollout.add_argument("--false-positive-threshold", type=float, default=0.10)
+    rollout.add_argument("--output", default=None, help="Optional ignored artifact path for full guarded rollout gate JSON.")
+    rollout.set_defaults(func=cmd_guarded_rollout_gate)
     return parser
 
 

@@ -156,6 +156,50 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _llm_guarded_rollout_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    try:
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from scripts import llm_provider_adapter
+
+        config = llm_provider_adapter.load_config()
+        advice = summary.get("llm_triage_advice") if isinstance(summary.get("llm_triage_advice"), dict) else {}
+        llm_workflow_gate = str(advice.get("workflow_gate") or "ready")
+        return llm_provider_adapter.build_guarded_rollout_gate(
+            "github_models",
+            config,
+            module=(summary.get("suspected_modules") or [None])[0],
+            issue_sections=[
+                "Failure Summary",
+                "Regression Locator",
+                "Agent Handoff",
+                "Token Policy",
+                "Production Gates",
+            ],
+            deterministic_issue_allowed=(summary.get("issue_creation_policy") or {}).get("allowed") is not False,
+            llm_workflow_gate=llm_workflow_gate,
+        )
+    except Exception as exc:
+        return {
+            "schema_version": "aistock_validation_llm_guarded_rollout_v1",
+            "workflow_gate": "warning",
+            "auto_file_allowed": False,
+            "llm_can_enhance_issue": False,
+            "fallback": "deterministic_issue_workflow",
+            "rejection_reasons": ["guarded_rollout_gate_unavailable"],
+            "fallback_reason": str(exc),
+            "llm_invocation_evidence": {
+                "schema_version": "aistock_llm_invocation_evidence_v1",
+                "provider": "github_models",
+                "model": "unknown",
+                "invoked": False,
+                "reason": "guarded_rollout_gate_unavailable_no_network",
+                "redaction_applied": True,
+            },
+        }
+
+
 def _infra_action_reason(summary: dict[str, Any]) -> str | None:
     statuses = summary.get("nightly_statuses") if isinstance(summary.get("nightly_statuses"), dict) else {}
     if statuses.get("runner_preflight") == "failure":
@@ -731,6 +775,7 @@ def build_context_pack(
         "failure_event": event,
         "agent_handoff": handoff,
         "llm_triage_advice": summary.get("llm_triage_advice"),
+        "llm_guarded_rollout_gate": summary.get("llm_guarded_rollout_gate"),
         "reproduce_command": summary.get("reproduce_command") or "Inspect the linked CI run log.",
         "allowed_write_scope": handoff["allowed_write_scope"],
         "required_verification": handoff["required_verification"],
@@ -832,6 +877,8 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
     severity = summary.get("severity") or "P1"
     if severity not in {"P0", "P1"}:
         raise ValueError("Only P0/P1 auto-file behavior is allowed.")
+    if "llm_guarded_rollout_gate" not in summary:
+        summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(summary)
     fingerprint = summary.get("fingerprint") or f"run-{summary.get('run_id') or 'unknown'}"
     run_id = str(summary.get("run_id") or "")
     nightly_marker = None
@@ -1321,6 +1368,20 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
                 f"- input_policy: `{llm_evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
             ]
         )
+    rollout_gate = summary.get("llm_guarded_rollout_gate") if isinstance(summary.get("llm_guarded_rollout_gate"), dict) else {}
+    if rollout_gate:
+        lines.extend(
+            [
+                "",
+                "## LLM Guarded Rollout",
+                "",
+                f"- mode: `{rollout_gate.get('mode') or 'unknown'}`",
+                f"- workflow_gate: `{rollout_gate.get('workflow_gate') or 'unknown'}`",
+                f"- auto_file_allowed: `{rollout_gate.get('auto_file_allowed')}`",
+                f"- llm_can_enhance_issue: `{rollout_gate.get('llm_can_enhance_issue')}`",
+                f"- fallback: `{rollout_gate.get('fallback') or 'deterministic_issue_workflow'}`",
+            ]
+        )
     policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
     if policy:
         lines.extend(
@@ -1615,6 +1676,17 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
                 else None
             ),
         },
+        "llm_guarded_rollout": {
+            "workflow_gate": (summary.get("llm_guarded_rollout_gate") or {}).get("workflow_gate")
+            if isinstance(summary.get("llm_guarded_rollout_gate"), dict)
+            else None,
+            "auto_file_allowed": (summary.get("llm_guarded_rollout_gate") or {}).get("auto_file_allowed")
+            if isinstance(summary.get("llm_guarded_rollout_gate"), dict)
+            else None,
+            "fallback": (summary.get("llm_guarded_rollout_gate") or {}).get("fallback")
+            if isinstance(summary.get("llm_guarded_rollout_gate"), dict)
+            else None,
+        },
         "suspected_modules": summary.get("suspected_modules") or [],
         "suspected_files_count": len(summary.get("suspected_files") or []),
         "failed_jobs_count": len(summary.get("failed_jobs") or []),
@@ -1678,6 +1750,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
+    if "llm_guarded_rollout_gate" not in summary:
+        summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(summary)
     _write_json(args.output, summary)
     _write_text(args.markdown_output, render_issue_markdown(summary))
     context_pack = build_context_pack(summary)

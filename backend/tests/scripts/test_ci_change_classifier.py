@@ -117,6 +117,8 @@ def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path
         [
             "prompt_packs/validation_llm/triage_failure.prompt.yml",
             "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
+            "configs/validation/llm_triage.yaml",
+            "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
             "scripts/llm_provider_adapter.py",
             "backend/tests/scripts/test_llm_provider_adapter.py",
         ],

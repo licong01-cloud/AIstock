@@ -407,3 +407,97 @@ def test_prompt_evaluation_cli_uses_compact_success_output(capsys, tmp_path):
     assert '"case_count": 20' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
+
+
+def test_guarded_rollout_config_defaults_preserve_deterministic_auto_file():
+    config = adapter.load_config()
+    adapter.validate_config(config)
+
+    rollout = config["guarded_rollout"]
+    assert rollout["default_mode"] == "warning_only"
+    assert rollout["deterministic_auto_file_preserved"] is True
+    assert "validation.runner" in rollout["module_allowlist"]
+
+
+def test_guarded_rollout_gate_requires_opt_in_and_allowlisted_module():
+    sections = list(adapter.EVALUATION_ISSUE_BODY_SECTIONS)
+
+    warning = adapter.build_guarded_rollout_gate(
+        "deterministic",
+        adapter.load_config(),
+        module="validation.runner",
+        issue_sections=sections,
+        deterministic_issue_allowed=True,
+    )
+    assert warning["workflow_gate"] == "warning"
+    assert warning["auto_file_allowed"] is False
+    assert "llm_auto_file_not_in_opt_in_mode" in warning["rejection_reasons"]
+
+    opted_in = adapter.build_guarded_rollout_gate(
+        "deterministic",
+        adapter.load_config(),
+        mode="opt_in_auto_file",
+        opt_in=True,
+        module="validation.runner",
+        issue_sections=sections,
+        deterministic_issue_allowed=True,
+    )
+    assert opted_in["workflow_gate"] == "ready"
+    assert opted_in["auto_file_allowed"] is True
+    assert opted_in["llm_invocation_evidence"]["invoked"] is False
+
+
+def test_guarded_rollout_gate_kill_switch_and_allowlist_are_safe():
+    sections = list(adapter.EVALUATION_ISSUE_BODY_SECTIONS)
+
+    off = adapter.build_guarded_rollout_gate(
+        "deterministic",
+        adapter.load_config(),
+        mode="off",
+        opt_in=True,
+        module="validation.runner",
+        issue_sections=sections,
+    )
+    assert off["workflow_gate"] == "off"
+    assert off["auto_file_allowed"] is False
+    assert off["fallback"] == "deterministic_issue_workflow"
+
+    not_allowlisted = adapter.build_guarded_rollout_gate(
+        "deterministic",
+        adapter.load_config(),
+        mode="opt_in_auto_file",
+        opt_in=True,
+        module="unknown_business_module",
+        issue_sections=sections,
+    )
+    assert not_allowlisted["auto_file_allowed"] is False
+    assert "module_not_allowlisted" in not_allowlisted["rejection_reasons"]
+
+
+def test_guarded_rollout_gate_cli_uses_compact_success_output(capsys, tmp_path):
+    output = tmp_path / "guarded-rollout.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "guarded-rollout-gate",
+            "--provider",
+            "github_models",
+            "--mode",
+            "opt_in_auto_file",
+            "--opt-in",
+            "--module",
+            "validation.runner",
+            "--issue-section",
+            ",".join(adapter.EVALUATION_ISSUE_BODY_SECTIONS),
+            "--output",
+            str(output),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"check": "guarded-rollout-gate"' in captured.out
+    assert '"auto_file_allowed": true' in captured.out
+    assert '"llm_invoked": false' in captured.out
+    assert output.exists()
