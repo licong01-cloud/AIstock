@@ -32,8 +32,8 @@
   "expected": "MiniQMT sync must settle same-day SELL_FILL proceeds and buy frozen cash before BUY_FILL cash deduction so virtual cash never becomes negative for a valid sell-funded rebalance; a sync failure must not leave partial trade/position/cash side effects that make future ticks fail.",
   "first_seen_at": "2026-06-08T05:29:06.043216Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3c42d493a73f07a8348c78c85316ad3d211ccfd2",
+  "fixed_at": "2026-06-09T12:07:50.143330Z",
   "github_issue_number": 830,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/830",
   "last_seen_at": "2026-06-08T05:29:06.043216Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/831",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -60,6 +61,13 @@
     "fingerprint": "e45518137b8c0cb49e69d50b",
     "source_event_id": "FE-20260608-e45518137b8c"
   },
+  "validation_evidence": [
+    "python -m ruff check backend/services/qmt_strategy_ledger/sync_service.py backend/services/qmt_strategy_ledger/repository.py backend/tests/qmt_strategy_ledger/test_sync_service.py -> passed",
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 15 passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "PR #831 CI -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
