@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
@@ -37,6 +37,7 @@ type ActivePoolSortKey =
   | "exit_reason";
 
 type ActivePoolSort = { key: ActivePoolSortKey; direction: SortDirection } | null;
+type ListDetailSource = "latest" | "review_result" | "timeline";
 type PackageWeightRow = { rowId: string; packageId: string; weight: string };
 type QualityInputRow = {
   rowId: string;
@@ -58,6 +59,16 @@ type ActivePoolColumn = {
   value: (row: AdvisoryEpisode) => string | number | boolean | null | undefined;
   render: (row: AdvisoryEpisode) => ReactNode;
 };
+
+function stockLabel(row: { symbol: string; stock_name?: string | null; symbol_name?: string | null }): ReactNode {
+  const name = row.stock_name || row.symbol_name;
+  return (
+    <span>
+      <strong>{name || row.symbol}</strong>
+      {name ? <><br /><span className="pv2-muted pv2-mono">{row.symbol}</span></> : null}
+    </span>
+  );
+}
 
 const REVIEW_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const PACKAGE_MODE_OPTIONS: AdvisoryPackageMode[] = ["single_package", "weighted_rank_fusion", "fusion_pool", "union", "intersection"];
@@ -228,13 +239,38 @@ function adviceText(item: AdvisoryRecommendationListItem): string {
   return String(item.operation_advice_json?.human_label || item.operation_advice_json?.reason_summary || item.reason_code || "-");
 }
 
-function reviewState(program: AdvisoryProgram, targetDate: string) {
-  if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", hint: "等待交易日服务返回最近交易日。" };
-  if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", hint: "任务启用后才可执行每日复评。" };
+function finalRecommendationItems(items: AdvisoryRecommendationListItem[]): AdvisoryRecommendationListItem[] {
+  return items
+    .filter((item) => item.symbol && item.item_state === "ACTIVE" && item.action !== "EXIT")
+    .sort((left, right) => {
+      const rankDiff = (left.rank ?? 999999) - (right.rank ?? 999999);
+      return rankDiff !== 0 ? rankDiff : left.symbol.localeCompare(right.symbol);
+    });
+}
+
+function defaultWatchlistCategoryName(program: AdvisoryProgram | null | undefined, version: { trade_date?: string } | null | undefined): string {
+  const programName = (program?.program_name || "荐股名单").trim();
+  const tradeDate = String(version?.trade_date || "").trim() || "未定日期";
+  return `${programName} ${tradeDate}`;
+}
+
+function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList = Boolean(program.latest_review_trade_date)) {
+  if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", previewLabel: "等待交易日", hint: "等待交易日服务返回最近交易日。", isInitialRun: false };
+  if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", previewLabel: "预览", hint: "任务启用后才可执行首次运行或每日复评。", isInitialRun: false };
   if (program.latest_review_trade_date && program.latest_review_trade_date >= targetDate) {
-    return { canPreview: true, canRun: false, label: "已复评", hint: `${targetDate} 已完成复评，等待下一个交易日。` };
+    return { canPreview: true, canRun: false, label: "已复评", previewLabel: "预览", hint: `${targetDate} 已完成复评，等待下一个交易日。`, isInitialRun: false };
   }
-  return { canPreview: true, canRun: true, label: "执行复评", hint: `目标交易日 ${targetDate}，由系统自动生成选股候选。` };
+  if (!hasPriorList) {
+    return {
+      canPreview: true,
+      canRun: true,
+      label: "生成初始列表",
+      previewLabel: "预览初始列表",
+      hint: `目标交易日 ${targetDate}，首次运行会自动生成候选并发布第一版荐股列表，无需填写任何内部 ID。`,
+      isInitialRun: true,
+    };
+  }
+  return { canPreview: true, canRun: true, label: "执行复评", previewLabel: "预览", hint: `目标交易日 ${targetDate}，由系统自动生成选股候选。`, isInitialRun: false };
 }
 
 function AdvisoryPageContent() {
@@ -255,6 +291,9 @@ function AdvisoryPageContent() {
   const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
   const [listVersions, setListVersions] = useState<AdvisoryRecommendationListVersion[]>([]);
   const [listVersionDetail, setListVersionDetail] = useState<AdvisoryListVersionDetail | null>(null);
+  const [selectedListVersionId, setSelectedListVersionId] = useState("");
+  const [listVersionLoadingId, setListVersionLoadingId] = useState("");
+  const [listDetailSource, setListDetailSource] = useState<ListDetailSource>("latest");
   const [activeSort, setActiveSort] = useState<ActivePoolSort>(null);
   const [reviews, setReviews] = useState<AdvisoryReviewDecision[]>([]);
   const [reviewTotalCount, setReviewTotalCount] = useState(0);
@@ -269,6 +308,8 @@ function AdvisoryPageContent() {
   const [qualityReport, setQualityReport] = useState<AdvisoryQualityReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [addingWatchlist, setAddingWatchlist] = useState(false);
+  const listDetailRef = useRef<HTMLDivElement | null>(null);
 
   const selectedProgram = useMemo(
     () => programs.find((item) => item.program_id === selectedProgramId) || programs[0],
@@ -276,7 +317,7 @@ function AdvisoryPageContent() {
   );
 
   const activeColumns = useMemo<ActivePoolColumn[]>(() => [
-    { key: "symbol", label: "股票", value: (row) => row.symbol, render: (row) => <strong>{row.symbol}</strong> },
+    { key: "symbol", label: "股票", value: (row) => row.symbol, render: (row) => stockLabel(row) },
     { key: "status", label: "状态", value: (row) => row.status, render: (row) => row.status },
     { key: "signal_date", label: "信号日", value: (row) => row.signal_date, render: (row) => row.signal_date },
     { key: "effective_entry_date", label: "入选生效日", value: (row) => row.effective_entry_date, render: (row) => row.effective_entry_date },
@@ -343,7 +384,16 @@ function AdvisoryPageContent() {
     setReturns(returnRows.returns || []);
     setBindings(bindingRows);
     setListVersions(versionRows);
-    setListVersionDetail(versionRows[0] ? await advisoryApi.listVersionDetail(versionRows[0].list_version_id) : null);
+    if (versionRows[0]) {
+      const detail = await advisoryApi.listVersionDetail(versionRows[0].list_version_id);
+      setListVersionDetail(detail);
+      setSelectedListVersionId(detail.list_version.list_version_id);
+      setListDetailSource("latest");
+    } else {
+      setListVersionDetail(null);
+      setSelectedListVersionId("");
+      setListDetailSource("latest");
+    }
   }
 
   async function refreshAll(nextProgramId?: string) {
@@ -377,6 +427,9 @@ function AdvisoryPageContent() {
         setBindings([]);
         setListVersions([]);
         setListVersionDetail(null);
+        setSelectedListVersionId("");
+        setListDetailSource("latest");
+        setReviewResult(null);
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -388,6 +441,7 @@ function AdvisoryPageContent() {
   async function selectProgram(programId: string) {
     setSelectedProgramId(programId);
     setReviewPage(1);
+    setReviewResult(null);
     setLoading(true);
     setError(null);
     try {
@@ -428,6 +482,9 @@ function AdvisoryPageContent() {
         status: "ENABLED",
       });
       await refreshAll(program.program_id);
+      if (reviewTradeDate) {
+        window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }
@@ -461,7 +518,8 @@ function AdvisoryPageContent() {
   }
 
   async function runReview(program: AdvisoryProgram, preview: boolean) {
-    const state = reviewState(program, reviewTradeDate);
+    const hasPriorList = program.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(program.latest_review_trade_date);
+    const state = reviewState(program, reviewTradeDate, hasPriorList);
     if (!state.canPreview || (!preview && !state.canRun)) return;
     setError(null);
     setReviewResult(null);
@@ -474,8 +532,37 @@ function AdvisoryPageContent() {
       const result = preview
         ? await advisoryApi.previewReview(program.program_id, payload)
         : await advisoryApi.runReview(program.program_id, payload);
-      setReviewResult(result);
       await refreshAll(program.program_id);
+      setReviewResult(result);
+      setSelectedListVersionId(result.list_version_id || "");
+      if (result.list_items && result.list_version_id) {
+        setListDetailSource("review_result");
+        const activeCount = result.list_items.filter((item) => item.item_state === "ACTIVE").length;
+        setListVersionDetail({
+          list_version: {
+            list_version_id: result.list_version_id,
+            program_id: program.program_id,
+            binding_version_id: result.binding_version_id || activeBinding?.binding_version_id || "",
+            review_run_id: result.review_run_id || "",
+            trade_date: result.trade_date,
+            previous_list_version_id: listVersions[0]?.list_version_id || null,
+            version_status: result.preview ? "PREVIEW" : "PUBLISHED",
+            target_count: program.target_count,
+            active_count: activeCount,
+            entered_count: Number(result.change_summary?.entered_count ?? 0),
+            held_count: Number(result.change_summary?.held_count ?? 0),
+            exited_count: Number(result.change_summary?.exited_count ?? 0),
+            waiting_count: Number(result.change_summary?.waiting_count ?? 0),
+            changed_count: Number(result.change_summary?.changed_count ?? result.decisions.length),
+            turnover_rate: result.change_summary?.turnover_rate as number | null | undefined,
+            overlap_rate: result.change_summary?.overlap_rate as number | null | undefined,
+          },
+          items: result.list_items,
+        });
+      } else {
+        setListDetailSource("latest");
+      }
+      window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -554,23 +641,29 @@ function AdvisoryPageContent() {
   }
 
   async function viewListVersion(listVersionId: string) {
-    setLoading(true);
+    setListVersionLoadingId(listVersionId);
     setError(null);
     try {
-      setListVersionDetail(await advisoryApi.listVersionDetail(listVersionId));
+      const detail = await advisoryApi.listVersionDetail(listVersionId);
+      setListVersionDetail(detail);
+      setSelectedListVersionId(detail.list_version.list_version_id);
+      setListDetailSource("timeline");
+      setReviewResult(null);
+      window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setLoading(false);
+      setListVersionLoadingId("");
     }
   }
 
-  const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate) : null;
+  const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate, listVersions.length > 0) : null;
   const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
   const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
   const activeBinding = bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
-  const visibleListItems = reviewResult?.list_items?.length ? reviewResult.list_items : listVersionDetail?.items || [];
-  const visibleListVersion = reviewResult?.list_version_id
+  const reviewResultDetailActive = listDetailSource === "review_result" && Boolean(reviewResult?.list_version_id);
+  const visibleListItems = reviewResultDetailActive ? (reviewResult?.list_items || []) : listVersionDetail?.items || [];
+  const visibleListVersion = reviewResultDetailActive && reviewResult?.list_version_id
     ? {
         list_version_id: reviewResult.list_version_id,
         trade_date: reviewResult.trade_date,
@@ -584,6 +677,57 @@ function AdvisoryPageContent() {
         overlap_rate: reviewResult.change_summary?.overlap_rate as number | null | undefined,
       }
     : listVersionDetail?.list_version;
+  const visibleListSourceLabel = listDetailSource === "review_result" ? "刚刚执行结果" : listDetailSource === "timeline" ? "手动查看版本" : "最新列表版本";
+  const finalWatchlistItems = useMemo(() => finalRecommendationItems(visibleListItems), [visibleListItems]);
+  const watchlistCategoryName = useMemo(
+    () => defaultWatchlistCategoryName(selectedProgram, visibleListVersion),
+    [selectedProgram, visibleListVersion],
+  );
+  const canAddFinalWatchlist = Boolean(
+    selectedProgram &&
+      visibleListVersion?.version_status === "PUBLISHED" &&
+      finalWatchlistItems.length &&
+      !addingWatchlist,
+  );
+
+  async function ensureWatchlistCategory(name: string) {
+    const existing = (await advisoryApi.watchlistCategories()).find((category) => category.name === name);
+    if (existing) return existing;
+    try {
+      return await advisoryApi.createWatchlistCategory(name, `荐股中心自动创建：${name}`);
+    } catch (exc) {
+      const raced = (await advisoryApi.watchlistCategories()).find((category) => category.name === name);
+      if (raced) return raced;
+      throw exc;
+    }
+  }
+
+  async function addFinalListToWatchlist() {
+    if (!selectedProgram || !visibleListVersion) return;
+    if (visibleListVersion.version_status !== "PUBLISHED") {
+      setError("只有正式发布后的最终荐股名单可以加入自选股票池；预览结果请先执行正式复评。");
+      return;
+    }
+    if (!finalWatchlistItems.length) {
+      setError("当前列表没有 ACTIVE 状态的最终荐股，无法加入自选股票池。");
+      return;
+    }
+    setAddingWatchlist(true);
+    setError(null);
+    try {
+      const category = await ensureWatchlistCategory(watchlistCategoryName);
+      const codes = finalWatchlistItems.map((item) => item.symbol);
+      const result = await advisoryApi.addWatchlistItems(codes, category.id);
+      const added = result.added ?? result.inserted ?? 0;
+      const skipped = result.skipped ?? Math.max(0, codes.length - added);
+      window.alert(`已将 ${codes.length} 只最终荐股加入自选股票池分类「${category.name}」。新增 ${added} 只，已存在 ${skipped} 只。`);
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+    } finally {
+      setAddingWatchlist(false);
+    }
+  }
 
   return (
     <main className="pv2-main">
@@ -626,7 +770,8 @@ function AdvisoryPageContent() {
             </thead>
             <tbody>
               {leaderboard.map((row) => {
-                const state = reviewState(row, reviewTradeDate);
+                const hasPriorList = row.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(row.latest_review_trade_date);
+                const state = reviewState(row, reviewTradeDate, hasPriorList);
                 const previewKey = `${row.program_id}:preview`;
                 const runKey = `${row.program_id}:run`;
                 return (
@@ -650,7 +795,7 @@ function AdvisoryPageContent() {
                           onClick={(event) => { event.stopPropagation(); void runReview(row, true); }}
                           type="button"
                         >
-                          {reviewingKey === previewKey ? "预览中..." : "预览"}
+                          {reviewingKey === previewKey ? "预览中..." : state.previewLabel}
                         </button>
                         <button
                           className="pv2-button-primary"
@@ -752,9 +897,9 @@ function AdvisoryPageContent() {
       <section className="pv2-card">
         <div className="pv2-card-head">
           <div>
-            <div className="pv2-kicker">每日复评</div>
+            <div className="pv2-kicker">{selectedReviewState?.isInitialRun ? "首次运行" : "每日复评"}</div>
             <h2>{selectedProgram ? selectedProgram.program_name : "未选择荐股任务"}</h2>
-            <p className="pv2-muted">每日复评使用 active_pool ∪ TopK；候选与行情由 Selection Center 自动生成，页面不暴露内部选股运行编号。</p>
+            <p className="pv2-muted">上方表格是该荐股任务的最新/指定列表版本；下方“当前推荐股票”是仍处于 ACTIVE 的持有池，列表版本还会保留 ENTER/HOLD/EXIT/WAITING 的每日调整方案。</p>
           </div>
           <div className="pv2-row-actions">
             <button
@@ -764,7 +909,7 @@ function AdvisoryPageContent() {
               disabled={!selectedProgram || !selectedReviewState?.canPreview || reviewingKey === selectedPreviewKey}
               type="button"
             >
-              {reviewingKey === selectedPreviewKey ? "预览中..." : "预览"}
+              {reviewingKey === selectedPreviewKey ? "预览中..." : selectedReviewState?.previewLabel || "预览"}
             </button>
             <button
               className="pv2-button-primary"
@@ -780,6 +925,7 @@ function AdvisoryPageContent() {
         <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
           <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{reviewTradeDate || "-"}</span></strong>
           <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
+          <div className="pv2-muted" style={{ marginTop: 6 }}>生效日按选股候选实际价格数据日后的下一交易日计算；盘中运行若只用昨日收盘数据，入选生效日应落到今天这个交易日，而不是简单自然日加一天。</div>
           {activeBinding ? (
             <div className="pv2-muted" style={{ marginTop: 6 }}>
               当前策略绑定：{activeBinding.package_mode} / {packageSummary(activeBinding.package_ids)} / {short(activeBinding.binding_version_id, 18)}
@@ -793,20 +939,44 @@ function AdvisoryPageContent() {
           </div>
         ) : null}
         {visibleListVersion ? (
-          <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-list-version-summary">
-            <strong>推荐列表版本：{short(visibleListVersion.list_version_id, 22)} / {visibleListVersion.trade_date} / {visibleListVersion.version_status}</strong>
+          <div className="pv2-readable-panel" ref={listDetailRef} style={{ marginTop: 12 }} data-testid="advisory-list-version-summary" tabIndex={-1}>
+            <strong>当前查看：{visibleListSourceLabel} / {short(visibleListVersion.list_version_id, 22)} / {visibleListVersion.trade_date} / {visibleListVersion.version_status}</strong>
             <span className="pv2-muted">
               {" "}ACTIVE {visibleListVersion.active_count}，ENTER {visibleListVersion.entered_count}，HOLD {visibleListVersion.held_count}，EXIT {visibleListVersion.exited_count}，WAITING {visibleListVersion.waiting_count}，换手 {fmtPct(visibleListVersion.turnover_rate)}，重合 {fmtPct(visibleListVersion.overlap_rate)}
             </span>
+            {visibleListVersion.waiting_count > 0 ? (
+              <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-list-waiting-hint">
+                WAITING 表示该版本已经生成，但对应股票仍在等待行情、停复牌或可交易性确认；这不是未刷新旧表。
+              </div>
+            ) : null}
+            <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+              <button
+                className="pv2-button-primary"
+                data-testid="advisory-add-final-watchlist"
+                disabled={!canAddFinalWatchlist}
+                onClick={() => void addFinalListToWatchlist()}
+                type="button"
+              >
+                {addingWatchlist ? "加入中..." : "一键加入自选股票池"}
+              </button>
+              <span className="pv2-muted" data-testid="advisory-watchlist-category-hint">
+                默认分类：{watchlistCategoryName}；仅加入当前 PUBLISHED 列表中 ACTIVE 的最终荐股，共 {finalWatchlistItems.length} 只。
+              </span>
+            </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="pv2-readable-panel" ref={listDetailRef} style={{ marginTop: 12 }} data-testid="advisory-list-version-summary" tabIndex={-1}>
+            <strong>尚未生成初始列表</strong>
+            <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
+          </div>
+        )}
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table" data-testid="advisory-list-items-table">
             <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>
             <tbody>
               {visibleListItems.map((item) => (
                 <tr key={item.list_item_id}>
-                  <td><strong>{item.symbol}</strong></td>
+                  <td>{stockLabel(item)}</td>
                   <td>{item.item_state}</td>
                   <td>{item.action}</td>
                   <td>{item.rank ?? "-"} / {fmtNumber(item.score, 3)}</td>
@@ -827,28 +997,42 @@ function AdvisoryPageContent() {
           <div>
             <div className="pv2-kicker">列表版本时间线</div>
             <h2>初始列表与每日复评后的推荐列表</h2>
-            <p className="pv2-muted">每次正式复评生成一个 PUBLISHED 列表版本；退出股票不会消失，会以 EXIT 动作和操作建议保留在版本明细中。</p>
+            <p className="pv2-muted">这里是版本时间线，用于回看初始列表和每个交易日复评后的完整列表；与上方当前查看区域联动，不是另一个策略包输出表。</p>
           </div>
         </div>
         <div className="pv2-table-wrap">
           <table className="pv2-table" data-testid="advisory-list-versions-table">
             <thead><tr><th>交易日</th><th>状态</th><th>ACTIVE</th><th>ENTER</th><th>HOLD</th><th>EXIT</th><th>WAITING</th><th>换手</th><th>重合</th><th>操作</th></tr></thead>
             <tbody>
-              {listVersions.map((version) => (
-                <tr key={version.list_version_id}>
-                  <td>{version.trade_date}<br /><span className="pv2-muted pv2-mono">{short(version.list_version_id, 18)}</span></td>
-                  <td>{version.version_status}</td>
-                  <td>{version.active_count}</td>
-                  <td>{version.entered_count}</td>
-                  <td>{version.held_count}</td>
-                  <td>{version.exited_count}</td>
-                  <td>{version.waiting_count}</td>
-                  <td>{fmtPct(version.turnover_rate)}</td>
-                  <td>{fmtPct(version.overlap_rate)}</td>
-                  <td><button className="pv2-button" onClick={() => void viewListVersion(version.list_version_id)} type="button">查看明细</button></td>
-                </tr>
-              ))}
-              {!listVersions.length ? <tr><td colSpan={10}>暂无列表版本；首次预览或复评后会生成可查看的列表版本。</td></tr> : null}
+              {listVersions.map((version) => {
+                const selected = selectedListVersionId === version.list_version_id;
+                const loadingDetail = listVersionLoadingId === version.list_version_id;
+                return (
+                  <tr key={version.list_version_id} data-testid={`advisory-list-version-row-${version.list_version_id}`} aria-selected={selected} style={selected ? { outline: "2px solid #2563eb", outlineOffset: -2 } : undefined}>
+                    <td>{version.trade_date}<br /><span className="pv2-muted pv2-mono">{short(version.list_version_id, 18)}</span></td>
+                    <td>{version.version_status}</td>
+                    <td>{version.active_count}</td>
+                    <td>{version.entered_count}</td>
+                    <td>{version.held_count}</td>
+                    <td>{version.exited_count}</td>
+                    <td>{version.waiting_count}</td>
+                    <td>{fmtPct(version.turnover_rate)}</td>
+                    <td>{fmtPct(version.overlap_rate)}</td>
+                    <td>
+                      <button
+                        className={selected ? "pv2-button-primary" : "pv2-button"}
+                        data-testid={`advisory-view-list-version-${version.list_version_id}`}
+                        disabled={loadingDetail}
+                        onClick={() => void viewListVersion(version.list_version_id)}
+                        type="button"
+                      >
+                        {loadingDetail ? "加载中..." : selected ? "当前明细" : "查看明细"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!listVersions.length ? <tr><td colSpan={10}>暂无列表版本；请在上方点击“预览初始列表”或“生成初始列表”。</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -856,7 +1040,7 @@ function AdvisoryPageContent() {
 
       <div className="pv2-grid pv2-grid-2">
         <section className="pv2-card">
-          <div className="pv2-card-head"><div><div className="pv2-kicker">当前荐股池</div><h2>当前推荐股票</h2><p className="pv2-muted">点击任意列名切换正序、倒序、取消排序。</p></div></div>
+          <div className="pv2-card-head"><div><div className="pv2-kicker">当前荐股池</div><h2>当前推荐股票</h2><p className="pv2-muted">这里只显示最新列表中仍然 ACTIVE 的股票；退出/等待/新进入的完整调整请看上方列表版本明细。点击任意列名切换排序。</p></div></div>
           <div className="pv2-table-wrap">
             <table className="pv2-table" data-testid="advisory-active-table">
               <thead>
@@ -893,7 +1077,7 @@ function AdvisoryPageContent() {
               <thead><tr><th>日期</th><th>股票</th><th>动作</th><th>原因</th><th>状态</th><th>排名</th></tr></thead>
               <tbody>
                 {pagedReviews.map((row, index) => (
-                  <tr data-testid="advisory-review-row" key={`${row.trade_date}-${row.symbol}-${row.action}-${row.episode_id || index}`}><td>{row.trade_date}</td><td>{row.symbol}</td><td>{row.action}</td><td>{row.reason_code}</td><td>{row.review_status}</td><td>{row.rank ?? "-"}</td></tr>
+                  <tr data-testid="advisory-review-row" key={`${row.trade_date}-${row.symbol}-${row.action}-${row.episode_id || index}`}><td>{row.trade_date}</td><td>{stockLabel(row)}</td><td>{row.action}</td><td>{row.reason_code}</td><td>{row.review_status}</td><td>{row.rank ?? "-"}</td></tr>
                 ))}
                 {!reviews.length ? <tr><td colSpan={6}>暂无复评记录。</td></tr> : null}
               </tbody>
@@ -914,7 +1098,7 @@ function AdvisoryPageContent() {
             <thead><tr><th>股票</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
             <tbody>
               {returns.map((row) => (
-                <tr key={row.episode_id}><td>{row.symbol}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
+                <tr key={row.episode_id}><td>{stockLabel(row)}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
               ))}
               {!returns.length ? <tr><td colSpan={7}>暂无 episode 收益。</td></tr> : null}
             </tbody>
