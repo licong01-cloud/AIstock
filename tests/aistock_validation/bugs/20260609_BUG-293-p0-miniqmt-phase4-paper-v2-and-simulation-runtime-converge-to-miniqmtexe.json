@@ -1,0 +1,80 @@
+{
+  "actual": "Phase 4 is pending. Design evidence identifies Paper v2 day_runner MiniQMT adapter and simulation_runtime MiniQMTExecutionBridge as still needing convergence to runtime; BUG-291 only attached runtime-owned vn.py-derived algo instances and explicitly deferred product entry routing.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2",
+    "backend/services/simulation_runtime",
+    "backend/services/miniqmt_execution_runtime",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/simulation_runtime",
+    "backend/tests/miniqmt_execution_runtime",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified",
+    "tests/aistock_validation/bugs/20260609_BUG-293-p0-miniqmt-phase4-paper-v2-and-simulation-runtime-converge-to-miniqmtexe.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-293",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T06:55:36.927441Z",
+  "description": "Phase 4 is pending. Design evidence identifies Paper v2 day_runner MiniQMT adapter and simulation_runtime MiniQMTExecutionBridge as still needing convergence to runtime; BUG-291 only attached runtime-owned vn.py-derived algo instances and explicitly deferred product entry routing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-031dda6d92b5",
+      "timestamp": "2026-06-09T06:55:36.927438Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:543"
+  ],
+  "expected": "Paper v2 MiniQMT N=1 and simulation_runtime MiniQMT N>1 both enter MiniQMTExecutionRuntime through runtime client APIs; product paths do not directly call XtQuantQMTClient.place_order or QmtManagedOrderService.submit_batch; qmt_strategy/raw manual order remains admin/operator compatibility only; API/contract tests and path scans prove a single runtime owner.",
+  "first_seen_at": "2026-06-09T06:55:36.927441Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 855,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/855",
+  "last_seen_at": "2026-06-09T06:55:36.927441Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md Phase 4 and scan current Paper v2/simulation_runtime MiniQMT entry points for non-runtime client execution ownership.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT][Phase4] Paper v2 and simulation_runtime converge to MiniQMTExecutionRuntime",
+  "trigger_condition": {
+    "fingerprint": "031dda6d92b59434ecb00325",
+    "source_event_id": "FE-20260609-031dda6d92b5"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
