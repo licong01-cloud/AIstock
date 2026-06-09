@@ -1306,6 +1306,8 @@ class AdvisoryProgramService:
         program_id: str,
         *,
         trade_date: date,
+        target_trade_date: date | None = None,
+        selection_as_of_trade_date: date | None = None,
         selection_run_id: str | None = None,
         data_source: str = "DB_HISTORICAL",
         runtime_config: dict[str, Any] | None = None,
@@ -1313,36 +1315,47 @@ class AdvisoryProgramService:
         market_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
         preview: bool = False,
     ) -> AdvisoryReviewResult:
+        review_trade_date = target_trade_date or trade_date
+        if target_trade_date is not None and target_trade_date != trade_date:
+            raise RuntimeConfigInvalidError(
+                "advisory review trade_date must match target_trade_date",
+                context={"trade_date": trade_date.isoformat(), "target_trade_date": target_trade_date.isoformat()},
+            )
         program = self.repository.get_program(program_id)
         binding = self._ensure_active_binding(program)
         bound_program = _program_with_binding(program, binding)
+        effective_runtime_config = self._with_advisory_date_context(
+            runtime_config or {},
+            target_trade_date=review_trade_date,
+            selection_as_of_trade_date=selection_as_of_trade_date,
+        )
         selection_run_ids: list[str] = []
         if candidates is None:
             run = self._selection_run_for_review(
                 program=bound_program,
-                trade_date=trade_date,
+                trade_date=review_trade_date,
                 selection_run_id=selection_run_id,
                 data_source=data_source,
-                runtime_config=runtime_config or {},
+                runtime_config=effective_runtime_config,
             )
             selection_run_ids = [run.run_id]
             normalized_candidates = candidates_from_selection_run(run)
         else:
             normalized_candidates = [_candidate_from_mapping(row) for row in candidates]
         market = {
-            symbol: _market_from_mapping(symbol, payload, trade_date=trade_date)
+            symbol: _market_from_mapping(symbol, payload, trade_date=review_trade_date)
             for symbol, payload in (market_by_symbol or {}).items()
         }
         return self.run_review(
             program_id,
-            trade_date=trade_date,
+            trade_date=review_trade_date,
             candidates=normalized_candidates,
             market_by_symbol=market,
             preview=preview,
             program_override=bound_program,
             binding_version_id=binding.binding_version_id,
             data_source=data_source,
-            runtime_config=runtime_config or {},
+            runtime_config=effective_runtime_config,
             selection_run_id=selection_run_id or (selection_run_ids[0] if selection_run_ids else None),
             selection_run_ids=selection_run_ids,
         )
@@ -1427,6 +1440,7 @@ class AdvisoryProgramService:
             previous_list=previous_list,
             previous_items=previous_items,
             version_status=LIST_VERSION_STATUS_PREVIEW if preview else LIST_VERSION_STATUS_PUBLISHED,
+            date_context=(runtime_config or {}).get("advisory_date_context"),
         )
         self.repository.create_list_version(list_version, list_items)
         enriched_decisions = [
@@ -1716,6 +1730,7 @@ class AdvisoryProgramService:
         previous_list: AdvisoryRecommendationListVersion | None,
         previous_items: list[AdvisoryRecommendationListItem],
         version_status: str,
+        date_context: Mapping[str, Any] | None = None,
     ) -> tuple[AdvisoryRecommendationListVersion, list[AdvisoryRecommendationListItem], dict[str, Any]]:
         previous_by_symbol = {row.symbol: row for row in previous_items}
         episode_by_id = {row.episode_id: row for row in result.active_pool}
@@ -1787,6 +1802,8 @@ class AdvisoryProgramService:
             "previous_list_version_id": previous_list.list_version_id if previous_list else None,
             "manual_gate": False,
         }
+        if date_context:
+            summary["advisory_date_context"] = _json_ready(dict(date_context))
         list_version = AdvisoryRecommendationListVersion(
             list_version_id=list_version_id,
             program_id=program.program_id,
@@ -2013,6 +2030,61 @@ class AdvisoryProgramService:
         return run
 
     @staticmethod
+    def _with_advisory_date_context(
+        runtime_config: Mapping[str, Any] | None,
+        *,
+        target_trade_date: date,
+        selection_as_of_trade_date: date | None,
+    ) -> dict[str, Any]:
+        config = deepcopy(dict(runtime_config or {}))
+        date_context = dict(config.get("advisory_date_context") or {})
+        date_context["target_trade_date"] = target_trade_date.isoformat()
+        if selection_as_of_trade_date is not None:
+            if selection_as_of_trade_date >= target_trade_date:
+                raise RuntimeConfigInvalidError(
+                    "selection_as_of_trade_date must be before target_trade_date",
+                    context={
+                        "target_trade_date": target_trade_date.isoformat(),
+                        "selection_as_of_trade_date": selection_as_of_trade_date.isoformat(),
+                    },
+                )
+            date_context["selection_as_of_trade_date"] = selection_as_of_trade_date.isoformat()
+            artifact_config = deepcopy(config.get("selection_artifact_config") or config.get("selection_artifact") or {})
+            if not isinstance(artifact_config, dict):
+                raise RuntimeConfigInvalidError(
+                    "advisory review selection_artifact_config must be an object",
+                    context={"selection_artifact_config_type": type(artifact_config).__name__},
+                )
+            artifact_config["cutoff_date"] = selection_as_of_trade_date.isoformat()
+            artifact_config.setdefault("pit_mode", "PREVIOUS_TRADING_DAY_CLOSE")
+            artifact_config["cutoff_policy"] = "FIXED_CUTOFF"
+            artifact_config["fixed_cutoff"] = True
+            config["selection_artifact_config"] = artifact_config
+            if "selection_artifact" in config:
+                config["selection_artifact"] = artifact_config
+
+            runtime_profile = deepcopy(config.get("runtime_profile") or {})
+            if not isinstance(runtime_profile, dict):
+                raise RuntimeConfigInvalidError(
+                    "advisory review runtime_config.runtime_profile must be an object",
+                    context={"runtime_profile_type": type(runtime_profile).__name__},
+                )
+            tradability = deepcopy(runtime_profile.get("tradability") or {})
+            if not isinstance(tradability, dict):
+                raise RuntimeConfigInvalidError(
+                    "advisory review runtime_config.runtime_profile.tradability must be an object",
+                    context={"tradability_type": type(tradability).__name__},
+                )
+            # Tomorrow's suspend_d is not available after today's close; the
+            # target list is generated from the explicit PIT cutoff and later
+            # reviews re-check tradability when data exists.
+            tradability["exclude_suspended"] = False
+            runtime_profile["tradability"] = tradability
+            config["runtime_profile"] = runtime_profile
+        config["advisory_date_context"] = date_context
+        return config
+
+    @staticmethod
     def _review_runtime_config(program: AdvisoryProgram, runtime_config: Mapping[str, Any] | None) -> dict[str, Any]:
         config = deepcopy(dict(runtime_config or {}))
         display_top_n = int(config.get("display_top_n") or config.get("top_k") or program.target_count)
@@ -2211,18 +2283,22 @@ def candidates_from_selection_run(run: SelectionRun) -> list[AdvisoryCandidate]:
             stock_name=item.stock_name,
             source_run_id=run.run_id,
             selection_entry_price_time=item.selection_entry_price_time,
-            reference_price_trade_date=_candidate_reference_trade_date_from_selection(item, run.trade_date),
+            reference_price_trade_date=_candidate_reference_trade_date_from_selection(item, run.trade_date, runtime_config=run.runtime_config),
         )
         for item in run.aggregate_results
     ]
 
 
-def _candidate_reference_trade_date_from_selection(item: Any, fallback: date) -> date:
+def _candidate_reference_trade_date_from_selection(item: Any, fallback: date, *, runtime_config: Mapping[str, Any] | None = None) -> date:
     display = (getattr(item, "component_scores", None) or {}).get("selection_result_display")
     display = display if isinstance(display, dict) else {}
+    point_in_time = (runtime_config or {}).get("point_in_time_context")
+    point_in_time = point_in_time if isinstance(point_in_time, dict) else {}
     for raw in (
         display.get("reference_price_trade_date"),
         (getattr(item, "component_scores", None) or {}).get("reference_price_trade_date"),
+        point_in_time.get("reference_price_trade_date"),
+        point_in_time.get("cutoff_date"),
         getattr(item, "selection_entry_price_time", None),
         display.get("selection_entry_price_time"),
     ):

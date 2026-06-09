@@ -423,6 +423,78 @@ def test_review_from_selection_builds_default_authoritative_runtime_config() -> 
     assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 40
 
 
+def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            self.calls.append(
+                {
+                    "package_ids": list(package_ids),
+                    "mode": mode,
+                    "trade_date": trade_date,
+                    "data_source": data_source,
+                    "runtime_config": dict(runtime_config),
+                }
+            )
+            cutoff = runtime_config["advisory_date_context"]["selection_as_of_trade_date"]
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config={
+                    **runtime_config,
+                    "point_in_time_context": {
+                        "reference_price_trade_date": cutoff,
+                        "cutoff_date": cutoff,
+                    },
+                },
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        selection_entry_price_time=f"{trade_date.isoformat()}T10:00:00+08:00",
+                        reference_price=10.0,
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=fake_selection,
+        calendar_provider=FakeTradingCalendar([date(2026, 6, 8), date(2026, 6, 9), date(2026, 6, 10)]),
+    )
+    program = _program(service, target_count=1)
+
+    result = service.run_review_from_selection(
+        program.program_id,
+        trade_date=date(2026, 6, 9),
+        target_trade_date=date(2026, 6, 9),
+        selection_as_of_trade_date=date(2026, 6, 8),
+        preview=False,
+    )
+
+    runtime_config = fake_selection.calls[0]["runtime_config"]
+    assert fake_selection.calls[0]["trade_date"] == date(2026, 6, 9)
+    assert runtime_config["advisory_date_context"] == {
+        "target_trade_date": "2026-06-09",
+        "selection_as_of_trade_date": "2026-06-08",
+    }
+    assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
+    assert runtime_config["selection_artifact_config"]["cutoff_policy"] == "FIXED_CUTOFF"
+    assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    assert result.active_pool[0].effective_entry_date == date(2026, 6, 9)
+    assert result.list_items[0].effective_trade_date == date(2026, 6, 9)
+    assert result.list_items[0].evidence_json["reference_price_trade_date"] == "2026-06-08"
+    assert result.change_summary["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-08"
+
+
 def test_review_marks_active_holding_not_in_current_topk_instead_of_waiting_evidence() -> None:
     class FakeCursor:
         def __enter__(self):

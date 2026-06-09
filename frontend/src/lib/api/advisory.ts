@@ -183,8 +183,12 @@ export type AdvisoryQualityReport = {
 };
 
 export type AdvisoryTradingDayDefaults = {
+  as_of_date?: string;
   latest_trading_day: string;
   next_trading_day?: string | null;
+  data_ready_latest_date?: string | null;
+  replay_start_date?: string;
+  replay_end_date?: string;
   trading_day_status?: JsonObject;
 };
 
@@ -204,6 +208,8 @@ export type CreateAdvisoryProgramPayload = {
 
 export type AdvisoryReviewPayload = {
   trade_date: string;
+  target_trade_date?: string;
+  selection_as_of_trade_date?: string;
   data_source?: string;
   runtime_config?: JsonObject;
   candidates?: JsonObject[];
