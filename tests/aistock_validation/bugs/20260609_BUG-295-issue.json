@@ -33,8 +33,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-09T13:56:14.330837Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "151ce4d94261db7084edff5edebb71e58328a08a",
+  "fixed_at": "2026-06-09T16:17:14.933343Z",
   "github_issue_number": 870,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/870",
   "last_seen_at": "2026-06-09T13:56:14.330837Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/878",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -103,6 +104,19 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "CI for PR #878 -> all required checks successful; Workflow validation fast lane skipped by classifier",
+    "python -m pytest backend/tests/watchlist/test_advisory_program.py -q -> 15 passed after origin/main merge",
+    "python -m pytest backend/tests/watchlist/test_advisory_api.py -q -> 11 passed after origin/main merge",
+    "frontend scoped tsc tmp/tsconfig.bug295.json -> passed after origin/main merge",
+    "npx playwright test tests/paper-v2/paper-v2-advisory-ui.spec.ts --config playwright.config.ts -> 3 passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> 8 passed",
+    "nox -s paper_v2_backend -> 605 passed, 1 skipped, 2 xfailed",
+    "nox -s paper_v2_ui -> 19 passed, 1 skipped",
+    "nox -s validation_center_backend -> 395 passed",
+    "production gates -> ddl noop; frontend dependency noop; backend dependency noop"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
