@@ -35,8 +35,8 @@
   "expected": "MiniQMT strategy count is governed only by capital capacity and trading rules; account-group slots expose ACTIVE/SKIPPED_INSUFFICIENT_CAPITAL/PARTIAL_CAPITAL_ALLOCATED/MIN_LOT_NOT_REACHED/SELL_PROCEEDS_REQUIRED states; full rebalance uses SELL-first with proceeds only when safe; dependent buys are blocked, scaled, or explicitly residual when sells are unfilled, partial, rejected, or timed out; automated tests and validation history prove these scenarios before BUG-210 parent closure.",
   "first_seen_at": "2026-06-09T13:59:10.604749Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8be7e1efd4df9183fad0963482d96cc8695758e6",
+  "fixed_at": "2026-06-09T15:29:03.580547Z",
   "github_issue_number": 871,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/871",
   "last_seen_at": "2026-06-09T13:59:10.604749Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/875",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -66,6 +67,18 @@
     "fingerprint": "5914344544d4668361eab467",
     "source_event_id": "FE-20260609-5914344544d4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/qmt_strategy_ledger/test_order_service_preflight.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 34 passed after rebase",
+    "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py -q -> 43 passed before rebase; touched MiniQMTSim capacity only",
+    "python -m ruff check backend/services/qmt_strategy_ledger/order_service.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -> All checks passed after rebase",
+    "python -m compileall -q backend/services/qmt_strategy_ledger backend/services/paper_trading_v2/broker backend/tests/qmt_strategy_ledger -> passed before rebase",
+    "python -m nox -s l0 -> passed before rebase, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> passed before rebase, 8 passed",
+    "python -m nox -s paper_v2_backend -> passed before rebase, 605 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s validation_center_backend -> passed before rebase, 395 passed, coverage passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed before rebase",
+    "gh pr checks 875 -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
