@@ -265,6 +265,38 @@ const listItems = [
   },
 ];
 
+const initialListVersion = {
+  list_version_id: "advlv_initial_20260608",
+  program_id: PROGRAM_ID,
+  binding_version_id: activeBinding.binding_version_id,
+  review_run_id: "advrun_initial_20260608",
+  trade_date: "2026-06-08",
+  previous_list_version_id: null,
+  version_status: "PUBLISHED",
+  target_count: 20,
+  active_count: 1,
+  entered_count: 1,
+  held_count: 0,
+  exited_count: 0,
+  waiting_count: 0,
+  changed_count: 1,
+  turnover_rate: 1,
+  overlap_rate: null,
+  summary_json: {},
+  created_at: "2026-06-08T18:10:00+08:00",
+};
+
+const initialListItems = [
+  {
+    ...listItems[0],
+    list_item_id: "advli_initial_000001",
+    list_version_id: "advlv_initial_20260608",
+    action: "ENTER",
+    previous_action: null,
+    operation_advice_json: { advice_type: "ENTER", human_label: "initial enter", reason_summary: "INITIAL_TOPK" },
+  },
+];
+
 const returns = activePool.map((row, index) => ({
   ...row,
   status: index === 0 ? "EXITED" : row.status,
@@ -334,6 +366,11 @@ async function mockAdvisoryApis(page: Page) {
       })),
     },
   });
+  let currentListVersions: JsonObject[] = [...listVersions];
+  let detailByVersion: Record<string, { list_version: JsonObject; items: JsonObject[] }> = {
+    advlv_20260605: { list_version: listVersions[0], items: listItems },
+    advlv_20260604: { list_version: listVersions[1], items: initialListItems.map((item) => ({ ...item, list_version_id: "advlv_20260604" })) },
+  };
   await page.route("**/api/v1/advisory/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -371,10 +408,13 @@ async function mockAdvisoryApis(page: Page) {
       return json(route, { ok: true, binding: activeBinding });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/list-versions`) && method === "GET") {
-      return json(route, { ok: true, list_versions: listVersions });
+      return json(route, { ok: true, list_versions: currentListVersions });
     }
-    if (path.endsWith("/api/v1/advisory/list-versions/advlv_20260605") && method === "GET") {
-      return json(route, { ok: true, list_version: listVersions[0], items: listItems });
+    if (path.includes("/api/v1/advisory/list-versions/") && method === "GET") {
+      const listVersionId = decodeURIComponent(path.split("/").pop() || "");
+      const detail = detailByVersion[listVersionId];
+      if (detail) return json(route, { ok: true, ...detail });
+      return json(route, { detail: `unknown list version: ${listVersionId}` }, 404);
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews`) && method === "GET") {
       const limit = Number(url.searchParams.get("limit") || "20");
@@ -402,6 +442,25 @@ async function mockAdvisoryApis(page: Page) {
       reviewBodies.push(body);
       latestReviewTradeDate = String(body.trade_date || latestReviewTradeDate);
       lastReviewStatus = "SUCCEEDED";
+      currentListVersions = [{
+        ...initialListVersion,
+        list_version_id: "advlv_20260608",
+        review_run_id: "advrun_20260608",
+        previous_list_version_id: currentListVersions[0]?.list_version_id || null,
+      }, ...currentListVersions];
+      detailByVersion = {
+        ...detailByVersion,
+        advlv_20260608: {
+          list_version: currentListVersions[0],
+          items: listItems.slice(0, 1).map((item) => ({
+            ...item,
+            list_item_id: "advli_run_000001",
+            list_version_id: "advlv_20260608",
+            action: "ENTER",
+            operation_advice_json: { advice_type: "ENTER", human_label: "enter list", reason_summary: "KEEP_TOPK" },
+          })),
+        },
+      };
       return json(route, reviewPayload(false));
     }
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
@@ -482,6 +541,14 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260608");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("enter list");
 
+  await page.getByTestId("advisory-view-list-version-advlv_20260605").click();
+  await expect(page.getByTestId("advisory-view-list-version-advlv_20260605")).toHaveText("当前明细");
+  await expect(page.getByTestId("advisory-list-version-row-advlv_20260605")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("手动查看版本");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("exit from list");
+  await expect(page.getByTestId("advisory-list-items-table")).not.toContainText("enter list");
+
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
   await expect(page.getByText(`第 1 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
@@ -529,5 +596,163 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory page exposes initial list generation when a new program has no list versions", async ({ page }) => {
+  const newProgramId = "adv_new_initial_program";
+  const calls: string[] = [];
+  const reviewBodies: JsonObject[] = [];
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  let latestReviewTradeDate: string | null = null;
+  let lastReviewStatus: string | null = null;
+  let currentListVersions: JsonObject[] = [];
+  let detailByVersion: Record<string, { list_version: JsonObject; items: JsonObject[] }> = {};
+  const newBinding = { ...activeBinding, program_id: newProgramId, binding_version_id: "advb_new_initial" };
+  const enabledProgram = () => ({
+    ...program,
+    program_id: newProgramId,
+    program_name: "新建荐股任务",
+    status: "ENABLED",
+    latest_review_trade_date: latestReviewTradeDate,
+    last_review_status: lastReviewStatus,
+  });
+  const initialPayload = (preview: boolean) => {
+    const listVersionId = preview ? "advlv_preview_initial_20260608" : "advlv_initial_20260608";
+    return {
+      ok: true,
+      review: {
+        program: enabledProgram(),
+        trade_date: "2026-06-08",
+        review_status: "SUCCEEDED",
+        decisions: reviews.slice(0, 1).map((row) => ({ ...row, trade_date: "2026-06-08", action: "ENTER" })),
+        active_pool: [],
+        metrics: {},
+        preview,
+        binding_version_id: newBinding.binding_version_id,
+        review_run_id: preview ? "advrun_preview_initial_20260608" : "advrun_initial_20260608",
+        list_version_id: listVersionId,
+        change_summary: { entered_count: 1, held_count: 0, exited_count: 0, waiting_count: 0, turnover_rate: 1, overlap_rate: null },
+        list_items: initialListItems.map((item) => ({
+          ...item,
+          program_id: newProgramId,
+          binding_version_id: newBinding.binding_version_id,
+          list_version_id: listVersionId,
+          operation_advice_json: { advice_type: "ENTER", human_label: preview ? "initial preview" : "initial enter", reason_summary: "INITIAL_TOPK" },
+        })),
+      },
+    };
+  };
+
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+
+  await mockShellApis(page);
+  await page.route("**/api/v1/advisory/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    calls.push(`${method} ${path}${url.search}`);
+
+    if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
+      return json(route, { ok: true, programs: [enabledProgram()] });
+    }
+    if (path.endsWith("/api/v1/advisory/leaderboard") && method === "GET") {
+      return json(route, {
+        ok: true,
+        leaderboard: [{
+          ...enabledProgram(),
+          entered_episode_count: 0,
+          active_count: 0,
+          take_profit_count: 0,
+          stop_loss_count: 0,
+          win_rate: null,
+          avg_return_bps: null,
+          median_return_bps: null,
+          max_drawdown_bps: null,
+          avg_holding_days: null,
+        }],
+      });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/active-pool`) && method === "GET") {
+      return json(route, { ok: true, active_pool: [] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/bindings`) && method === "GET") {
+      return json(route, { ok: true, bindings: [newBinding] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/list-versions`) && method === "GET") {
+      return json(route, { ok: true, list_versions: currentListVersions });
+    }
+    if (path.includes("/api/v1/advisory/list-versions/") && method === "GET") {
+      const listVersionId = decodeURIComponent(path.split("/").pop() || "");
+      const detail = detailByVersion[listVersionId];
+      if (detail) return json(route, { ok: true, ...detail });
+      return json(route, { detail: `unknown list version: ${listVersionId}` }, 404);
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews`) && method === "GET") {
+      return json(route, { ok: true, reviews: [], total_count: 0, limit: 20, offset: 0 });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/returns`) && method === "GET") {
+      return json(route, { ok: true, returns: [], metrics: {} });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {
+      reviewBodies.push(request.postDataJSON() as JsonObject);
+      return json(route, initialPayload(true));
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/run`) && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      reviewBodies.push(body);
+      latestReviewTradeDate = String(body.trade_date || "2026-06-08");
+      lastReviewStatus = "SUCCEEDED";
+      const published = { ...initialListVersion, program_id: newProgramId, binding_version_id: newBinding.binding_version_id };
+      const publishedItems = initialListItems.map((item) => ({
+        ...item,
+        program_id: newProgramId,
+        binding_version_id: newBinding.binding_version_id,
+      }));
+      currentListVersions = [published];
+      detailByVersion = { [String(published.list_version_id)]: { list_version: published, items: publishedItems } };
+      return json(route, initialPayload(false));
+    }
+    return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-selected-preview")).toHaveText("预览初始列表");
+  await expect(page.getByTestId("advisory-selected-run")).toHaveText("生成初始列表");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("尚未生成初始列表");
+  await expect(page.getByTestId("advisory-list-versions-table")).toContainText("暂无列表版本");
+  await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
+  await expect(page.getByText("选股运行 ID")).toHaveCount(0);
+
+  await page.getByTestId("advisory-selected-preview").click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${newProgramId}/reviews/preview`)).length).toBe(1);
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("刚刚执行结果");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_initial_");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("initial preview");
+  expect(reviewBodies.at(-1)).toMatchObject({
+    runtime_config: {
+      selection_artifact_config: {
+        auto_generate: true,
+      },
+    },
+  });
+  expect(reviewBodies.at(-1)).not.toHaveProperty("selection_run_id");
+
+  await page.getByTestId("advisory-selected-run").click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${newProgramId}/reviews/run`)).length).toBe(1);
+  await expect(page.getByTestId("advisory-selected-run")).toHaveText("已复评");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_initial_20260608");
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("initial enter");
+  await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(1);
+
+  expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
 });
