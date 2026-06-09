@@ -148,6 +148,9 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     file_payload = json.loads(output_path.read_text(encoding="utf-8"))
     context_payload = json.loads(context_path.read_text(encoding="utf-8"))
     assert stdout_payload["diagnostic_status"] == "complete"
+    assert stdout_payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
+    assert file_payload["llm_guarded_rollout_gate"]["workflow_gate"] == "warning"
+    assert context_payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
     assert file_payload["failed_jobs"][0]["nox_session"] == "paper_v2_backend"
     assert "Failed Tests" in markdown_path.read_text(encoding="utf-8")
     assert context_payload["schema_version"] == "aistock_ci_failure_context_pack_v1"
@@ -180,6 +183,9 @@ def test_github_issue_payload_contains_dedupe_marker_and_labels() -> None:
     assert "P1" in issue_payload["labels"]
     assert "module:paper_v2" in issue_payload["labels"]
     assert "Latest run" in issue_payload["recurrence_comment"]
+    assert payload["llm_guarded_rollout_gate"]["workflow_gate"] == "warning"
+    assert payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
+    assert "## LLM Guarded Rollout" in issue_payload["body"]
 
 
 def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -890,6 +896,8 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "llm-nightly-scheduler-advice.json" in code_steps
     assert "prompt-evaluation" in code_steps
     assert "llm-prompt-evaluation.json" in code_steps
+    assert "guarded-rollout-gate" in code_steps
+    assert "llm-guarded-rollout-gate.json" in code_steps
     summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run
