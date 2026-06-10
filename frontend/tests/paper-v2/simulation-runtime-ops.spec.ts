@@ -103,7 +103,17 @@ const qmtRun = {
   status: "SUCCEEDED",
   last_stage: "SUBMITTED",
   stage_counts: { target_count: 2, execution_plan_intent_count: 2, submitted_intents: 2, failed_intents: 0 },
-  broker_context: { no_rebalance_required: false, broker_called: true, qmt_batch_status: "SUCCEEDED" },
+  broker_context: {
+    no_rebalance_required: false,
+    broker_called: true,
+    qmt_batch_status: "SUCCEEDED",
+    qmt_batch_result: {
+      runtime_evidence: {
+        runtime_id: "mqrt_sim_qmt_ops_runtime",
+        runtime_owner: "MiniQMTExecutionRuntime",
+      },
+    },
+  },
   strategy_performance: { nav: 1.001, total_equity: 100100, realized_pnl: 0, unrealized_pnl: 100, market_value: 10100, cash: 90000, positions: [{ symbol: "000001.SZ", quantity: 1000 }] },
   orders: [{ source: "miniqmt_managed_order", intent_id: "intent_qmt_buy", qmt_order_id: "900000001", success: true }],
   fills: [{ source: "miniqmt_sync_summary", trades_seen: 1, cash_entries_appended: 1 }],
@@ -166,6 +176,37 @@ const plans = {
       { intent_id: "intent_qmt_sell", symbol: "000003.SZ", side: "SELL", order_quantity: 77 },
     ],
   },
+};
+
+const operatorCommandPayload = {
+  ok: true,
+  operator_command: {
+    command_id: "opcmd_ui_cancel_all",
+    command_type: "CANCEL_ALL_OPEN_ORDERS",
+    account_group_id: "ag_minqmt_62266303_sim",
+    strategy_slot_id: "slot_strategy_miniqmt_ops",
+    reason: "ui operator regression",
+  },
+  result: {
+    command_id: "opcmd_ui_cancel_all",
+    command_type: "CANCEL_ALL_OPEN_ORDERS",
+    runtime_id: "mqrt_ui_operator",
+    status: "EXECUTED",
+    reason: "ui operator regression",
+    cancelled_child_order_ids: ["mqchild_ui_001"],
+    submitted_child_order_ids: [],
+    affected_algo_instance_ids: ["mqalgo_ui_001"],
+    broker_packets: [{ action: "cancel_child_order", accepted: true }],
+    errors: [],
+    metadata: { active_child_count: 1 },
+  },
+  runtime_evidence: {
+    runtime_owner: "MiniQMTExecutionRuntime",
+    runtime_id: "mqrt_ui_operator",
+    submitted_child_count: 0,
+    rejected_child_count: 0,
+  },
+  production_runtime_restart_required: false,
 };
 
 type MockRun = JsonObject & { broker_backend: string; status: string; strategy_id: string };
@@ -242,8 +283,42 @@ async function mockApi(page: Page) {
       });
     }
 
+    if (path.endsWith(`/api/v1/simulation-runtime/runs/${QMT_RUN_ID}`)) {
+      return respond({
+        ok: true,
+        run: qmtRun,
+        selection_evidence: {
+          evidence_id: "dse_qmt_ops",
+          artifact_hash: "selection_hash_shared_1234567890",
+          target_trade_date: TRADE_DATE,
+          package_id: "pkg_ops",
+          manifest_sha256: "manifest_qmt_hash",
+          release_id: "srr_qmt_ops",
+          release_hash: "release_qmt_hash_1234567890",
+          runtime_profile_version_id: "runtime_profile_ops_v1",
+          runtime_profile_hash: "runtime_hash_ops",
+          candidate_count: 2,
+          excluded_count: 0,
+          source_type: "live_inference",
+          data_source: "DB_HISTORICAL",
+        },
+        execution_plan: plans[QMT_PLAN_ID],
+      });
+    }
+
     if (path.endsWith(`/api/v1/simulation-runtime/execution-plans/${LOCAL_PLAN_ID}`)) {
       return respond({ ok: true, execution_plan: plans[LOCAL_PLAN_ID] });
+    }
+
+    if (path.endsWith("/api/v1/simulation-runtime/miniqmt/operator-commands") && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      if (body.confirm_text !== "EXECUTE CANCEL_ALL_OPEN_ORDERS") {
+        return respond({ detail: { error_code: "MINIQMT_OPERATOR_CONFIRMATION_REQUIRED" } }, 409);
+      }
+      if (body.runtime_id !== "mqrt_sim_qmt_ops_runtime") {
+        return respond({ detail: { error_code: "MINIQMT_RUNTIME_ID_NOT_FROM_EVIDENCE" } }, 422);
+      }
+      return respond(operatorCommandPayload);
     }
 
     return respond({ detail: `unexpected simulation-runtime route: ${path}` }, 404);
@@ -295,6 +370,36 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByText("strategy_local_ops", { exact: true })).toHaveCount(0);
 
   expect(writeMethods).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("simulation runtime ops page submits MiniQMT operator command only after explicit selection and confirmation", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
+  });
+  const writeMethods = await mockApi(page);
+
+  await page.goto("/paper-v2/simulation-runtime");
+  await expect(page.getByTestId("sim-runtime-operator-command-panel")).toBeVisible();
+  await expect(page.getByTestId("sim-runtime-operator-submit")).toBeDisabled();
+
+  await page.getByTestId(`sim-runtime-run-detail-${QMT_RUN_ID}`).click();
+  await expect(page.getByTestId("sim-runtime-operator-selected-run")).toContainText(QMT_RUN_ID);
+  await page.getByTestId("sim-runtime-operator-reason").fill("ui operator regression");
+  await page.getByTestId("sim-runtime-operator-confirm").fill("EXECUTE CANCEL_ALL_OPEN_ORDERS");
+  await page.getByTestId("sim-runtime-operator-submit").click();
+
+  await expect(page.getByTestId("sim-runtime-operator-result")).toContainText("EXECUTED");
+  expect(writeMethods).toEqual(["POST /api/v1/simulation-runtime/miniqmt/operator-commands"]);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(badResponses).toEqual([]);
