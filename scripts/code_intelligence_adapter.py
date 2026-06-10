@@ -238,6 +238,39 @@ def _codegraph_command() -> str | None:
     return shutil.which("codegraph")
 
 
+def _runner_context() -> str:
+    if str(os.environ.get("GITHUB_ACTIONS") or "").lower() == "true":
+        return "github_actions"
+    if os.environ.get("CI"):
+        return "ci"
+    return "local"
+
+
+def _codegraph_fallback(*, status: dict[str, Any], skip_external: bool) -> dict[str, Any]:
+    context = _runner_context()
+    if context in {"github_actions", "ci"}:
+        if skip_external:
+            detail = "CodeGraph external calls are disabled in this PR Quality runner; use artifact refs or local latest-freshness."
+        elif not status.get("available"):
+            detail = "CodeGraph CLI is not installed in this runner; use artifact refs or local latest-freshness."
+        elif not status.get("index_exists"):
+            detail = "CodeGraph index artifact is not present in this runner checkout; use artifact refs or local latest-freshness."
+        else:
+            detail = "CodeGraph index is not executable in this runner; use artifact refs or local latest-freshness."
+        return {
+            "used": True,
+            "reason": "runner_artifact_unavailable",
+            "detail": detail,
+            "runner_context": context,
+        }
+    return {
+        "used": True,
+        "reason": "codegraph_unavailable_or_missing_index",
+        "detail": None,
+        "runner_context": context,
+    }
+
+
 def _codegraph_bootstrap_command() -> str:
     command = _codegraph_command() or "codegraph"
     return f"{command} init -i"
@@ -289,6 +322,44 @@ def _latest_codegraph_freshness_artifact(root: Path) -> dict[str, Any] | None:
         "index_summary": payload.get("index_summary") or {},
         "warnings": payload.get("warnings") or [],
         "notes": payload.get("notes") or [],
+        "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
+    }
+
+
+def _latest_understand_anything_summary_manifest(root: Path) -> dict[str, Any] | None:
+    candidates: list[tuple[str, float, Path, dict[str, Any]]] = []
+    for relative_root in CODE_INTELLIGENCE_ARTIFACT_ROOTS:
+        artifact_root = root / relative_root
+        if not artifact_root.exists():
+            continue
+        for path in artifact_root.rglob("ua-summary-manifest.json"):
+            payload = _read_json_if_exists(path)
+            if (payload or {}).get("schema_version") != "aistock_understand_anything_summary_manifest_v1":
+                continue
+            generated_at = str(payload.get("generated_at") or "")
+            try:
+                modified_at = path.stat().st_mtime
+            except OSError:
+                modified_at = 0.0
+            candidates.append((generated_at, modified_at, path, payload or {}))
+    if not candidates:
+        return None
+    _, _, path, payload = sorted(candidates, key=lambda item: (item[0], item[1], str(item[2])), reverse=True)[0]
+    return {
+        "schema_version": payload.get("schema_version"),
+        "artifact_type": "understand_anything_summary_manifest",
+        "workflow_gate": payload.get("workflow_gate"),
+        "generated_at": payload.get("generated_at"),
+        "artifact_path": _repo_rel(path, root),
+        "summary_refs": [
+            {
+                "module": item.get("module"),
+                "summary_ref": item.get("summary_ref"),
+                "freshness": item.get("freshness"),
+            }
+            for item in payload.get("summary_refs") or []
+            if isinstance(item, dict)
+        ],
         "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
     }
 
@@ -817,6 +888,7 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
     notes: list[str] = []
     if freshness == "base_current":
         notes.append("Understand Anything graph matches an ancestor of the current worktree; use it for base-code context plus targeted reads of changed files.")
+    latest_manifest = _latest_understand_anything_summary_manifest(root)
     if graph_path.exists() and graph:
         manifest = {
             "node_count": len(graph.get("nodes") or []),
@@ -834,8 +906,15 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
     plugin_root = _first_existing_dir(_ua_plugin_root_candidates(home))
     claude_plugin = _claude_understand_plugin_status(skip_external=skip_external)
     configured = config_path.exists() or ignore_path.exists() or bool(plugin_root) or codex_skill.exists()
+    runner_context = _runner_context()
     if graph_path.exists():
         status = "available"
+    elif latest_manifest and runner_context in {"github_actions", "ci"}:
+        status = "runner_artifact_available"
+        notes.append("Understand Anything graph is not present in this runner, but a compact summary manifest is available.")
+    elif runner_context in {"github_actions", "ci"}:
+        status = "runner_artifact_unavailable"
+        notes.append("Understand Anything local graph is not bundled with this runner checkout; this is warning-only and does not mean local clients are not configured.")
     elif configured:
         status = "configured_missing_graph"
     else:
@@ -845,6 +924,7 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
         "provider": "understand_anything",
         "enabled": True,
         "status": status,
+        "runner_context": runner_context,
         "expected_version": DEFAULT_UNDERSTAND_ANYTHING_VERSION,
         "graph_path": _repo_rel(graph_path, root),
         "graph_root": str(root),
@@ -872,6 +952,7 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
         "auto_update_required": False,
         "blocking_for_issue_workflow": False,
         "manifest": manifest,
+        "latest_summary_manifest": latest_manifest,
         "install_commands": install_commands,
         "configure_command": "python scripts/code_intelligence_adapter.py ua-configure --language zh",
         "generate_graph_command": _understand_generate_command(root),
@@ -1143,8 +1224,9 @@ def build_context_artifacts(
     context_path = output_dir / "codegraph-context.md"
     manifest_path = output_dir / "code-intelligence.json"
     status = codegraph_status(root, skip_external=skip_external)
+    fallback = _codegraph_fallback(status=status, skip_external=skip_external)
     fallback_used = True
-    fallback_reason = "codegraph_unavailable_or_missing_index"
+    fallback_reason = str(fallback.get("reason") or "codegraph_unavailable_or_missing_index")
     graph_ready = bool(status.get("available") and status.get("index_exists") and not skip_external)
     context_text = _fallback_context(query, changed)
     channel = "fallback"
@@ -1159,11 +1241,18 @@ def build_context_artifacts(
         if result.get("ok") and (result.get("stdout") or "").strip():
             fallback_used = False
             fallback_reason = None
+            fallback = {"used": False, "reason": None, "detail": None, "runner_context": _runner_context()}
             context_text = str(result.get("stdout") or "")
             channel = "cli"
         else:
             fallback_reason = result.get("stderr") or result.get("stdout") or "codegraph_context_failed"
             fallback_used = False
+            fallback = {
+                "used": False,
+                "reason": None,
+                "detail": f"CodeGraph detail context failed; repo-level index summary used: {_compact_text(str(fallback_reason), max_chars=180)}",
+                "runner_context": _runner_context(),
+            }
             context_text = _repo_level_context(query, changed, status, str(fallback_reason))
             channel = "repo_index"
     _write_text(context_path, context_text)
@@ -1179,10 +1268,21 @@ def build_context_artifacts(
         "changed_files": changed,
         "status": "fallback" if fallback_used else ("repo_index_ready" if channel == "repo_index" else "ok"),
         "context_markdown": _repo_rel(context_path, root),
-        "fallback": {"used": fallback_used, "reason": fallback_reason},
+        "fallback": {**fallback, "used": fallback_used, "reason": fallback_reason},
         "graph_root": status.get("graph_root"),
         "graph_root_source": status.get("graph_root_source"),
         "channel": channel,
+        "runner_context": _runner_context(),
+        "codegraph_status": {
+            "available": status.get("available"),
+            "index_exists": status.get("index_exists"),
+            "status": status.get("status"),
+            "status_check": status.get("status_check"),
+            "index_summary": status.get("index_summary"),
+            "git_commit": status.get("git_commit"),
+            "graph_root": status.get("graph_root"),
+            "graph_root_source": status.get("graph_root_source"),
+        },
     }
     _write_json(manifest_path, manifest)
     return {**manifest, "manifest_path": _repo_rel(manifest_path, root)}
@@ -1272,8 +1372,9 @@ def build_affected_tests_artifact(
     out_path = output_dir / "affected-tests.json"
     status = codegraph_status(root, skip_external=skip_external)
     suggested: list[str] = []
+    fallback = _codegraph_fallback(status=status, skip_external=skip_external)
     fallback_used = True
-    fallback_reason = "codegraph_unavailable_or_missing_index"
+    fallback_reason = str(fallback.get("reason") or "codegraph_unavailable_or_missing_index")
     graph_ready = bool(changed and status.get("available") and status.get("index_exists") and not skip_external)
     if graph_ready:
         command = str(status["command"])
@@ -1286,6 +1387,7 @@ def build_affected_tests_artifact(
             suggested = [line.strip() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
             fallback_used = False
             fallback_reason = None
+            fallback = {"used": False, "reason": None, "detail": None, "runner_context": _runner_context()}
         else:
             fallback_reason = result.get("stderr") or result.get("stdout") or "codegraph_affected_failed"
     codegraph_suggested = list(suggested)
@@ -1315,7 +1417,7 @@ def build_affected_tests_artifact(
         "repo_fallback_suggested_tests": supplement,
         "filter": filter_glob,
         "status": "fallback" if fallback_used else "ok",
-        "fallback": {"used": fallback_used, "reason": fallback_reason},
+        "fallback": {**fallback, "used": fallback_used, "reason": fallback_reason},
         "test_discovery_fallback": {
             "used": bool(supplement),
             **test_discovery,
@@ -1324,6 +1426,7 @@ def build_affected_tests_artifact(
         "source": "codegraph affected"
         if not fallback_used and not supplement
         else ("codegraph affected + aistock repo fallback" if not fallback_used else "aistock fallback"),
+        "runner_context": _runner_context(),
     }
     _write_json(out_path, payload)
     return {**payload, "artifact_path": _repo_rel(out_path, root)}
@@ -1353,7 +1456,7 @@ def build_summary(
         skip_external=skip_external,
     )
     ua_status = understand_anything_status(root, skip_external=True)
-    freshness = latest_codegraph_freshness(root, live_status=context.get("status_check"))
+    freshness = latest_codegraph_freshness(root, live_status=context.get("codegraph_status"))
     ua_summary: dict[str, Any] | None = None
     if module:
         ua_payload = build_understand_anything_summary(
@@ -1379,6 +1482,7 @@ def build_summary(
         "item_id": item_id,
         "module": module,
         "provider": "codegraph",
+        "runner_context": _runner_context(),
         "status": "ok" if context["status"] in {"ok", "repo_index_ready"} or affected["status"] == "ok" else "fallback",
         "context_ref": context.get("context_markdown"),
         "manifest_ref": context.get("manifest_path"),
@@ -1425,6 +1529,7 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
         "## Code Intelligence Summary",
         "",
         f"- provider: `{payload.get('provider') or 'codegraph'}`",
+        f"- runner_context: `{payload.get('runner_context') or 'local'}`",
         f"- status: `{payload.get('status') or 'unknown'}`",
         f"- fallback_used: `{str(bool(payload.get('fallback_used'))).lower()}`",
         f"- affected_quality: `{affected.get('quality') or 'unknown'}`",
@@ -1449,6 +1554,17 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
     ]
     if warnings:
         lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    runner_notes = []
+    for item in (context_fallback, affected_fallback):
+        if item.get("detail") and item.get("detail") not in runner_notes:
+            runner_notes.append(str(item.get("detail")))
+    if ua.get("runner_context") in {"github_actions", "ci"} and ua.get("status") in {
+        "runner_artifact_unavailable",
+        "runner_artifact_available",
+    }:
+        runner_notes.extend(str(item) for item in ua.get("notes") or [] if str(item).strip())
+    if runner_notes:
+        lines.extend(["", "### Runner Context", *[f"- {item}" for item in runner_notes[:4]]])
     lines.extend([
         "",
         "Code intelligence is warning-only. Final merge readiness still depends on AIstock nox, pytest, Validation Center, and production gates.",
