@@ -27,6 +27,13 @@ export type AdvisoryProgram = {
   enabled_since?: string | null;
   last_review_status?: string | null;
   latest_review_trade_date?: string | null;
+  latest_recommendation_list_version_id?: string | null;
+  latest_recommendation_trade_date?: string | null;
+  latest_recommendation_target_trade_date?: string | null;
+  latest_recommendation_selection_as_of_trade_date?: string | null;
+  latest_recommendation_generated_at?: string | null;
+  latest_recommendation_version_status?: string | null;
+  published_recommendation_target_trade_dates?: string[];
 };
 
 export type AdvisoryLeaderboardRow = AdvisoryProgram & {
@@ -133,6 +140,8 @@ export type AdvisoryRecommendationListVersion = {
   turnover_rate?: number | null;
   overlap_rate?: number | null;
   summary_json?: JsonObject;
+  target_trade_date?: string | null;
+  selection_as_of_trade_date?: string | null;
   created_at?: string | null;
 };
 
@@ -192,6 +201,7 @@ export type AdvisoryTradingDayDefaults = {
   latest_trading_day: string;
   next_trading_day?: string | null;
   data_ready_latest_date?: string | null;
+  trading_days?: string[];
   replay_start_date?: string;
   replay_end_date?: string;
   trading_day_status?: JsonObject;

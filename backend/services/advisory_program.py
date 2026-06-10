@@ -1231,7 +1231,7 @@ class AdvisoryProgramService:
         for program in self.repository.list_programs(include_archived=include_archived):
             if program.status not in ACTIVE_PROGRAM_STATUSES and not include_archived:
                 continue
-            rows.append({**program_to_dict(program), **self._program_metrics(program)})
+            rows.append({**program_to_dict(program), **self._program_metrics(program), **self._latest_recommendation_payload(program)})
         return sorted(rows, key=self._leaderboard_key(sort_by))
 
     def active_pool(self, program_id: str) -> list[dict[str, Any]]:
@@ -1256,6 +1256,40 @@ class AdvisoryProgramService:
     def recommendation_list_versions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
         return [list_version_to_dict(row) for row in self.repository.list_versions(program_id, limit=limit, offset=offset)]
+
+    def _latest_recommendation_payload(self, program: AdvisoryProgram) -> dict[str, Any]:
+        versions = [
+            row for row in self.repository.list_versions(program.program_id, limit=20, offset=0)
+            if row.version_status == LIST_VERSION_STATUS_PUBLISHED
+        ]
+        latest = versions[0] if versions else None
+        published_targets = [
+            str(_list_version_advisory_date_context(row)["target_trade_date"] or row.trade_date.isoformat())
+            for row in versions
+        ]
+        payload: dict[str, Any] = {
+            "latest_recommendation_list_version_id": None,
+            "latest_recommendation_trade_date": None,
+            "latest_recommendation_target_trade_date": None,
+            "latest_recommendation_selection_as_of_trade_date": None,
+            "latest_recommendation_generated_at": None,
+            "latest_recommendation_version_status": None,
+            "published_recommendation_target_trade_dates": published_targets,
+        }
+        if latest is None:
+            return payload
+        context = _list_version_advisory_date_context(latest)
+        payload.update(
+            {
+                "latest_recommendation_list_version_id": latest.list_version_id,
+                "latest_recommendation_trade_date": latest.trade_date.isoformat(),
+                "latest_recommendation_target_trade_date": context["target_trade_date"] or latest.trade_date.isoformat(),
+                "latest_recommendation_selection_as_of_trade_date": context["selection_as_of_trade_date"],
+                "latest_recommendation_generated_at": latest.created_at,
+                "latest_recommendation_version_status": latest.version_status,
+            }
+        )
+        return _json_ready(payload)
 
     def recommendation_list_version_detail(self, list_version_id: str) -> dict[str, Any]:
         list_version = self.repository.get_list_version(list_version_id)
@@ -2472,7 +2506,11 @@ def binding_to_dict(binding: AdvisoryStrategyBindingVersion) -> dict[str, Any]:
 
 
 def list_version_to_dict(list_version: AdvisoryRecommendationListVersion) -> dict[str, Any]:
-    return _json_ready(asdict(list_version))
+    payload = _json_ready(asdict(list_version))
+    context = _list_version_advisory_date_context(list_version)
+    payload["target_trade_date"] = context["target_trade_date"] or list_version.trade_date.isoformat()
+    payload["selection_as_of_trade_date"] = context["selection_as_of_trade_date"]
+    return payload
 
 
 def list_item_to_dict(item: AdvisoryRecommendationListItem) -> dict[str, Any]:
@@ -2497,6 +2535,17 @@ def review_result_to_dict(result: AdvisoryReviewResult) -> dict[str, Any]:
         "list_version_id": result.list_version_id,
         "change_summary": _json_ready(result.change_summary),
         "list_items": [list_item_to_dict(row) for row in result.list_items],
+    }
+
+
+def _list_version_advisory_date_context(list_version: AdvisoryRecommendationListVersion) -> dict[str, str | None]:
+    summary = dict(list_version.summary_json or {})
+    context = dict(summary.get("advisory_date_context") or {})
+    target = context.get("target_trade_date") or summary.get("target_trade_date")
+    selection_as_of = context.get("selection_as_of_trade_date") or summary.get("selection_as_of_trade_date")
+    return {
+        "target_trade_date": str(target) if target else None,
+        "selection_as_of_trade_date": str(selection_as_of) if selection_as_of else None,
     }
 
 
