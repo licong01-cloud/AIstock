@@ -24,6 +24,14 @@ MODULE_REGISTRY = CATALOG_ROOT / "module_registry.yaml"
 FILE_OWNERSHIP = CATALOG_ROOT / "file_ownership.yaml"
 TEST_PLANS = CATALOG_ROOT / "test_plans.yaml"
 PR_COMMENT_MAX_CHARS = 55000
+TIER_COMPLEXITY_THRESHOLDS = {
+    "changed_files_t2": 8,
+    "changed_files_t3": 20,
+    "impacted_modules_t2": 4,
+    "impacted_modules_t3": 8,
+    "layers_t2": 3,
+    "layers_t3": 5,
+}
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
     "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md",
@@ -294,13 +302,27 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     plans = _plans_by_key()
     ownership = match_changed_files(changed_files)
     impacted = list(ownership["impacted_modules"])
+    primary_modules = _unique_strings(
+        str(item.get("primary_module"))
+        for item in ownership.get("matched_rules") or []
+        if item.get("primary_module")
+    )
     if module and module not in impacted:
         impacted.insert(0, module)
+    if module and module not in primary_modules:
+        primary_modules.insert(0, module)
     if not impacted and module:
         impacted = [module]
+    if not primary_modules and impacted:
+        primary_modules = [impacted[0]]
 
     required: list[str] = []
     recommended: list[str] = []
+    primary_required: set[str] = set()
+    for module_id in primary_modules:
+        entry = modules.get(module_id) or {}
+        module_plans = entry.get("test_plans") or {}
+        primary_required.update(str(item) for item in _as_list(module_plans.get("required_on_change")))
     for module_id in impacted:
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
@@ -310,6 +332,13 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         required.append("l0")
     required = [plan for plan in _unique_strings(required) if plan in plans]
     recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
+    required, recommended, plan_promotions = _promote_indirect_required_to_recommended(
+        required,
+        recommended,
+        primary_required={plan for plan in primary_required if plan in plans},
+    )
+    recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
+    required = sorted(required, key=_plan_priority)
 
     skip_reasons = {
         plan_key: "not selected by changed-file ownership or requested module"
@@ -328,12 +357,92 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     return {
         "schema_version": "aistock_validation_selection_v1",
         "impacted_modules": impacted,
+        "primary_modules": primary_modules,
         "ownership": ownership,
         "required_plans": required,
         "recommended_plans": recommended,
+        "plan_promotions": plan_promotions,
         "nightly_plans": ["AIstock Nightly L3 + DR"],
         "skip_reasons": skip_reasons,
         "production_gates": gates,
+    }
+
+
+def _plan_priority(plan_key: str) -> int:
+    priority = {
+        "l0": 0,
+        "validation_module_registry_l0": 10,
+        "guardrail_changed_files": 20,
+    }
+    return priority.get(plan_key, 100)
+
+
+def _promote_indirect_required_to_recommended(
+    required: list[str],
+    recommended: list[str],
+    *,
+    primary_required: set[str],
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Keep CI selection narrow: indirect impact modules inform recommendations, not required gates."""
+
+    always_required = {"l0"}
+    final_required: list[str] = []
+    final_recommended = list(recommended)
+    promotions: list[dict[str, str]] = []
+    for plan in _unique_strings(required):
+        if plan in primary_required or plan in always_required:
+            final_required.append(plan)
+        else:
+            final_recommended.append(plan)
+            promotions.append(
+                {
+                    "plan_key": plan,
+                    "reason": "selected_from_indirect_impact_module",
+                    "target": "recommended",
+                }
+            )
+    return _unique_strings(final_required), _unique_strings(final_recommended), promotions
+
+
+def _infer_complexity_tier(
+    *,
+    changed_files: list[str],
+    ownership: dict[str, Any],
+    impacted_modules: list[str],
+    feature_signals: list[str],
+) -> dict[str, Any]:
+    layers = _unique_strings(str(item.get("layer") or "") for item in ownership.get("matched_rules") or [] if item.get("layer"))
+    changed_count = len(_unique_strings(changed_files))
+    impacted_count = len(_unique_strings(impacted_modules))
+    tier = "T0"
+    reasons: list[str] = []
+    if changed_count >= TIER_COMPLEXITY_THRESHOLDS["changed_files_t3"]:
+        tier = "T3"
+        reasons.append(f"changed_files>={TIER_COMPLEXITY_THRESHOLDS['changed_files_t3']}")
+    elif changed_count >= TIER_COMPLEXITY_THRESHOLDS["changed_files_t2"]:
+        tier = "T2"
+        reasons.append(f"changed_files>={TIER_COMPLEXITY_THRESHOLDS['changed_files_t2']}")
+    if changed_count >= 3 and impacted_count >= TIER_COMPLEXITY_THRESHOLDS["impacted_modules_t3"]:
+        tier = _highest_task_tier([tier, "T3"]) or tier
+        reasons.append(f"impacted_modules>={TIER_COMPLEXITY_THRESHOLDS['impacted_modules_t3']}")
+    elif changed_count >= 3 and impacted_count >= TIER_COMPLEXITY_THRESHOLDS["impacted_modules_t2"]:
+        tier = _highest_task_tier([tier, "T2"]) or tier
+        reasons.append(f"impacted_modules>={TIER_COMPLEXITY_THRESHOLDS['impacted_modules_t2']}")
+    if len(layers) >= TIER_COMPLEXITY_THRESHOLDS["layers_t3"]:
+        tier = _highest_task_tier([tier, "T3"]) or tier
+        reasons.append(f"layers>={TIER_COMPLEXITY_THRESHOLDS['layers_t3']}")
+    elif len(layers) >= TIER_COMPLEXITY_THRESHOLDS["layers_t2"]:
+        tier = _highest_task_tier([tier, "T2"]) or tier
+        reasons.append(f"layers>={TIER_COMPLEXITY_THRESHOLDS['layers_t2']}")
+    if feature_signals and tier == "T0" and changed_count >= 3:
+        tier = "T1"
+        reasons.append("feature_signal")
+    return {
+        "task_tier": tier,
+        "reasons": reasons,
+        "changed_file_count": changed_count,
+        "impacted_module_count": impacted_count,
+        "layers": layers,
     }
 
 
@@ -1006,6 +1115,42 @@ def evaluate_design_compliance_gate(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def evaluate_feature_linkage_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Warn when a medium/large feature PR lacks issue/design linkage or scoped boundaries."""
+
+    inferred = summary.get("linkage_inference") or {}
+    feature_signals = _as_list(inferred.get("feature_signals"))
+    task_tier = _highest_task_tier(_as_list(summary.get("task_tier"))) or "T0"
+    scope = summary.get("scope_check") or {}
+    linked = bool(summary.get("linked_issues"))
+    design_present = bool(inferred.get("design_acceptance_present"))
+    scope_defined = scope.get("status") in {"passed", "failed", "missing_scope"}
+    checks = {
+        "feature_signal": bool(feature_signals),
+        "tier_needs_linkage": task_tier in {"T2", "T3"},
+        "linked_issue_or_design": linked or design_present,
+        "scope_defined": scope_defined,
+    }
+    missing: list[str] = []
+    if checks["feature_signal"] and checks["tier_needs_linkage"]:
+        if not checks["linked_issue_or_design"]:
+            missing.append("linked_issue_or_design")
+        if not checks["scope_defined"]:
+            missing.append("scope_definition")
+    gate = "warning" if missing else "not_applicable"
+    if checks["feature_signal"] and checks["tier_needs_linkage"] and not missing:
+        gate = "passed"
+    return {
+        "workflow_gate": gate,
+        "checks": checks,
+        "blocking": [],
+        "warnings": missing,
+        "suggested_action": "link a GitHub Issue/design doc or provide allowed_write_scope for medium/large feature PRs"
+        if missing
+        else None,
+    }
+
+
 def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = False) -> dict[str, Any]:
     """Evaluate the opt-in high-risk PR evidence gate without changing normal PR behavior."""
     issue_record = summary.get("issue_record") or {}
@@ -1131,6 +1276,12 @@ def build_pr_quality(
     changed_files = changed_files if changed_files is not None else changed_files_from_git(base, head)
     inferred = _infer_pr_quality_context(changed_files, base=base, head=head)
     validation = select_validation(changed_files, module=(issue_record or {}).get("module"))
+    complexity = _infer_complexity_tier(
+        changed_files=changed_files,
+        ownership=validation.get("ownership") or {},
+        impacted_modules=validation.get("impacted_modules") or [],
+        feature_signals=inferred["feature_signals"],
+    )
     record_scope = _as_list((issue_record or {}).get("allowed_write_scope"))
     inferred_scope = inferred["inferred_allowed_scope"]
     scope = record_scope or inferred_scope
@@ -1163,9 +1314,16 @@ def build_pr_quality(
         "head": head,
         "issue_record": issue_record or {},
         "linked_issues": linked,
-        "task_tier": _highest_task_tier(inferred["task_tier_signals"]) or ("T1" if linked else "T0"),
+        "task_tier": _highest_task_tier(
+            _as_list((issue_record or {}).get("task_tier"))
+            + _as_list((issue_record or {}).get("tier"))
+            + inferred["task_tier_signals"]
+            + [str(complexity.get("task_tier") or "")]
+        )
+        or ("T1" if linked else "T0"),
         "changed_files": changed_files,
         "impacted_modules": validation["impacted_modules"],
+        "complexity_inference": complexity,
         "scope_check": scope_result,
         "linkage_inference": {
             "branch": inferred["branch"],
@@ -1191,6 +1349,7 @@ def build_pr_quality(
     }
     summary["p0p1_evidence_gate"] = evaluate_pr_quality_gate(summary, enforce_p0_p1=enforce_p0_p1_evidence)
     summary["design_compliance_gate"] = evaluate_design_compliance_gate(summary)
+    summary["feature_linkage_gate"] = evaluate_feature_linkage_gate(summary)
     summary["llm_triage_summary"] = build_pr_quality_llm_summary(summary)
     summary.pop("issue_record", None)
     return summary
@@ -1214,6 +1373,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- linkage_inference: `{(summary.get('linkage_inference') or {}).get('status')}`",
         f"- p0p1_evidence_gate: `{(summary.get('p0p1_evidence_gate') or {}).get('workflow_gate')}`",
         f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
+        f"- feature_linkage_gate: `{(summary.get('feature_linkage_gate') or {}).get('workflow_gate')}`",
         f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
@@ -1229,6 +1389,9 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         lines.extend(["### P0/P1 Evidence Gate Blocking", *[f"- `{item}`" for item in gate["blocking"]], ""])
     elif gate.get("warnings"):
         lines.extend(["### P0/P1 Evidence Gate Warnings", *[f"- `{item}`" for item in gate["warnings"]], ""])
+    feature_gate = summary.get("feature_linkage_gate") or {}
+    if feature_gate.get("warnings"):
+        lines.extend(["### Feature Linkage Warnings", *[f"- `{item}`" for item in feature_gate["warnings"]], ""])
     if llm_summary:
         lines.extend(
             [
