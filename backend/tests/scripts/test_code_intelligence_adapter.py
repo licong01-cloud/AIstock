@@ -797,3 +797,73 @@ def test_understand_anything_summary_manifest_uses_standard_modules(tmp_path: Pa
     assert [item["module"] for item in payload["summary_refs"]] == ["issue_workflow", "paper_v2"]
     assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "ua-summary-manifest.json").exists()
 
+
+def test_pr_quality_runner_reports_artifact_fallback_not_local_misconfiguration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_summary(
+        item_id="PR-887",
+        query="PR impact",
+        changed_files=["scripts/code_intelligence_adapter.py"],
+        root=tmp_path,
+        skip_external=True,
+    )
+    markdown = adapter.render_summary_markdown(payload)
+
+    assert payload["runner_context"] == "github_actions"
+    assert payload["context"]["fallback"]["reason"] == "runner_artifact_unavailable"
+    assert payload["affected_tests"]["fallback"]["reason"] == "runner_artifact_unavailable"
+    assert payload["understand_anything"]["status"] == "runner_artifact_unavailable"
+    assert payload["understand_anything"]["blocking_for_issue_workflow"] is False
+    assert "runner_context: `github_actions`" in markdown
+    assert "runner_artifact_unavailable" in markdown
+    assert "not_configured" not in markdown
+    assert len(markdown) < 4000
+
+
+def test_pr_quality_runner_can_reference_ua_summary_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "ua-summary-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_understand_anything_summary_manifest_v1",
+                "generated_at": "2026-06-10T00:00:00Z",
+                "workflow_gate": "ready",
+                "blocking_for_issue_workflow": False,
+                "summary_refs": [
+                    {
+                        "module": "validation",
+                        "summary_ref": "tmp/validation/code-intelligence/latest/ua-validation-summary.md",
+                        "freshness": "base_current",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True, runner_artifact_mode=True)
+
+    assert payload["status"] == "runner_artifact_available"
+    assert payload["latest_summary_manifest"]["artifact_path"].endswith("ua-summary-manifest.json")
+    assert payload["latest_summary_manifest"]["summary_refs"][0]["module"] == "validation"
+
