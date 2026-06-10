@@ -29,8 +29,8 @@
   "expected": "Medium or large feature PRs should infer appropriate T2/T3 tier from changed-file count, cross-module/layer signals, feature branch/title/body signals, and should surface design/feature linkage guidance without pretending the PR is T0.",
   "first_seen_at": "2026-06-10T01:40:36.889960Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "be0bda0bff950a06359aeaafc9c75a972e6683e7",
+  "fixed_at": "2026-06-10T03:30:57.894130Z",
   "github_issue_number": 886,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/886",
   "last_seen_at": "2026-06-10T01:40:36.889960Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "b59f10e566b857a10743681c",
     "source_event_id": "FE-20260610-b59f10e566b8"
   },
+  "validation_evidence": [
+    "PR #887 CI green; local required validations passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
