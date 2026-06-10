@@ -1,0 +1,97 @@
+{
+  "actual": "MCP model_registry tools currently read the empty model_registry.* catalog facade while the only populated model library is public.aistock_model_catalog. UI already uses /quantevolver/models backed by public.aistock_model_catalog. Requirement: current stage must keep one usable model library source, switch MCP list/detail/register/deprecate facade to public.aistock_model_catalog, support legacy IDs containing ::, and ensure MCP can access all 58 existing DB models and register new models.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260610_BUG-306-model-registry-mcp-reads-empty-new-registry-instead-of-populated-legacy.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-306",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T06:35:08.849392Z",
+  "description": "MCP model_registry tools currently read the empty model_registry.* catalog facade while the only populated model library is public.aistock_model_catalog. UI already uses /quantevolver/models backed by public.aistock_model_catalog. Requirement: current stage must keep one usable model library source, switch MCP list/detail/register/deprecate facade to public.aistock_model_catalog, support legacy IDs containing ::, and ensure MCP can access all 58 existing DB models and register new models.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-72d27c35c50b",
+      "timestamp": "2026-06-10T06:35:08.849386Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-10T06:35:08.849392Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 911,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/911",
+  "last_seen_at": "2026-06-10T06:35:08.849392Z",
+  "module": "mcp.gateway",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "mcp.gateway"
+  ],
+  "title": "Model registry MCP reads empty new registry instead of populated legacy catalog",
+  "trigger_condition": {
+    "fingerprint": "72d27c35c50b85db2c2d0174",
+    "source_event_id": "FE-20260610-72d27c35c50b"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:mcp.gateway",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/quantevolver/models",
+    "ui_routes": [
+      "/quantevolver/models"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
