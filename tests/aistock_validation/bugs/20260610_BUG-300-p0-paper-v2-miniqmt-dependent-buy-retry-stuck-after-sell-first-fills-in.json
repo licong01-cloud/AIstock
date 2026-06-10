@@ -25,10 +25,10 @@
       "timestamp": "2026-06-10T03:36:36.677236Z"
     },
     {
-      "timestamp": "2026-06-10T03:45:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Add simulation runtime lifecycle regression test file for BUG-300 dependent BUY retry coverage."
+      "actor": "codex",
+      "note": "Add simulation runtime lifecycle regression test file for BUG-300 dependent BUY retry coverage.",
+      "timestamp": "2026-06-10T03:45:00Z"
     }
   ],
   "evidence_uris": [
@@ -39,8 +39,8 @@
   "expected": "MiniQMT SELL-first 调仓在卖单成交并同步 cash/lot 后，统一 simulation-runtime 下一次 tick 必须只重试未提交的 dependent BUY，不得重复已接受 SELL/BUY；若卖单未成交、部分成交、资金仍不足或规则拒绝，必须给出显式 residual/terminal 状态，不能假成功也不能永久卡住。",
   "first_seen_at": "2026-06-10T03:36:36.677240Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1eb9fc92de2e81f07b0f7663e099de96bc2788c5",
+  "fixed_at": "2026-06-10T04:10:06.867381Z",
   "github_issue_number": 895,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/895",
   "last_seen_at": "2026-06-10T03:36:36.677240Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/898",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -68,6 +69,13 @@
     "fingerprint": "f4a8f0db1030ad5d523ae7c6",
     "source_event_id": "FE-20260610-f4a8f0db1030"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py -q -> 46 passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/qmt_strategy_ledger/order_service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/simulation_runtime backend/services/qmt_strategy_ledger backend/tests/simulation_runtime -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
