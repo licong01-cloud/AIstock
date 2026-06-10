@@ -858,7 +858,12 @@ def render_code_intelligence_run_manifest_markdown(payload: dict[str, Any]) -> s
     return text.rstrip("\n")
 
 
-def understand_anything_status(root: Path | None = None, *, skip_external: bool = False) -> dict[str, Any]:
+def understand_anything_status(
+    root: Path | None = None,
+    *,
+    skip_external: bool = False,
+    runner_artifact_mode: bool = False,
+) -> dict[str, Any]:
     requested_root = root or REPO_ROOT
     root = _understand_project_root(requested_root)
     graph_path = _understand_graph_path(root)
@@ -909,10 +914,10 @@ def understand_anything_status(root: Path | None = None, *, skip_external: bool 
     runner_context = _runner_context()
     if graph_path.exists():
         status = "available"
-    elif latest_manifest and runner_context in {"github_actions", "ci"}:
+    elif runner_artifact_mode and latest_manifest and runner_context in {"github_actions", "ci"}:
         status = "runner_artifact_available"
         notes.append("Understand Anything graph is not present in this runner, but a compact summary manifest is available.")
-    elif runner_context in {"github_actions", "ci"}:
+    elif runner_artifact_mode and runner_context in {"github_actions", "ci"}:
         status = "runner_artifact_unavailable"
         notes.append("Understand Anything local graph is not bundled with this runner checkout; this is warning-only and does not mean local clients are not configured.")
     elif configured:
@@ -1455,7 +1460,11 @@ def build_summary(
         root=root,
         skip_external=skip_external,
     )
-    ua_status = understand_anything_status(root, skip_external=True)
+    ua_status = understand_anything_status(
+        root,
+        skip_external=True,
+        runner_artifact_mode=_runner_context() in {"github_actions", "ci"},
+    )
     freshness = latest_codegraph_freshness(root, live_status=context.get("codegraph_status"))
     ua_summary: dict[str, Any] | None = None
     if module:

@@ -861,7 +861,7 @@ def test_pr_quality_runner_can_reference_ua_summary_manifest(
         lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
     )
 
-    payload = adapter.understand_anything_status(tmp_path, skip_external=True)
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True, runner_artifact_mode=True)
 
     assert payload["status"] == "runner_artifact_available"
     assert payload["latest_summary_manifest"]["artifact_path"].endswith("ua-summary-manifest.json")
