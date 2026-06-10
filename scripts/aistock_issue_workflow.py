@@ -8116,6 +8116,7 @@ def _build_close_sync_cleanup_after_merge_plan(
     close_sync_pr_merge: dict[str, Any],
     cleanup: bool,
     apply: bool,
+    sync_root: bool = False,
 ) -> dict[str, Any] | None:
     if not cleanup or close_sync_pr_merge.get("workflow_gate") not in {"merged", "already_merged"}:
         return None
@@ -8132,7 +8133,7 @@ def _build_close_sync_cleanup_after_merge_plan(
         worktree=worktree,
         pr_url=close_sync_commit.get("pr_url") or close_sync_pr_merge.get("pr_url"),
         apply=bool(apply and close_sync_pr_merge.get("auto_merge")),
-        sync_root=False,
+        sync_root=sync_root,
     )
 
 
@@ -8348,12 +8349,22 @@ def build_merge_finalizer_plan(
                 apply=merge_close_sync_pr,
                 sync_root=sync_root,
             )
+    close_sync_cleanup_sync_root = bool(
+        sync_root
+        and close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
+        and (
+            cleanup_plan is None
+            or cleanup_plan.get("workflow_gate") != "cleanup_done"
+            or not cleanup_plan.get("sync_root")
+        )
+    )
     close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
         close_sync_pr_merge=close_sync_pr_merge,
         cleanup=cleanup,
         apply=apply,
+        sync_root=close_sync_cleanup_sync_root,
     )
     try:
         postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
