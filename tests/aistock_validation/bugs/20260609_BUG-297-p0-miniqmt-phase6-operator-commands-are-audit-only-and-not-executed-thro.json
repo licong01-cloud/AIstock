@@ -57,6 +57,12 @@
       "actor": "codex",
       "action": "expand_allowed_write_scope_exports",
       "note": "Added miniqmt_execution_runtime __init__ export file to scope because Phase 6 exposes runtime result/gateway models through package API."
+    },
+    {
+      "timestamp": "2026-06-10T01:58:00Z",
+      "actor": "codex",
+      "action": "post_rebase_validation_completed_with_caveat",
+      "note": "BUG-297 runtime/router/direct UI validations pass after origin/main merge; full paper_v2_ui still has unrelated run-console readiness timeout recorded as caveat."
     }
   ],
   "evidence_uris": [
@@ -66,7 +72,7 @@
   "expected": "All MiniQMT operator commands enter MiniQMTExecutionRuntime as the only execution owner. CANCEL_ALL_OPEN_ORDERS cancels active child orders through gateway and terminalizes OMS state; FLATTEN_ALL_POSITIONS/FLATTEN_STRATEGY_SLOT generate sell-first execution through runtime/OMS with slot attribution and broker raw packets; RESET_STRATEGY_SLOT cancels/terminalizes slot orders and records settlement snapshot; REPLACE_ALPHA_SIGNAL_BOOK creates a new signal-book binding/target plan without changing execution code. Tests, validation history, and DESIGN-COMPLIANCE-001 evidence prove the behavior before BUG-210 closure.",
   "first_seen_at": "2026-06-09T15:42:48.715948Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "cf678868e5ce8b1d2ff4a0a3fb5a45d169cae2d1",
   "fixed_at": null,
   "github_issue_number": 877,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/877",
@@ -123,10 +129,23 @@
     "python -m nox -s l0 -> passed; guardrail scanner reported existing/baseline findings and blocking=0",
     "python -m nox -s validation_module_registry_l0 -> passed; 8 passed and ownership scan unmapped=0 ambiguous=0",
     "python -m nox -s validation_center_backend -> passed; 395 passed, coverage line=80.07 branch=62.3 status=passed",
-    "PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 605 passed/1 skipped/2 xfailed, data quality gates passed with known legacy ledger warning, data_quality_deep 10 passed/21 skipped, paper_v2_ui 19 passed/1 skipped"
+    "PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 605 passed/1 skipped/2 xfailed, data quality gates passed with known legacy ledger warning, data_quality_deep 10 passed/21 skipped, paper_v2_ui 19 passed/1 skipped",
+    "after merging latest origin/main: python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py backend/tests/simulation_runtime/test_operator_command_router.py -q -> 10 passed",
+    "after merging latest origin/main: python -m pytest backend/tests/miniqmt_execution_runtime -q -> 21 passed",
+    "after merging latest origin/main: python -m pytest backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_operator_command_router.py -q -> 14 passed",
+    "after merging latest origin/main: python -m pytest backend/tests/simulation_runtime/test_miniqmt_signal_contract.py backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -q -> 23 passed",
+    "after merging latest origin/main: python -m ruff check changed runtime/router/tests -> All checks passed",
+    "after merging latest origin/main: python -m compileall -q backend/services/miniqmt_execution_runtime backend/routers/simulation_runtime.py backend/tests/miniqmt_execution_runtime backend/tests/simulation_runtime -> passed",
+    "after merging latest origin/main: git diff --check origin/main...HEAD -> passed",
+    "after merging latest origin/main: node .\\node_modules\\next\\dist\\bin\\next lint --file src/app/paper-v2/simulation-runtime/page.tsx --file src/lib/paper-v2/api.ts --file src/lib/paper-v2/types.ts -> No ESLint warnings or errors",
+    "after merging latest origin/main: node .\\node_modules\\@playwright\\test\\cli.js test tests/paper-v2/simulation-runtime-ops.spec.ts --project=chromium --reporter=list -> 2 passed",
+    "after merging latest origin/main: python -m nox -s l0 -> passed; guardrail scanner reported existing/baseline findings and blocking=0",
+    "after merging latest origin/main: python -m nox -s validation_module_registry_l0 -> passed; 8 passed and ownership scan unmapped=0 ambiguous=0",
+    "after merging latest origin/main: python -m nox -s validation_center_backend -> passed; 409 passed, coverage line=80.09 branch=62.33 status=passed"
   ],
   "validation_caveats": [
     "python -m nox -s simulation_runtime_ops_ui is blocked by unrelated existing TypeScript error tests/research-assistant/phase5-mcp-gateway-ui.spec.ts(226,11): Type null is not assignable to type string; direct operator Playwright spec and paper_v2_l3 paper_v2_ui covered the changed UI flow.",
-    "Real MiniQMT trading-hour L5 remains Phase 7/BUG-210 scope; this BUG proves Phase 6 runtime/router/UI operator command behavior with fake gateway and controlled UI tests."
+    "Real MiniQMT trading-hour L5 remains Phase 7/BUG-210 scope; this BUG proves Phase 6 runtime/router/UI operator command behavior with fake gateway and controlled UI tests.",
+    "after merging latest origin/main: PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 has non-BUG-297 paper_v2_ui failure in tests/paper-v2/paper-v2-real-flow.spec.ts:1018; run-console readiness POST remains pending and .pv2-readiness-card never renders. The BUG-297 changed UI path simulation-runtime-ops.spec.ts passed in the same full UI run and in direct Playwright; this branch does not modify run-console or readiness API."
   ]
 }

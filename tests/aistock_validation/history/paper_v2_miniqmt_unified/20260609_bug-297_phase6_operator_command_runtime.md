@@ -55,7 +55,23 @@ BUG-297 覆盖 BUG-210 父门禁中的 Phase 6 缺口：operator command 不能�
 - `python -m nox -s l0` -> passed；guardrail scanner 仅报告既有/基线项，`blocking=0`
 - `python -m nox -s validation_module_registry_l0` -> passed；8 passed，ownership scan `unmapped=0 ambiguous=0`
 - `python -m nox -s validation_center_backend` -> passed；395 passed，coverage `line=80.07 branch=62.3 status=passed`
-- `PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3` -> passed；`paper_v2_backend` 605 passed/1 skipped/2 xfailed，data quality gates passed with known legacy ledger warning，`data_quality_deep` 10 passed/21 skipped，`paper_v2_ui` 19 passed/1 skipped
+- `PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3` -> pre-rebase passed；`paper_v2_backend` 605 passed/1 skipped/2 xfailed，data quality gates passed with known legacy ledger warning，`data_quality_deep` 10 passed/21 skipped，`paper_v2_ui` 19 passed/1 skipped
+
+合入最新 `origin/main` 后复验：
+
+- `python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py backend/tests/simulation_runtime/test_operator_command_router.py -q` -> 10 passed
+- `python -m pytest backend/tests/miniqmt_execution_runtime -q` -> 21 passed
+- `python -m pytest backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_operator_command_router.py -q` -> 14 passed
+- `python -m pytest backend/tests/simulation_runtime/test_miniqmt_signal_contract.py backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -q` -> 23 passed
+- `python -m ruff check backend/services/miniqmt_execution_runtime/runtime.py backend/services/miniqmt_execution_runtime/client.py backend/services/miniqmt_execution_runtime/models.py backend/services/miniqmt_execution_runtime/gateway.py backend/services/miniqmt_execution_runtime/__init__.py backend/routers/simulation_runtime.py backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py backend/tests/simulation_runtime/test_operator_command_router.py` -> All checks passed
+- `python -m compileall -q backend/services/miniqmt_execution_runtime backend/routers/simulation_runtime.py backend/tests/miniqmt_execution_runtime backend/tests/simulation_runtime` -> passed
+- `git diff --check origin/main...HEAD` -> passed
+- `node .\node_modules\next\dist\bin\next lint --file src/app/paper-v2/simulation-runtime/page.tsx --file src/lib/paper-v2/api.ts --file src/lib/paper-v2/types.ts` -> No ESLint warnings or errors
+- `node .\node_modules\@playwright\test\cli.js test tests/paper-v2/simulation-runtime-ops.spec.ts --project=chromium --reporter=list` -> 2 passed
+- `python -m nox -s l0` -> passed；guardrail scanner reported existing/baseline findings，`blocking=0`
+- `python -m nox -s validation_module_registry_l0` -> passed；8 passed，ownership scan `unmapped=0 ambiguous=0`
+- `python -m nox -s validation_center_backend` -> passed；409 passed，coverage `line=80.09 branch=62.33 status=passed`
+- `PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3` -> partial after rebase：`paper_v2_backend` 605 passed/1 skipped/2 xfailed，data-quality gates passed，`data_quality_deep` 10 passed/21 skipped；`paper_v2_ui` 在非本次变更路径的 `paper-v2-real-flow.spec.ts:1018` run-console readiness 用例超时失败。该失败页停留在 `run-console`，`POST /readiness` pending 超过 120s；本分支未修改 `run-console` 或 readiness API，且同一完整 UI run 中 BUG-297 相关 `simulation-runtime-ops.spec.ts` 两个用例均 passed。
 
 覆盖能力：
 
@@ -93,7 +109,8 @@ BUG-297 覆盖 BUG-210 父门禁中的 Phase 6 缺口：operator command 不能�
 
 - 本 issue 不关闭 BUG-210 父项；BUG-210 仍需要 Phase 7 L0-L5 总验收、legacy deprecation 用户确认。
 - Phase 6 的 operator command runtime/router/UI 已覆盖；真实 MiniQMT L5 仍待 Phase 7 交易时段验证。
-- `python -m nox -s simulation_runtime_ops_ui` 当前被无关的既有 TypeScript 错误阻断：`tests/research-assistant/phase5-mcp-gateway-ui.spec.ts(226,11): Type 'null' is not assignable to type 'string'`。本次改动的 UI 由直接 Playwright spec 和 `paper_v2_l3` 中的 `paper_v2_ui` 覆盖。
+- `python -m nox -s simulation_runtime_ops_ui` 当前被无关的既有 TypeScript 错误阻断：`tests/research-assistant/phase5-mcp-gateway-ui.spec.ts(226,11): Type 'null' is not assignable to type 'string'`。本次改动的 UI 由直接 Playwright spec 覆盖。
+- 合入最新 `origin/main` 后完整 `paper_v2_ui` 仍存在非 BUG-297 路径的 run-console readiness 超时失败：`paper-v2-real-flow.spec.ts:1018` 等待 `.pv2-readiness-card` 超时；trace 显示 `POST /api/v1/paper-v2/portfolios/<id>/readiness` pending，后端日志未返回 POST 结果。本分支 diff 不包含 `frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx` 或 readiness API；不在 BUG-297 Phase 6 operator command 范围内。
 - 本次为了工作树 UI 验证执行了 `npm ci` 安装本地 `frontend/node_modules`；未修改 `package.json`/`package-lock.json`，不属于生产依赖变更。
 
 ## 7. 生产门禁
