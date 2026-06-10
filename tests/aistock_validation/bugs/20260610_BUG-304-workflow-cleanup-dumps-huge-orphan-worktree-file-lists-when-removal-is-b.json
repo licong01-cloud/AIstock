@@ -28,8 +28,8 @@
   "expected": "Cleanup failures should stay compact by default and never dump full node_modules/history file lists into chat. The payload should include counts, representative samples, and the blocked path/reason.",
   "first_seen_at": "2026-06-10T06:08:05.901871Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0c0ad1a731ff0a955fb7e377bb1f7e6ac4e4849d",
+  "fixed_at": "2026-06-10T06:25:54.861333Z",
   "github_issue_number": 907,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/907",
   "last_seen_at": "2026-06-10T06:08:05.901871Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/909",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "e1de88156054fcf7189faf06",
     "source_event_id": "FE-20260610-e1de88156054"
   },
+  "validation_evidence": [
+    "PR #909 CI green; local validations passed: pytest, ruff, workflow-smoke, nox l0/module/guardrail, validation_center_backend"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
