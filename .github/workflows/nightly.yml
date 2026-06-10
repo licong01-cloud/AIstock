@@ -422,6 +422,10 @@ jobs:
             --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `
             --output "$outDir/llm-guarded-rollout-gate.json"
 
+      - name: Validate CI/Nightly issue workflow automation
+        run: |
+          conda run -n AIstock python -m nox -s validation_workflow_automation
+
       - name: Build Understand Anything readiness summaries
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
