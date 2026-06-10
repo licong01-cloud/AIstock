@@ -34,8 +34,8 @@
   "expected": "Synthetic smoke artifacts are unmistakable and never promoted as real failures; real auto-filed issues have consistent labels after closure; daily/nightly LLM-guided diagnostics use GitHub/AIstock pipeline context to identify actionable failures, generate compact high-quality issue drafts, and keep all artifacts under ignored tmp paths.",
   "first_seen_at": "2026-06-10T16:44:29.481115Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6df73ff86a19f103dd7519d7e5e98185bd5d8968",
+  "fixed_at": "2026-06-10T17:39:12.683668Z",
   "github_issue_number": 926,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/926",
   "last_seen_at": "2026-06-10T16:44:29.481115Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/927",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -66,6 +67,11 @@
     "fingerprint": "1ff889e4e3ebe30dacb07dea",
     "source_event_id": "FE-20260611-1ff889e4e3eb"
   },
+  "validation_evidence": [
+    "PR #927 GitHub checks -> success",
+    "python -m nox -s validation_workflow_automation -> passed",
+    "python -m nox -s validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
