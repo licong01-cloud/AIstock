@@ -1,0 +1,71 @@
+{
+  "actual": "Paper v2 选股选择 HMM 后，如果 trade_date=2026-06-11/as_of_date=2026-06-10 没有已生成 artifact 覆盖交易日，当前接口返回 ARTIFACT_GENERATION_FAILED HTTP 400: HMM signal_preset has no coefficients: preset_A。期望：HMM 如果没有完成预测和计算、缓存没有预测数据，需要在选股时自动执行预测和计算并生成/缓存可用系数，不应直接失败。package_id=pkg_09750b4944ca434db03efd399ccf2144 snapshot_id=ecee7c40-6764-49ad-bc0f-1c6c6b390504 reason=no_artifact_covers_trade_date。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260611_BUG-312-paper-v2-hmm-400.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-312",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T17:16:43.392825Z",
+  "description": "Paper v2 选股选择 HMM 后，如果 trade_date=2026-06-11/as_of_date=2026-06-10 没有已生成 artifact 覆盖交易日，当前接口返回 ARTIFACT_GENERATION_FAILED HTTP 400: HMM signal_preset has no coefficients: preset_A。期望：HMM 如果没有完成预测和计算、缓存没有预测数据，需要在选股时自动执行预测和计算并生成/缓存可用系数，不应直接失败。package_id=pkg_09750b4944ca434db03efd399ccf2144 snapshot_id=ecee7c40-6764-49ad-bc0f-1c6c6b390504 reason=no_artifact_covers_trade_date。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-aab7ce1205eb",
+      "timestamp": "2026-06-10T17:16:43.392821Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-10T17:16:43.392825Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 928,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/928",
+  "last_seen_at": "2026-06-10T17:16:43.392825Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 HMM选股缺少预测缓存时未自动计算导致400",
+  "trigger_condition": {
+    "fingerprint": "aab7ce1205eb2605fc7a5885",
+    "source_event_id": "FE-20260611-aab7ce1205eb"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
