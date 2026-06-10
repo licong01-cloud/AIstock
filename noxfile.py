@@ -2277,6 +2277,59 @@ def validation_catalog_integrity(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def validation_workflow_automation(session: nox.Session) -> None:
+    """Validate compact CI/Nightly/LLM-guided workflow automation gates."""
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "scripts/ci_failure_issue_summary.py",
+        "scripts/aistock_issue_workflow.py",
+        "scripts/llm_provider_adapter.py",
+        "scripts/nightly_adaptive_scheduler.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_llm_provider_adapter.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_issue_workflow.py",
+        "nightly-intake-smoke",
+        "--output-format",
+        "summary",
+        external=True,
+    )
+    out_dir = ROOT / "tmp" / "validation" / "workflow_automation"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "scripts/nightly_adaptive_scheduler.py",
+        "--json",
+        "--provider",
+        "github_models",
+        "--status",
+        "nightly_l3=failure",
+        "--codegraph-freshness",
+        "fresh",
+        "--resource-budget-seconds",
+        "900",
+        "--output",
+        str(out_dir / "nightly-adaptive-scheduler.json"),
+        "--markdown-output",
+        str(out_dir / "nightly-adaptive-scheduler.md"),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
     """Run Validation Center API, coverage, and controlled-runner contract tests."""
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"

@@ -31,6 +31,7 @@ NIGHTLY_STATUS_ALIASES = {
 }
 NIGHTLY_FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
 LOGS_NOT_READY_REASON = "actions_run_still_in_progress_logs_unavailable"
+SYNTHETIC_RUN_IDS = {"999999999", "synthetic", "smoke"}
 
 
 def _utc_now() -> str:
@@ -154,6 +155,19 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
         "reason": "ready" if diagnostic_status == "complete" else "partial_but_actionable",
         "next_command": None,
     }
+
+
+def _runtime_failure_kind(summary: dict[str, Any]) -> str:
+    """Classify whether a failure payload is a real Actions event or a local smoke fixture."""
+    run_id = str(summary.get("run_id") or "").strip().lower()
+    run_url = str(summary.get("run_url") or "").strip()
+    if summary.get("synthetic") is True or summary.get("smoke") is True:
+        return "synthetic_smoke"
+    if run_id in SYNTHETIC_RUN_IDS or "/999999999" in run_url:
+        return "synthetic_smoke"
+    if summary.get("nightly_statuses") or summary.get("workflow"):
+        return "real_github_actions"
+    return "unknown"
 
 
 def _llm_guarded_rollout_gate(
@@ -648,6 +662,7 @@ def build_failure_event(
         "evidence_refs": evidence_refs,
         "changed_files": summary.get("suspected_files") or [],
         "candidate_status": "new",
+        "failure_kind": _runtime_failure_kind(summary),
         "last_green_locator": summary.get("last_green_locator"),
         "log_policy": {
             "full_log_embedded": False,
@@ -777,6 +792,7 @@ def build_context_pack(
         "module": event["module_guess"],
         "severity": event["severity_guess"],
         "diagnostic_status": event["diagnostic_status"],
+        "failure_kind": event.get("failure_kind"),
         "problem_statement": _primary_failure(summary),
         "issue_creation_policy": handoff.get("issue_creation_policy") or {},
         "github_issue_number": str(github_issue_number) if github_issue_number else None,
@@ -896,7 +912,18 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         nightly_marker = f"<!-- aistock-nightly-failure:{summary['nightly_fingerprint']} -->"
     marker = f"<!-- aistock-ci-failure-fingerprint:{fingerprint} -->"
     run_marker = f"<!-- aistock-issue-on-test-fail:{run_id} -->"
-    detail_body = [item for item in [nightly_marker, marker, run_marker, f"<!-- aistock-ci-diagnostic-status:{summary.get('diagnostic_status') or 'partial'} -->"] if item]
+    failure_kind = _runtime_failure_kind(summary)
+    detail_body = [
+        item
+        for item in [
+            f"<!-- aistock-failure-kind:{failure_kind} -->",
+            nightly_marker,
+            marker,
+            run_marker,
+            f"<!-- aistock-ci-diagnostic-status:{summary.get('diagnostic_status') or 'partial'} -->",
+        ]
+        if item
+    ]
     detail_body.extend(["", render_issue_markdown(summary).strip()])
     module_label_allowlist = {
         "module:validation",
@@ -945,6 +972,8 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         or f"[{severity}] {summary.get('workflow') or 'AIstock CI'} failed on {summary.get('branch') or 'unknown'}",
         "body": "\n".join(detail_body).rstrip() + "\n",
         "labels": labels,
+        "failure_kind": failure_kind,
+        "synthetic": failure_kind == "synthetic_smoke",
         "dedupe": {
             "fingerprint": fingerprint,
             "marker": marker,
@@ -1349,6 +1378,7 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         f"- Branch: `{summary.get('branch') or 'unknown'}`",
         f"- Commit: `{summary.get('commit') or 'unknown'}`",
         f"- Fingerprint: `{summary.get('fingerprint')}`",
+        f"- Failure kind: `{_runtime_failure_kind(summary)}`",
         "",
     ]
     locator = summary.get("last_green_locator") or {}

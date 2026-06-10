@@ -4552,6 +4552,9 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "promotion_requires_registry_worktree": "--create-registry-worktree --apply" in str(entrypoints.get("promote") or ""),
         "needs_bug_json_recorded": handoff.get("needs_bug_json") is True,
         "candidate_history_tmp_only": bool(candidate_history_path and _path_under_repo_tmp_validation(candidate_history_path)),
+        "synthetic_marker_recorded": issue_payload.get("synthetic") is True
+        and issue_payload.get("failure_kind") == "synthetic_smoke"
+        and "aistock-failure-kind:synthetic_smoke" in body,
     }
     for label, ok in closed_loop_checks.items():
         if not ok:
@@ -4585,6 +4588,8 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "warnings": warnings,
         "dry_run": True,
         "github_writes": False,
+        "failure_kind": issue_payload.get("failure_kind"),
+        "synthetic": issue_payload.get("synthetic") is True,
         "production_gates": _production_gates_payload(),
         "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
         "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
@@ -6137,7 +6142,7 @@ def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[st
         "No BUG JSON promotion is required. production_ddl_gate=noop; "
         "production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop."
     )
-    return _execute_checked(
+    result = _execute_checked(
         [
             "gh",
             "issue",
@@ -6151,6 +6156,9 @@ def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[st
         cwd=REPO_ROOT,
         timeout=60,
     )
+    label_result = _sync_closed_auto_filed_issue_labels(issue_number)
+    result["label_sync"] = _pick(label_result, "ok", "returncode", "skipped")
+    return result
 
 
 def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any], workflow: str | None) -> dict[str, Any]:
@@ -6163,7 +6171,7 @@ def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any],
         "production_ddl_gate=noop; production_frontend_dependency_gate=noop; "
         "production_backend_dependency_gate=noop."
     )
-    return _execute_checked(
+    result = _execute_checked(
         [
             "gh",
             "issue",
@@ -6173,6 +6181,52 @@ def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any],
             GITHUB_REPO,
             "--comment",
             comment,
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    label_result = _sync_closed_auto_filed_issue_labels(issue_number)
+    result["label_sync"] = _pick(label_result, "ok", "returncode", "skipped")
+    return result
+
+
+def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, Any]:
+    """Keep closed auto-filed issues from retaining the active status label."""
+    try:
+        view = _execute_checked(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--repo",
+                GITHUB_REPO,
+                "--json",
+                "state,labels",
+            ],
+            cwd=REPO_ROOT,
+            timeout=60,
+        )
+        payload = json.loads(str(view.get("stdout") or "{}"))
+    except Exception as exc:
+        return {"ok": False, "skipped": False, "reason": str(exc)}
+    labels = {
+        str(item.get("name") or "")
+        for item in payload.get("labels") or []
+        if isinstance(item, dict)
+    }
+    if str(payload.get("state") or "").upper() != "CLOSED" or "auto-filed" not in labels or "status:open" not in labels:
+        return {"ok": True, "skipped": True}
+    return _execute_checked(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--remove-label",
+            "status:open",
         ],
         cwd=REPO_ROOT,
         timeout=60,

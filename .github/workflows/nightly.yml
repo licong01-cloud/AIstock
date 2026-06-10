@@ -422,6 +422,10 @@ jobs:
             --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `
             --output "$outDir/llm-guarded-rollout-gate.json"
 
+      - name: Validate CI/Nightly issue workflow automation
+        run: |
+          conda run -n AIstock python -m nox -s validation_workflow_automation
+
       - name: Build Understand Anything readiness summaries
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -595,6 +599,10 @@ jobs:
               return;
             }
             const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
+            if (payload.synthetic || payload.failure_kind === 'synthetic_smoke') {
+              core.info('Skipping synthetic Nightly smoke payload; it must not create or update a real GitHub Issue.');
+              return;
+            }
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner,
