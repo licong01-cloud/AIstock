@@ -24,6 +24,14 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
         "latest_freshness": "fresh",
         "latest_freshness_ref": "tmp/validation/code-intelligence/codegraph-freshness.json",
         "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
+        "verify_command": "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-199",
+        "stale_metadata_warning": False,
+        "context": {
+            "context_quality": {
+                "quality": "scoped",
+                "noisy_context_warning": False,
+            }
+        },
         "affected_tests": {"suggested_tests": []},
         "understand_anything": {"status": "not_required_missing"},
         "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
@@ -440,6 +448,12 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     assert task_card["code_intelligence"]["latest_freshness"] == "fresh"
     assert task_card["code_intelligence"]["consume_command"].endswith("latest-freshness --refresh-if-stale")
+    assert task_card["code_intelligence"]["verify_command"].startswith(
+        "python scripts/code_intelligence_adapter.py verify-clients"
+    )
+    assert task_card["code_intelligence"]["context_quality"] == "scoped"
+    assert task_card["code_intelligence"]["stale_metadata_warning"] is False
+    assert task_card["code_intelligence"]["noisy_context_warning"] is False
     assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False

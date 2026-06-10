@@ -3633,6 +3633,18 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "latest_freshness": code_intelligence_summary.get("latest_freshness"),
         "latest_freshness_ref": code_intelligence_summary.get("latest_freshness_ref"),
         "consume_command": code_intelligence_summary.get("consume_command"),
+        "verify_command": code_intelligence_summary.get("verify_command"),
+        "stale_metadata_warning": bool(code_intelligence_summary.get("stale_metadata_warning")),
+        "context_quality": (
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("quality")
+            if isinstance(code_intelligence_summary.get("context"), dict)
+            else None
+        ),
+        "noisy_context_warning": bool(
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("noisy_context_warning")
+        )
+        if isinstance(code_intelligence_summary.get("context"), dict)
+        else False,
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
@@ -3762,6 +3774,10 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- latest_freshness: `{code_intel.get('latest_freshness') or 'not_available'}`",
         f"- latest_freshness_ref: `{code_intel.get('latest_freshness_ref') or 'not_available'}`",
         f"- consume_command: `{code_intel.get('consume_command') or 'python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale'}`",
+        f"- verify_command: `{code_intel.get('verify_command') or 'python scripts/code_intelligence_adapter.py verify-clients'}`",
+        f"- context_quality: `{code_intel.get('context_quality') or 'unknown'}`",
+        f"- stale_metadata_warning: `{str(bool(code_intel.get('stale_metadata_warning'))).lower()}`",
+        f"- noisy_context_warning: `{str(bool(code_intel.get('noisy_context_warning'))).lower()}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
         f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
         f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
