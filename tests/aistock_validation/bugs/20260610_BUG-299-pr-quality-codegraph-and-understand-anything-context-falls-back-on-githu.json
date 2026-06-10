@@ -1,0 +1,81 @@
+{
+  "actual": "PR Quality comment shows fallback_used=true and understand_anything_status=not_configured even though doctor reports CodeGraph fresh and UA available.",
+  "allowed_write_scope": [
+    ".github/workflows/pr-quality.yml",
+    "scripts/code_intelligence_adapter.py",
+    "scripts/issue_flow.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "tests/aistock_validation/bugs/20260610_BUG-299-pr-quality-codegraph-and-understand-anything-context-falls-back-on-githu.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-299",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T02:15:27.151440Z",
+  "description": "PR Quality comment shows fallback_used=true and understand_anything_status=not_configured even though doctor reports CodeGraph fresh and UA available.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-456b082315c4",
+      "timestamp": "2026-06-10T02:15:27.151437Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "PR Quality should consume repository code-intelligence readiness artifacts or produce explicit runner-only warning with compact artifact refs. When local config/artifacts are present, CodeGraph freshness and UA summary should be surfaced as available instead of fallback/not_configured, without blocking PRs or expanding validation.",
+  "first_seen_at": "2026-06-10T02:15:27.151440Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 890,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/890",
+  "last_seen_at": "2026-06-10T02:15:27.151440Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open PR #887 PR Quality comment and inspect Code Intelligence Summary.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "PR Quality CodeGraph and Understand Anything context falls back on GitHub runner",
+  "trigger_condition": {
+    "fingerprint": "456b082315c42cbaf577ea8a",
+    "source_event_id": "FE-20260610-456b082315c4"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
