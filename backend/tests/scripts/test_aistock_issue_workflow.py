@@ -1284,6 +1284,92 @@ def test_run_plan_existing_clean_active_worktree_returns_resume(
     assert "resume --bug-id BUG-199" in payload["next_command"]
 
 
+def test_run_plan_missing_local_bug_json_reports_github_adopt_command(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-302",
+                    "number": 302,
+                    "kind": "github_issue",
+                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                    "github_issue_number": 897,
+                    "github_state": "OPEN",
+                    "title": "BUG-302 P1: missing registry record",
+                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+                }
+            ],
+            [],
+        ),
+    )
+
+    with pytest.raises(workflow.WorkflowPayloadError) as excinfo:
+        workflow.build_run_plan(
+            bug_id="BUG-302",
+            mode="plan",
+            issue_json=None,
+            changed_files=[],
+            create_worktree=True,
+            dry_run=False,
+            validation_evidence=[],
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+            base="origin/main",
+            head="HEAD",
+        )
+
+    payload = excinfo.value.payload
+    assert payload["schema_version"] == "aistock_issue_workflow_missing_bug_record_v1"
+    assert payload["workflow_gate"] == "missing_bug_record"
+    assert payload["github_issue"]["number"] == 897
+    assert payload["inferred_module"] == "paper_v2"
+    assert payload["inferred_severity"] == "P1"
+    assert "--bug-id BUG-302" in payload["next_command"]
+    assert "--github-issue-number 897" in payload["next_command"]
+    assert "--module paper_v2 --severity P1" in payload["next_command"]
+    assert "--create-fix-worktree --apply" in payload["next_command"]
+
+
+def test_run_cli_missing_local_bug_json_emits_compact_recovery_payload(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-302",
+                    "number": 302,
+                    "kind": "github_issue",
+                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                    "github_issue_number": 897,
+                    "github_state": "OPEN",
+                    "title": "BUG-302 P1: missing registry record",
+                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+                }
+            ],
+            [],
+        ),
+    )
+
+    assert workflow.main(["run", "--bug-id", "BUG-302", "--mode", "plan", "--create-worktree"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflow_gate"] == "missing_bug_record"
+    assert payload["github_issue"]["number"] == 897
+    assert payload["inferred_module"] == "paper_v2"
+    assert payload["next_command"].startswith("python scripts/aistock_issue_workflow.py submit-bug")
+    assert "BUG record not found" not in payload["next_command"]
+
+
 def test_run_plan_registry_intake_creates_separate_fix_worktree(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
