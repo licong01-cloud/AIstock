@@ -125,6 +125,14 @@ class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
 
 
+class WorkflowPayloadError(WorkflowError):
+    """Raised with a compact machine-readable recovery payload."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(str(payload.get("message") or payload.get("reason") or "workflow payload error"))
+        self.payload = payload
+
+
 def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
@@ -803,6 +811,20 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_promote_ci_issue(payload) or {})
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
         compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
+    elif schema.endswith("_missing_bug_record_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "reason",
+                "github_issue",
+                "inferred_module",
+                "inferred_severity",
+                "blocking",
+                "warnings",
+                "next_actions",
+                "next_command",
+            )
+        )
     else:
         for key in (
             "module",
@@ -1628,7 +1650,7 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
             "--limit",
             str(limit),
             "--json",
-            "number,title,url,state",
+            "number,title,url,state,labels",
         ],
         timeout=timeout,
     )
@@ -1655,6 +1677,8 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
                 "source": issue.get("url") or f"github_issue:{issue.get('number')}",
                 "github_issue_number": issue.get("number"),
                 "github_state": issue.get("state"),
+                "title": title,
+                "labels": issue.get("labels") or [],
             }
         )
     if len(issues) >= limit:
@@ -1667,6 +1691,20 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
             }
         )
     return sources, []
+
+
+def _github_bug_issue_for_id(bug_id: str, *, limit: int = 1000, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
+    normalized = bug_id.strip().upper()
+    sources, warnings = _scan_github_bug_ids(limit=limit, timeout=timeout)
+    matches = [
+        item
+        for item in sources
+        if str(item.get("bug_id") or "").upper() == normalized and item.get("kind") == "github_issue"
+    ]
+    if not matches:
+        return None, warnings
+    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
+    return matches[0], warnings
 
 
 def _bug_id_allocation_report(
@@ -2769,6 +2807,113 @@ def _find_bug_by_github_issue(issue_number: int | str) -> tuple[dict[str, Any], 
     return None
 
 
+def _shell_quote(value: str) -> str:
+    text = str(value)
+    return '"' + text.replace('"', '\\"') + '"'
+
+
+def _github_issue_label_names(issue: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for item in issue.get("labels") or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name:
+            names.append(name)
+    return flow._unique_strings(names)
+
+
+def _infer_bug_module_from_github_issue(issue: dict[str, Any]) -> str | None:
+    for label in _github_issue_label_names(issue):
+        lower = label.lower()
+        if lower.startswith("module:"):
+            value = lower.split(":", 1)[1].strip()
+            return value or None
+        if lower == "paper-v2":
+            return "paper_v2"
+        if lower == "qe":
+            return "qe"
+    return None
+
+
+def _infer_bug_severity_from_github_issue(issue: dict[str, Any]) -> str | None:
+    text = " ".join([str(issue.get("title") or ""), *_github_issue_label_names(issue)])
+    match = re.search(r"\bP([0-3])\b", text, flags=re.IGNORECASE)
+    return f"P{match.group(1)}" if match else None
+
+
+def _adopt_bug_command(*, bug_id: str, title: str, module: str | None, severity: str | None, issue_number: Any, issue_url: str) -> str:
+    module_arg = module or "<module>"
+    severity_arg = severity or "P1"
+    return (
+        "python scripts/aistock_issue_workflow.py submit-bug "
+        f"--bug-id {bug_id} --title {_shell_quote(title)} "
+        f"--module {module_arg} --severity {severity_arg} "
+        f"--github-issue-number {issue_number} --github-issue-url {issue_url} "
+        "--create-fix-worktree --apply"
+    )
+
+
+def _missing_bug_record_recovery_payload(bug_id: str) -> dict[str, Any]:
+    normalized = bug_id.strip().upper()
+    github_issue, warnings = _github_bug_issue_for_id(normalized)
+    if not github_issue:
+        return {
+            "schema_version": "aistock_issue_workflow_missing_bug_record_v1",
+            "generated_at": _utc_now(),
+            "bug_id": normalized,
+            "workflow_gate": "blocked",
+            "reason": "local_bug_json_missing",
+            "blocking": [f"BUG record not found: {normalized}"],
+            "warnings": warnings,
+            "next_command": _adopt_bug_command(
+                bug_id=normalized,
+                title=f"{normalized} <title>",
+                module=None,
+                severity=None,
+                issue_number="<issue_number>",
+                issue_url="<issue_url>",
+            ),
+        }
+
+    issue_number = github_issue.get("github_issue_number")
+    issue_url = str(github_issue.get("source") or _github_issue_url(issue_number))
+    issue_title = str(github_issue.get("title") or normalized)
+    module = _infer_bug_module_from_github_issue(github_issue)
+    severity = _infer_bug_severity_from_github_issue(github_issue)
+    return {
+        "schema_version": "aistock_issue_workflow_missing_bug_record_v1",
+        "generated_at": _utc_now(),
+        "bug_id": normalized,
+        "workflow_gate": "missing_bug_record",
+        "reason": "github_issue_exists_without_local_bug_json",
+        "github_issue": {
+            "number": issue_number,
+            "url": issue_url,
+            "state": github_issue.get("github_state"),
+            "title": issue_title,
+            "labels": _github_issue_label_names(github_issue),
+        },
+        "inferred_module": module,
+        "inferred_severity": severity,
+        "blocking": [f"{normalized} exists on GitHub but local BUG JSON is missing from this checkout"],
+        "warnings": warnings,
+        "next_actions": [
+            "adopt_or_reconstruct_bug_json_in_isolated_worktree",
+            "avoid_creating_duplicate_bug_id",
+        ],
+        "next_command": _adopt_bug_command(
+            bug_id=normalized,
+            title=issue_title,
+            module=module,
+            severity=severity,
+            issue_number=issue_number,
+            issue_url=issue_url,
+        ),
+    }
+
+
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
     if issue_json:
         path = Path(issue_json)
@@ -2783,7 +2928,7 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
         if str(record.get("bug_id") or "").upper() == normalized:
             matches.append((record, path))
     if not matches:
-        raise WorkflowError(f"BUG record not found: {normalized}")
+        raise WorkflowPayloadError(_missing_bug_record_recovery_payload(normalized))
     if len(matches) > 1:
         raise WorkflowError(f"Multiple BUG records found for {normalized}: {[str(path) for _, path in matches]}")
     return matches[0]
@@ -9624,6 +9769,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except WorkflowPayloadError as exc:
+        _emit_args(exc.payload, args)
+        return 2
     except WorkflowError as exc:
         print(f"aistock_issue_workflow error: {exc}", file=sys.stderr)
         return 2
