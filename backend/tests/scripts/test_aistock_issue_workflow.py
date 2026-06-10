@@ -3401,6 +3401,8 @@ def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree
     assert payload["source_cleanup_deferred"] is True
     assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
     assert payload["cleanup"]["reason"] == "source_worktree_contains_invoking_cwd"
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"]["sync_root"] is True
     assert "cleanup-after-merge" in payload["cleanup"]["next_command"]
     assert payload["next_commands"] == [payload["cleanup"]["next_command"]]
     assert cleanup_cwds == [isolated_workflow_root]
