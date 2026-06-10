@@ -30,8 +30,8 @@
   "expected": "For unlinked auto-filed CI/Nightly issues, triage-ci-issue and ci-issue-janitor should classify a failed run as superseded when a later successful run of the same workflow exists on the same branch, not only when a later default-branch success exists. The janitor should close the issue with a compact comment and no BUG JSON promotion.",
   "first_seen_at": "2026-06-10T03:49:10.986063Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "51241e5cc3013056ee70abe2a87e935452322162",
+  "fixed_at": "2026-06-10T05:08:07.054468Z",
   "github_issue_number": 896,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/896",
   "last_seen_at": "2026-06-10T03:49:10.986063Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/899",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "b2bb1dfbf849d673839acf07",
     "source_event_id": "FE-20260610-b2bb1dfbf849"
   },
+  "validation_evidence": [
+    "PR #899 CI green; local required validations passed after rebase"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
