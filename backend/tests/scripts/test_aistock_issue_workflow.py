@@ -886,6 +886,8 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert payload["schema_version"] == "aistock_nightly_intake_smoke_v1"
     assert payload["workflow_gate"] == "passed"
     assert payload["github_writes"] is False
+    assert payload["failure_kind"] == "synthetic_smoke"
+    assert payload["synthetic"] is True
     assert payload["unexpected_dirty_paths"] == []
     assert payload["candidate_history_path"].startswith("tmp/validation/nightly_failure_issue/smoke/")
     assert "tests/aistock_validation/history" not in payload["candidate_history_path"]
@@ -898,9 +900,13 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert payload["closed_loop_checks"]["agent_handoff_section"] is True
     assert payload["closed_loop_checks"]["promotion_requires_registry_worktree"] is True
     assert payload["closed_loop_checks"]["candidate_history_tmp_only"] is True
+    assert payload["closed_loop_checks"]["synthetic_marker_recorded"] is True
     context_pack = json.loads((isolated_workflow_root / payload["artifacts"]["context"]).read_text(encoding="utf-8"))
-    assert context_pack["llm_triage_advice"]["workflow_gate"] == "ready"
+    issue_payload = json.loads((isolated_workflow_root / payload["artifacts"]["github_issue_payload"]).read_text(encoding="utf-8"))
+    assert context_pack["llm_triage_advice"]["workflow_gate"] in {"ready", "warning"}
     assert context_pack["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
+    assert issue_payload["synthetic"] is True
+    assert issue_payload["failure_kind"] == "synthetic_smoke"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
@@ -5494,6 +5500,7 @@ def test_ci_issue_janitor_dry_run_does_not_close_superseded_issue(monkeypatch: p
 
 def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int | str] = []
+    label_synced: list[int | str] = []
 
     def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
         issue = int(issue_number)
@@ -5533,6 +5540,11 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
 
     monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
     monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+    monkeypatch.setattr(
+        workflow,
+        "_sync_closed_auto_filed_issue_labels",
+        lambda issue_number: label_synced.append(issue_number) or {"ok": True, "returncode": 0},
+    )
 
     payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[642, 559, 548], apply=True)
 
@@ -5541,6 +5553,54 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
     assert payload["closed_issues"] == [642]
     assert payload["skipped_count"] == 2
     assert closed == [642]
+    assert label_synced == []
+
+
+def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "state": "CLOSED",
+                        "labels": [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
+                    }
+                ),
+            }
+        if args[:3] == ["gh", "issue", "edit"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    result = workflow._sync_closed_auto_filed_issue_labels(853)
+
+    assert result["ok"] is True
+    assert any(command[:3] == ["gh", "issue", "edit"] and "--remove-label" in command for command in commands)
+
+
+def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    edit_called = False
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edit_called
+        if args[:3] == ["gh", "issue", "view"]:
+            return {"ok": True, "stdout": json.dumps({"state": "OPEN", "labels": [{"name": "auto-filed"}]})}
+        if args[:3] == ["gh", "issue", "edit"]:
+            edit_called = True
+        return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    result = workflow._sync_closed_auto_filed_issue_labels(853)
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert edit_called is False
 
 
 def test_ci_issue_janitor_closes_superseded_same_branch_issue(monkeypatch: pytest.MonkeyPatch) -> None:

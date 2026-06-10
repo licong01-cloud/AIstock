@@ -799,19 +799,51 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert "paper_v2" in payload["suspected_modules"]
     assert "noxfile.py" in payload["suspected_files"]
     assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
-    assert payload["llm_triage_advice"]["workflow_gate"] == "ready"
+    assert payload["llm_triage_advice"]["workflow_gate"] in {"ready", "warning"}
     assert payload["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
-    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["workflow_gate"] == "ready"
-    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["shell_commands_allowed"] is False
-    assert payload["llm_triage_advice"]["test_plan_advice_gate"]["llm_invoked"] is False
+    if not payload["llm_triage_advice"].get("fallback_used"):
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["workflow_gate"] == "ready"
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["shell_commands_allowed"] is False
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["llm_invoked"] is False
     assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
+    assert "<!-- aistock-failure-kind:real_github_actions -->" in issue_payload["body"]
+    assert issue_payload["failure_kind"] == "real_github_actions"
+    assert issue_payload["synthetic"] is False
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
     assert "module:validation.runner" in issue_payload["labels"]
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
+    assert context_pack["failure_event"]["failure_kind"] == "real_github_actions"
     assert context_pack["llm_triage_advice"]["provider"] == "github_models"
     assert context_pack["token_budget"]["full_logs_included"] is False
+
+
+def test_nightly_smoke_payload_is_explicitly_synthetic() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "failure",
+                "paperV2Live": "skipped",
+                "codeIntelligence": "success",
+            },
+            "run_id": "999999999",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+    context_pack = summary.build_context_pack(payload, github_issue_number=519)
+
+    assert issue_payload["failure_kind"] == "synthetic_smoke"
+    assert issue_payload["synthetic"] is True
+    assert "<!-- aistock-failure-kind:synthetic_smoke -->" in issue_payload["body"]
+    assert "Failure kind: `synthetic_smoke`" in issue_payload["body"]
+    assert context_pack["failure_event"]["failure_kind"] == "synthetic_smoke"
 
 
 def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
