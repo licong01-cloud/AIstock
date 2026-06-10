@@ -429,6 +429,87 @@ def test_model_registry_read_routes_do_not_require_write_guard(monkeypatch: pyte
     assert legacy.json()["items"][0]["paper_selectable"] is False
 
 
+def test_mcp_model_facade_reads_legacy_catalog_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_legacy_list_models(*, limit: int, offset: int, qe_selectable: bool | None = None):
+        calls.append({"limit": limit, "offset": offset, "qe_selectable": qe_selectable})
+        return (
+            [
+                {
+                    "model_id": "task_1::loop_1",
+                    "model_name": "Legacy LGB",
+                    "model_type": "LGBModel",
+                    "training_failed": False,
+                    "code_text": "heavy code omitted",
+                    "model_artifacts": {"weights": "heavy"},
+                }
+            ],
+            58,
+        )
+
+    monkeypatch.setattr(model_registry_router, "_legacy_list_models", fake_legacy_list_models)
+    app = FastAPI()
+    app.include_router(model_registry_router.router)
+    client = TestClient(app)
+
+    response = client.get("/model-registry/models?limit=5&offset=10&qe_selectable=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 58
+    assert body["items"][0]["model_id"] == "task_1::loop_1"
+    assert "code_text" not in body["items"][0]
+    assert "model_artifacts" not in body["items"][0]
+    assert calls == [{"limit": 5, "offset": 10, "qe_selectable": True}]
+
+
+def test_mcp_model_detail_supports_legacy_ids_with_colons(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_find_model(model_id: str) -> dict[str, object]:
+        assert model_id == "task_1::loop_1"
+        return {"model_id": model_id, "model_name": "Legacy LGB", "model_type": "LGBModel"}
+
+    monkeypatch.setattr(model_registry_router, "_legacy_find_model", fake_find_model)
+    app = FastAPI()
+    app.include_router(model_registry_router.router)
+    client = TestClient(app)
+
+    response = client.get("/model-registry/models/detail", params={"model_id": "task_1::loop_1"})
+
+    assert response.status_code == 200
+    assert response.json()["model"]["model_id"] == "task_1::loop_1"
+
+
+def test_mcp_model_register_confirmed_writes_legacy_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_register(payload: dict[str, object]) -> dict[str, object]:
+        captured.update(payload)
+        return {"model_id": payload["model_id"], "model_name": payload["model_name"]}
+
+    monkeypatch.delenv("AISTOCK_MODEL_REGISTRY_WRITE_API_ENABLED", raising=False)
+    monkeypatch.setattr(model_registry_router, "_legacy_register_model", fake_register)
+    app = FastAPI()
+    app.include_router(model_registry_router.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/model-registry/register-confirmed",
+        json={
+            "confirm": model_registry_router.REGISTER_MODEL_CONFIRM,
+            "payload": {
+                "model_id": "manual_model_1",
+                "model_name": "Manual Model",
+                "model_type": "LGBModel",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["registered"]["model_id"] == "manual_model_1"
+    assert captured["model_name"] == "Manual Model"
+
+
 def test_model_registry_router_exposes_write_guard_and_trial_artifact_endpoints() -> None:
     source = inspect.getsource(model_registry_router)
     assert "AISTOCK_MODEL_REGISTRY_WRITE_API_ENABLED" in source

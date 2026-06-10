@@ -2,7 +2,11 @@
   "actual": "MCP model_registry tools currently read the empty model_registry.* catalog facade while the only populated model library is public.aistock_model_catalog. UI already uses /quantevolver/models backed by public.aistock_model_catalog. Requirement: current stage must keep one usable model library source, switch MCP list/detail/register/deprecate facade to public.aistock_model_catalog, support legacy IDs containing ::, and ensure MCP can access all 58 existing DB models and register new models.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260610_BUG-306-model-registry-mcp-reads-empty-new-registry-instead-of-populated-legacy.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/model_registry.py",
+    "backend/mcp/modules/model_registry.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "backend/tests/model_registry/test_model_registry_phase5.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-306",
@@ -20,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260610-72d27c35c50b",
       "timestamp": "2026-06-10T06:35:08.849386Z"
+    },
+    {
+      "timestamp": "2026-06-10T06:36:45Z",
+      "actor": "codex",
+      "action": "set_allowed_write_scope",
+      "note": "Expanded scope from fast-path suggested_scope for MCP model registry legacy catalog fix."
     }
   ],
   "evidence_uris": [],
@@ -40,7 +50,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "model_registry_backend"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
