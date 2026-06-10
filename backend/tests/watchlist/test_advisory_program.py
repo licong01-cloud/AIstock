@@ -305,6 +305,91 @@ def test_multi_program_isolation_leaderboard_and_no_sample_fields() -> None:
     assert "data_excluded_count" not in board[0]
 
 
+def test_leaderboard_marks_open_active_episodes_from_latest_market_data() -> None:
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params):
+            return None
+
+        def fetchall(self):
+            return rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return FakeCursor()
+
+    service, repo = _service()
+    program = _program(service, target_count=2, take_profit_bps=500, take_profit_mode="fixed")
+
+    initial = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 1),
+        candidates=[
+            _candidate("000001.SZ", 1, 10.0),
+            _candidate("000002.SZ", 2, 20.0),
+        ],
+        preview=False,
+    )
+    episode_ids = {row.symbol: row.episode_id for row in initial.active_pool}
+    rows = [
+        {
+            "episode_id": episode_ids["000001.SZ"],
+            "symbol": "000001.SZ",
+            "trade_date": date(2026, 6, 2),
+            "mark_price": 11.0,
+            "max_price": 11.0,
+            "min_price": 10.5,
+            "observation_count": 2,
+        },
+        {
+            "episode_id": episode_ids["000002.SZ"],
+            "symbol": "000002.SZ",
+            "trade_date": date(2026, 6, 2),
+            "mark_price": 18.0,
+            "max_price": 20.0,
+            "min_price": 18.0,
+            "observation_count": 2,
+        },
+    ]
+    repo._conn_factory = lambda: FakeConnection()
+
+    metrics = service.program_metrics(program.program_id)
+    board_row = next(row for row in service.leaderboard(sort_by="win_rate") if row["program_id"] == program.program_id)
+    active_rows = {row["symbol"]: row for row in service.active_pool(program.program_id)}
+    return_rows = {row["symbol"]: row for row in service.return_history(program.program_id)}
+
+    assert metrics["take_profit_count"] == 1
+    assert metrics["stop_loss_count"] == 1
+    assert metrics["win_rate"] == 0.5
+    assert metrics["avg_return_bps"] == pytest.approx(0.0)
+    assert metrics["median_return_bps"] == pytest.approx(0.0)
+    assert metrics["max_drawdown_bps"] == pytest.approx(-1000.0)
+    assert metrics["avg_holding_days"] == 2
+    assert metrics["metric_status"] == "READY"
+    assert metrics["metric_evaluable_count"] == 2
+    assert metrics["open_mark_count"] == 2
+    assert metrics["missing_open_mark_count"] == 0
+    assert metrics["metric_mark_trade_date"] == "2026-06-02"
+    assert board_row["take_profit_count"] == 1
+    assert board_row["stop_loss_count"] == 1
+    assert board_row["win_rate"] == 0.5
+    assert board_row["metric_status"] == "READY"
+    assert active_rows["000001.SZ"]["return_bps"] == pytest.approx(1000.0)
+    assert active_rows["000001.SZ"]["win_rate_inclusion_status"] == "OPEN_MARK_TO_MARKET"
+    assert return_rows["000002.SZ"]["still_active_mark_price"] == 18.0
+
+
 def test_replay_uses_default_next_open_entry_basis_and_records_win_rate() -> None:
     repo = InMemoryAdvisoryProgramRepository()
     service = AdvisoryProgramService(

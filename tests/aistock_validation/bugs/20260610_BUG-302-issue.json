@@ -30,7 +30,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "每日复评后，open/active 持仓应基于最新可用行情生成盯市收益；排行榜止盈、止损、胜率、平均涨幅不再长期为空。缺少行情时页面展示可验证的等待行情状态。",
   "first_seen_at": "2026-06-10T03:55:44.268105Z",
   "fix_branch": null,
   "fix_commit": null,

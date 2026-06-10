@@ -269,6 +269,17 @@ class AdvisoryMarketMark:
 
 
 @dataclass(frozen=True)
+class AdvisoryMetricMarketMark:
+    episode_id: str
+    symbol: str
+    trade_date: date
+    mark_price: float
+    max_price: float | None = None
+    min_price: float | None = None
+    observation_count: int = 0
+
+
+@dataclass(frozen=True)
 class AdvisoryEpisode:
     episode_id: str
     program_id: str
@@ -1220,12 +1231,13 @@ class AdvisoryProgramService:
         for program in self.repository.list_programs(include_archived=include_archived):
             if program.status not in ACTIVE_PROGRAM_STATUSES and not include_archived:
                 continue
-            rows.append({**program_to_dict(program), **self.program_metrics(program.program_id)})
+            rows.append({**program_to_dict(program), **self._program_metrics(program)})
         return sorted(rows, key=self._leaderboard_key(sort_by))
 
     def active_pool(self, program_id: str) -> list[dict[str, Any]]:
-        self.repository.get_program(program_id)
-        return self._enrich_display_names([episode_to_dict(row) for row in self.repository.active_episodes(program_id)])
+        program = self.repository.get_program(program_id)
+        active = [row for row in self._episodes_for_metrics(program) if row.status == EPISODE_STATUS_ACTIVE]
+        return self._enrich_display_names([episode_to_dict(row) for row in active])
 
     def review_history(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
@@ -1254,8 +1266,8 @@ class AdvisoryProgramService:
         }
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
-        self.repository.get_program(program_id)
-        return self._enrich_display_names([episode_to_dict(row) for row in self.repository.all_latest_episodes(program_id)])
+        program = self.repository.get_program(program_id)
+        return self._enrich_display_names([episode_to_dict(row) for row in self._episodes_for_metrics(program)])
 
     def _enrich_display_names(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -1299,7 +1311,14 @@ class AdvisoryProgramService:
 
     def program_metrics(self, program_id: str) -> dict[str, Any]:
         program = self.repository.get_program(program_id)
-        return compute_program_metrics(program, self.repository.all_latest_episodes(program_id))
+        return self._program_metrics(program)
+
+    def _program_metrics(self, program: AdvisoryProgram) -> dict[str, Any]:
+        return compute_program_metrics(program, self._episodes_for_metrics(program))
+
+    def _episodes_for_metrics(self, program: AdvisoryProgram) -> list[AdvisoryEpisode]:
+        episodes = self.repository.all_latest_episodes(program.program_id)
+        return self._with_latest_open_episode_metric_marks(program, episodes)
 
     def run_review_from_selection(
         self,
@@ -1716,6 +1735,98 @@ class AdvisoryProgramService:
                 next_open_executable=_li_price(row.get("open_li")),
                 next_close=close_price,
                 price_quality_status="OK",
+            )
+        return marks
+
+    def _with_latest_open_episode_metric_marks(
+        self,
+        program: AdvisoryProgram,
+        episodes: list[AdvisoryEpisode],
+    ) -> list[AdvisoryEpisode]:
+        active = [row for row in episodes if row.status == EPISODE_STATUS_ACTIVE and row.entry_price > 0]
+        if not active:
+            return episodes
+        try:
+            marks = self._load_latest_open_episode_metric_marks(active)
+        except Exception:
+            return episodes
+        if not marks:
+            return episodes
+        return [_episode_with_metric_mark(row, marks[row.episode_id], program=program) if row.episode_id in marks else row for row in episodes]
+
+    def _load_latest_open_episode_metric_marks(self, episodes: list[AdvisoryEpisode]) -> dict[str, AdvisoryMetricMarketMark]:
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if conn_factory is None:
+            return {}
+        values: list[Any] = []
+        placeholders: list[str] = []
+        for episode in episodes:
+            placeholders.append("(%s::text, %s::text, %s::date)")
+            values.extend([episode.episode_id, episode.symbol, episode.effective_entry_date])
+        if not placeholders:
+            return {}
+        sql = f"""
+            WITH active(episode_id, symbol, effective_entry_date) AS (
+                VALUES {", ".join(placeholders)}
+            ),
+            priced AS (
+                SELECT
+                    active.episode_id,
+                    active.symbol,
+                    k.trade_date,
+                    COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS mark_price,
+                    COALESCE(NULLIF(k.high_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS high_price,
+                    COALESCE(NULLIF(k.low_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS low_price
+                FROM active
+                JOIN market.kline_daily_raw k
+                  ON k.ts_code = active.symbol
+                 AND k.trade_date >= active.effective_entry_date
+                WHERE COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) IS NOT NULL
+            ),
+            latest AS (
+                SELECT DISTINCT ON (episode_id)
+                    episode_id, symbol, trade_date, mark_price
+                FROM priced
+                ORDER BY episode_id, trade_date DESC
+            ),
+            aggregate_marks AS (
+                SELECT
+                    episode_id,
+                    MAX(high_price) AS max_price,
+                    MIN(low_price) AS min_price,
+                    COUNT(*)::int AS observation_count
+                FROM priced
+                GROUP BY episode_id
+            )
+            SELECT
+                latest.episode_id,
+                latest.symbol,
+                latest.trade_date,
+                latest.mark_price,
+                aggregate_marks.max_price,
+                aggregate_marks.min_price,
+                aggregate_marks.observation_count
+            FROM latest
+            JOIN aggregate_marks USING (episode_id)
+        """
+        with conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, [*values, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR])
+                rows = cur.fetchall()
+        marks: dict[str, AdvisoryMetricMarketMark] = {}
+        for row in rows:
+            mark_price = _optional_float(row.get("mark_price"))
+            if mark_price is None or mark_price <= 0:
+                continue
+            episode_id = str(row["episode_id"])
+            marks[episode_id] = AdvisoryMetricMarketMark(
+                episode_id=episode_id,
+                symbol=str(row["symbol"]).strip().upper(),
+                trade_date=row["trade_date"],
+                mark_price=mark_price,
+                max_price=_optional_float(row.get("max_price")),
+                min_price=_optional_float(row.get("min_price")),
+                observation_count=int(row.get("observation_count") or 0),
             )
         return marks
 
@@ -2315,18 +2426,36 @@ def compute_program_metrics(program: AdvisoryProgram, episodes: Iterable[Advisor
     wins = [row for row in evaluable if row.return_bps is not None and row.return_bps > 0]
     drawdowns = [float(row.max_drawdown_bps) for row in rows if row.max_drawdown_bps is not None]
     holding_days = [row.holding_trading_days for row in rows]
+    metric_exit_reasons = [_metric_count_exit_reason(row, program=program) for row in rows]
+    open_marked = [
+        row
+        for row in rows
+        if row.status == EPISODE_STATUS_ACTIVE and row.return_bps is not None and row.win_rate_inclusion_status == WIN_OPEN_MARK
+    ]
+    missing_open_marks = [row for row in rows if row.status == EPISODE_STATUS_ACTIVE and row.return_bps is None]
+    mark_trade_dates = [
+        str((row.evidence_json.get("open_mark_to_market") or {}).get("trade_date"))
+        for row in open_marked
+        if isinstance(row.evidence_json.get("open_mark_to_market"), dict)
+        and (row.evidence_json.get("open_mark_to_market") or {}).get("trade_date")
+    ]
     return {
         "enabled_since": program.enabled_since.isoformat() if program.enabled_since else None,
         "entered_episode_count": len(rows),
         "active_count": sum(1 for row in rows if row.status == EPISODE_STATUS_ACTIVE),
-        "take_profit_count": sum(1 for row in rows if row.exit_reason in {EXIT_TAKE_PROFIT, EXIT_TRAILING_TAKE_PROFIT}),
-        "stop_loss_count": sum(1 for row in rows if row.exit_reason == EXIT_STOP_LOSS),
+        "take_profit_count": sum(1 for reason in metric_exit_reasons if reason in {EXIT_TAKE_PROFIT, EXIT_TRAILING_TAKE_PROFIT}),
+        "stop_loss_count": sum(1 for reason in metric_exit_reasons if reason == EXIT_STOP_LOSS),
         "win_rate": (len(wins) / len(evaluable)) if evaluable else None,
         "avg_return_bps": mean(returns) if returns else None,
         "median_return_bps": median(returns) if returns else None,
         "max_drawdown_bps": min(drawdowns) if drawdowns else None,
         "avg_holding_days": mean(holding_days) if holding_days else None,
         "last_review_status": program.last_review_status,
+        "metric_status": "READY" if returns else "WAITING_MARKET_DATA" if missing_open_marks else "NO_EPISODES",
+        "metric_evaluable_count": len(evaluable),
+        "open_mark_count": len(open_marked),
+        "missing_open_mark_count": len(missing_open_marks),
+        "metric_mark_trade_date": max(mark_trade_dates) if mark_trade_dates else None,
     }
 
 
@@ -2493,6 +2622,79 @@ def _episode_with_mark(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate,
         evidence_json=_candidate_evidence(evidence, program),
         updated_at=_utcnow(),
     )
+
+
+def _episode_with_metric_mark(episode: AdvisoryEpisode, mark: AdvisoryMetricMarketMark, *, program: AdvisoryProgram) -> AdvisoryEpisode:
+    return_bps = (float(mark.mark_price) / episode.entry_price - 1.0) * 10000.0
+    runup_bps = return_bps
+    drawdown_bps = return_bps
+    if mark.max_price is not None and mark.max_price > 0:
+        runup_bps = (float(mark.max_price) / episode.entry_price - 1.0) * 10000.0
+    if mark.min_price is not None and mark.min_price > 0:
+        drawdown_bps = (float(mark.min_price) / episode.entry_price - 1.0) * 10000.0
+    exit_reason = _metric_exit_reason(
+        return_bps=return_bps,
+        max_runup_bps=max(_coalesce_float(episode.max_runup_bps, runup_bps), runup_bps),
+        holding_days=max(int(episode.holding_trading_days or 0), int(mark.observation_count or 0)),
+        program=program,
+    )
+    return replace(
+        episode,
+        holding_trading_days=max(int(episode.holding_trading_days or 0), int(mark.observation_count or 0)),
+        return_bps=return_bps,
+        is_win=return_bps > 0,
+        win_rate_inclusion_status=WIN_OPEN_MARK,
+        max_runup_bps=max(_coalesce_float(episode.max_runup_bps, runup_bps), runup_bps),
+        max_drawdown_bps=min(_coalesce_float(episode.max_drawdown_bps, drawdown_bps), drawdown_bps),
+        still_active_mark_price=mark.mark_price,
+        price_quality_status="OPEN_MARK_TO_MARKET",
+        evidence_json={
+            **deepcopy(episode.evidence_json),
+            "open_mark_to_market": {
+                "trade_date": mark.trade_date.isoformat(),
+                "mark_price": mark.mark_price,
+                "observation_count": mark.observation_count,
+                "metric_exit_reason": exit_reason,
+            },
+        },
+    )
+
+
+def _metric_count_exit_reason(episode: AdvisoryEpisode, *, program: AdvisoryProgram) -> str | None:
+    if episode.exit_reason:
+        return episode.exit_reason
+    if episode.status != EPISODE_STATUS_ACTIVE or episode.return_bps is None:
+        return None
+    if episode.win_rate_inclusion_status != WIN_OPEN_MARK:
+        return None
+    return _metric_exit_reason(
+        return_bps=float(episode.return_bps),
+        max_runup_bps=_coalesce_float(episode.max_runup_bps, float(episode.return_bps)),
+        holding_days=int(episode.holding_trading_days or 0),
+        program=program,
+    )
+
+
+def _metric_exit_reason(
+    *,
+    return_bps: float,
+    max_runup_bps: float,
+    holding_days: int,
+    program: AdvisoryProgram,
+) -> str | None:
+    policy = program.review_policy
+    if int(policy["stop_loss_bps"]) > 0 and return_bps <= -int(policy["stop_loss_bps"]):
+        return EXIT_STOP_LOSS
+    if int(policy["time_stop_days"]) > 0 and holding_days >= int(policy["time_stop_days"]):
+        return EXIT_TIME_STOP
+    take_bps = int(policy["take_profit_bps"])
+    trailing_bps = int(policy["trailing_stop_bps"])
+    if take_bps > 0:
+        if str(policy.get("take_profit_mode") or "trailing") == "fixed" and return_bps >= take_bps:
+            return EXIT_TAKE_PROFIT
+        if max_runup_bps >= take_bps and trailing_bps > 0 and return_bps <= max_runup_bps - trailing_bps:
+            return EXIT_TRAILING_TAKE_PROFIT
+    return None
 
 
 def _not_in_current_topk_candidate(
