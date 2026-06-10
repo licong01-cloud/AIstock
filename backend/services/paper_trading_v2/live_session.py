@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
@@ -1972,22 +1973,12 @@ class PaperTradingLiveMinuteExecutor:
         )
 
     def _ensure_live_selection_cutoff(self, config: dict[str, Any], *, trade_date: date) -> None:
-        artifact_config = config.get("selection_artifact_config")
-        if artifact_config is None:
-            artifact_config = config.get("selection_artifact")
-        if artifact_config is None:
-            return
-        if not isinstance(artifact_config, dict):
-            raise SessionConfigError("selection_artifact_config must be an object")
-        if artifact_config.get("cutoff_date"):
-            return
-        if not bool(artifact_config.get("auto_generate")):
-            return
-        lookup_start = trade_date - timedelta(days=31)
-        previous_days = self.calendar_provider.list_trading_days(lookup_start, trade_date - timedelta(days=1))
-        cutoff_date = previous_days[-1]
-        artifact_config["cutoff_date"] = cutoff_date.isoformat()
-        config.setdefault("paper_v2_session", {})["selection_cutoff_date"] = cutoff_date.isoformat()
+        ensure_previous_trading_day_selection_cutoff(
+            config,
+            trade_date=trade_date,
+            calendar_provider=self.calendar_provider,
+            config_error_type=SessionConfigError,
+        )
 
     def _current_position_prices(
         self,

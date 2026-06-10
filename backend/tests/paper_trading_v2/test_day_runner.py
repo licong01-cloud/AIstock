@@ -15,6 +15,7 @@ from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
+from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -1291,6 +1292,91 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
         "rebalance",
         "minute_market_data",
     }
+
+
+def test_selection_cutoff_helper_injects_previous_trading_day_for_auto_generate() -> None:
+    runtime_config = {
+        "selection_artifact_config": {"auto_generate": True, "inference_backend": "wsl"},
+        "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+    }
+
+    cutoff = ensure_previous_trading_day_selection_cutoff(
+        runtime_config,
+        trade_date=date(2024, 1, 3),
+        calendar_provider=FakeCalendar(),
+    )
+
+    assert cutoff == date(2024, 1, 2)
+    assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
+    assert runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
+    assert runtime_config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-02"
+    assert runtime_config["paper_v2_session"]["selection_cutoff_policy"] == "PREVIOUS_TRADING_DAY_CLOSE"
+
+
+def test_paper_trading_readiness_auto_generate_uses_previous_trading_day_cutoff() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    save_manifest_with_default_execution_policy(package_repo, manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="readiness auto cutoff",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    runtime_config_without_cutoff = {
+        "selection_artifact_config": {"auto_generate": True, "inference_backend": "wsl"},
+        "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+        "runtime_profile": {
+            "selection": {"top_k": 20},
+            "tradability": {"exclude_suspended": True},
+            "hmm": {"enabled": False},
+        },
+    }
+    runtime_config_with_cutoff = {
+        **runtime_config_without_cutoff,
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "inference_backend": "wsl",
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2024-01-02",
+        },
+        "paper_v2_session": {
+            "signal_data_source": "DB_HISTORICAL",
+            "selection_cutoff_date": "2024-01-02",
+            "selection_cutoff_policy": "PREVIOUS_TRADING_DAY_CLOSE",
+        },
+    }
+
+    result = PaperTradingReadinessService(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeDbMinuteProvider(),  # type: ignore[arg-type]
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            trade_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            runtime_config=runtime_config_with_cutoff,
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    ).check_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        runtime_config=runtime_config_without_cutoff,
+    )
+
+    assert result.checked_symbols == ["000001.SZ"]
+    assert "paper_v2_session" in result.runtime_config_keys
+    assert "selection_artifact_config" in result.runtime_config_keys
+    assert any(
+        check.check_name == "selection_runtime" and check.context["raw_candidate_count"] == 1
+        for check in result.checks
+    )
 
 
 def test_readiness_loads_db_price_for_existing_position_equity() -> None:

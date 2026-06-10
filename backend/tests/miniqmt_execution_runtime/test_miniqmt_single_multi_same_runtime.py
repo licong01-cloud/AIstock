@@ -5,6 +5,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeClient
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
@@ -24,7 +26,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.simulation_runtime import MiniQMTExecutionBridge, SimulationBrokerBackend
+from backend.services.simulation_runtime import ExecutionPathNotCanonicalError, MiniQMTExecutionBridge, SimulationBrokerBackend
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import _SnapshotOnlyRepository
@@ -244,9 +246,16 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
         root / "backend/services/simulation_runtime/lifecycle.py",
     ]
     forbidden_by_file = {
-        "day_runner.py": ("broker.submit_order_intent(", "XtQuantQMTClient(", ".place_order("),
-        "bridges.py": ("self._managed_order_service.submit_batch(", "XtQuantQMTClient(", ".place_order("),
-        "lifecycle.py": ("QmtManagedOrderService.submit_batch(", "XtQuantQMTClient(", ".place_order("),
+        "day_runner.py": ("broker.submit_order_intent(", "XtQuantQMTClient(", ".place_order(", "MiniQMTLiveAlgoAdapter"),
+        "bridges.py": (
+            "self._managed_order_service.submit_batch(",
+            "XtQuantQMTClient(",
+            ".place_order(",
+            "UnifiedMiniQMTVnpyExecutionAdapter",
+            "QmtManagedOrderSubmitter",
+            "MiniQMTChildOrderRequest",
+        ),
+        "lifecycle.py": ("QmtManagedOrderService.submit_batch(", "XtQuantQMTClient(", ".place_order(", "MiniQMTLiveAlgoAdapter"),
     }
 
     for path in product_files:
@@ -258,3 +267,20 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
     runtime_client = (root / "backend/services/miniqmt_execution_runtime/client.py").read_text(encoding="utf-8")
     assert "managed_order_service.submit_batch(requests)" in runtime_client
     assert "self.broker.submit_order_intent(child_intent)" in runtime_client
+
+
+def test_legacy_paper_v2_miniqmt_live_adapter_is_removed() -> None:
+    root = Path(__file__).resolve().parents[3]
+
+    execution_init = (root / "backend/services/paper_trading_v2/execution/__init__.py").read_text(encoding="utf-8")
+    assert "MiniQMTLiveAlgoAdapter" not in execution_init
+    legacy_file = (root / "backend/services/paper_trading_v2/execution/minqmt_live_algo_adapter.py").read_text(encoding="utf-8")
+    assert "ExecutionPathNotCanonicalError" in legacy_file
+
+    from backend.services.paper_trading_v2.execution.minqmt_live_algo_adapter import MiniQMTLiveAlgoAdapter
+
+    with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
+        MiniQMTLiveAlgoAdapter(broker=object(), policy_context={})
+
+    assert exc_info.value.error_code == "EXECUTION_PATH_NOT_CANONICAL"
+    assert exc_info.value.context["required_runtime_owner"] == "MiniQMTExecutionRuntime"

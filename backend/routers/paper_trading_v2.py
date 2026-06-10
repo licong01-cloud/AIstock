@@ -28,6 +28,7 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+DEFAULTS_REQUIRED_DATASETS = ("kline_minute_raw", "stk_limit", "suspend_d")
 
 
 class CreatePortfolioRequest(BaseModel):
@@ -255,6 +256,56 @@ def _raise_coldstart_sentinel_http(exc: TradingCoreError) -> None:
     _raise_http(exc)
 
 
+def _latest_successful_dataset_date(cur: Any, *, dataset: str, as_of: date) -> date | None:
+    cur.execute(
+        """
+        SELECT MAX(trade_date)
+        FROM market.dataset_date_refresh_audit
+        WHERE dataset = %s
+          AND status = 'success'
+          AND row_count > 0
+          AND trade_date <= %s
+        """,
+        (dataset, as_of),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _latest_minute_raw_trade_date(cur: Any, *, as_of: date) -> date | None:
+    cur.execute(
+        """
+        SELECT MAX(trade_time::date)
+        FROM market.kline_minute_raw
+        WHERE trade_time < %s::date + interval '1 day'
+        """,
+        (as_of,),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _resolve_defaults_data_ready_end(
+    cur: Any,
+    *,
+    as_of: date,
+    require_minute_data: bool,
+) -> tuple[date | None, dict[str, date], list[str]]:
+    if not require_minute_data:
+        return None, {}, []
+    dataset_dates = {
+        dataset: _latest_successful_dataset_date(cur, dataset=dataset, as_of=as_of)
+        for dataset in DEFAULTS_REQUIRED_DATASETS
+    }
+    if dataset_dates.get("kline_minute_raw") is None:
+        dataset_dates["kline_minute_raw"] = _latest_minute_raw_trade_date(cur, as_of=as_of)
+    missing = [dataset for dataset, latest in dataset_dates.items() if latest is None]
+    if missing:
+        return None, {key: value for key, value in dataset_dates.items() if value is not None}, missing
+    available_dates = [value for value in dataset_dates.values() if value is not None]
+    return min(available_dates), dict(dataset_dates), []
+
+
 @router.get("/trading-days/defaults")
 def get_trading_day_defaults(
     lookback_trading_days: int = 10,
@@ -269,24 +320,28 @@ def get_trading_day_defaults(
         status = calendar_service.status(as_of_date=as_of)
         with get_conn() as conn:
             with conn.cursor() as cur:
-                data_ready_latest_date: date | None = None
+                data_ready_dataset_dates: dict[str, date] = {}
+                data_ready_missing_datasets: list[str] = []
                 effective_end = as_of
-                if require_minute_data:
-                    cur.execute(
-                        """
-                        SELECT MAX(trade_date)
-                        FROM market.dataset_date_refresh_audit
-                        WHERE dataset = 'stk_limit'
-                          AND status = 'success'
-                          AND row_count > 0
-                          AND trade_date <= %s
-                        """,
-                        (as_of,),
+                data_ready_latest_date, data_ready_dataset_dates, data_ready_missing_datasets = _resolve_defaults_data_ready_end(
+                    cur,
+                    as_of=as_of,
+                    require_minute_data=require_minute_data,
+                )
+                if data_ready_missing_datasets:
+                    raise DataUnavailableError(
+                        "paper v2 trading-day defaults require completed DB minute/day data",
+                        context={
+                            "as_of_date": as_of.isoformat(),
+                            "missing_datasets": data_ready_missing_datasets,
+                            "available_dataset_dates": {
+                                key: value.isoformat()
+                                for key, value in data_ready_dataset_dates.items()
+                            },
+                        },
                     )
-                    data_ready_row = cur.fetchone()
-                    if data_ready_row and data_ready_row[0]:
-                        data_ready_latest_date = data_ready_row[0]
-                        effective_end = min(as_of, data_ready_latest_date)
+                if data_ready_latest_date is not None:
+                    effective_end = min(as_of, data_ready_latest_date)
         lookup_start = effective_end - dt.timedelta(days=max(lookback_trading_days * 3, 31))
         all_days = calendar_service.list_trading_days(lookup_start, effective_end)
         dates = list(reversed(all_days[-lookback_trading_days:]))
@@ -318,6 +373,11 @@ def get_trading_day_defaults(
         "lookback_trading_days": lookback_trading_days,
         "require_minute_data": require_minute_data,
         "data_ready_latest_date": data_ready_latest_date.isoformat() if data_ready_latest_date else None,
+        "data_ready_dataset_dates": {
+            key: value.isoformat()
+            for key, value in data_ready_dataset_dates.items()
+        },
+        "data_ready_missing_datasets": data_ready_missing_datasets,
         "latest_trading_day": latest.isoformat(),
         "trading_days": [day.isoformat() for day in sorted(dates)],
         "replay_start_date": replay_start.isoformat(),

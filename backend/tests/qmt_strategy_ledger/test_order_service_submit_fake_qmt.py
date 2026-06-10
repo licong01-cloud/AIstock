@@ -312,6 +312,78 @@ def test_submit_batch_dependent_buy_retry_submits_after_sell_proceeds_reconciled
     assert batch.metadata["dependent_buy_retry"] is True
 
 
+def test_submit_batch_dependent_buy_retry_matches_logical_batch_when_runtime_ids_change() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100")))
+    _add_sellable_lot(repo, 1000)
+    first_broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+    first_requests = [
+        replace(
+            _buy_request("remark_runtime_rebalance_buy"),
+            metadata={
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_id": "mqrt_same_runtime",
+                "runtime_algo_instance_id": "mqalgo_buy_first",
+                "runtime_child_order_id": "mqchild_buy_first",
+                "runtime_parent_intent_id": "parent_buy_first",
+                "execution_plan_id": "plan_same",
+                "execution_plan_intent_id": "intent_buy_same",
+            },
+        ),
+        replace(
+            _sell_request("remark_runtime_rebalance_sell"),
+            metadata={
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_id": "mqrt_same_runtime",
+                "runtime_algo_instance_id": "mqalgo_sell_first",
+                "runtime_child_order_id": "mqchild_sell_first",
+                "runtime_parent_intent_id": "parent_sell_first",
+                "execution_plan_id": "plan_same",
+                "execution_plan_intent_id": "intent_sell_same",
+            },
+        ),
+    ]
+
+    first = _service(repo, first_broker).submit_batch(first_requests)
+    account_after_sell_fill = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account_after_sell_fill, cash=Decimal("10100")))
+    second_broker = FakeManagedBroker(order_ids=[1082167999])
+    second_requests = [
+        replace(
+            first_requests[0],
+            metadata={
+                **first_requests[0].metadata,
+                "runtime_algo_instance_id": "mqalgo_buy_retry",
+                "runtime_child_order_id": "mqchild_buy_retry",
+                "runtime_parent_intent_id": "parent_buy_retry",
+            },
+        ),
+        replace(
+            first_requests[1],
+            metadata={
+                **first_requests[1].metadata,
+                "runtime_algo_instance_id": "mqalgo_sell_retry",
+                "runtime_child_order_id": "mqchild_sell_retry",
+                "runtime_parent_intent_id": "parent_sell_retry",
+            },
+        ),
+    ]
+    second = _service(repo, second_broker).submit_batch(second_requests)
+
+    assert first.batch_status == OrderBatchStatus.PARTIAL.value
+    assert second.success is True
+    assert second.batch_id == first.batch_id
+    assert second.retry_of_batch_id == first.batch_id
+    assert [payload["order_remark"] for payload in first_broker.place_order_payloads] == ["remark_runtime_rebalance_sell"]
+    assert [payload["order_remark"] for payload in second_broker.place_order_payloads] == ["remark_runtime_rebalance_buy"]
+    batch = repo.get_order_batch(first.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.SUCCEEDED
+    assert batch.metadata["dependent_buy_deferred"] is False
+    assert batch.metadata["dependent_buy_retry"] is True
+
+
 def test_submit_batch_aggregates_same_symbol_sell_and_broker_can_sell() -> None:
     repo = _repo()
     _add_sellable_lot(repo, 1000)

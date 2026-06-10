@@ -587,7 +587,12 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
     assert all(item.allowed for item in preview.preflights)
     assert submitted.success is True
     assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
-    assert preview.requests[0].metadata["source"] == "shared_vnpy_execution_adapter"
+    assert preview.requests[0].metadata["source"] == "runtime_owned_vnpy_algo"
+    assert preview.requests[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert preview.requests[0].metadata["runtime_child_order_id"]
+    assert preview.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
+    assert submitted.runtime_evidence is not None
+    assert submitted.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
     assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
 
 

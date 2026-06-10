@@ -3,7 +3,31 @@
   "allowed_write_scope": [
     "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md",
     "tests/aistock_validation/bugs/20260602_BUG-210-paper-v2-miniqmt-unified-single-and-multi-strategy-unattended-autorun-im.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/paper_trading_v2/execution/minqmt_live_algo_adapter.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified/**",
+    "backend/services/paper_trading_v2/execution/__init__.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/services/paper_trading_v2/selection_cutoff.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/tests/paper_trading_v2/test_trading_day_defaults.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "tests/aistock_validation/history/paper_v2_selection_center/**"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-210",
@@ -11,7 +35,10 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Phase 7 code migration: MiniQMT product paths must use MiniQMTExecutionRuntime as the single authoritative execution owner before live validation.",
+    "Phase 7 static guard: explain or block all legacy raw broker/order/adaptor hits and prove product paths no longer instantiate MiniQMTLiveAlgoAdapter or UnifiedMiniQMTVnpyExecutionAdapter outside runtime client.",
+    "Phase 7 validation: run non-live L0/L2/L3/L4 gates or record pending-live-window for real MiniQMT SIM L5."
   ],
   "created_at": "2026-06-02T09:09:51.462245Z",
   "description": "Current main has separate Paper v2 exclusive_account and MiniQMT virtual-strategy execution paths; the unified branch must merge fixes and capabilities without losing today-fixed bug regressions or vn.py-style execution behavior.",
@@ -21,10 +48,55 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260602-eaea99c761df",
       "timestamp": "2026-06-02T09:09:51.462238Z"
+    },
+    {
+      "action": "phase7_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded BUG-210 scope for user-requested Phase 7 canonical MiniQMT runtime migration before live validation.",
+      "timestamp": "2026-06-10T05:32:51.861663Z"
+    },
+    {
+      "action": "phase7_validation_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded scope to keep Selection Center history visible when selectable package loading fails during paper_v2_l3 validation; this preserves Phase 7 L3 evidence without changing MiniQMT execution semantics.",
+      "timestamp": "2026-06-10T06:52:00Z"
+    },
+    {
+      "action": "phase7_readiness_cutoff_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded scope to fix paper_v2_l3 run-console readiness/day-run auto_generate PIT cutoff regression discovered during Phase 7 validation.",
+      "timestamp": "2026-06-10T07:25:00Z"
+    },
+    {
+      "action": "phase7_trading_day_defaults_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded scope to make Paper v2 trading-day defaults honor DB minute-bar readiness, preventing same-day DB_HISTORICAL UI validation when current-day minutes are not post-close synced.",
+      "timestamp": "2026-06-10T07:55:00Z"
+    },
+    {
+      "action": "phase7_dependent_buy_retry_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded scope to fix deterministic MiniQMT dependent BUY retry after runtime-owned vn.py child IDs made logical batch identity unstable; required for L2/L4 Phase 7 validation.",
+      "timestamp": "2026-06-10T08:17:58Z"
+    },
+    {
+      "action": "phase7_non_live_validation_passed",
+      "actor": "Codex",
+      "note": "Phase 7 L0/L2/L3/L4 non-live gates passed; L5 real MiniQMT SIM remains pending-live-window before declaring production trading readiness.",
+      "timestamp": "2026-06-10T08:33:29Z"
+    },
+    {
+      "action": "phase7_post_rebase_validation_passed",
+      "actor": "Codex",
+      "note": "Rebased BUG-210 Phase 7 branch onto latest origin/main and reran L0/L2/L3/L4 non-live validation; L5 real MiniQMT SIM remains pending-live-window.",
+      "timestamp": "2026-06-10T08:55:00Z"
     }
   ],
   "evidence_uris": [
-    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md"
+    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md",
+    "tests/aistock_validation/history/paper_v2_miniqmt_unified/20260610_bug-210_phase7_canonical_miniqmt_runtime.md",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260610_162409_l3_paper-v2-selection-center-l3-regression.md",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260610_165139_l3_paper-v2-selection-center-l3-regression.md"
   ],
   "expected": "Single-strategy (N=1) and multi-strategy (N>1) MiniQMT SIM portfolios run through one account-group/slot/plan/preflight/execution/reconcile/status/UI path. Every F2M capability has implementation location, automated tests, runtime/API/UI evidence, validation record, and DESIGN-COMPLIANCE-001 mapping. No main merge before complete development and validation.",
   "first_seen_at": "2026-06-02T09:09:51.462245Z",
