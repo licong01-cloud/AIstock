@@ -4,7 +4,8 @@
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/qmt_strategy_ledger/order_service.py",
     "tests/aistock_validation/bugs/20260610_BUG-300-p0-paper-v2-miniqmt-dependent-buy-retry-stuck-after-sell-first-fills-in.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-300",
@@ -22,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260610-f4a8f0db1030",
       "timestamp": "2026-06-10T03:36:36.677236Z"
+    },
+    {
+      "timestamp": "2026-06-10T03:45:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Add simulation runtime lifecycle regression test file for BUG-300 dependent BUY retry coverage."
     }
   ],
   "evidence_uris": [
@@ -46,7 +53,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "During trading window with MiniQMT SIM connected, run POST /api/v1/simulation-runtime/scheduler/tick for a SELL-first rebalance where BUY needs same-batch proceeds; then query paper_v2.simulation_daily_run and qmt_strategy.order_batch for PARTIAL+dependent_buy_deferred after SELL fills reconcile.",
   "required_verification": [
-    "l0"
+    "l0",
+    "simulation_runtime_lifecycle_targeted"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

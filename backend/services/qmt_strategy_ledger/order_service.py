@@ -1406,8 +1406,27 @@ def _request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
         "package_id": request.package_id,
         "selection_run_id": request.selection_run_id,
         "target_weight": str(request.target_weight) if request.target_weight is not None else None,
-        "metadata": _json_safe(request.metadata),
+        "metadata": _stable_request_metadata(request.metadata),
     }
+
+
+def _stable_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    stable = _json_safe(metadata)
+    if not isinstance(stable, dict):
+        return {}
+    stable.pop("vnpy_action_id", None)
+    stable.pop("vnpy_vt_orderid", None)
+    # The full vn.py diagnostic contains generated order ids and timestamps;
+    # order intent metadata still preserves it, but batch identity must be stable.
+    stable.pop("vnpy_execution_diagnostic", None)
+    vnpy_action = stable.get("vnpy_action")
+    if isinstance(vnpy_action, dict):
+        stable["vnpy_action"] = {
+            key: value
+            for key, value in vnpy_action.items()
+            if key not in {"action_id", "vt_orderid"}
+        }
+    return stable
 
 
 def _compensation_actions(results: tuple[ManagedOrderSubmitResult, ...]) -> list[dict[str, Any]]:
