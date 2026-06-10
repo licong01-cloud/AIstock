@@ -28,8 +28,8 @@
   "expected": "After close-sync PR merge, merge-finalizer with --sync-root must fast-forward the canonical root to the final origin/main head before reporting success, or return a blocking sync-root gate with a compact next command.",
   "first_seen_at": "2026-06-10T06:35:35.976060Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "efc8e7ef82fbccf1df3b0d99f2d6cd495bce8fe3",
+  "fixed_at": "2026-06-10T07:02:47.504392Z",
   "github_issue_number": 912,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/912",
   "last_seen_at": "2026-06-10T06:35:35.976060Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/914",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "b971329c41d203994437f116",
     "source_event_id": "FE-20260610-b971329c41d2"
   },
+  "validation_evidence": [
+    "PR #914 CI green; local validations passed: pytest, ruff, workflow-smoke, nox l0/module/guardrail, validation_center_backend"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
