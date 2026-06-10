@@ -1,9 +1,36 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import dynamic from "next/dynamic";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false }) as any;
+type PlotlyComponent = React.ComponentType<any>;
+
+function PlotlyChart(props: any) {
+  const [Plot, setPlot] = React.useState<PlotlyComponent | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    import("react-plotly.js")
+      .then((module) => {
+        if (!cancelled) setPlot(() => module.default as PlotlyComponent);
+      })
+      .catch((error) => console.error("Failed to load Plotly chart", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!Plot) {
+    const placeholderHeight = props?.style?.height ?? props?.layout?.height ?? 260;
+    return (
+      <div style={{ height: placeholderHeight, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
+        Loading chart...
+      </div>
+    );
+  }
+
+  return <Plot {...props} />;
+}
+
 
 interface Props {
   factorNames: string[];
@@ -70,7 +97,7 @@ export default function CorrelationHeatmap({
           暂无矩阵数据
         </div>
       ) : (
-        <Plot
+        <PlotlyChart
           data={[
             {
               z: filteredMatrix,
