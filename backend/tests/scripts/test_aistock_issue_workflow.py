@@ -4713,6 +4713,37 @@ def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
     assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
 
 
+def test_orphan_worktree_profile_and_refusal_message_stay_compact(
+    isolated_workflow_root: Path,
+) -> None:
+    orphan = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    for index in range(60):
+        path = orphan / "frontend" / "node_modules" / "pkg" / f"file-{index}.js"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    deep_tail = orphan / "tests" / "aistock_validation" / "history" / "very-deep-tail.json"
+    deep_tail.parent.mkdir(parents=True, exist_ok=True)
+    deep_tail.write_text("{}", encoding="utf-8")
+
+    profile = workflow._orphan_worktree_dir_profile(orphan)
+
+    assert profile["regular_entry_count"] == 61
+    assert len(profile["regular_entries"]) <= profile["sample_limit"]
+    assert profile["regular_entries_truncated"] is True
+    assert profile["top_regular_dirs"]["frontend"] == 60
+    assert profile["safe_reparse_or_empty_only"] is False
+    assert "very-deep-tail.json" not in json.dumps(profile, ensure_ascii=False)
+
+    with pytest.raises(workflow.WorkflowError) as excinfo:
+        workflow._remove_reparse_or_empty_tree(orphan)
+
+    message = str(excinfo.value)
+    assert "count=61" in message
+    assert "top_dirs=" in message
+    assert "full file list intentionally omitted" in message
+    assert "very-deep-tail.json" not in message
+
+
 def test_cleanup_after_merge_removes_orphan_reparse_only_worktree_dir(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
