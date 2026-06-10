@@ -30,8 +30,8 @@
   "expected": "Code intelligence verification should produce compact machine-readable evidence for CodeGraph freshness, affected tests, UA summary, and client wrapper availability; it should classify stale-but-up-to-date metadata as an explicit warning, keep artifacts under ignored tmp paths, and expose clear next actions without requiring agents to parse large JSON or broad-scan the repo.",
   "first_seen_at": "2026-06-10T07:33:14.125084Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "71df0981c8dea9a36788e0f846e15f4fad362d95",
+  "fixed_at": "2026-06-10T08:08:03.898026Z",
   "github_issue_number": 917,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/917",
   "last_seen_at": "2026-06-10T07:33:14.125084Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/918",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,12 @@
     "fingerprint": "1247eea8ac87398dbe1a3913",
     "source_event_id": "FE-20260610-1247eea8ac87"
   },
+  "validation_evidence": [
+    "python -m pytest backend\\\\tests\\\\scripts\\\\test_code_intelligence_adapter.py backend\\\\tests\\\\scripts\\\\test_aistock_issue_workflow.py -q -> passed (175 passed)",
+    "python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -> passed",
+    "python -m nox -s validation_center_backend -> passed (414 passed)",
+    "python scripts\\\\code_intelligence_adapter.py verify-clients --item-id BUG-308 --changed-file scripts/code_intelligence_adapter.py --changed-file scripts/aistock_issue_workflow.py --module validation -> warning-only passed: clients ready, CodeGraph ok, UA base_current usable"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
