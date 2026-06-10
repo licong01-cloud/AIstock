@@ -443,6 +443,11 @@ async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeD
           median_return_bps: 120,
           max_drawdown_bps: -310,
           avg_holding_days: 4.5,
+          metric_status: "READY",
+          metric_evaluable_count: 3,
+          open_mark_count: 3,
+          missing_open_mark_count: 0,
+          metric_mark_trade_date: "2026-06-05",
         }],
       });
     }
@@ -568,6 +573,8 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.locator("body")).not.toContainText("JSON");
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-09");
   await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-08");
+  await expect(page.getByText("盯市 2026-06-05")).toBeVisible();
+  await expect(page.getByText("样本 3/3")).toBeVisible();
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("平安银行");

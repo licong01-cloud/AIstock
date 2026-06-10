@@ -88,6 +88,17 @@ function fmtBps(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value / 100).toFixed(2)}%` : "-";
 }
 
+function metricStatusText(row: AdvisoryLeaderboardRow): string {
+  if (row.metric_status === "READY") {
+    return row.metric_mark_trade_date ? `盯市 ${row.metric_mark_trade_date}` : "盯市已更新";
+  }
+  if (row.metric_status === "WAITING_MARKET_DATA") {
+    const missing = row.missing_open_mark_count ?? row.active_count ?? 0;
+    return missing > 0 ? `缺行情 ${missing}` : "等待行情";
+  }
+  return row.metric_status || "";
+}
+
 function fmtNumber(value: number | null | undefined, digits = 0): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
@@ -854,8 +865,8 @@ function AdvisoryPageContent() {
                     <td>{row.active_count ?? 0}</td>
                     <td>{row.take_profit_count ?? 0}</td>
                     <td>{row.stop_loss_count ?? 0}</td>
-                    <td>{fmtPct(row.win_rate)}</td>
-                    <td>{fmtBps(row.avg_return_bps)}</td>
+                    <td>{fmtPct(row.win_rate)}<br /><span className="pv2-muted">{metricStatusText(row)}</span></td>
+                    <td>{fmtBps(row.avg_return_bps)}<br /><span className="pv2-muted">样本 {row.metric_evaluable_count ?? 0}/{row.active_count ?? 0}</span></td>
                     <td>{row.last_review_status || "STALE"}<br /><span className="pv2-muted">{row.latest_review_trade_date || "尚未复评"}</span></td>
                     <td>
                       <div className="pv2-row-actions">

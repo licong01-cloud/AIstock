@@ -39,6 +39,11 @@ export type AdvisoryLeaderboardRow = AdvisoryProgram & {
   median_return_bps?: number | null;
   max_drawdown_bps?: number | null;
   avg_holding_days?: number | null;
+  metric_status?: string | null;
+  metric_evaluable_count?: number | null;
+  open_mark_count?: number | null;
+  missing_open_mark_count?: number | null;
+  metric_mark_trade_date?: string | null;
 };
 
 export type AdvisoryEpisode = {
