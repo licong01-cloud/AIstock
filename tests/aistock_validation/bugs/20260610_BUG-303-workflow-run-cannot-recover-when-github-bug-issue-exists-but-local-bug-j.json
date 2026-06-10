@@ -24,18 +24,18 @@
       "timestamp": "2026-06-10T05:17:44.376443Z"
     },
     {
-      "timestamp": "2026-06-10T05:24:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "BUG-303 requires scoped workflow CLI and unit-test changes; no production/runtime files added."
+      "actor": "codex",
+      "note": "BUG-303 requires scoped workflow CLI and unit-test changes; no production/runtime files added.",
+      "timestamp": "2026-06-10T05:24:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-10T05:17:44.376448Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8817935a82c1e3b71f6ec982b4c47621f5a1e938",
+  "fixed_at": "2026-06-10T05:39:08.231890Z",
   "github_issue_number": 902,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/902",
   "last_seen_at": "2026-06-10T05:17:44.376448Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/903",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -90,6 +91,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #903 CI green; local required validations passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
