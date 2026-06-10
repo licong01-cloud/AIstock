@@ -31,8 +31,8 @@
   "expected": "PR Quality should consume repository code-intelligence readiness artifacts or produce explicit runner-only warning with compact artifact refs. When local config/artifacts are present, CodeGraph freshness and UA summary should be surfaced as available instead of fallback/not_configured, without blocking PRs or expanding validation.",
   "first_seen_at": "2026-06-10T02:15:27.151440Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c5f0421495e16468bba9069ec74a795ce555fa9f",
+  "fixed_at": "2026-06-10T02:55:59.762658Z",
   "github_issue_number": 890,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/890",
   "last_seen_at": "2026-06-10T02:15:27.151440Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/892",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,6 +65,9 @@
     "fingerprint": "456b082315c42cbaf577ea8a",
     "source_event_id": "FE-20260610-456b082315c4"
   },
+  "validation_evidence": [
+    "PR #892 merged; CI green; local required validations passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
