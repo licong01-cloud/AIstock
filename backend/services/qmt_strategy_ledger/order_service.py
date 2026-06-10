@@ -410,6 +410,9 @@ class QmtManagedOrderService:
         deferred_batch = self._existing_dependent_buy_batch(batch_id)
         if deferred_batch is not None:
             return self._retry_dependent_buy_batch(batch_id, requests, deferred_batch)
+        deferred_batch = self._find_dependent_buy_batch_by_logical_key(requests)
+        if deferred_batch is not None:
+            return self._retry_dependent_buy_batch(deferred_batch.batch_id, _requests_from_batch(deferred_batch), deferred_batch)
         retry_result = self._existing_batch_result(batch_id, len(requests))
         if retry_result is not None:
             return retry_result
@@ -920,6 +923,30 @@ class QmtManagedOrderService:
             return None
         return batch
 
+    def _find_dependent_buy_batch_by_logical_key(
+        self,
+        requests: list[ManagedOrderRequest],
+    ) -> OrderBatchRecord | None:
+        get_batch = getattr(self._repository, "get_order_batch", None)
+        if get_batch is None:
+            return None
+        logical_batch_id = _logical_batch_id_for_requests(requests)
+        if logical_batch_id == _batch_id_for_requests(requests):
+            return None
+        for request, remark in ((request, request.order_remark) for request in requests if request.order_remark):
+            intent = self._repository.get_order_intent_by_remark(request.account_id, remark)
+            if intent is None or not intent.batch_id:
+                continue
+            batch = get_batch(intent.batch_id)
+            if batch is None:
+                continue
+            if _logical_batch_id_for_batch(batch) != logical_batch_id:
+                continue
+            existing = self._existing_dependent_buy_batch(batch.batch_id)
+            if existing is not None:
+                return existing
+        return None
+
     def _retry_dependent_buy_batch(
         self,
         batch_id: str,
@@ -1261,6 +1288,29 @@ def _batch_id_for_requests(requests: list[ManagedOrderRequest]) -> str:
     return f"qmtbatch_{sha1(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
+def _logical_batch_id_for_requests(requests: list[ManagedOrderRequest]) -> str:
+    signatures = [_logical_request_signature(request) for request in requests]
+    payload = json.dumps(signatures, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return f"qmtbatch_{sha1(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _logical_batch_id_for_batch(batch: OrderBatchRecord) -> str | None:
+    orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
+    if not isinstance(orders, list):
+        return None
+    requests = [request_from_payload(order) for order in orders if isinstance(order, dict)]
+    if not requests:
+        return None
+    return _logical_batch_id_for_requests(requests)
+
+
+def _requests_from_batch(batch: OrderBatchRecord) -> list[ManagedOrderRequest]:
+    orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
+    if not isinstance(orders, list):
+        return []
+    return _batch_submission_order([request_from_payload(order) for order in orders if isinstance(order, dict)])
+
+
 def _batch_submission_order(requests: list[ManagedOrderRequest]) -> list[ManagedOrderRequest]:
     return [
         request
@@ -1410,6 +1460,13 @@ def _request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
     }
 
 
+def _logical_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
+    return {
+        **_request_signature(request),
+        "metadata": _logical_request_metadata(request.metadata),
+    }
+
+
 def _stable_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     stable = _json_safe(metadata)
     if not isinstance(stable, dict):
@@ -1426,6 +1483,17 @@ def _stable_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             for key, value in vnpy_action.items()
             if key not in {"action_id", "vt_orderid"}
         }
+    return stable
+
+
+def _logical_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    stable = _stable_request_metadata(metadata)
+    for key in (
+        "runtime_algo_instance_id",
+        "runtime_child_order_id",
+        "runtime_parent_intent_id",
+    ):
+        stable.pop(key, None)
     return stable
 
 

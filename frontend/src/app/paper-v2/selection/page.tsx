@@ -98,29 +98,30 @@ export default function PaperV2SelectionPage() {
   const loadPackages = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const [rows, runRows, configRows] = await Promise.all([
-        selectionCenterApi.selectablePackages(300),
-        selectionCenterApi.listRunsPage({ page: runPage, pageSize: 20 }),
-        hmmTrainingApi.configs(),
-      ]);
-      setPackages(rows);
-      setRuns(runRows.runs);
-      setRunPagination(runRows.pagination);
-      setHmmConfigs(configRows);
-      setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
-      const firstPackageId = rows[0]?.package_id;
-      setSelected((prev) => Object.fromEntries(rows.map((item) => [
-        item.package_id,
-        Boolean(prev[item.package_id] ?? item.package_id === firstPackageId),
-      ])));
-      if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
-    } catch (exc) {
-      setError(exc);
-    } finally {
-      setLoading(false);
-    }
-  }, [hmmConfigId, runPage]);
+    const tasks = [
+      selectionCenterApi.selectablePackages(300).then((rows) => {
+        setPackages(rows);
+        setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
+        const firstPackageId = rows[0]?.package_id;
+        setSelected((prev) => Object.fromEntries(rows.map((item) => [
+          item.package_id,
+          Boolean(prev[item.package_id] ?? item.package_id === firstPackageId),
+        ])));
+      }),
+      selectionCenterApi.listRunsPage({ page: runPage, pageSize: 20 }).then((runRows) => {
+        setRuns(runRows.runs);
+        setRunPagination(runRows.pagination);
+      }),
+      hmmTrainingApi.configs().then((configRows) => {
+        setHmmConfigs(configRows);
+        setHmmConfigId((current) => current || configRows[0]?.config_id || "");
+      }),
+    ];
+    const results = await Promise.allSettled(tasks);
+    const firstFailure = results.find((item): item is PromiseRejectedResult => item.status === "rejected");
+    if (firstFailure) setError(firstFailure.reason);
+    setLoading(false);
+  }, [runPage]);
 
   useEffect(() => { loadPackages(); }, [loadPackages]);
 
