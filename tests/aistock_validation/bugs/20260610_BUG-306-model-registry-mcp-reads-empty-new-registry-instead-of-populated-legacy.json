@@ -26,18 +26,18 @@
       "timestamp": "2026-06-10T06:35:08.849386Z"
     },
     {
-      "timestamp": "2026-06-10T06:36:45Z",
-      "actor": "codex",
       "action": "set_allowed_write_scope",
-      "note": "Expanded scope from fast-path suggested_scope for MCP model registry legacy catalog fix."
+      "actor": "codex",
+      "note": "Expanded scope from fast-path suggested_scope for MCP model registry legacy catalog fix.",
+      "timestamp": "2026-06-10T06:36:45Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-10T06:35:08.849392Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "80d6656a824f736a2140f6c1d91a9d8a7bf50071",
+  "fixed_at": "2026-06-10T06:52:35.197867Z",
   "github_issue_number": 911,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/911",
   "last_seen_at": "2026-06-10T06:35:08.849392Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/913",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "mcp.gateway"
   ],
@@ -91,6 +92,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s model_registry_backend -> passed",
+    "python -m pytest backend/tests/mcp/test_domain_modules.py::test_model_strategy_execution_modules_call_facades_and_confirm_before_http -> 4 passed",
+    "TestClient GET /model-registry/models?limit=5 -> status 200 total 58; rollback registration smoke left visible_after_rollback=0"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
