@@ -319,6 +319,7 @@ def get_trading_day_defaults(
         "require_minute_data": require_minute_data,
         "data_ready_latest_date": data_ready_latest_date.isoformat() if data_ready_latest_date else None,
         "latest_trading_day": latest.isoformat(),
+        "trading_days": [day.isoformat() for day in sorted(dates)],
         "replay_start_date": replay_start.isoformat(),
         "replay_end_date": latest.isoformat(),
         "available_trading_day_count": len(dates),

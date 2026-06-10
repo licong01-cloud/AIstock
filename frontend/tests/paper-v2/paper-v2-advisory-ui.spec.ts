@@ -193,7 +193,14 @@ const listVersions = [
     changed_count: 3,
     turnover_rate: 0.15,
     overlap_rate: 0.85,
-    summary_json: {},
+    target_trade_date: "2026-06-05",
+    selection_as_of_trade_date: "2026-06-04",
+    summary_json: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-05",
+        selection_as_of_trade_date: "2026-06-04",
+      },
+    },
     created_at: "2026-06-05T18:10:00+08:00",
   },
   {
@@ -213,7 +220,14 @@ const listVersions = [
     changed_count: 20,
     turnover_rate: 1,
     overlap_rate: null,
-    summary_json: {},
+    target_trade_date: "2026-06-04",
+    selection_as_of_trade_date: "2026-06-03",
+    summary_json: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-04",
+        selection_as_of_trade_date: "2026-06-03",
+      },
+    },
     created_at: "2026-06-04T18:10:00+08:00",
   },
 ];
@@ -288,9 +302,36 @@ const initialListVersion = {
   changed_count: 1,
   turnover_rate: 1,
   overlap_rate: null,
-  summary_json: {},
+  target_trade_date: "2026-06-08",
+  selection_as_of_trade_date: "2026-06-05",
+  summary_json: {
+    advisory_date_context: {
+      target_trade_date: "2026-06-08",
+      selection_as_of_trade_date: "2026-06-05",
+    },
+  },
   created_at: "2026-06-08T18:10:00+08:00",
 };
+
+function publishedListVersion(tradeDate: string, selectionAsOfDate: string, previousListVersionId: string | null = null): JsonObject {
+  const suffix = tradeDate.replaceAll("-", "");
+  return {
+    ...initialListVersion,
+    list_version_id: `advlv_${suffix}`,
+    review_run_id: `advrun_${suffix}`,
+    trade_date: tradeDate,
+    target_trade_date: tradeDate,
+    selection_as_of_trade_date: selectionAsOfDate,
+    previous_list_version_id: previousListVersionId,
+    summary_json: {
+      advisory_date_context: {
+        target_trade_date: tradeDate,
+        selection_as_of_trade_date: selectionAsOfDate,
+      },
+    },
+    created_at: `${tradeDate}T18:10:00+08:00`,
+  };
+}
 
 const initialListItems = [
   {
@@ -335,6 +376,7 @@ async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
     },
     lookback_trading_days: 10,
     latest_trading_day: "2026-06-08",
+    trading_days: ["2026-06-05", "2026-06-08"],
     replay_start_date: "2026-05-25",
     replay_end_date: "2026-06-08",
     available_trading_day_count: 10,
@@ -376,12 +418,19 @@ async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
   return { watchlistCalls, watchlistBodies };
 }
 
-async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeDate?: string | null; initialLastReviewStatus?: string | null } = {}) {
+async function mockAdvisoryApis(page: Page, options: { initialProgramStatus?: string; initialLatestReviewTradeDate?: string | null; initialLastReviewStatus?: string | null; initialListVersions?: JsonObject[] } = {}) {
   const calls: string[] = [];
   const reviewBodies: JsonObject[] = [];
+  let programStatus = options.initialProgramStatus ?? program.status;
   let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
   let lastReviewStatus = options.initialLastReviewStatus ?? program.last_review_status;
   let lastReviewTargetDate = "2026-06-08";
+  const currentProgram = () => ({
+    ...program,
+    status: programStatus,
+    last_review_status: lastReviewStatus,
+    latest_review_trade_date: latestReviewTradeDate,
+  });
   const enabledProgram = () => ({
     ...program,
     status: "ENABLED",
@@ -414,11 +463,19 @@ async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeD
     },
   });
   };
-  let currentListVersions: JsonObject[] = [...listVersions];
+  let currentListVersions: JsonObject[] = [...(options.initialListVersions || listVersions)];
   let detailByVersion: Record<string, { list_version: JsonObject; items: JsonObject[] }> = {
     advlv_20260605: { list_version: listVersions[0], items: listItems },
     advlv_20260604: { list_version: listVersions[1], items: initialListItems.map((item) => ({ ...item, list_version_id: "advlv_20260604" })) },
   };
+  for (const version of currentListVersions) {
+    const listVersionId = String(version.list_version_id || "");
+    if (!listVersionId || detailByVersion[listVersionId]) continue;
+    detailByVersion[listVersionId] = {
+      list_version: version,
+      items: listItems.slice(0, 1).map((item) => ({ ...item, list_version_id: listVersionId })),
+    };
+  }
   await page.route("**/api/v1/advisory/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -427,13 +484,20 @@ async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeD
     calls.push(`${method} ${path}${url.search}`);
 
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
-      return json(route, { ok: true, programs: [{ ...program, last_review_status: lastReviewStatus, latest_review_trade_date: latestReviewTradeDate }] });
+      return json(route, { ok: true, programs: [currentProgram()] });
     }
     if (path.endsWith("/api/v1/advisory/leaderboard") && method === "GET") {
       return json(route, {
         ok: true,
         leaderboard: [{
           ...enabledProgram(),
+          latest_recommendation_list_version_id: currentListVersions[0]?.list_version_id ?? null,
+          latest_recommendation_trade_date: currentListVersions[0]?.trade_date ?? null,
+          latest_recommendation_target_trade_date: currentListVersions[0]?.target_trade_date ?? currentListVersions[0]?.trade_date ?? null,
+          latest_recommendation_selection_as_of_trade_date: currentListVersions[0]?.selection_as_of_trade_date ?? null,
+          latest_recommendation_generated_at: currentListVersions[0]?.created_at ?? null,
+          latest_recommendation_version_status: currentListVersions[0]?.version_status ?? null,
+          published_recommendation_target_trade_dates: currentListVersions.map((version) => String(version.target_trade_date || version.trade_date)),
           entered_episode_count: 42,
           active_count: 3,
           take_profit_count: 5,
@@ -484,7 +548,8 @@ async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeD
       return json(route, { ok: true, returns, metrics: { win_rate: 0.64 } });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/enable`) && method === "POST") {
-      return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
+      programStatus = "ENABLED";
+      return json(route, { ok: true, program: currentProgram() });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/reviews/preview`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
@@ -504,6 +569,13 @@ async function mockAdvisoryApis(page: Page, options: { initialLatestReviewTradeD
         list_version_id: `advlv_${suffix}`,
         review_run_id: `advrun_${suffix}`,
         trade_date: lastReviewTargetDate,
+        target_trade_date: lastReviewTargetDate,
+        selection_as_of_trade_date: (body.runtime_config as JsonObject | undefined)?.advisory_date_context
+          ? String(((body.runtime_config as JsonObject).advisory_date_context as JsonObject).selection_as_of_trade_date || "")
+          : null,
+        summary_json: (body.runtime_config as JsonObject | undefined)?.advisory_date_context
+          ? { advisory_date_context: (body.runtime_config as JsonObject).advisory_date_context }
+          : {},
         previous_list_version_id: currentListVersions[0]?.list_version_id || null,
       }, ...currentListVersions];
       detailByVersion = {
@@ -571,8 +643,13 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
   await expect(page.getByTestId("advisory-package-select-pkg-1").locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
   await expect(page.locator("body")).not.toContainText("JSON");
-  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-09");
-  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-08");
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
+  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-05");
+  await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("预测目标：2026-06-05");
+  await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("数据截止：2026-06-04");
+  await expect(page.getByTestId("advisory-selected-latest-context")).toContainText("预测目标 2026-06-05");
+  await expect(page.getByTestId("advisory-visible-list-date-context")).toContainText("预测目标交易日：2026-06-05");
+  await expect(page.getByTestId("advisory-visible-list-date-context")).toContainText("选股数据截止日：2026-06-04");
   await expect(page.getByText("盯市 2026-06-05")).toBeVisible();
   await expect(page.getByText("样本 3/3")).toBeVisible();
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(2);
@@ -585,21 +662,21 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
-  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_20260609");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_preview_20260608");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("preview hold");
   expect(reviewBodies.at(-1)).toMatchObject({
-    trade_date: "2026-06-09",
-    target_trade_date: "2026-06-09",
-    selection_as_of_trade_date: "2026-06-08",
+    trade_date: "2026-06-08",
+    target_trade_date: "2026-06-08",
+    selection_as_of_trade_date: "2026-06-05",
     runtime_config: {
       advisory_date_context: {
-        target_trade_date: "2026-06-09",
-        selection_as_of_trade_date: "2026-06-08",
+        target_trade_date: "2026-06-08",
+        selection_as_of_trade_date: "2026-06-05",
       },
       selection_artifact_config: {
         auto_generate: true,
         pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
-        cutoff_date: "2026-06-08",
+        cutoff_date: "2026-06-05",
       },
     },
   });
@@ -609,7 +686,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("已复评");
-  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260609");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260608");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("enter list");
 
   await page.getByTestId("advisory-view-list-version-advlv_20260605").click();
@@ -697,6 +774,8 @@ test("Advisory review defaults to next target date after current target was publ
   await mockShellApis(page, {
     as_of_date: "2026-06-09",
     latest_trading_day: "2026-06-09",
+    data_ready_latest_date: "2026-06-09",
+    trading_days: ["2026-06-09", "2026-06-10"],
     replay_end_date: "2026-06-09",
     next_trading_day: "2026-06-10",
     trading_day_status: {
@@ -706,8 +785,10 @@ test("Advisory review defaults to next target date after current target was publ
     },
   });
   const { calls, reviewBodies } = await mockAdvisoryApis(page, {
+    initialProgramStatus: "ENABLED",
     initialLatestReviewTradeDate: "2026-06-09",
     initialLastReviewStatus: "SUCCEEDED",
+    initialListVersions: [publishedListVersion("2026-06-09", "2026-06-08")],
   });
 
   await page.goto("/paper-v2/advisory");
@@ -735,6 +816,129 @@ test("Advisory review defaults to next target date after current target was publ
   });
   await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
   await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260610");
+
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory review defaults to earliest missing target date and keeps catch-up enabled", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+
+  await mockShellApis(page, {
+    as_of_date: "2026-06-10",
+    latest_trading_day: "2026-06-09",
+    data_ready_latest_date: "2026-06-09",
+    replay_end_date: "2026-06-09",
+    next_trading_day: "2026-06-11",
+    trading_days: ["2026-06-08", "2026-06-09"],
+    trading_day_status: {
+      is_trading_day: true,
+      previous_trading_day: "2026-06-09",
+      next_trading_day: "2026-06-11",
+    },
+  });
+  const { calls, reviewBodies } = await mockAdvisoryApis(page, {
+    initialProgramStatus: "ENABLED",
+    initialLatestReviewTradeDate: "2026-06-09",
+    initialLastReviewStatus: "SUCCEEDED",
+    initialListVersions: [publishedListVersion("2026-06-09", "2026-06-08")],
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-10");
+  await expect(page.getByTestId("advisory-review-target-select").locator("option").first()).toHaveText(/待补跑目标日 2026-06-10/);
+  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-09");
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeEnabled();
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("执行复评");
+
+  await page.getByTestId(`advisory-run-${PROGRAM_ID}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/run`)).length).toBe(1);
+  expect(reviewBodies.at(-1)).toMatchObject({
+    trade_date: "2026-06-10",
+    target_trade_date: "2026-06-10",
+    selection_as_of_trade_date: "2026-06-09",
+    runtime_config: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-10",
+        selection_as_of_trade_date: "2026-06-09",
+      },
+      selection_artifact_config: {
+        cutoff_date: "2026-06-09",
+        cutoff_policy: "FIXED_CUTOFF",
+      },
+    },
+  });
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toBeDisabled();
+  await expect(page.getByTestId(`advisory-run-${PROGRAM_ID}`)).toHaveText("已复评");
+  await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260610");
+
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory catch-up uses the nearest previous data-ready trading day for a missed historical target", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+
+  await mockShellApis(page, {
+    as_of_date: "2026-06-10",
+    latest_trading_day: "2026-06-10",
+    data_ready_latest_date: "2026-06-10",
+    replay_end_date: "2026-06-10",
+    next_trading_day: "2026-06-11",
+    trading_days: ["2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10"],
+    trading_day_status: {
+      is_trading_day: true,
+      previous_trading_day: "2026-06-09",
+      next_trading_day: "2026-06-11",
+    },
+  });
+  const { reviewBodies } = await mockAdvisoryApis(page, {
+    initialProgramStatus: "ENABLED",
+    initialLatestReviewTradeDate: "2026-06-09",
+    initialLastReviewStatus: "SUCCEEDED",
+    initialListVersions: [
+      publishedListVersion("2026-06-09", "2026-06-08"),
+      publishedListVersion("2026-06-05", "2026-06-04"),
+    ],
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
+  await expect(page.getByTestId("advisory-review-target-select").locator("option").first()).toHaveText(/待补跑目标日 2026-06-08/);
+  await expect(page.getByTestId("advisory-review-data-cutoff")).toContainText("2026-06-05");
+
+  await page.getByTestId(`advisory-run-${PROGRAM_ID}`).click();
+  expect(reviewBodies.at(-1)).toMatchObject({
+    trade_date: "2026-06-08",
+    target_trade_date: "2026-06-08",
+    selection_as_of_trade_date: "2026-06-05",
+    runtime_config: {
+      advisory_date_context: {
+        target_trade_date: "2026-06-08",
+        selection_as_of_trade_date: "2026-06-05",
+      },
+      selection_artifact_config: {
+        cutoff_date: "2026-06-05",
+        cutoff_policy: "FIXED_CUTOFF",
+      },
+    },
+  });
 
   expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
@@ -811,6 +1015,13 @@ test("Advisory page exposes initial list generation when a new program has no li
         ok: true,
         leaderboard: [{
           ...enabledProgram(),
+          latest_recommendation_list_version_id: currentListVersions[0]?.list_version_id ?? null,
+          latest_recommendation_trade_date: currentListVersions[0]?.trade_date ?? null,
+          latest_recommendation_target_trade_date: currentListVersions[0]?.target_trade_date ?? currentListVersions[0]?.trade_date ?? null,
+          latest_recommendation_selection_as_of_trade_date: currentListVersions[0]?.selection_as_of_trade_date ?? null,
+          latest_recommendation_generated_at: currentListVersions[0]?.created_at ?? null,
+          latest_recommendation_version_status: currentListVersions[0]?.version_status ?? null,
+          published_recommendation_target_trade_dates: currentListVersions.map((version) => String(version.target_trade_date || version.trade_date)),
           entered_episode_count: 0,
           active_count: 0,
           take_profit_count: 0,
@@ -860,6 +1071,13 @@ test("Advisory page exposes initial list generation when a new program has no li
         ...initialListVersion,
         list_version_id: `advlv_initial_${initialTargetDate.replaceAll("-", "")}`,
         trade_date: initialTargetDate,
+        target_trade_date: initialTargetDate,
+        selection_as_of_trade_date: (body.runtime_config as JsonObject | undefined)?.advisory_date_context
+          ? String(((body.runtime_config as JsonObject).advisory_date_context as JsonObject).selection_as_of_trade_date || "")
+          : null,
+        summary_json: (body.runtime_config as JsonObject | undefined)?.advisory_date_context
+          ? { advisory_date_context: (body.runtime_config as JsonObject).advisory_date_context }
+          : {},
         program_id: newProgramId,
         binding_version_id: newBinding.binding_version_id,
       };

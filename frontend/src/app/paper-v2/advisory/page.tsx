@@ -142,11 +142,102 @@ function isTradingDay(defaults: { trading_day_status?: JsonObject } | null | und
   return defaults?.trading_day_status?.is_trading_day === true;
 }
 
-function defaultReviewTargetDate(defaults: { latest_trading_day?: string; next_trading_day?: string | null } | null | undefined): string {
-  return defaults?.next_trading_day || defaults?.latest_trading_day || "";
+function dateContextFromListVersion(version: AdvisoryRecommendationListVersion | null | undefined): { targetTradeDate: string | null; selectionAsOfDate: string | null } {
+  const summary = (version?.summary_json || {}) as JsonObject;
+  const context = (summary.advisory_date_context || {}) as JsonObject;
+  const target = version?.target_trade_date || context.target_trade_date || summary.target_trade_date || version?.trade_date || null;
+  const selectionAsOf = version?.selection_as_of_trade_date || context.selection_as_of_trade_date || summary.selection_as_of_trade_date || null;
+  return {
+    targetTradeDate: typeof target === "string" ? target : null,
+    selectionAsOfDate: typeof selectionAsOf === "string" ? selectionAsOf : null,
+  };
 }
 
-function reviewDateOptions(defaults: { as_of_date?: string; latest_trading_day?: string; next_trading_day?: string | null; trading_day_status?: JsonObject } | null | undefined): ReviewDateOption[] {
+function publishedTargetDates(program: Pick<AdvisoryProgram, "latest_recommendation_target_trade_date" | "published_recommendation_target_trade_dates"> | null | undefined, versions: AdvisoryRecommendationListVersion[] = []): Set<string> {
+  const dates = new Set<string>();
+  (program?.published_recommendation_target_trade_dates || []).forEach((value) => { if (value) dates.add(value); });
+  if (program?.latest_recommendation_target_trade_date) dates.add(program.latest_recommendation_target_trade_date);
+  versions
+    .filter((version) => version.version_status === "PUBLISHED")
+    .forEach((version) => {
+      const context = dateContextFromListVersion(version);
+      if (context.targetTradeDate) dates.add(context.targetTradeDate);
+    });
+  return dates;
+}
+
+function hasPublishedTarget(program: AdvisoryProgram | null | undefined, targetDate: string, versions: AdvisoryRecommendationListVersion[] = []): boolean {
+  return Boolean(targetDate && publishedTargetDates(program, versions).has(targetDate));
+}
+
+function sortedDates(values: Iterable<string | null | undefined>): string[] {
+  return [...new Set([...values].filter((value): value is string => typeof value === "string" && value.length > 0))].sort();
+}
+
+function latestRecommendationMeta(program: AdvisoryProgram | null | undefined, versions: AdvisoryRecommendationListVersion[] = []) {
+  const latestVersion = versions.find((version) => version.version_status === "PUBLISHED");
+  if (latestVersion) {
+    const context = dateContextFromListVersion(latestVersion);
+    return {
+      listVersionId: latestVersion.list_version_id,
+      targetTradeDate: context.targetTradeDate || latestVersion.trade_date,
+      selectionAsOfDate: context.selectionAsOfDate,
+      generatedAt: latestVersion.created_at || null,
+      versionStatus: latestVersion.version_status,
+    };
+  }
+  return {
+    listVersionId: program?.latest_recommendation_list_version_id || null,
+    targetTradeDate: program?.latest_recommendation_target_trade_date || program?.latest_recommendation_trade_date || program?.latest_review_trade_date || null,
+    selectionAsOfDate: program?.latest_recommendation_selection_as_of_trade_date || null,
+    generatedAt: program?.latest_recommendation_generated_at || null,
+    versionStatus: program?.latest_recommendation_version_status || null,
+  };
+}
+
+function selectionAsOfForTarget(targetDate: string, defaults: AdvisoryTradingDayDefaults | null | undefined): string | null {
+  const latestDataDate = defaults?.data_ready_latest_date || defaults?.latest_trading_day || null;
+  const previous = statusText(defaults, "previous_trading_day") || null;
+  const tradingDays = Array.isArray(defaults?.trading_days) ? defaults.trading_days : [];
+  const candidates = sortedDates([
+    ...tradingDays,
+    defaults?.latest_trading_day,
+    previous,
+  ]).filter((date) => date < targetDate && (!latestDataDate || date <= latestDataDate));
+  return candidates.at(-1) || null;
+}
+
+function reviewTargetCandidates(defaults: AdvisoryTradingDayDefaults | null | undefined): string[] {
+  const tradingDays = Array.isArray(defaults?.trading_days) ? defaults?.trading_days : [];
+  const today = defaults?.as_of_date || "";
+  return sortedDates([
+    ...(tradingDays || []),
+    isTradingDay(defaults) ? today : null,
+    defaults?.latest_trading_day,
+    defaults?.next_trading_day,
+  ]);
+}
+
+function earliestMissingTargetDate(defaults: AdvisoryTradingDayDefaults | null | undefined, published: Set<string>): string | null {
+  if (!published.size) return null;
+  const firstPublished = sortedDates(published)[0];
+  return reviewTargetCandidates(defaults).find((date) => date > firstPublished && !published.has(date)) || null;
+}
+
+function defaultReviewTargetDate(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program?: AdvisoryProgram | null,
+  versions: AdvisoryRecommendationListVersion[] = [],
+): string {
+  const missing = earliestMissingTargetDate(defaults, publishedTargetDates(program, versions));
+  return missing || defaults?.next_trading_day || defaults?.latest_trading_day || defaults?.as_of_date || "";
+}
+
+function reviewDateOptions(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program?: AdvisoryProgram | null,
+  versions: AdvisoryRecommendationListVersion[] = [],
+): ReviewDateOption[] {
   const seen = new Set<string>();
   const options: ReviewDateOption[] = [];
   const add = (option: ReviewDateOption | null) => {
@@ -157,22 +248,33 @@ function reviewDateOptions(defaults: { as_of_date?: string; latest_trading_day?:
   const latest = defaults?.latest_trading_day || "";
   const previous = statusText(defaults, "previous_trading_day") || (latest && latest !== defaults?.as_of_date ? latest : null);
   const today = defaults?.as_of_date || latest;
+  const missing = earliestMissingTargetDate(defaults, publishedTargetDates(program, versions));
+  const missingSelectionAsOf = missing ? selectionAsOfForTarget(missing, defaults) : null;
+  const nextSelectionAsOf = defaults?.next_trading_day ? selectionAsOfForTarget(defaults.next_trading_day, defaults) : null;
+  const todaySelectionAsOf = today ? selectionAsOfForTarget(today, defaults) : null;
+  const latestSelectionAsOf = latest ? selectionAsOfForTarget(latest, defaults) : null;
+  add(missing ? {
+    value: missing,
+    label: `待补跑目标日 ${missing}`,
+    selectionAsOfDate: missingSelectionAsOf,
+    description: `按顺序补齐缺失荐股：用 ${missingSelectionAsOf || "系统解析"} 数据生成 ${missing} 荐股名单，避免直接跳到更晚交易日。`,
+  } : null);
   add(defaults?.next_trading_day ? {
     value: defaults.next_trading_day,
     label: `下一交易日 ${defaults.next_trading_day}`,
-    selectionAsOfDate: latest || null,
-    description: latest ? `默认盘后复评：用 ${latest} 已就绪数据生成 ${defaults.next_trading_day} 荐股名单。` : "默认盘后复评：等待最新数据就绪后生成下一交易日荐股名单。",
+    selectionAsOfDate: nextSelectionAsOf,
+    description: nextSelectionAsOf ? `默认盘后复评：用 ${nextSelectionAsOf} 已就绪数据生成 ${defaults.next_trading_day} 荐股名单。` : "默认盘后复评：等待最新数据就绪后生成下一交易日荐股名单。",
   } : null);
   add(today && isTradingDay(defaults) ? {
     value: today,
     label: `当天交易日 ${today}`,
-    selectionAsOfDate: previous,
-    description: previous ? `盘中补选：用 ${previous} 数据生成 ${today} 荐股名单。` : `盘中补选：生成 ${today} 荐股名单。`,
+    selectionAsOfDate: todaySelectionAsOf || previous,
+    description: todaySelectionAsOf ? `盘中补跑：用 ${todaySelectionAsOf} 数据生成 ${today} 荐股名单。` : `盘中补跑：生成 ${today} 荐股名单。`,
   } : null);
   add(latest ? {
     value: latest,
     label: `最新已就绪交易日 ${latest}`,
-    selectionAsOfDate: latest === today ? previous : null,
+    selectionAsOfDate: latestSelectionAsOf || (latest === today ? previous : null),
     description: latest === today && previous ? `用 ${previous} 数据生成 ${latest} 荐股名单。` : `使用 ${latest} 作为目标荐股交易日。`,
   } : null);
   return options;
@@ -327,10 +429,10 @@ function defaultWatchlistCategoryName(program: AdvisoryProgram | null | undefine
   return `${programName} ${tradeDate}`;
 }
 
-function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList = Boolean(program.latest_review_trade_date)) {
+function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList = Boolean(program.latest_review_trade_date), targetPublished = false) {
   if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", previewLabel: "等待交易日", hint: "等待交易日服务返回最近交易日。", isInitialRun: false };
   if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", previewLabel: "预览", hint: "任务启用后才可执行首次运行或每日复评。", isInitialRun: false };
-  if (program.latest_review_trade_date && program.latest_review_trade_date >= targetDate) {
+  if (targetPublished) {
     return { canPreview: true, canRun: false, label: "已复评", previewLabel: "预览", hint: `${targetDate} 已完成复评，等待下一个交易日。`, isInitialRun: false };
   }
   if (!hasPriorList) {
@@ -343,7 +445,7 @@ function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList 
       isInitialRun: true,
     };
   }
-  return { canPreview: true, canRun: true, label: "执行复评", previewLabel: "预览", hint: `目标交易日 ${targetDate}，由系统自动生成选股候选。`, isInitialRun: false };
+  return { canPreview: true, canRun: true, label: "执行复评", previewLabel: "预览", hint: `目标交易日 ${targetDate}，由系统自动生成选股候选；若该交易日漏跑，会按顺序补齐。`, isInitialRun: false };
 }
 
 function AdvisoryPageContent() {
@@ -469,9 +571,10 @@ function AdvisoryPageContent() {
       setSelectedListVersionId("");
       setListDetailSource("latest");
     }
+    return versionRows;
   }
 
-  async function refreshAll(nextProgramId?: string, options: { resetReviewDate?: boolean } = {}) {
+  async function refreshAll(nextProgramId?: string, options: { resetReviewDate?: boolean; preserveReviewDate?: boolean } = {}) {
     setLoading(true);
     setError(null);
     try {
@@ -481,7 +584,9 @@ function AdvisoryPageContent() {
         advisoryApi.tradingDayDefaults(10),
         selectionCenterApi.selectablePackages(300).catch(() => []),
       ]);
-      setPrograms(programRows);
+      const boardById = new Map(boardRows.map((row) => [row.program_id, row]));
+      const hydratedPrograms = programRows.map((program) => ({ ...(boardById.get(program.program_id) || {}), ...program }));
+      setPrograms(hydratedPrograms);
       setLeaderboard(boardRows);
       setSelectablePackages(packageOptions);
       setPackageRows((rows) => {
@@ -490,12 +595,17 @@ function AdvisoryPageContent() {
       });
       setTradingDefaults(nextTradingDefaults);
       if (options.resetReviewDate) setReviewDateTouched(false);
-      setReviewTradeDate((current) => (options.resetReviewDate || !reviewDateTouched || !current ? defaultReviewTargetDate(nextTradingDefaults) : current));
-      const resolvedProgramId = nextProgramId || selectedProgramId || programRows[0]?.program_id || "";
+      const resolvedProgramId = nextProgramId || selectedProgramId || hydratedPrograms[0]?.program_id || "";
+      const resolvedProgram = hydratedPrograms.find((item) => item.program_id === resolvedProgramId) || hydratedPrograms[0] || null;
       setSelectedProgramId(resolvedProgramId);
       setReviewPage(1);
       if (resolvedProgramId) {
-        await loadProgramDetails(resolvedProgramId, 1, reviewPageSize);
+        const versionRows = await loadProgramDetails(resolvedProgramId, 1, reviewPageSize);
+        setReviewTradeDate((current) => (
+          !options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current)
+            ? defaultReviewTargetDate(nextTradingDefaults, resolvedProgram, versionRows)
+            : current
+        ));
       } else {
         setActivePool([]);
         setReviews([]);
@@ -507,6 +617,7 @@ function AdvisoryPageContent() {
         setSelectedListVersionId("");
         setListDetailSource("latest");
         setReviewResult(null);
+        setReviewTradeDate((current) => (!options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current) ? defaultReviewTargetDate(nextTradingDefaults) : current));
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -522,7 +633,9 @@ function AdvisoryPageContent() {
     setLoading(true);
     setError(null);
     try {
-      await loadProgramDetails(programId, 1, reviewPageSize);
+      const versionRows = await loadProgramDetails(programId, 1, reviewPageSize);
+      const program = programs.find((item) => item.program_id === programId) || null;
+      setReviewTradeDate((current) => (!reviewDateTouched || !current ? defaultReviewTargetDate(tradingDefaults, program, versionRows) : current));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -595,8 +708,9 @@ function AdvisoryPageContent() {
   }
 
   async function runReview(program: AdvisoryProgram, preview: boolean) {
-    const hasPriorList = program.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(program.latest_review_trade_date);
-    const state = reviewState(program, reviewTradeDate, hasPriorList);
+    const programVersions = program.program_id === selectedProgram?.program_id ? listVersions : [];
+    const hasPriorList = program.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(latestRecommendationMeta(program).targetTradeDate);
+    const state = reviewState(program, reviewTradeDate, hasPriorList, hasPublishedTarget(program, reviewTradeDate, programVersions));
     if (!state.canPreview || (!preview && !state.canRun)) return;
     setError(null);
     setReviewResult(null);
@@ -611,7 +725,7 @@ function AdvisoryPageContent() {
       const result = preview
         ? await advisoryApi.previewReview(program.program_id, payload)
         : await advisoryApi.runReview(program.program_id, payload);
-      await refreshAll(program.program_id, { resetReviewDate: !preview });
+      await refreshAll(program.program_id, { preserveReviewDate: true });
       setReviewResult(result);
       setSelectedListVersionId(result.list_version_id || "");
       if (result.list_items && result.list_version_id) {
@@ -736,29 +850,40 @@ function AdvisoryPageContent() {
     }
   }
 
-  const reviewDateChoices = useMemo(() => reviewDateOptions(tradingDefaults), [tradingDefaults]);
+  const reviewDateChoices = useMemo(() => reviewDateOptions(tradingDefaults, selectedProgram, listVersions), [listVersions, selectedProgram, tradingDefaults]);
   const selectedReviewDateChoice = reviewDateChoices.find((option) => option.value === reviewTradeDate);
   const reviewSelectionAsOfDate = selectedReviewDateChoice?.selectionAsOfDate || null;
-  const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate, listVersions.length > 0) : null;
+  const selectedReviewState = selectedProgram ? reviewState(selectedProgram, reviewTradeDate, listVersions.length > 0, hasPublishedTarget(selectedProgram, reviewTradeDate, listVersions)) : null;
   const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
   const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
   const activeBinding = bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
+  const selectedLatestMeta = latestRecommendationMeta(selectedProgram, listVersions);
   const reviewResultDetailActive = listDetailSource === "review_result" && Boolean(reviewResult?.list_version_id);
   const visibleListItems = reviewResultDetailActive ? (reviewResult?.list_items || []) : listVersionDetail?.items || [];
-  const visibleListVersion = reviewResultDetailActive && reviewResult?.list_version_id
+  const visibleListVersion: AdvisoryRecommendationListVersion | undefined = reviewResultDetailActive && reviewResult?.list_version_id
     ? {
         list_version_id: reviewResult.list_version_id,
+        program_id: reviewResult.program.program_id,
+        binding_version_id: reviewResult.binding_version_id || activeBinding?.binding_version_id || "",
+        review_run_id: reviewResult.review_run_id || "",
         trade_date: reviewResult.trade_date,
+        previous_list_version_id: listVersions[0]?.list_version_id || null,
         version_status: reviewResult.preview ? "PREVIEW" : "PUBLISHED",
+        target_count: reviewResult.program.target_count,
+        summary_json: reviewResult.change_summary || {},
+        target_trade_date: typeof reviewResult.change_summary?.advisory_date_context === "object" ? String((reviewResult.change_summary.advisory_date_context as JsonObject).target_trade_date || reviewResult.trade_date) : reviewResult.trade_date,
+        selection_as_of_trade_date: typeof reviewResult.change_summary?.advisory_date_context === "object" ? String((reviewResult.change_summary.advisory_date_context as JsonObject).selection_as_of_trade_date || "") || null : null,
         active_count: visibleListItems.filter((item) => item.item_state === "ACTIVE").length,
         entered_count: Number(reviewResult.change_summary?.entered_count ?? 0),
         held_count: Number(reviewResult.change_summary?.held_count ?? 0),
         exited_count: Number(reviewResult.change_summary?.exited_count ?? 0),
         waiting_count: Number(reviewResult.change_summary?.waiting_count ?? 0),
+        changed_count: Number(reviewResult.change_summary?.changed_count ?? reviewResult.decisions.length),
         turnover_rate: reviewResult.change_summary?.turnover_rate as number | null | undefined,
         overlap_rate: reviewResult.change_summary?.overlap_rate as number | null | undefined,
+        created_at: null,
       }
-    : listVersionDetail?.list_version;
+    : listVersionDetail?.list_version || undefined;
   const visibleListSourceLabel = listDetailSource === "review_result" ? "刚刚执行结果" : listDetailSource === "timeline" ? "手动查看版本" : "最新列表版本";
   const finalWatchlistItems = useMemo(() => finalRecommendationItems(visibleListItems), [visibleListItems]);
   const watchlistCategoryName = useMemo(
@@ -852,8 +977,10 @@ function AdvisoryPageContent() {
             </thead>
             <tbody>
               {leaderboard.map((row) => {
-                const hasPriorList = row.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(row.latest_review_trade_date);
-                const state = reviewState(row, reviewTradeDate, hasPriorList);
+                const rowVersions = row.program_id === selectedProgram?.program_id ? listVersions : [];
+                const rowLatestMeta = latestRecommendationMeta(row, rowVersions);
+                const hasPriorList = row.program_id === selectedProgram?.program_id ? listVersions.length > 0 : Boolean(rowLatestMeta.targetTradeDate);
+                const state = reviewState(row, reviewTradeDate, hasPriorList, hasPublishedTarget(row, reviewTradeDate, rowVersions));
                 const previewKey = `${row.program_id}:preview`;
                 const runKey = `${row.program_id}:run`;
                 return (
@@ -867,7 +994,12 @@ function AdvisoryPageContent() {
                     <td>{row.stop_loss_count ?? 0}</td>
                     <td>{fmtPct(row.win_rate)}<br /><span className="pv2-muted">{metricStatusText(row)}</span></td>
                     <td>{fmtBps(row.avg_return_bps)}<br /><span className="pv2-muted">样本 {row.metric_evaluable_count ?? 0}/{row.active_count ?? 0}</span></td>
-                    <td>{row.last_review_status || "STALE"}<br /><span className="pv2-muted">{row.latest_review_trade_date || "尚未复评"}</span></td>
+                    <td data-testid={`advisory-row-latest-context-${row.program_id}`}>
+                      {row.last_review_status || "STALE"}
+                      <br /><span className="pv2-muted">预测目标：{rowLatestMeta.targetTradeDate || "尚未生成"}</span>
+                      <br /><span className="pv2-muted">数据截止：{rowLatestMeta.selectionAsOfDate || "未记录"}</span>
+                      <br /><span className="pv2-muted">生成时间：{short(rowLatestMeta.generatedAt, 16)}</span>
+                    </td>
                     <td>
                       <div className="pv2-row-actions">
                         <button
@@ -1020,6 +1152,10 @@ function AdvisoryPageContent() {
               {reviewDateChoices.length && reviewTradeDate && !reviewDateChoices.some((option) => option.value === reviewTradeDate) ? <option value={reviewTradeDate}>{reviewTradeDate}</option> : null}
             </select>
           </label>
+          <div data-testid="advisory-selected-latest-context">
+            <strong>最新荐股结果：</strong>
+            <span className="pv2-muted"> 预测目标 {selectedLatestMeta.targetTradeDate || "尚未生成"}；数据截止 {selectedLatestMeta.selectionAsOfDate || "未记录"}；生成时间 {short(selectedLatestMeta.generatedAt, 16)}；列表 {short(selectedLatestMeta.listVersionId, 18)}</span>
+          </div>
           <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{reviewTradeDate || "-"}</span></strong>
           <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
           <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-review-data-cutoff">
@@ -1044,6 +1180,9 @@ function AdvisoryPageContent() {
             <span className="pv2-muted">
               {" "}ACTIVE {visibleListVersion.active_count}，ENTER {visibleListVersion.entered_count}，HOLD {visibleListVersion.held_count}，EXIT {visibleListVersion.exited_count}，WAITING {visibleListVersion.waiting_count}，换手 {fmtPct(visibleListVersion.turnover_rate)}，重合 {fmtPct(visibleListVersion.overlap_rate)}
             </span>
+            <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-visible-list-date-context">
+              预测目标交易日：{dateContextFromListVersion(visibleListVersion).targetTradeDate || visibleListVersion.trade_date}；选股数据截止日：{dateContextFromListVersion(visibleListVersion).selectionAsOfDate || "未记录"}；生成时间：{short(visibleListVersion.created_at, 16)}
+            </div>
             {visibleListVersion.waiting_count > 0 ? (
               <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-list-waiting-hint">
                 WAITING 表示该版本已经生成，但对应股票仍在等待行情、停复牌或可交易性确认；这不是未刷新旧表。
