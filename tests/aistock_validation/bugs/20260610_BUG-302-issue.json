@@ -33,8 +33,8 @@
   "expected": "每日复评后，open/active 持仓应基于最新可用行情生成盯市收益；排行榜止盈、止损、胜率、平均涨幅不再长期为空。缺少行情时页面展示可验证的等待行情状态。",
   "first_seen_at": "2026-06-10T03:55:44.268105Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d6e38e29262b856891e1bea406127ceedbd04f8c",
+  "fixed_at": "2026-06-10T05:54:22.696124Z",
   "github_issue_number": 897,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/897",
   "last_seen_at": "2026-06-10T03:55:44.268105Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/905",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -104,6 +105,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -q -> 27 passed",
+    "python -m ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 success",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep success",
+    "FRONTEND_PORT=3013 BACKEND_PORT=8013 npm --prefix frontend run test:e2e -- tests/paper-v2/paper-v2-advisory-ui.spec.ts -> 3 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
