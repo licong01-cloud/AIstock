@@ -163,17 +163,19 @@ def test_model_strategy_execution_modules_call_facades_and_confirm_before_http()
 
     _registry, mcp, calls = _registry_with_capture(model_registry)
     mcp.tools["model_registry_list"]()
-    mcp.tools["model_registry_get"]("model_1")
-    mcp.tools["model_registry_compare_trials"]("model_1")
-    mcp.tools["model_registry_get_seed_stability"]("model_1")
-    mcp.tools["model_registry_get_hyperparam_history"]("model_1")
-    mcp.tools["model_registry_get_artifacts"]("model_1")
+    mcp.tools["model_registry_get"]("task_1::loop_1")
+    mcp.tools["model_registry_compare_trials"]("task_1::loop_1")
+    mcp.tools["model_registry_get_seed_stability"]("task_1::loop_1")
+    mcp.tools["model_registry_get_hyperparam_history"]("task_1::loop_1")
+    mcp.tools["model_registry_get_artifacts"]("task_1::loop_1")
     mcp.tools["model_registry_plan_register"]({"object_type": "spec"})
     mcp.tools["model_registry_register_confirmed"]({"object_type": "spec", "payload": {}}, confirm=model_registry.REGISTER_MODEL_CONFIRM)
     mcp.tools["model_registry_deprecate_confirmed"]({"object_id": "model_1"}, confirm=model_registry.DEPRECATE_MODEL_CONFIRM)
     assert len(calls) == model_registry.TOOL_COUNT
     assert all(call["path"].startswith("/api/v1/model-registry/") for call in calls)
     assert calls[0]["query"]["limit"] == "20"
+    assert calls[1]["path"] == "/api/v1/model-registry/models/detail"
+    assert calls[1]["query"]["model_id"] == "task_1::loop_1"
 
     _registry, mcp, calls = _registry_with_capture(strategy_governance)
     mcp.tools["strategy_governance_list_packages"]()

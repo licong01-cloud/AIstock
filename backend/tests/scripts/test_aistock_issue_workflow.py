@@ -24,6 +24,14 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
         "latest_freshness": "fresh",
         "latest_freshness_ref": "tmp/validation/code-intelligence/codegraph-freshness.json",
         "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
+        "verify_command": "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-199",
+        "stale_metadata_warning": False,
+        "context": {
+            "context_quality": {
+                "quality": "scoped",
+                "noisy_context_warning": False,
+            }
+        },
         "affected_tests": {"suggested_tests": []},
         "understand_anything": {"status": "not_required_missing"},
         "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
@@ -440,6 +448,12 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     assert task_card["code_intelligence"]["latest_freshness"] == "fresh"
     assert task_card["code_intelligence"]["consume_command"].endswith("latest-freshness --refresh-if-stale")
+    assert task_card["code_intelligence"]["verify_command"].startswith(
+        "python scripts/code_intelligence_adapter.py verify-clients"
+    )
+    assert task_card["code_intelligence"]["context_quality"] == "scoped"
+    assert task_card["code_intelligence"]["stale_metadata_warning"] is False
+    assert task_card["code_intelligence"]["noisy_context_warning"] is False
     assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
@@ -3401,6 +3415,8 @@ def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree
     assert payload["source_cleanup_deferred"] is True
     assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
     assert payload["cleanup"]["reason"] == "source_worktree_contains_invoking_cwd"
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"]["sync_root"] is True
     assert "cleanup-after-merge" in payload["cleanup"]["next_command"]
     assert payload["next_commands"] == [payload["cleanup"]["next_command"]]
     assert cleanup_cwds == [isolated_workflow_root]
@@ -4711,6 +4727,37 @@ def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
     assert payload["deferred_cleanup"]["reason"] == "empty_directory_locked_by_windows_handle"
     assert payload["deferred_cleanup"]["safe_to_retry"] is True
     assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
+
+
+def test_orphan_worktree_profile_and_refusal_message_stay_compact(
+    isolated_workflow_root: Path,
+) -> None:
+    orphan = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    for index in range(60):
+        path = orphan / "frontend" / "node_modules" / "pkg" / f"file-{index}.js"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    deep_tail = orphan / "tests" / "aistock_validation" / "history" / "very-deep-tail.json"
+    deep_tail.parent.mkdir(parents=True, exist_ok=True)
+    deep_tail.write_text("{}", encoding="utf-8")
+
+    profile = workflow._orphan_worktree_dir_profile(orphan)
+
+    assert profile["regular_entry_count"] == 61
+    assert len(profile["regular_entries"]) <= profile["sample_limit"]
+    assert profile["regular_entries_truncated"] is True
+    assert profile["top_regular_dirs"]["frontend"] == 60
+    assert profile["safe_reparse_or_empty_only"] is False
+    assert "very-deep-tail.json" not in json.dumps(profile, ensure_ascii=False)
+
+    with pytest.raises(workflow.WorkflowError) as excinfo:
+        workflow._remove_reparse_or_empty_tree(orphan)
+
+    message = str(excinfo.value)
+    assert "count=61" in message
+    assert "top_dirs=" in message
+    assert "full file list intentionally omitted" in message
+    assert "very-deep-tail.json" not in message
 
 
 def test_cleanup_after_merge_removes_orphan_reparse_only_worktree_dir(

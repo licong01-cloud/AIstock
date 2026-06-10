@@ -1,0 +1,79 @@
+{
+  "actual": "merge-finalizer returned workflow_gate=close_sync_persisted / next_actions=rerun_cleanup_after_merge_with_apply while F:\\\\Dev\\\\AIstock was still behind origin/main by the close-sync merge commit.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260610_BUG-307-merge-finalizer-sync-root-leaves-canonical-main-behind-after-close-sync.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-307",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T06:35:35.976060Z",
+  "description": "merge-finalizer returned workflow_gate=close_sync_persisted / next_actions=rerun_cleanup_after_merge_with_apply while F:\\\\Dev\\\\AIstock was still behind origin/main by the close-sync merge commit.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-b971329c41d2",
+      "timestamp": "2026-06-10T06:35:35.976056Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "After close-sync PR merge, merge-finalizer with --sync-root must fast-forward the canonical root to the final origin/main head before reporting success, or return a blocking sync-root gate with a compact next command.",
+  "first_seen_at": "2026-06-10T06:35:35.976060Z",
+  "fix_branch": null,
+  "fix_commit": "efc8e7ef82fbccf1df3b0d99f2d6cd495bce8fe3",
+  "fixed_at": "2026-06-10T07:02:47.504392Z",
+  "github_issue_number": 912,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/912",
+  "last_seen_at": "2026-06-10T06:35:35.976060Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/914",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py merge-finalizer --bug-id BUG-304 --source-pr-url https://github.com/licong01-cloud/AIstock/pull/909 --source-branch bug/BUG-304-workflow-cleanup-dumps-huge-orphan-worktree-file-20260610 --source-worktree F:\\\\Dev\\\\AIstock_worktrees\\\\BUG-304-workflow-cleanup-dumps-huge-orphan-worktree-file-20260610 --sync-root --merge-close-sync-pr --cleanup --apply",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "merge-finalizer sync-root leaves canonical main behind after close-sync PR merge",
+  "trigger_condition": {
+    "fingerprint": "b971329c41d203994437f116",
+    "source_event_id": "FE-20260610-b971329c41d2"
+  },
+  "validation_evidence": [
+    "PR #914 CI green; local validations passed: pytest, ruff, workflow-smoke, nox l0/module/guardrail, validation_center_backend"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

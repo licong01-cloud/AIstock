@@ -3633,6 +3633,18 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "latest_freshness": code_intelligence_summary.get("latest_freshness"),
         "latest_freshness_ref": code_intelligence_summary.get("latest_freshness_ref"),
         "consume_command": code_intelligence_summary.get("consume_command"),
+        "verify_command": code_intelligence_summary.get("verify_command"),
+        "stale_metadata_warning": bool(code_intelligence_summary.get("stale_metadata_warning")),
+        "context_quality": (
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("quality")
+            if isinstance(code_intelligence_summary.get("context"), dict)
+            else None
+        ),
+        "noisy_context_warning": bool(
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("noisy_context_warning")
+        )
+        if isinstance(code_intelligence_summary.get("context"), dict)
+        else False,
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
@@ -3762,6 +3774,10 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- latest_freshness: `{code_intel.get('latest_freshness') or 'not_available'}`",
         f"- latest_freshness_ref: `{code_intel.get('latest_freshness_ref') or 'not_available'}`",
         f"- consume_command: `{code_intel.get('consume_command') or 'python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale'}`",
+        f"- verify_command: `{code_intel.get('verify_command') or 'python scripts/code_intelligence_adapter.py verify-clients'}`",
+        f"- context_quality: `{code_intel.get('context_quality') or 'unknown'}`",
+        f"- stale_metadata_warning: `{str(bool(code_intel.get('stale_metadata_warning'))).lower()}`",
+        f"- noisy_context_warning: `{str(bool(code_intel.get('noisy_context_warning'))).lower()}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
         f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
         f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
@@ -6452,45 +6468,84 @@ def _is_reparse_or_symlink(path: Path) -> bool:
 
 
 def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:
+    sample_limit = 20
     profile: dict[str, Any] = {
         "path": str(path),
         "inside_worktree_root": _is_inside(path, _default_worktree_root()) if path.exists() else False,
         "regular_entries": [],
         "reparse_entries": [],
         "empty_dirs": [],
+        "regular_entry_count": 0,
+        "reparse_entry_count": 0,
+        "empty_dir_count": 0,
+        "sample_limit": sample_limit,
+        "top_regular_dirs": {},
         "missing": not path.exists(),
     }
     if not path.exists():
         profile["safe_reparse_or_empty_only"] = True
         return profile
 
+    def add_sample(key: str, rel: str) -> None:
+        count_key = {
+            "regular_entries": "regular_entry_count",
+            "reparse_entries": "reparse_entry_count",
+            "empty_dirs": "empty_dir_count",
+        }[key]
+        profile[count_key] += 1
+        if len(profile[key]) < sample_limit:
+            profile[key].append(rel)
+        if key == "regular_entries":
+            top = rel.split("/", 1)[0] if "/" in rel else rel
+            top_dirs = profile["top_regular_dirs"]
+            top_dirs[top] = int(top_dirs.get(top, 0)) + 1
+
     def scan_dir(directory: Path) -> None:
         try:
             children = sorted(directory.iterdir(), key=lambda item: item.as_posix())
         except OSError:
-            profile["regular_entries"].append(_repo_rel(directory, path))
+            add_sample("regular_entries", _repo_rel(directory, path))
             return
         if not children and directory != path:
-            profile["empty_dirs"].append(_repo_rel(directory, path))
+            add_sample("empty_dirs", _repo_rel(directory, path))
             return
         for child in children:
             rel = _repo_rel(child, path)
             if _is_reparse_or_symlink(child):
-                profile["reparse_entries"].append(rel)
+                add_sample("reparse_entries", rel)
             elif child.is_dir():
                 scan_dir(child)
             else:
-                profile["regular_entries"].append(rel)
+                add_sample("regular_entries", rel)
 
     scan_dir(path)
-    profile["safe_reparse_or_empty_only"] = bool(profile["inside_worktree_root"]) and not profile["regular_entries"]
+    profile["regular_entries_truncated"] = profile["regular_entry_count"] > len(profile["regular_entries"])
+    profile["reparse_entries_truncated"] = profile["reparse_entry_count"] > len(profile["reparse_entries"])
+    profile["empty_dirs_truncated"] = profile["empty_dir_count"] > len(profile["empty_dirs"])
+    profile["top_regular_dirs"] = dict(
+        sorted(
+            profile["top_regular_dirs"].items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:10]
+    )
+    profile["safe_reparse_or_empty_only"] = bool(profile["inside_worktree_root"]) and not profile["regular_entry_count"]
     return profile
+
+
+def _orphan_worktree_refusal_message(profile: dict[str, Any]) -> str:
+    return (
+        "refusing orphan worktree cleanup with regular files: "
+        f"count={profile.get('regular_entry_count', 0)} "
+        f"samples={profile.get('regular_entries') or []} "
+        f"top_dirs={profile.get('top_regular_dirs') or {}} "
+        "full file list intentionally omitted; close open processes or delete the orphan directory manually"
+    )
 
 
 def _remove_reparse_or_empty_tree(path: Path) -> dict[str, Any]:
     profile = _orphan_worktree_dir_profile(path)
     if not profile.get("safe_reparse_or_empty_only"):
-        raise WorkflowError(f"refusing orphan worktree cleanup with regular files: {profile.get('regular_entries')}")
+        raise WorkflowError(_orphan_worktree_refusal_message(profile))
     removed: list[str] = []
     if not path.exists():
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "profile": profile, "removed": removed}
@@ -8077,6 +8132,7 @@ def _build_close_sync_cleanup_after_merge_plan(
     close_sync_pr_merge: dict[str, Any],
     cleanup: bool,
     apply: bool,
+    sync_root: bool = False,
 ) -> dict[str, Any] | None:
     if not cleanup or close_sync_pr_merge.get("workflow_gate") not in {"merged", "already_merged"}:
         return None
@@ -8093,7 +8149,7 @@ def _build_close_sync_cleanup_after_merge_plan(
         worktree=worktree,
         pr_url=close_sync_commit.get("pr_url") or close_sync_pr_merge.get("pr_url"),
         apply=bool(apply and close_sync_pr_merge.get("auto_merge")),
-        sync_root=False,
+        sync_root=sync_root,
     )
 
 
@@ -8309,12 +8365,22 @@ def build_merge_finalizer_plan(
                 apply=merge_close_sync_pr,
                 sync_root=sync_root,
             )
+    close_sync_cleanup_sync_root = bool(
+        sync_root
+        and close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
+        and (
+            cleanup_plan is None
+            or cleanup_plan.get("workflow_gate") != "cleanup_done"
+            or not cleanup_plan.get("sync_root")
+        )
+    )
     close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
         close_sync_pr_merge=close_sync_pr_merge,
         cleanup=cleanup,
         apply=apply,
+        sync_root=close_sync_cleanup_sync_root,
     )
     try:
         postmortem = build_postmortem_plan(bug_id=canonical_bug_id)

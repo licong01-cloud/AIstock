@@ -867,3 +867,183 @@ def test_pr_quality_runner_can_reference_ua_summary_manifest(
     assert payload["latest_summary_manifest"]["artifact_path"].endswith("ua-summary-manifest.json")
     assert payload["latest_summary_manifest"]["summary_refs"][0]["module"] == "validation"
 
+
+def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+            "git_commit": "abc123",
+            "working_tree_dirty": False,
+            "graph_root": str(tmp_path),
+            "graph_root_source": "current_worktree",
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "unrelated frontend component and strategy package symbol",
+            "stderr": "",
+        },
+    )
+
+    payload = adapter.build_context_artifacts(
+        item_id="BUG-308",
+        query="issue workflow merge-finalizer cleanup sync root",
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        root=tmp_path,
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["context_quality"]["quality"] == "no_direct_scope_hit"
+    assert payload["context_quality"]["noisy_context_warning"] is True
+    assert payload["context_quality"]["broad_scan_required"] is False
+    markdown = (tmp_path / payload["context_markdown"]).read_text(encoding="utf-8")
+    assert "Code Intelligence Context Guidance" in markdown
+    assert "do not trust unrelated entry points" in markdown
+
+
+def test_latest_freshness_marks_stale_metadata_warning_without_blocking(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "fresh.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "old123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
+                "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.latest_codegraph_freshness(tmp_path)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["effective"]["freshness"] == "fresh"
+    assert payload["stale_metadata_warning"] is True
+    assert any("differs from current HEAD" in item for item in payload["warnings"])
+
+
+def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    codex_skill = home / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md"
+    claude_command = home / ".claude" / "commands" / "fix-aistock-issue.md"
+    ua_skill = home / ".understand-anything" / "repo" / "understand-anything-plugin" / "skills" / "understand" / "SKILL.md"
+    ua_chat = (
+        home
+        / ".understand-anything"
+        / "repo"
+        / "understand-anything-plugin"
+        / "skills"
+        / "understand-chat"
+        / "SKILL.md"
+    )
+    for path in (codex_skill, claude_command, ua_skill, ua_chat):
+        path.parent.mkdir(parents=True)
+        path.write_text("graph-first Code Intelligence aistock_issue_workflow.py understand", encoding="utf-8")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "fresh.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "base123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+            "status": "ok",
+            "status_check": {"ok": True},
+            "git_commit": "feature456",
+            "working_tree_dirty": False,
+            "graph_root": str(tmp_path),
+            "graph_root_source": "current_worktree",
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "unrelated validation dashboard symbol"
+            if args[1] == "context"
+            else "backend/tests/scripts/test_code_intelligence_adapter.py",
+            "stderr": "",
+        },
+    )
+
+    payload = adapter.build_client_verification(
+        item_id="BUG-308",
+        query="issue workflow merge-finalizer cleanup sync root",
+        changed_files=["scripts/code_intelligence_adapter.py"],
+        module="validation",
+        root=tmp_path,
+    )
+    markdown = adapter.render_client_verification_summary(payload)
+
+    assert payload["schema_version"] == "aistock_code_intelligence_client_verification_v1"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"]["stale_metadata_warning"] is True
+    assert payload["context"]["noisy_context_warning"] is True
+    assert payload["context"]["broad_scan_required"] is False
+    assert payload["clients"]["codex_issue_skill"]["status"] == "ready"
+    assert payload["clients"]["claude_issue_command"]["status"] == "ready"
+    assert payload["understand_anything"]["stale_but_usable"] is True
+    assert payload["efficiency"]["large_graph_payload_inlined"] is False
+    assert "selected_nodes" not in json.dumps(payload["understand_anything"])
+    assert "Code Intelligence Client Verification" in markdown
+    assert len(markdown) < 3000
+
