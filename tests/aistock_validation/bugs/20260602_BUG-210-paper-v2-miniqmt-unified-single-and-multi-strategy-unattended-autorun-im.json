@@ -101,8 +101,8 @@
   "expected": "Single-strategy (N=1) and multi-strategy (N>1) MiniQMT SIM portfolios run through one account-group/slot/plan/preflight/execution/reconcile/status/UI path. Every F2M capability has implementation location, automated tests, runtime/API/UI evidence, validation record, and DESIGN-COMPLIANCE-001 mapping. No main merge before complete development and validation.",
   "first_seen_at": "2026-06-02T09:09:51.462245Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "51ad64839aa74c8387e7e60f989f9da5b2989d90",
+  "fixed_at": "2026-06-10T12:44:25.855270Z",
   "github_issue_number": 567,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/567",
   "last_seen_at": "2026-06-02T09:09:51.462245Z",
@@ -110,6 +110,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/920",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,7 +123,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -131,5 +132,12 @@
     "fingerprint": "eaea99c761df061fada5eaa4",
     "source_event_id": "FE-20260602-eaea99c761df"
   },
+  "validation_evidence": [
+    "post-rebase targeted retry tests: python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_dependent_buy_retry_matches_logical_batch_when_runtime_ids_change backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_retries_deferred_miniqmt_dependent_buys_without_duplicate_sells -q -> 2 passed",
+    "post-rebase MiniQMT runtime regression: python -m pytest backend/tests/miniqmt_execution_runtime backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py backend/tests/simulation_runtime/test_miniqmt_signal_contract.py backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_trading_day_defaults.py -q -> 105 passed",
+    "post-rebase static gate: python -m nox -s l0 -> passed, guardrail blocking=0",
+    "PR #920 checks after rebase -> 16 passed, 0 failed",
+    "full pre-rebase gates: validation_module_registry_l0, simulation_core_l2, simulation_dual_backend_l4, paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null
 }
