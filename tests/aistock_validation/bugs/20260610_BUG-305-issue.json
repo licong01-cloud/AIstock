@@ -35,8 +35,8 @@
   "expected": "荐股中心每个运行任务显示最新结果的数据截止日和目标交易日；复评日期选择包含最早缺失目标交易日，已发布目标日才禁用执行；开盘后可用上一交易日收盘数据补跑当天荐股。",
   "first_seen_at": "2026-06-10T06:12:54.016405Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b2e7451ced59446598bfa69e9b677a03a2c00e20",
+  "fixed_at": "2026-06-10T10:23:42.691020Z",
   "github_issue_number": 908,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/908",
   "last_seen_at": "2026-06-10T06:12:54.016405Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/921",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -107,6 +108,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #921 merged with all GitHub checks passing; merge commit b2e7451ced59446598bfa69e9b677a03a2c00e20"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
