@@ -5219,6 +5219,70 @@ def test_triage_ci_issue_preserves_issue_locator_and_marks_superseded_main_succe
     assert payload["failure_event"]["candidate_status"] == "superseded_by_later_main_success"
 
 
+def test_triage_ci_issue_marks_superseded_same_branch_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 853,
+        "title": "P1 Nightly failed: runner=success dr=success/success l3=success live=failure code=success",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/853",
+        "body": "<!-- aistock-issue-on-test-fail:27185588632 -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock Nightly L3 + DR",
+        "run_id": "27185588632",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/27185588632",
+        "branch": "feat/github-models-deepseek-r1-20260609",
+        "commit": "030771c80f19e331093971a453949db9b742f3c0",
+        "failed_jobs": [
+            {
+                "job_name": "AIstock Nightly status",
+                "nox_session": "paper_v2_live",
+                "failed_tests": [],
+                "error_signature": "Nightly failed: paper_v2_live=failure",
+                "key_log_excerpt": ["paper_v2_live: failure"],
+                "suspected_module": "paper_v2",
+                "suspected_files": [],
+            }
+        ],
+        "suspected_modules": ["paper_v2"],
+        "suspected_files": [],
+        "fingerprint": "ci-07b8e8ccdbb3d76a",
+        "reproduce_command": "python -m nox -s paper_v2_live",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(
+        workflow,
+        "_find_superseding_main_success",
+        lambda summary: {
+            "run_id": "27188538840",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/27188538840",
+            "head_sha": "760cd2d26b445e2cbf2afe63380aa1d89b7dccef",
+            "created_at": "2026-06-09T06:37:28Z",
+            "branch": "feat/github-models-deepseek-r1-20260609",
+            "supersede_scope": "same_branch",
+        },
+    )
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=853)
+
+    assert payload["classification_recommendation"] == "superseded_by_later_branch_success"
+    assert payload["needs_bug_json"] is False
+    assert payload["superseded_action"]["workflow_gate"] == "superseded_by_latest_branch_success"
+    assert "same branch feat/github-models-deepseek-r1-20260609" in payload["next_command"]
+    assert payload["failure_event"]["candidate_status"] == "superseded_by_later_branch_success"
+    assert "promote" not in payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]
+
+
 def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> None:
     summary = {
         "diagnostic_status": "complete",
@@ -5344,6 +5408,41 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
     assert payload["closed_issues"] == [642]
     assert payload["skipped_count"] == 2
     assert closed == [642]
+
+
+def test_ci_issue_janitor_closes_superseded_same_branch_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "classification_recommendation": "superseded_by_later_branch_success",
+            "linked_bug": None,
+            "github_issue": {"number": int(issue_number), "state": "OPEN"},
+            "summary": {"workflow": "AIstock Nightly L3 + DR"},
+            "superseded_action": {
+                "workflow_gate": "superseded_by_latest_branch_success",
+                "superseding_run": {
+                    "run_id": "27188538840",
+                    "run_url": "https://github.example/runs/27188538840",
+                    "branch": "feat/github-models-deepseek-r1-20260609",
+                    "supersede_scope": "same_branch",
+                },
+            },
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[853], apply=True)
+
+    assert payload["workflow_gate"] == "closed"
+    assert payload["superseded_count"] == 1
+    assert payload["closed_issues"] == [853]
+    assert closed == [853]
 
 
 def test_ci_issue_janitor_dry_run_marks_infra_issue_without_closing(monkeypatch: pytest.MonkeyPatch) -> None:

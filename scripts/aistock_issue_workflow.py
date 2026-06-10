@@ -52,6 +52,10 @@ BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
+SUPERSEDED_CI_CLASSIFICATIONS = {
+    "superseded_by_later_main_success",
+    "superseded_by_later_branch_success",
+}
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
@@ -2600,7 +2604,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     workflow = str(summary.get("workflow") or "").strip()
     branch = str(summary.get("branch") or "").strip()
     run_id = str(summary.get("run_id") or "").strip()
-    if not workflow or branch != "main" or not run_id.isdigit():
+    if not workflow or not branch or not run_id.isdigit():
         return None
     result = _run_command(
         [
@@ -2646,8 +2650,18 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             "head_sha": item.get("headSha"),
             "created_at": item.get("createdAt"),
             "display_title": item.get("displayTitle"),
+            "branch": branch,
+            "supersede_scope": "main" if branch == "main" else "same_branch",
         }
     return None
+
+
+def _superseded_success_phrase(superseding_run: dict[str, Any], workflow: str | None) -> str:
+    workflow_name = workflow or "CI"
+    branch = str(superseding_run.get("branch") or "").strip()
+    if superseding_run.get("supersede_scope") == "same_branch" and branch:
+        return f"later successful {workflow_name} run on the same branch {branch}"
+    return f"later successful main {workflow_name} run"
 
 
 def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
@@ -5761,15 +5775,21 @@ def build_triage_ci_issue_plan(
     superseding_run = _find_superseding_main_success(summary)
     superseded_action = None
     if superseding_run and linked is None:
-        classification = "superseded_by_later_main_success"
+        same_branch = superseding_run.get("supersede_scope") == "same_branch"
+        classification = "superseded_by_later_branch_success" if same_branch else "superseded_by_later_main_success"
+        success_phrase = _superseded_success_phrase(superseding_run, str(summary.get("workflow") or "CI"))
         close_command = (
             f"gh issue close {issue.get('number')} --repo {GITHUB_REPO} --comment "
-            f"\"Superseded by later successful main {summary.get('workflow') or 'CI'} run: {superseding_run.get('run_url')}. "
+            f"\"Superseded by {success_phrase}: {superseding_run.get('run_url')}. "
             "No BUG JSON promotion is required.\""
         )
         superseded_action = {
-            "workflow_gate": "superseded_by_latest_main_success",
-            "reason": "A later successful default-branch run of the same workflow supersedes this CI failure.",
+            "workflow_gate": "superseded_by_latest_branch_success" if same_branch else "superseded_by_latest_main_success",
+            "reason": (
+                "A later successful run of the same workflow on the same branch supersedes this CI failure."
+                if same_branch
+                else "A later successful default-branch run of the same workflow supersedes this CI failure."
+            ),
             "superseding_run": superseding_run,
             "next_command": close_command,
             "production_gates": {
@@ -5798,7 +5818,7 @@ def build_triage_ci_issue_plan(
     )
     actionable = classification in ACTIONABLE_CI_CLASSIFICATIONS
     triage_action: str | None = None
-    if not actionable and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"}:
+    if not actionable and classification not in {"infra_flaky", "infra_blocker", *SUPERSEDED_CI_CLASSIFICATIONS}:
         triage_action = "triage_incomplete_collect_failure_diagnostics_before_bug_promotion"
         failure_event["candidate_status"] = "triage_incomplete"
         context_pack["failure_event"] = failure_event
@@ -5816,12 +5836,13 @@ def build_triage_ci_issue_plan(
         ]
         context_pack["agent_handoff"] = handoff
     if superseded_action:
-        failure_event["candidate_status"] = "superseded_by_later_main_success"
+        failure_event["candidate_status"] = classification
         failure_event["superseded_action"] = superseded_action
         context_pack["failure_event"] = failure_event
         context_pack["superseded_action"] = superseded_action
+        verification_scope = "same branch" if classification == "superseded_by_later_branch_success" else "default-branch"
         context_pack["required_verification"] = [
-            "Verify the superseding default-branch run for the same workflow is successful.",
+            f"Verify the superseding {verification_scope} run for the same workflow is successful.",
             "Close the auto-filed GitHub Issue with the superseding run URL; do not promote BUG JSON.",
         ]
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
@@ -5889,7 +5910,7 @@ def build_triage_ci_issue_plan(
             if classification in {"infra_flaky", "infra_blocker"} and linked is None
             else (
                 superseded_action["next_command"]
-                if classification == "superseded_by_later_main_success" and linked is None and superseded_action
+                if classification in SUPERSEDED_CI_CLASSIFICATIONS and linked is None and superseded_action
                 else (
                     f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
                     "--create-registry-worktree --apply"
@@ -5949,8 +5970,9 @@ def _list_open_auto_filed_ci_issues(*, limit: int = 50) -> list[dict[str, Any]]:
 
 
 def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[str, Any], workflow: str | None) -> dict[str, Any]:
+    success_phrase = _superseded_success_phrase(superseding_run, workflow)
     comment = (
-        f"Superseded by later successful main {workflow or 'CI'} run: {superseding_run.get('run_url')}. "
+        f"Superseded by {success_phrase}: {superseding_run.get('run_url')}. "
         "No BUG JSON promotion is required. production_ddl_gate=noop; "
         "production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop."
     )
@@ -6034,7 +6056,7 @@ def build_ci_issue_janitor_plan(
         entry["linked_bug"] = triage.get("linked_bug")
         entry["github_issue"] = triage.get("github_issue")
         if (
-            triage.get("classification_recommendation") == "superseded_by_later_main_success"
+            triage.get("classification_recommendation") in SUPERSEDED_CI_CLASSIFICATIONS
             and not triage.get("linked_bug")
             and isinstance(triage.get("superseded_action"), dict)
         ):
@@ -6155,7 +6177,7 @@ def build_promote_ci_issue_plan(
             "infra_action": triage.get("infra_action"),
             "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
         }
-    if triage.get("classification_recommendation") == "superseded_by_later_main_success":
+    if triage.get("classification_recommendation") in SUPERSEDED_CI_CLASSIFICATIONS:
         action = triage.get("superseded_action") if isinstance(triage.get("superseded_action"), dict) else {}
         return {
             "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
