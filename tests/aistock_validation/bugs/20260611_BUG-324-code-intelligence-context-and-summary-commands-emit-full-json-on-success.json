@@ -28,8 +28,8 @@
   "expected": "Successful context, affected-tests, and summary commands should default to compact PASS/WARN stdout with artifact refs/counts. Full JSON should remain available only via --output-format full-json or --output.",
   "first_seen_at": "2026-06-11T11:06:44.212558Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1640892d5634a27e33f63169d20169f7ef117346",
+  "fixed_at": "2026-06-11T11:22:18.730324Z",
   "github_issue_number": 971,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/971",
   "last_seen_at": "2026-06-11T11:06:44.212558Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/972",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,14 @@
     "fingerprint": "a391d04de9fc5acd8ca00ac3",
     "source_event_id": "FE-20260611-a391d04de9fc"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> 53 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 420 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
