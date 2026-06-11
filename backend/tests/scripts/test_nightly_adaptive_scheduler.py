@@ -174,8 +174,8 @@ def test_nightly_adaptive_scheduler_can_invoke_llm_advice(monkeypatch, tmp_path:
     )
 
     assert report["provider"] == "github_models"
-    assert report["llm_invocation_evidence"]["invoked"] is True
-    assert report["llm_invocation_evidence"]["reason"] == "nightly_scheduler_advice_live_provider_json"
+    assert report["llm_invocation_summary"]["invoked"] is True
+    assert report["llm_invocation_summary"]["reason"] == "nightly_scheduler_advice_live_provider_json"
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:

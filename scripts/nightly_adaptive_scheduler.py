@@ -209,7 +209,9 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
-        "llm_invocation_evidence": advice["llm_invocation_evidence"],
+        "llm_invocation_summary": llm_provider_adapter.llm_invocation_public_summary(
+            advice["llm_invocation_evidence"]
+        ),
         "issue_creation_policy": {
             "allowed": False,
             "reason": "adaptive_scheduler_warning_mode_never_creates_issue",
@@ -249,7 +251,11 @@ def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(llm_provider_adapter.public_artifact_payload(payload), ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_text(path: Path | None, text: str) -> None:
@@ -269,7 +275,7 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "allowed_plan_count": len(queue["allowed_plan_keys"]),
         "deferred_plan_count": len(queue["deferred_plan_keys"]),
         "codegraph_freshness": report["input_refs"]["codegraph"]["freshness"],
-        "llm_invoked": report["llm_invocation_evidence"]["invoked"],
+        "llm_invoked": report["llm_invocation_summary"]["invoked"],
         "artifact": str(output) if output else None,
     }
     if as_json:
@@ -363,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                 "resource_budget_seconds": args.resource_budget_seconds,
             },
             "input_refs": {"codegraph": {"freshness": "unknown"}},
-            "llm_invocation_evidence": {"invoked": False},
+            "llm_invocation_summary": {"invoked": False},
             "production_gates": {
                 "production_ddl_gate": "noop",
                 "production_frontend_dependency_gate": "noop",

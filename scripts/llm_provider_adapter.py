@@ -677,15 +677,14 @@ def _llm_evidence(
         "model": provider_summary["model"],
         "invoked": invoked,
         "reason": reason,
-        "credential_source": provider_summary["credential_source"],
         "input_policy": input_policy,
         "redaction_applied": True,
     }
     if usage:
-        evidence["usage"] = {
-            key: usage.get(key)
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if isinstance(usage, dict) and usage.get(key) is not None
+        evidence["usage_summary"] = {
+            "prompt_units": usage.get("prompt_tokens"),
+            "completion_units": usage.get("completion_tokens"),
+            "total_units": usage.get("total_tokens"),
         }
     if error:
         redacted_error = redact_secret_text(error)
@@ -1468,7 +1467,6 @@ def build_triage_quality_smoke(provider: str, config: dict[str, Any]) -> dict[st
             "model": provider_summary["model"],
             "invoked": False,
             "reason": "schema_quality_smoke_no_network",
-            "credential_source": provider_summary["credential_source"],
             "input_policy": "compact_failure_event_plus_code_intelligence_refs_only",
             "redaction_applied": True,
         },
@@ -1514,6 +1512,74 @@ def _print_success(label: str, payload: dict[str, Any], *, as_json: bool) -> Non
     print(f"gate=passed check={label} {details}".strip())
 
 
+def public_artifact_payload(payload: Any) -> Any:
+    """Return a public-safe artifact payload without credential or raw usage fields."""
+
+    if isinstance(payload, list):
+        return [public_artifact_payload(item) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+
+    result: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "credential_source":
+            continue
+        if key == "usage":
+            if isinstance(value, dict):
+                result["usage_summary"] = {
+                    "prompt_units": value.get("prompt_tokens"),
+                    "completion_units": value.get("completion_tokens"),
+                    "total_units": value.get("total_tokens"),
+                }
+            continue
+        if key == "llm_invocation_evidence":
+            evidence = value if isinstance(value, dict) else {}
+            summary: dict[str, Any] = {
+                "schema_version": evidence.get("schema_version"),
+                "provider": evidence.get("provider"),
+                "model": evidence.get("model"),
+                "invoked": bool(evidence.get("invoked")),
+                "reason": evidence.get("reason"),
+                "input_policy": evidence.get("input_policy"),
+                "redaction_applied": evidence.get("redaction_applied"),
+            }
+            usage = evidence.get("usage")
+            if isinstance(usage, dict):
+                summary["usage_summary"] = {
+                    "prompt_units": usage.get("prompt_tokens"),
+                    "completion_units": usage.get("completion_tokens"),
+                    "total_units": usage.get("total_tokens"),
+                }
+            if isinstance(evidence.get("usage_summary"), dict):
+                summary["usage_summary"] = public_artifact_payload(evidence["usage_summary"])
+            if evidence.get("error"):
+                summary["error"] = redact_secret_text(str(evidence.get("error")))
+            result["llm_invocation_summary"] = summary
+            continue
+        if key.endswith("_tokens"):
+            result[f"{key[:-7]}_units"] = value
+            continue
+        result[key] = public_artifact_payload(value)
+    return json.loads(redact_secret_text(json.dumps(result, ensure_ascii=False)))
+
+
+def llm_invocation_public_summary(evidence: dict[str, Any] | None) -> dict[str, Any]:
+    public_payload = public_artifact_payload({"llm_invocation_evidence": evidence or {}})
+    summary = public_payload.get("llm_invocation_summary") if isinstance(public_payload, dict) else None
+    return summary if isinstance(summary, dict) else {"invoked": False}
+
+
+def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> None:
+    if not path:
+        return
+    artifact_path = Path(path)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        json.dumps(public_artifact_payload(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def cmd_validate_config(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     validate_config(config)
@@ -1554,8 +1620,7 @@ def cmd_triage_quality_smoke(args: argparse.Namespace) -> int:
     provider = args.provider or str(config.get("default_provider") or "deterministic")
     advice = build_triage_quality_smoke(provider, config)
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     compact = {
         "provider": advice["provider"],
         "model": advice["model"],
@@ -1592,8 +1657,7 @@ def cmd_test_plan_advice(args: argparse.Namespace) -> int:
         fallback_on_llm_error=not args.fail_on_llm_error,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     gate = advice["deterministic_gate"]
     compact = {
         "provider": advice["provider"],
@@ -1627,8 +1691,7 @@ def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
         fallback_on_llm_error=not args.fail_on_llm_error,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     gate = advice["deterministic_gate"]
     compact = {
         "provider": advice["provider"],
@@ -1658,8 +1721,7 @@ def cmd_prompt_evaluation(args: argparse.Namespace) -> int:
         false_positive_threshold=args.false_positive_threshold,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(evaluation, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, evaluation)
     metrics = evaluation["metrics"]
     compact = {
         "provider": evaluation["provider"],
@@ -1697,8 +1759,7 @@ def cmd_guarded_rollout_gate(args: argparse.Namespace) -> int:
         false_positive_threshold=args.false_positive_threshold,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, gate)
     compact = {
         "provider": gate["provider"],
         "model": gate["model"],

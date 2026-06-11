@@ -370,7 +370,7 @@ def test_test_plan_advice_can_invoke_llm_but_keeps_deterministic_gate(monkeypatc
 
     assert payload["deterministic_gate"]["workflow_gate"] == "ready"
     assert payload["llm_invocation_evidence"]["invoked"] is True
-    assert payload["llm_invocation_evidence"]["usage"]["total_tokens"] == 140
+    assert payload["llm_invocation_evidence"]["usage_summary"]["total_units"] == 140
     assert payload["llm_advice"]["suggested_plan_keys"] == ["validation_catalog_integrity"]
     assert payload["llm_advice"]["ignored_plan_key_count"] == 1
 
