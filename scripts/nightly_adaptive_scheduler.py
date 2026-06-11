@@ -209,9 +209,7 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
-        "llm_invocation_summary": llm_provider_adapter.llm_invocation_public_summary(
-            advice["llm_invocation_evidence"]
-        ),
+        "llm_invoked": bool((advice.get("llm_advice") or {}).get("advisory_only")),
         "issue_creation_policy": {
             "allowed": False,
             "reason": "adaptive_scheduler_warning_mode_never_creates_issue",
@@ -269,7 +267,7 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "resource_budget_seconds": queue.get("resource_budget_seconds"),
         },
         "queue": report.get("queue") or [],
-        "llm_invocation_summary": report.get("llm_invocation_summary") or {"invoked": False},
+        "llm_invoked": bool(report.get("llm_invoked")),
         "issue_creation_policy": report.get("issue_creation_policy") or {},
         "test_plan_advice_gate": report.get("test_plan_advice_gate") or {},
         "workspace_gate": report.get("workspace_gate") or {},
@@ -305,7 +303,7 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "allowed_plan_count": len(queue["allowed_plan_keys"]),
         "deferred_plan_count": len(queue["deferred_plan_keys"]),
         "codegraph_freshness": report["input_refs"]["codegraph"]["freshness"],
-        "llm_invoked": report["llm_invocation_summary"]["invoked"],
+        "llm_invoked": bool(report.get("llm_invoked")),
         "artifact": str(output) if output else None,
     }
     if as_json:
@@ -399,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
                 "resource_budget_seconds": args.resource_budget_seconds,
             },
             "input_refs": {"codegraph": {"freshness": "unknown"}},
-            "llm_invocation_summary": {"invoked": False},
+            "llm_invoked": False,
             "production_gates": {
                 "production_ddl_gate": "noop",
                 "production_frontend_dependency_gate": "noop",

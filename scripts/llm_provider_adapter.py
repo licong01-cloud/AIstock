@@ -1552,7 +1552,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "validation_select": payload.get("validation_select") or {},
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
-            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "llm_invoked": bool(payload.get("llm_advice")),
             "deterministic_gate": gate,
         }
     if payload.get("schema_version") == NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION:
@@ -1568,7 +1568,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "test_plan_advice_gate": payload.get("test_plan_advice_gate") or {},
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
-            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "llm_invoked": bool(payload.get("llm_advice")),
             "deterministic_gate": payload.get("deterministic_gate") or {},
         }
     if payload.get("schema_version") == PROMPT_EVALUATION_SCHEMA_VERSION:
@@ -1581,7 +1581,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "changed_files": payload.get("changed_files") or [],
             "metrics": payload.get("metrics") or {},
             "policy_gate": payload.get("policy_gate") or {},
-            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "llm_invoked": False,
             "rows": payload.get("rows") or [],
         }
     if payload.get("schema_version") == GUARDED_ROLLOUT_SCHEMA_VERSION:
@@ -1608,13 +1608,13 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "rejection_reasons": payload.get("rejection_reasons") or [],
             "fallback": payload.get("fallback"),
             "production_gates": payload.get("production_gates") or {},
-            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "llm_invoked": False,
         }
     return {
         "schema_version": payload.get("schema_version"),
         "provider": payload.get("provider"),
         "model": payload.get("model"),
-        "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+        "llm_invoked": False,
     }
 
 
