@@ -30,8 +30,8 @@
   "expected": "verify-clients should persist or resolve CodeGraph freshness against current HEAD after successful graph verification, expose compact status-only output, and keep UA freshness actionable: fresh when refreshed or a precise non-blocking refresh-needed status without stale artifact drift.",
   "first_seen_at": "2026-06-11T07:09:11.302556Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ad0027d647980ec6680b476aafd17b91fb6bdf84",
+  "fixed_at": "2026-06-11T07:31:58.024977Z",
   "github_issue_number": 946,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/946",
   "last_seen_at": "2026-06-11T07:09:11.302556Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/947",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,16 @@
     "fingerprint": "835108f2e0e473488ffebaf7",
     "source_event_id": "FE-20260611-835108f2e0e4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -p no:cacheprovider -> 37 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-316 --module validation -> workflow_gate=ready",
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_center_backend -> 420 passed",
+    "PR CI #947 -> 12 passed 0 failed 0 pending"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
