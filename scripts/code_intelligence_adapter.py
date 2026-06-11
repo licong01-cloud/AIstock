@@ -26,6 +26,7 @@ DEFAULT_CODEGRAPH_CRITICAL_FILES = [
     "scripts/aistock_issue_workflow.py",
     ".github/workflows/nightly.yml",
 ]
+GRAPH_SOURCE_ROOT_ENV = "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT"
 CODE_INTELLIGENCE_ARTIFACT_ROOTS = (
     Path("tmp") / "validation" / "code-intelligence",
     Path("tests") / "aistock_validation" / "history" / "code-intelligence",
@@ -210,20 +211,72 @@ def _canonical_repo_root(root: Path) -> Path:
     return common_dir.parent if common_dir.name == ".git" else root
 
 
+def _same_repo_remote(left: Path, right: Path) -> bool:
+    left_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=left).get("stdout") or "").strip().lower()
+    right_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=right).get("stdout") or "").strip().lower()
+    if not left_remote or not right_remote:
+        return True
+
+    def normalize(value: str) -> str:
+        return value.replace("\\", "/").removesuffix(".git")
+
+    return normalize(left_remote) == normalize(right_remote)
+
+
+def _configured_graph_source_root(requested_root: Path) -> tuple[Path | None, str | None, list[str]]:
+    configured = str(os.environ.get(GRAPH_SOURCE_ROOT_ENV) or "").strip()
+    if not configured:
+        return None, None, []
+    warnings: list[str] = []
+    try:
+        source = Path(configured).expanduser().resolve()
+    except OSError as exc:
+        return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} could not be resolved: {exc}"]
+    if not source.exists():
+        return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} does not exist: {source}"]
+    if not (source / ".git").exists():
+        return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} is not a git checkout: {source}"]
+    if source == requested_root:
+        return source, "configured_env", warnings
+    if not _same_repo_remote(requested_root, source):
+        return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} remote does not match requested checkout: {source}"]
+    return source, "configured_env", warnings
+
+
+def _graph_source_root(root: Path) -> tuple[Path, str, list[str]]:
+    configured, source, warnings = _configured_graph_source_root(root)
+    if configured is not None and _codegraph_index_path(configured).exists():
+        return configured, source or "configured_env", warnings
+    if _codegraph_index_path(root).exists():
+        return root, "current_worktree", warnings
+    canonical = _canonical_repo_root(root)
+    if canonical != root and _codegraph_index_path(canonical).exists():
+        return canonical, "canonical_worktree_root", warnings
+    return root, "current_worktree", warnings
+
+
+def _graph_commit_relation(root: Path, graph_root: Path, root_commit: Any, graph_commit: Any) -> str:
+    if not root_commit or not graph_commit:
+        return "unknown"
+    if str(root_commit) == str(graph_commit):
+        return "same"
+    if _git_commit_is_ancestor(root, graph_commit, root_commit):
+        return "ancestor"
+    return "different"
+
+
 def _codegraph_index_path(root: Path) -> Path:
     return root / ".codegraph" / "codegraph.db"
 
 
 def _codegraph_graph_root(root: Path) -> Path:
-    if _codegraph_index_path(root).exists():
-        return root
-    canonical = _canonical_repo_root(root)
-    if canonical != root and _codegraph_index_path(canonical).exists():
-        return canonical
-    return root
+    return _graph_source_root(root)[0]
 
 
 def _understand_project_root(root: Path) -> Path:
+    configured, _, _ = _configured_graph_source_root(root)
+    if configured is not None:
+        return configured
     canonical = _canonical_repo_root(root)
     return canonical if canonical != root else root
 
@@ -767,7 +820,7 @@ def configure_understand_anything(
 
 def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -> dict[str, Any]:
     root = root or REPO_ROOT
-    graph_root = _codegraph_graph_root(root)
+    graph_root, graph_root_source, source_warnings = _graph_source_root(root)
     command = _codegraph_command()
     available = bool(command)
     version_result: dict[str, Any] = {"ok": False, "skipped": skip_external or not available}
@@ -780,6 +833,8 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
     status_summary = _parse_codegraph_status(str(status_result.get("stdout") or ""))
     index_path = _codegraph_index_path(graph_root)
     git = _git_snapshot(root)
+    graph_git = _git_snapshot(graph_root) if graph_root != root else git
+    graph_commit_relation = _graph_commit_relation(root, graph_root, git.get("head"), graph_git.get("head"))
     status = "ok" if available and index_path.exists() else ("missing_index" if available else "unavailable")
     if skip_external and available:
         status = "available_unchecked" if index_path.exists() else "missing_index"
@@ -797,7 +852,7 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
         ),
         "index_path": _repo_rel(index_path, root),
         "graph_root": str(graph_root),
-        "graph_root_source": "canonical_worktree_root" if graph_root != root else "current_worktree",
+        "graph_root_source": graph_root_source,
         "index_exists": index_path.exists(),
         "status_check": _compact_command_result(
             status_result,
@@ -805,6 +860,9 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
         ),
         "index_summary": status_summary,
         "git_commit": git.get("head"),
+        "graph_root_git_commit": graph_git.get("head"),
+        "graph_commit_relation": graph_commit_relation,
+        "graph_source_warnings": source_warnings,
         "working_tree_dirty": git.get("dirty"),
         "channel": "mcp_or_cli",
         "bootstrap_command": _codegraph_bootstrap_command(),
@@ -933,6 +991,15 @@ def build_codegraph_freshness_artifact(
         freshness = "stale"
         freshness_basis = "codegraph_status"
         warnings.append("CodeGraph status did not report the index as up to date.")
+    graph_commit_relation = status.get("graph_commit_relation")
+    if status.get("graph_root_source") == "configured_env" and graph_commit_relation not in {"same", "ancestor"}:
+        if freshness == "fresh":
+            freshness = "stale"
+            freshness_basis = "configured_graph_root_commit"
+        warnings.append(
+            f"Configured CodeGraph root commit is {graph_commit_relation or 'unknown'} relative to the requested checkout."
+        )
+    warnings.extend(str(item) for item in status.get("graph_source_warnings") or [])
     age_seconds = age.get("age_seconds")
     if isinstance(age_seconds, (int, float)) and age_seconds > max_age_hours * 3600:
         status_reports_fresh = (
@@ -971,6 +1038,8 @@ def build_codegraph_freshness_artifact(
         "graph_root": status.get("graph_root"),
         "graph_root_source": status.get("graph_root_source"),
         "git_commit": status.get("git_commit"),
+        "graph_root_git_commit": status.get("graph_root_git_commit"),
+        "graph_commit_relation": status.get("graph_commit_relation"),
         "working_tree_dirty": status.get("working_tree_dirty"),
         "max_age_hours": max_age_hours,
         "index_age": age,
@@ -1002,6 +1071,8 @@ def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
         f"- version: `{payload.get('version') or 'unknown'}`",
         f"- graph_root_source: `{payload.get('graph_root_source') or 'unknown'}`",
         f"- git_commit: `{payload.get('git_commit') or 'unknown'}`",
+        f"- graph_root_git_commit: `{payload.get('graph_root_git_commit') or 'unknown'}`",
+        f"- graph_commit_relation: `{payload.get('graph_commit_relation') or 'unknown'}`",
         f"- index_modified_at: `{age.get('modified_at') or 'missing'}`",
         f"- index_age_seconds: `{age.get('age_seconds') if age.get('age_seconds') is not None else 'unknown'}`",
         f"- files/nodes/edges: `{summary.get('files', 'unknown')}` / `{summary.get('nodes', 'unknown')}` / `{summary.get('edges', 'unknown')}`",
@@ -1118,6 +1189,9 @@ def understand_anything_status(
 ) -> dict[str, Any]:
     requested_root = root or REPO_ROOT
     root = _understand_project_root(requested_root)
+    graph_root_source = "configured_env" if root != requested_root and os.environ.get(GRAPH_SOURCE_ROOT_ENV) else (
+        "canonical_worktree_root" if root != requested_root else "current_worktree"
+    )
     graph_path = _understand_graph_path(root)
     config_path = _understand_config_path(root)
     ignore_path = _understand_ignore_path(root)
@@ -1197,7 +1271,7 @@ def understand_anything_status(
         "expected_version": DEFAULT_UNDERSTAND_ANYTHING_VERSION,
         "graph_path": _repo_rel(graph_path, root),
         "graph_root": str(root),
-        "graph_root_source": "canonical_worktree_root" if root != requested_root else "current_worktree",
+        "graph_root_source": graph_root_source,
         "graph_exists": graph_path.exists(),
         "graph_commit": graph_commit,
         "graph_analyzed_at": graph_analyzed_at,
@@ -2026,6 +2100,8 @@ def build_client_verification(
             "graph_root": status.get("graph_root"),
             "graph_root_source": status.get("graph_root_source"),
             "git_commit": status.get("git_commit"),
+            "graph_root_git_commit": status.get("graph_root_git_commit"),
+            "graph_commit_relation": status.get("graph_commit_relation"),
             "index_summary": status.get("index_summary") or {},
         },
         "freshness": {
