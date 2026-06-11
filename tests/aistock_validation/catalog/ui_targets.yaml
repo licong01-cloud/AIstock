@@ -882,3 +882,19 @@ targets:
   - Review Model and HMM state
   - Validate Model and HMM primary workflow
   coverage_status: partial
+- route_id: tdx_blocks
+  href: /tdx-blocks
+  label: 通达信板块管理
+  nav_group: 选股板块
+  primary_module: paper_v2
+  impact_modules:
+  - paper_v2
+  risk_level: low
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open TDX Block Management
+  - Review TDX Block list
+  - Create/Delete/Sync TDX blocks
+  coverage_status: partial
