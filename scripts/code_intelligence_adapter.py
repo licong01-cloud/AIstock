@@ -216,7 +216,10 @@ def _same_repo_remote(left: Path, right: Path) -> bool:
     right_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=right).get("stdout") or "").strip().lower()
     if not left_remote or not right_remote:
         return True
-    normalize = lambda value: value.replace("\\", "/").removesuffix(".git")
+
+    def normalize(value: str) -> str:
+        return value.replace("\\", "/").removesuffix(".git")
+
     return normalize(left_remote) == normalize(right_remote)
 
 
