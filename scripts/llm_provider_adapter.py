@@ -1540,6 +1540,7 @@ def llm_invocation_public_summary(record: dict[str, Any] | None) -> dict[str, An
 def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
 
+    llm_summary = llm_invocation_public_summary(payload.get("llm_invocation_evidence"))
     if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
         gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
         return {
@@ -1553,6 +1554,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
             "llm_invoked": bool(payload.get("llm_advice")),
+            "llm_invocation_evidence": llm_summary,
             "deterministic_gate": gate,
         }
     if payload.get("schema_version") == NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION:
@@ -1569,6 +1571,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
             "llm_invoked": bool(payload.get("llm_advice")),
+            "llm_invocation_evidence": llm_summary,
             "deterministic_gate": payload.get("deterministic_gate") or {},
         }
     if payload.get("schema_version") == PROMPT_EVALUATION_SCHEMA_VERSION:
@@ -1582,6 +1585,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "metrics": payload.get("metrics") or {},
             "policy_gate": payload.get("policy_gate") or {},
             "llm_invoked": False,
+            "llm_invocation_evidence": llm_summary,
             "rows": payload.get("rows") or [],
         }
     if payload.get("schema_version") == GUARDED_ROLLOUT_SCHEMA_VERSION:
@@ -1609,12 +1613,14 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "fallback": payload.get("fallback"),
             "production_gates": payload.get("production_gates") or {},
             "llm_invoked": False,
+            "llm_invocation_evidence": llm_summary,
         }
     return {
         "schema_version": payload.get("schema_version"),
         "provider": payload.get("provider"),
         "model": payload.get("model"),
         "llm_invoked": False,
+        "llm_invocation_evidence": llm_summary,
     }
 
 
@@ -1623,12 +1629,8 @@ def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> No
         return
     artifact_path = Path(path)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact = {
-        "schema_version": "aistock_public_advisory_status_v1",
-        "workflow_gate": "passed",
-        "llm_invoked": False,
-        "public_artifact": True,
-    }
+    artifact = public_advisory_artifact(payload)
+    artifact["public_artifact"] = True
     serialized = json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     artifact_path.write_text(serialized, encoding="utf-8")
 
