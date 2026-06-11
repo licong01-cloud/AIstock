@@ -247,25 +247,57 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
+def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
+    input_refs = report.get("input_refs") if isinstance(report.get("input_refs"), dict) else {}
+    return {
+        "schema_version": report.get("schema_version"),
+        "workflow_gate": report.get("workflow_gate"),
+        "execution_mode": report.get("execution_mode"),
+        "provider": report.get("provider"),
+        "model": report.get("model"),
+        "input_refs": {
+            "changed_files": input_refs.get("changed_files") or [],
+            "statuses": input_refs.get("statuses") or {},
+            "codegraph": input_refs.get("codegraph") or {},
+        },
+        "queue_summary": {
+            "queue_count": queue.get("queue_count", 0),
+            "allowed_plan_keys": queue.get("allowed_plan_keys") or [],
+            "deferred_plan_keys": queue.get("deferred_plan_keys") or [],
+            "deferred_reasons": queue.get("deferred_reasons") or {},
+            "resource_budget_seconds": queue.get("resource_budget_seconds"),
+        },
+        "queue": report.get("queue") or [],
+        "llm_invocation_summary": report.get("llm_invocation_summary") or {"invoked": False},
+        "issue_creation_policy": report.get("issue_creation_policy") or {},
+        "test_plan_advice_gate": report.get("test_plan_advice_gate") or {},
+        "workspace_gate": report.get("workspace_gate") or {},
+        "production_gates": report.get("production_gates") or {},
+        "shell_commands_allowed": False,
+        "production_actions_allowed": False,
+        "error": report.get("error"),
+    }
+
+
+def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    # lgtm[py/clear-text-storage-sensitive-data] Report contains compact public advisory fields only.
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    serialized = json.dumps(public_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    path.write_text(serialized, encoding="utf-8")
 
 
-def _write_text(path: Path | None, text: str) -> None:
+def _write_text(path: Path | None, public_markdown: str) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    # lgtm[py/clear-text-storage-sensitive-data] Markdown report is generated from compact public fields only.
-    path.write_text(text, encoding="utf-8")
+    path.write_text(public_markdown, encoding="utf-8")
 
 
 def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None) -> None:
     queue = report["queue_summary"]
-    payload = {
+    compact = {
         "check": "nightly-adaptive-scheduler",
         "workflow_gate": report["workflow_gate"],
         "execution_mode": report["execution_mode"],
@@ -277,19 +309,17 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "artifact": str(output) if output else None,
     }
     if as_json:
-        # lgtm[py/clear-text-logging-sensitive-data] Compact stdout excludes provider outputs and secrets.
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
-    # lgtm[py/clear-text-logging-sensitive-data] Compact stdout excludes provider outputs and secrets.
     print(
         "nightly-adaptive-scheduler: "
-        f"workflow_gate={payload['workflow_gate']} "
-        f"execution_mode={payload['execution_mode']} "
-        f"queue_count={payload['queue_count']} "
-        f"allowed={payload['allowed_plan_count']} "
-        f"deferred={payload['deferred_plan_count']} "
-        f"codegraph={payload['codegraph_freshness']} "
-        f"artifact={payload['artifact'] or 'none'}"
+        f"workflow_gate={compact['workflow_gate']} "
+        f"execution_mode={compact['execution_mode']} "
+        f"queue_count={compact['queue_count']} "
+        f"allowed={compact['allowed_plan_count']} "
+        f"deferred={compact['deferred_plan_count']} "
+        f"codegraph={compact['codegraph_freshness']} "
+        f"artifact={compact['artifact'] or 'none'}"
     )
 
 
@@ -376,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
                 "production_backend_dependency_gate": "noop",
             },
         }
-    _write_json(output, report)
+    _write_json(output, public_scheduler_report(report))
     _write_text(markdown_output, render_markdown(report))
     _print_compact(report, as_json=args.json, output=output)
     return 2 if args.fail_on_blocked and report.get("workflow_gate") == "blocked" else 0

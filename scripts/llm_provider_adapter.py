@@ -1624,11 +1624,8 @@ def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> No
     artifact_path = Path(path)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact = public_advisory_artifact(payload)
-    # lgtm[py/clear-text-storage-sensitive-data] Artifact is built from an explicit public allowlist above.
-    artifact_path.write_text(
-        json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    serialized = json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    artifact_path.write_text(serialized, encoding="utf-8")
 
 
 def cmd_validate_config(args: argparse.Namespace) -> int:
