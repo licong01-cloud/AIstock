@@ -1,0 +1,77 @@
+{
+  "actual": "python scripts/code_intelligence_adapter.py context --root F:/Dev/AIstock --item-id SMOKE-20260611 --query workflow-compact-output-smoke --changed-file scripts/code_intelligence_adapter.py returned context_quality=no_direct_scope_hit and unrelated qlib/research-assistant symbols.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/20260611_BUG-325-code-intelligence-context-misses-changed-file-scope-on-exact-script-chan.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-325",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T11:32:32.456534Z",
+  "description": "python scripts/code_intelligence_adapter.py context --root F:/Dev/AIstock --item-id SMOKE-20260611 --query workflow-compact-output-smoke --changed-file scripts/code_intelligence_adapter.py returned context_quality=no_direct_scope_hit and unrelated qlib/research-assistant symbols.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-6cdf08ec4feb",
+      "timestamp": "2026-06-11T11:32:32.456531Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/issue_workflow/SMOKE-20260611/codegraph-context.md"
+  ],
+  "expected": "For changed-file scoped workflow tasks, code intelligence context should surface the scoped file itself or a concise scoped fallback before unrelated graph hits, while keeping compact success output.",
+  "first_seen_at": "2026-06-11T11:32:32.456534Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 974,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/974",
+  "last_seen_at": "2026-06-11T11:32:32.456534Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/code_intelligence_adapter.py context --root F:/Dev/AIstock --item-id SMOKE-20260611 --query workflow-compact-output-smoke --changed-file scripts/code_intelligence_adapter.py",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Code intelligence context misses changed-file scope on exact script changes",
+  "trigger_condition": {
+    "fingerprint": "6cdf08ec4feb5adb1a55cae7",
+    "source_event_id": "FE-20260611-6cdf08ec4feb"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

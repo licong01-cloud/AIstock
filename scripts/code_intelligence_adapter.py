@@ -1595,6 +1595,71 @@ def _repo_level_context(query: str, changed_files: list[str], status: dict[str, 
     return text
 
 
+def _line_count(text: str) -> int:
+    if not text:
+        return 0
+    return text.count("\n") + 1
+
+
+def _changed_file_outline(root: Path, repo_path: str) -> dict[str, Any]:
+    normalized = _norm_repo_path(repo_path)
+    path = root / normalized
+    exists = path.is_file()
+    stat = path.stat() if exists else None
+    lines: list[str] = []
+    symbol_patterns = (
+        re.compile(r"^\s*def\s+([A-Za-z_][\w]*)\s*\("),
+        re.compile(r"^\s*class\s+([A-Za-z_][\w]*)\s*[:(]"),
+        re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][\w]*)\s*\("),
+        re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_][\w]*)\s*="),
+    )
+    symbols: list[dict[str, Any]] = []
+    if exists:
+        text = _read_text_if_exists(path)
+        lines = text.splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            for pattern in symbol_patterns:
+                match = pattern.search(line)
+                if match:
+                    symbols.append({"name": match.group(1), "line": line_number})
+                    break
+            if len(symbols) >= 12:
+                break
+    return {
+        "path": normalized,
+        "exists": exists,
+        "size_bytes": stat.st_size if stat else None,
+        "line_count": len(lines) if exists else None,
+        "symbols": symbols,
+    }
+
+
+def _scoped_changed_file_context(root: Path, changed_files: list[str]) -> tuple[str, list[dict[str, Any]]]:
+    outlines = [_changed_file_outline(root, path) for path in changed_files]
+    lines = [
+        "## Scoped Changed-File Context",
+        "",
+        "This section is generated from --changed-file and is shown before raw CodeGraph hits so agents can stay inside allowed_write_scope.",
+    ]
+    for outline in outlines:
+        lines.extend(
+            [
+                "",
+                f"### {outline['path']}",
+                f"- exists: `{str(bool(outline['exists'])).lower()}`",
+                f"- line_count: `{outline.get('line_count') if outline.get('line_count') is not None else 'unknown'}`",
+                f"- size_bytes: `{outline.get('size_bytes') if outline.get('size_bytes') is not None else 'unknown'}`",
+                "- symbols: "
+                + (
+                    ", ".join(f"`{item['name']}:{item['line']}`" for item in outline.get("symbols") or [])
+                    if outline.get("symbols")
+                    else "`none_detected`"
+                ),
+            ]
+        )
+    return "\n".join(lines), outlines
+
+
 def _context_quality(context_text: str, changed_files: list[str], *, channel: str) -> dict[str, Any]:
     normalized_text = context_text.replace("\\", "/").lower()
     changed = [_norm_repo_path(path) for path in changed_files if str(path).strip()]
@@ -1602,7 +1667,9 @@ def _context_quality(context_text: str, changed_files: list[str], *, channel: st
     warnings: list[str] = []
     quality = "scoped"
     broad_scan_required = False
-    if not changed:
+    if channel == "scoped_fallback":
+        quality = "scoped_fallback"
+    elif not changed:
         quality = "orientation_only"
     elif not matched and channel == "cli":
         quality = "no_direct_scope_hit"
@@ -1707,6 +1774,22 @@ def build_context_artifacts(
             context_text = _repo_level_context(query, changed, status, str(fallback_reason))
             channel = "repo_index"
     quality = _context_quality(context_text, changed, channel=channel)
+    scoped_context = ""
+    scoped_file_context: dict[str, Any] = {"enabled": False, "outlines": []}
+    if changed and quality.get("noisy_context_warning"):
+        scoped_text, outlines = _scoped_changed_file_context(root, changed)
+        scoped_context = scoped_text.rstrip() + "\n\n---\n\n"
+        scoped_file_context = {
+            "enabled": True,
+            "outlines": outlines,
+            "context_lines": _line_count(scoped_text),
+        }
+        merged_text = scoped_context + context_text.lstrip()
+        quality = _context_quality(merged_text, changed, channel="scoped_fallback")
+        quality["scoped_fallback_inserted"] = True
+        quality["original_channel"] = channel
+        channel = "scoped_fallback"
+        context_text = merged_text
     context_text = _prepend_context_guidance(
         context_text=context_text,
         query=query,
@@ -1732,6 +1815,7 @@ def build_context_artifacts(
         "graph_root_source": status.get("graph_root_source"),
         "channel": channel,
         "context_quality": quality,
+        "scoped_file_context": scoped_file_context,
         "runner_context": _runner_context(),
         "codegraph_status": {
             "available": status.get("available"),
@@ -2157,6 +2241,7 @@ def build_client_verification(
             "matched_changed_files": context_quality.get("matched_changed_files") or [],
             "noisy_context_warning": context_quality.get("noisy_context_warning"),
             "broad_scan_required": context_quality.get("broad_scan_required"),
+            "scoped_fallback_inserted": context_quality.get("scoped_fallback_inserted"),
         },
         "affected_tests": {
             "status": affected.get("status"),
@@ -2186,7 +2271,7 @@ def build_client_verification(
             "large_graph_payload_inlined": False,
             "next_actions": [
                 "read_task_card_code_intelligence_refs",
-                "start_from_allowed_write_scope_when_context_quality_is_no_direct_scope_hit",
+                "use_scoped_changed_file_context_before_raw_graph_hits",
                 "run_required_validation_gates",
             ],
         },
@@ -2412,6 +2497,7 @@ def cmd_context(args: argparse.Namespace) -> int:
             "changed_files": len(payload.get("changed_files") or []),
             "context_ref": payload.get("context_markdown"),
             "fallback_used": str(bool(fallback.get("used"))).lower(),
+            "scoped_fallback": str(bool(quality.get("scoped_fallback_inserted"))).lower(),
             "graph_root_source": payload.get("graph_root_source"),
         },
         payload=payload,
