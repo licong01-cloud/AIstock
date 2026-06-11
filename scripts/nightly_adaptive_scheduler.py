@@ -139,7 +139,7 @@ def normalize_codegraph_freshness(value: str | None) -> str:
         return "fresh"
     if raw in {"missing", "missing_index"}:
         return "missing"
-    if raw in {"stale", "unavailable", "status_check_failed", "unverified"}:
+    if raw in {"stale", "unavailable", "status_check_failed", "unverified", "incomplete_index"}:
         return "stale"
     return "unknown"
 

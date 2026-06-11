@@ -266,6 +266,47 @@ def test_affected_tests_supplements_codegraph_with_repo_import_scan(
     assert payload["quality"] == "partial_codegraph_plus_repo_fallback"
 
 
+def test_affected_tests_maps_scripts_to_matching_backend_script_tests(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    script = tmp_path / "scripts" / "nightly_adaptive_scheduler.py"
+    test_file = tmp_path / "backend" / "tests" / "scripts" / "test_nightly_adaptive_scheduler.py"
+    script.parent.mkdir(parents=True)
+    test_file.parent.mkdir(parents=True)
+    script.write_text("def build_report():\n    return {}\n", encoding="utf-8")
+    test_file.write_text("def test_scheduler():\n    assert True\n", encoding="utf-8")
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
+    )
+
+    payload = adapter.build_affected_tests_artifact(
+        item_id="BUG-313",
+        changed_files=["scripts/nightly_adaptive_scheduler.py"],
+        root=tmp_path,
+    )
+
+    assert payload["suggested_tests"] == ["backend/tests/scripts/test_nightly_adaptive_scheduler.py"]
+    assert payload["test_discovery_fallback"]["direct_matches"] == {
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py": [
+            "direct:scripts/nightly_adaptive_scheduler.py"
+        ]
+    }
+    assert payload["quality"] == "partial_codegraph_plus_repo_fallback"
+
+
 def test_affected_tests_filter_applies_to_repo_import_scan(tmp_path: Path, monkeypatch) -> None:
     script = tmp_path / "scripts" / "aistock_issue_workflow.py"
     backend_test = tmp_path / "backend" / "tests" / "scripts" / "test_aistock_issue_workflow.py"
@@ -420,6 +461,47 @@ def test_codegraph_freshness_ready_for_up_to_date_index(tmp_path: Path, monkeypa
     assert payload["blocking_for_issue_workflow"] is False
     assert (tmp_path / payload["artifact_path"]).exists()
     assert "CodeGraph Freshness" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+
+
+def test_codegraph_freshness_warns_when_critical_file_missing_from_index(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    for relative in ("scripts/code_intelligence_adapter.py", "scripts/llm_provider_adapter.py"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# critical\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        if args[:2] == ["codegraph", "status"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+                "stderr": "",
+            }
+        if args[:2] == ["codegraph", "files"]:
+            pattern = args[args.index("--pattern") + 1]
+            rows = [{"path": pattern}] if pattern == "scripts/code_intelligence_adapter.py" else []
+            return {"ok": True, "returncode": 0, "stdout": json.dumps(rows), "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=36)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"] == "incomplete_index"
+    assert payload["freshness_basis"] == "critical_file_coverage"
+    assert payload["index_file_coverage"]["missing_files"] == ["scripts/llm_provider_adapter.py"]
+    assert any("missing critical workflow files" in item for item in payload["warnings"])
 
 
 def test_codegraph_freshness_warns_for_missing_index(tmp_path: Path, monkeypatch) -> None:
@@ -578,6 +660,41 @@ def test_latest_codegraph_freshness_uses_live_status_when_artifact_is_stale(tmp_
     assert payload["effective"]["freshness"] == "fresh"
     assert payload["warnings"] == []
     assert payload["notes"]
+
+
+def test_latest_codegraph_freshness_marks_live_incomplete_index(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    critical = tmp_path / "scripts" / "llm_provider_adapter.py"
+    critical.parent.mkdir(parents=True)
+    critical.write_text("# critical\n", encoding="utf-8")
+    live_status = {
+        "available": True,
+        "index_exists": True,
+        "command": "codegraph",
+        "graph_root": str(tmp_path),
+        "graph_root_source": "current_worktree",
+        "git_commit": "new456",
+        "status": "ok",
+        "status_check": {"ok": True},
+        "index_summary": {"up_to_date": True},
+    }
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "returncode": 0, "stdout": "[]", "stderr": ""},
+    )
+
+    payload = adapter.latest_codegraph_freshness(tmp_path, live_status=live_status)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["effective"]["freshness"] == "incomplete_index"
+    assert payload["effective"]["index_file_coverage"]["missing_files"] == ["scripts/llm_provider_adapter.py"]
 
 
 def test_latest_codegraph_freshness_refreshes_missing_artifact_on_demand(tmp_path: Path, monkeypatch) -> None:

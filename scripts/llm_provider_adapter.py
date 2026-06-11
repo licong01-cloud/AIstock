@@ -217,15 +217,54 @@ def select_github_model(catalog_payload: Any, selector: dict[str, Any]) -> dict[
     return candidates[0]
 
 
+def _github_token_from_gh_cli() -> str | None:
+    try:
+        completed = subprocess.run(
+            ["gh", "auth", "token"],
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    token = (completed.stdout or "").strip()
+    return token or None
+
+
+def _resolve_github_models_token(config: dict[str, Any], *, token: str | None = None) -> tuple[str | None, str]:
+    github_models = config["providers"]["github_models"]
+    token_env = str((github_models.get("auth") or {}).get("token_env") or "GITHUB_TOKEN")
+    if token:
+        return token, "explicit_token"
+    candidate_envs = [token_env, "GITHUB_TOKEN", "GH_TOKEN"]
+    for env_name in dict.fromkeys(name for name in candidate_envs if name):
+        value = os.getenv(env_name)
+        if value:
+            return value, env_name
+    gh_token = _github_token_from_gh_cli()
+    if gh_token:
+        return gh_token, "gh_auth_token"
+    return None, token_env
+
+
 def fetch_github_models_catalog(config: dict[str, Any], *, token: str | None = None) -> Any:
     github_models = config["providers"]["github_models"]
     base_url = str(github_models.get("base_url") or "").rstrip("/")
     catalog_path = str(github_models.get("catalog_path") or "/catalog/models")
     url = f"{base_url}{catalog_path if catalog_path.startswith('/') else '/' + catalog_path}"
-    token_env = str((github_models.get("auth") or {}).get("token_env") or "GITHUB_TOKEN")
-    auth_token = token if token is not None else os.getenv(token_env)
+    auth_token, credential_source = _resolve_github_models_token(config, token=token)
     if not auth_token:
-        raise ProviderAdapterError(f"{token_env} is required for GitHub Models catalog discovery")
+        raise ProviderAdapterError(
+            f"{credential_source} or gh auth token is required for GitHub Models catalog discovery"
+        )
     request = urllib.request.Request(url)
     request.add_header("Authorization", f"Bearer {auth_token}")
     request.add_header("Accept", "application/json")
@@ -512,10 +551,11 @@ def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, 
     if provider == "github_models":
         selector = config["providers"]["github_models"]["model_selector"]
         preferred = selector.get("preferred_models") or [GITHUB_MODELS_DEEPSEEK_MODEL_ID]
+        token_env = config["providers"]["github_models"].get("auth", {}).get("token_env") or "GITHUB_TOKEN"
         return {
             "provider": provider,
             "model": str(preferred[0]),
-            "credential_source": config["providers"]["github_models"].get("auth", {}).get("token_env") or "GITHUB_TOKEN",
+            "credential_source": f"{token_env}|GH_TOKEN|gh_auth_token",
             "invoked": False,
         }
     if provider == "deepseek_api":

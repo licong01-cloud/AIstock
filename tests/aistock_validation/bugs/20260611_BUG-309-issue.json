@@ -1,0 +1,119 @@
+{
+  "actual": "荐股中心页面打开仍需 20 秒以上才显示数据；运行中荐股任务的复评区域没有明确展示当前已复评到哪个目标交易日、后续哪些交易日缺失、点击按钮是只执行当前目标日还是一次性补全所有漏评交易日，导致用户无法判断补跑范围和执行结果。期望页面快速显示基础骨架/部分数据，并明确展示最新已发布目标日、当前待复评目标日、缺失交易日列表及按钮执行语义。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260611_BUG-309-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-309",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T16:33:06.532369Z",
+  "description": "荐股中心页面打开仍需 20 秒以上才显示数据；运行中荐股任务的复评区域没有明确展示当前已复评到哪个目标交易日、后续哪些交易日缺失、点击按钮是只执行当前目标日还是一次性补全所有漏评交易日，导致用户无法判断补跑范围和执行结果。期望页面快速显示基础骨架/部分数据，并明确展示最新已发布目标日、当前待复评目标日、缺失交易日列表及按钮执行语义。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-22ea380b7a86",
+      "timestamp": "2026-06-10T16:33:06.532365Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-10T16:33:06.532369Z",
+  "fix_branch": null,
+  "fix_commit": "de814da78c4feb419dda7505de5a435693b52ce6",
+  "fixed_at": "2026-06-11T03:50:14.310385Z",
+  "github_issue_number": 924,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/924",
+  "last_seen_at": "2026-06-10T16:33:06.532369Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/938",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "荐股页面加载慢且复评漏跑补全语义不清",
+  "trigger_condition": {
+    "fingerprint": "22ea380b7a86d674ba3e2473",
+    "source_event_id": "FE-20260611-22ea380b7a86"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2"
+    ],
+    "ui_issue": true,
+    "ui_route": "/paper-v2",
+    "ui_routes": [
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "git diff --check -> passed; scoped advisory Playwright -> 8 passed; nox -s l0 -> passed; nox -s validation_module_registry_l0 -> passed; nox -s paper_v2_backend -> 612 passed, 1 skipped, 2 xfailed; PR CI -> 18 passed, 0 failed, 2 non-blocking skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

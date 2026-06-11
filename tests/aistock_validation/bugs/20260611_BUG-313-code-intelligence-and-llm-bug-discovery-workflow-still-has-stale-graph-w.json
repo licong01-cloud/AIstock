@@ -1,0 +1,91 @@
+{
+  "actual": "CodeGraph freshness can be falsely fresh, affected-test suggestions can be empty for known script-test pairs, UA is warning-only stale base context, LLM provider discovery requires explicit GITHUB_TOKEN in local shells, and closed issues may keep status:open labels.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260611_BUG-313-code-intelligence-and-llm-bug-discovery-workflow-still-has-stale-graph-w.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-313",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T01:55:00.201948Z",
+  "description": "CodeGraph freshness can be falsely fresh, affected-test suggestions can be empty for known script-test pairs, UA is warning-only stale base context, LLM provider discovery requires explicit GITHUB_TOKEN in local shells, and closed issues may keep status:open labels.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-5d2d430af9c3",
+      "timestamp": "2026-06-11T01:55:00.201944Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-311 aftercare diagnosis on 2026-06-11: CodeGraph full index fixed missing scripts; affected-tests still returned no tests; UA graph remained base_current; discover-github-models failed without GITHUB_TOKEN; 86 closed issues retained status:open."
+  ],
+  "expected": "Issue workflow and Nightly/CI code-intelligence lanes verify key files are indexed, map changed workflow/LLM scripts to the correct tests, keep UA freshness explicit, support safe GitHub token fallback for local diagnostics, and converge closed issue status labels without adding heavy gates or broad scans.",
+  "first_seen_at": "2026-06-11T01:55:00.201948Z",
+  "fix_branch": null,
+  "fix_commit": "de553b4d1070612293550339e487412f7f20c018",
+  "fixed_at": "2026-06-11T03:09:39.471448Z",
+  "github_issue_number": 931,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/931",
+  "last_seen_at": "2026-06-11T01:55:00.201948Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/936",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-311 --module validation; codegraph affected scripts/llm_provider_adapter.py scripts/nightly_adaptive_scheduler.py --path F:/Dev/AIstock; python scripts/llm_provider_adapter.py --json discover-github-models; gh issue list --state closed --label status:open",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Code intelligence and LLM bug-discovery workflow still has stale graph, weak affected-test mapping, and token fallback gaps",
+  "trigger_condition": {
+    "fingerprint": "5d2d430af9c3d10b028d27aa",
+    "source_event_id": "FE-20260611-5d2d430af9c3"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_center_backend -> 419 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
