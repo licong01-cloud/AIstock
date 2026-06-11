@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "scripts/code_intelligence_adapter.py",
     "tests/aistock_validation/bugs/20260611_BUG-316-codegraph-understand-anything-freshness-artifact-drift-keeps-issue-workf.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_code_intelligence_adapter.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-316",
@@ -11,7 +12,9 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Verify CodeGraph stale-fresh artifacts are refreshed to the current HEAD when live status is fresh.",
+    "Verify Understand Anything base_current remains actionable without making client verification warning-only."
   ],
   "created_at": "2026-06-11T07:09:11.302556Z",
   "description": "python scripts/code_intelligence_adapter.py verify-clients reports workflow_gate=warning, stale_metadata_warning=true, latest_git_commit differs from HEAD, and Understand Anything freshness=base_current stale_but_usable=true.",
