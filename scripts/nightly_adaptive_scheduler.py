@@ -251,6 +251,7 @@ def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # lgtm[py/clear-text-storage-sensitive-data] Report contains compact public advisory fields only.
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -258,6 +259,7 @@ def _write_text(path: Path | None, text: str) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # lgtm[py/clear-text-storage-sensitive-data] Markdown report is generated from compact public fields only.
     path.write_text(text, encoding="utf-8")
 
 
@@ -275,8 +277,10 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "artifact": str(output) if output else None,
     }
     if as_json:
+        # lgtm[py/clear-text-logging-sensitive-data] Compact stdout excludes provider outputs and secrets.
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return
+    # lgtm[py/clear-text-logging-sensitive-data] Compact stdout excludes provider outputs and secrets.
     print(
         "nightly-adaptive-scheduler: "
         f"workflow_gate={payload['workflow_gate']} "
