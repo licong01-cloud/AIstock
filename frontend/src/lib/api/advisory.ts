@@ -373,4 +373,14 @@ export const advisoryApi = {
       body({ codes, category_id: categoryId, on_conflict: "ignore" }),
     );
   },
+  async tdxAvailable(): Promise<boolean> {
+    const data = await apiFetch<{ available: boolean }>("/tdx-blocks/available");
+    return data.available;
+  },
+  async tdxSyncFromCategory(categoryName: string): Promise<{ name: string; display_name: string; count: number; codes: string[] }> {
+    return apiFetch(
+      "/tdx-blocks/sync-from-category",
+      body({ category_name: categoryName }),
+    );
+  },
 };

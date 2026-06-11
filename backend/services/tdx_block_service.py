@@ -16,7 +16,11 @@ blocknew.cfg 格式: 每条记录 120 字节
 import logging
 import os
 import shutil
-from typing import Optional
+from typing import Any, Dict, Optional
+
+import psycopg2.extras
+
+from backend.db.pg_pool import get_conn
 
 logger = logging.getLogger(__name__)
 
@@ -349,3 +353,62 @@ def delete_block(name: str) -> dict:
         raise FileNotFoundError(f"板块不存在: {name}")
 
     return {"deleted": deleted, "unregistered": unregistered}
+
+
+def sync_from_category(category_name: str) -> Dict[str, Any]:
+    """将自选分类中的股票同步到通达信板块文件 (.blk)。
+
+    1. DB 查询分类下的所有股票代码
+    2. 以 category ID 构造稳定文件名 AIstock_cat_<id>.blk
+    3. 调用 _write_blk 覆盖写入
+    4. 调用 _register_in_cfg 幂等注册到 blocknew.cfg
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT c.id AS category_id, c.name AS display_name, i.code
+                FROM app.watchlist_items i
+                JOIN app.watchlist_item_categories w ON w.item_id = i.id
+                JOIN app.watchlist_categories c ON c.id = w.category_id
+                WHERE c.name = %s
+                ORDER BY i.code
+                """,
+                (category_name,),
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        raise ValueError(f"自选分类不存在或无股票: {category_name!r}")
+
+    category_id = rows[0]["category_id"]
+    display_name = rows[0]["display_name"]
+    codes = [r["code"] for r in rows]
+
+    # 转换为 blk 内部格式
+    raw_codes = []
+    for code in codes:
+        raw = denormalize_code(code)
+        if raw:
+            raw_codes.append(raw)
+        else:
+            logger.warning("sync_from_category: 无法转换代码 %r", code)
+
+    if not raw_codes:
+        raise ValueError(f"分类 {category_name!r} 中无有效股票代码")
+
+    block_name = f"AIstock_cat_{category_id}"
+    _write_blk(block_name, raw_codes)
+    _register_in_cfg(block_name, display_name)
+
+    logger.info(
+        "sync_from_category: 分类=%r → 板块=%s, %d 只股票",
+        category_name, block_name, len(raw_codes),
+    )
+
+    return {
+        "name": block_name,
+        "display_name": display_name,
+        "count": len(raw_codes),
+        "codes": codes,
+    }

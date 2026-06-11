@@ -28,6 +28,17 @@ def list_blocks() -> List[Dict[str, Any]]:
     return tdx_block_service.list_blocks()
 
 
+@router.post("/sync-from-category", summary="从自选分类同步到通达信板块")
+def sync_from_category(
+    category_name: str = Body(..., embed=True),
+) -> Dict[str, Any]:
+    _ensure_available()
+    try:
+        return tdx_block_service.sync_from_category(category_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/{name}/stocks", summary="读取板块内股票列表")
 def get_block_stocks(name: str) -> Dict[str, Any]:
     _ensure_available()

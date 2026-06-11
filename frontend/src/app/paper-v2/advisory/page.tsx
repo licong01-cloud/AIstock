@@ -621,6 +621,9 @@ function AdvisoryPageContent() {
   const [loadedDetailsProgramId, setLoadedDetailsProgramId] = useState("");
   const [addingWatchlist, setAddingWatchlist] = useState(false);
   const [catchUpProgress, setCatchUpProgress] = useState<{ programId: string; index: number; total: number; targetDate: string } | null>(null);
+  const [tdxAvailable, setTdxAvailable] = useState(false);
+  const [tdxSyncing, setTdxSyncing] = useState(false);
+  const [tdxSyncResult, setTdxSyncResult] = useState<{ display_name: string; count: number } | null>(null);
   const listDetailRef = useRef<HTMLDivElement | null>(null);
   const refreshSeqRef = useRef(0);
   const detailsSeqRef = useRef(0);
@@ -846,6 +849,14 @@ function AdvisoryPageContent() {
     refreshAll().catch((exc) => setError(exc instanceof Error ? exc.message : String(exc)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy]);
+
+  useEffect(() => {
+    let alive = true;
+    advisoryApi.tdxAvailable().then((available) => {
+      if (alive) setTdxAvailable(available);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (prefillPackages) {
@@ -1164,6 +1175,21 @@ function AdvisoryPageContent() {
       setError(message);
     } finally {
       setAddingWatchlist(false);
+    }
+  }
+
+  async function syncFinalListToTdx() {
+    if (!canAddFinalWatchlist) return;
+    setTdxSyncing(true);
+    setTdxSyncResult(null);
+    setError(null);
+    try {
+      const result = await advisoryApi.tdxSyncFromCategory(watchlistCategoryName);
+      setTdxSyncResult({ display_name: result.display_name, count: result.count });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setTdxSyncing(false);
     }
   }
 
@@ -1489,9 +1515,25 @@ function AdvisoryPageContent() {
               >
                 {addingWatchlist ? "加入中..." : "一键加入自选股票池"}
               </button>
+              {tdxAvailable && (
+                <button
+                  className="pv2-button"
+                  data-testid="advisory-tdx-sync"
+                  disabled={!canAddFinalWatchlist || tdxSyncing}
+                  onClick={() => void syncFinalListToTdx()}
+                  type="button"
+                >
+                  📡 加入通达信自选
+                </button>
+              )}
               <span className="pv2-muted" data-testid="advisory-watchlist-category-hint">
                 默认分类：{watchlistCategoryName}；仅加入当前 PUBLISHED 列表中 ACTIVE 的最终荐股，共 {finalWatchlistItems.length} 只。
               </span>
+              {tdxSyncResult && (
+                <div className="pv2-readable-panel" style={{ marginTop: 8 }} data-testid="advisory-tdx-sync-result">
+                  ✅ 板块「{tdxSyncResult.display_name}」，已同步 {tdxSyncResult.count} 只股票到通达信客户端。
+                </div>
+              )}
             </div>
           </div>
         ) : (

@@ -15,6 +15,7 @@ from . import smart_monitor
 from . import rdagent
 from . import rdagent_templates
 from . import stock_universe
+from . import tdx_blocks
 
 __all__ = [
     "health",
@@ -34,6 +35,7 @@ __all__ = [
     "rdagent",
     "rdagent_templates",
     "stock_universe",
+    "tdx_blocks",
 ]
 
 from . import quantevolver
