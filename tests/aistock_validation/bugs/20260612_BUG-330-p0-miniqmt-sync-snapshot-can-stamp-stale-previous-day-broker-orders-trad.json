@@ -30,8 +30,8 @@
   "expected": "MiniQMT sync_snapshot must be trade-date strict: broker orders/trades whose parsed order_time/traded_time date does not equal the requested trade_date are skipped or fail-fast with explicit stale-broker-snapshot diagnostics, and must not be inserted into qmt_strategy.order_ledger, trade_ledger, unattributed_order, or unattributed_trade for the wrong date. Scheduler/reconcile should surface an actionable warning/error instead of silently stamping stale broker records as current-day evidence.",
   "first_seen_at": "2026-06-11T16:20:40.422670Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "934a6ffe3c43ab22bee8f4e3fa468a3b8d7ab51d",
+  "fixed_at": "2026-06-11T16:47:26.499962Z",
   "github_issue_number": 986,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/986",
   "last_seen_at": "2026-06-11T16:20:40.422670Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/989",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -58,6 +59,16 @@
     "fingerprint": "93b259094d53dab6211c88ae",
     "source_event_id": "FE-20260612-93b259094d53"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 17 passed",
+    "python -m ruff check backend/services/qmt_strategy_ledger/sync_service.py backend/tests/qmt_strategy_ledger/test_sync_service.py -> passed",
+    "python -m compileall -q backend/services/qmt_strategy_ledger/sync_service.py backend/tests/qmt_strategy_ledger/test_sync_service.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 613 passed, 1 skipped, 2 xfailed",
+    "GitHub PR #989 checks -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
