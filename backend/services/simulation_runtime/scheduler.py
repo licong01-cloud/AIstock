@@ -20,8 +20,10 @@ from typing import Any, Protocol
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
+from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.models import PaperRun
+from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.qmt_strategy_ledger.reconciliation import QmtStrategyLedgerReconciliationService
 from backend.services.qmt_strategy_ledger.order_service import SELL_ORDER_TYPE, OrderPreflightError, QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.models import (
@@ -36,7 +38,7 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.models import AccountSnapshot, PositionLot, RunStatus
 
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
@@ -99,10 +101,19 @@ class SimulationRunContext:
     broker_positions: list[dict[str, Any]] = field(default_factory=list)
     tail_policy_service: TailHandlingPolicyService | None = None
     price_by_symbol: dict[str, Any] | None = None
+    paper_repository: Any | None = None
     cash: float | None = None
     frozen_cash: float = 0.0
     realized_pnl: float = 0.0
     market_data_source: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalSimPersistenceResult:
+    payload: dict[str, Any]
+    positions: dict[str, PositionLot]
+    marks: dict[str, float]
+    cash: float
 
 
 class SimulationRunContextProvider(Protocol):
@@ -364,6 +375,7 @@ class ProductionSimulationRunContextProvider:
             manifest=manifest,
             execution_policy_payload=effective_execution_policy_payload or release_execution_policy_payload,
             local_broker=local_broker,
+            paper_repository=paper_repository,
             cash=cash,
             market_data_source=(
                 getattr(local_broker, "data_source").value
@@ -1544,6 +1556,12 @@ class SimulationLifecycleScheduler:
             mode=mode,
             price_by_symbol=context.price_by_symbol or context.current_prices,
         )
+        local_persistence = self._persist_local_sim_execution_result(
+            binding=binding,
+            run=execution.run,
+            execution=execution,
+            context=context,
+        )
         if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
             latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
@@ -1564,7 +1582,12 @@ class SimulationLifecycleScheduler:
             )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
         reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
-        self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+        self._persist_strategy_performance(
+            binding=binding,
+            run=execution.run,
+            context=context,
+            local_persistence=local_persistence,
+        )
         latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
         status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
         return SimulationSchedulerBindingResult(
@@ -1607,6 +1630,22 @@ class SimulationLifecycleScheduler:
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
             status = "NO_REBALANCE"
+        local_failure_error = self._local_sim_broker_called_failure_error(binding=binding, run=run)
+        if local_failure_error is not None:
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status=run.status.value,
+                run=run,
+                execution_plan=plan,
+                error=local_failure_error,
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         if self._should_mark_existing_no_rebalance(run=run, plan=plan, submit=submit):
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
@@ -1680,6 +1719,12 @@ class SimulationLifecycleScheduler:
                 mode=mode,
                 price_by_symbol=context.price_by_symbol or context.current_prices,
             )
+            local_persistence = self._persist_local_sim_execution_result(
+                binding=binding,
+                run=execution.run,
+                execution=execution,
+                context=context,
+            )
             if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
                 self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
                 latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
@@ -1700,7 +1745,12 @@ class SimulationLifecycleScheduler:
                 )
             tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
             reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
-            self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+            self._persist_strategy_performance(
+                binding=binding,
+                run=execution.run,
+                context=context,
+                local_persistence=local_persistence,
+            )
             latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
             status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
             return SimulationSchedulerBindingResult(
@@ -1732,6 +1782,25 @@ class SimulationLifecycleScheduler:
                 default_data_source=data_source,
             ),
         )
+
+    @staticmethod
+    def _local_sim_broker_called_failure_error(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+    ) -> dict[str, Any] | None:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return None
+        if run.status not in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL}:
+            return None
+        if not bool(run.run_payload_json.get("broker_called")):
+            return None
+        failure = run.run_payload_json.get("submit_failure")
+        return {
+            "type": str(failure.get("type") or run.status.value) if isinstance(failure, dict) else run.status.value,
+            "message": str(failure.get("message") or "LocalSim broker-called run is failed") if isinstance(failure, dict) else "LocalSim broker-called run is failed",
+            "context": failure.get("context") if isinstance(failure, dict) else {"run_id": run.run_id},
+        }
 
     @staticmethod
     def _effective_market_data_source_for_binding(
@@ -1847,6 +1916,7 @@ class SimulationLifecycleScheduler:
         binding: SimulationReleaseBinding,
         run: SimulationDailyRun,
         context: SimulationRunContext,
+        local_persistence: LocalSimPersistenceResult | None = None,
     ) -> dict[str, Any]:
         marks = self._performance_marks(context)
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and context.qmt_ledger_repository is not None:
@@ -1854,6 +1924,17 @@ class SimulationLifecycleScheduler:
                 strategy_id=binding.strategy_id,
                 repository=context.qmt_ledger_repository,
                 marks=marks,
+            )
+        elif local_persistence is not None:
+            projection = self.performance_service.project_strategy(
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                initial_capital=float(binding.capital_allocation),
+                cash=float(local_persistence.cash),
+                frozen_cash=0.0,
+                realized_pnl=float(context.realized_pnl),
+                positions=local_persistence.positions,
+                marks=local_persistence.marks,
             )
         else:
             projection = self.performance_service.project_strategy(
@@ -1875,6 +1956,316 @@ class SimulationLifecycleScheduler:
             },
         )
         return payload
+
+    def _persist_local_sim_execution_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        execution: SimulationExecutionResult,
+        context: SimulationRunContext,
+    ) -> LocalSimPersistenceResult | None:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return None
+        if execution.status != "SUBMITTED":
+            return None
+        try:
+            broker_result = execution.broker_result
+            snapshot = getattr(broker_result, "execution_snapshot", None)
+            if snapshot is None:
+                raise DataUnavailableError(
+                    "LocalSim submit returned no execution snapshot for durable persistence",
+                    context={
+                        "run_id": run.run_id,
+                        "strategy_id": binding.strategy_id,
+                        "binding_id": binding.binding_id,
+                        "plan_id": execution.execution_plan.plan_id,
+                    },
+                )
+            orders = tuple(getattr(snapshot, "orders", ()) or ())
+            fills = tuple(getattr(snapshot, "fills", ()) or ())
+            events = tuple(getattr(snapshot, "events", ()) or ())
+            snapshot_cash_entries = tuple(getattr(snapshot, "cash_entries", ()) or ())
+            orders, fills, events, cash_entries = self._filter_local_sim_snapshot_by_plan(
+                execution=execution,
+                orders=orders,
+                fills=fills,
+                events=events,
+                cash_entries=snapshot_cash_entries,
+            )
+            positions = dict(getattr(snapshot, "positions", {}) or {})
+            account = getattr(snapshot, "account", None)
+            self._validate_local_sim_snapshot_for_success(
+                run=run,
+                execution=execution,
+                orders=orders,
+                fills=fills,
+                cash_entries=cash_entries,
+            )
+            marks = self._local_sim_position_marks(
+                positions=positions,
+                context=context,
+                execution=execution,
+            )
+            cash = float(getattr(account, "cash")) if account is not None else self._cash_after_local_sim(cash_entries, context)
+            snapshot_time = self._local_sim_snapshot_time(fills=fills, events=events, run=run)
+            market_value = sum(int(position.quantity) * marks[position.symbol] for position in positions.values())
+            account_snapshot = AccountSnapshot(
+                portfolio_id=str(context.portfolio_id or execution.execution_plan.portfolio_id),
+                cash=cash,
+                market_value=market_value,
+                nav=cash + market_value,
+                snapshot_time=snapshot_time,
+            )
+            paper_repository = self._paper_repository_for_local_sim(
+                binding=binding,
+                run=run,
+                context=context,
+            )
+            self._ensure_local_sim_paper_run(
+                repository=paper_repository,
+                run=run,
+                context=context,
+            )
+            for order in orders:
+                paper_repository.save_order(run.run_id, order)
+            for fill in fills:
+                paper_repository.save_fill(run.run_id, fill)
+            for event in events:
+                paper_repository.save_order_event(run.run_id, event)
+            for entry in cash_entries:
+                paper_repository.save_cash_entry(run.run_id, entry)
+            paper_repository.save_positions(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                positions=list(positions.values()),
+                prices=marks,
+            )
+            paper_repository.save_daily_snapshot(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                snapshot=account_snapshot,
+                metadata={
+                    "source": "simulation_runtime_local_sim",
+                    "simulation_run_id": run.run_id,
+                    "execution_plan_id": execution.execution_plan.plan_id,
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "cash_ledger_count": len(cash_entries),
+                    "position_count": len(positions),
+                },
+            )
+            paper_repository.update_run_status(paper_repository.get_run(run.run_id), RunStatus.SUCCEEDED)
+            self.repository.update_simulation_daily_run(
+                run.run_id,
+                status=SimulationDailyRunStatus.SUCCEEDED,
+                payload_patch={
+                    "local_sim_persistence": {
+                        "schema_version": "local_sim_persistence_v1",
+                        "status": "PERSISTED",
+                        "paper_v2_run_id": run.run_id,
+                        "order_count": len(orders),
+                        "fill_count": len(fills),
+                        "order_event_count": len(events),
+                        "cash_ledger_count": len(cash_entries),
+                        "position_count": len(positions),
+                        "snapshot_time": snapshot_time.isoformat(),
+                        "cash": cash,
+                        "nav": account_snapshot.nav,
+                    },
+                    "last_stage": "SUCCEEDED",
+                },
+                payload_unset=("submit_failure",),
+            )
+            return LocalSimPersistenceResult(
+                payload={
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "cash_ledger_count": len(cash_entries),
+                    "position_count": len(positions),
+                    "cash": cash,
+                    "nav": account_snapshot.nav,
+                },
+                positions=positions,
+                marks=marks,
+                cash=cash,
+            )
+        except Exception as exc:
+            if not isinstance(exc, DataUnavailableError):
+                exc = DataUnavailableError(
+                    "LocalSim execution side effects could not be persisted durably",
+                    context={
+                        "run_id": run.run_id,
+                        "strategy_id": binding.strategy_id,
+                        "binding_id": binding.binding_id,
+                        "plan_id": execution.execution_plan.plan_id,
+                        "cause": str(exc),
+                    },
+                )
+            stage = self._local_sim_persistence_failure_stage(exc)
+            self.orchestrator.mark_submit_failure(run=run, stage=stage, exc=exc)
+            raise exc
+
+    @staticmethod
+    def _filter_local_sim_snapshot_by_plan(
+        *,
+        execution: SimulationExecutionResult,
+        orders: tuple[Any, ...],
+        fills: tuple[Any, ...],
+        events: tuple[Any, ...],
+        cash_entries: tuple[Any, ...],
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...], tuple[Any, ...], tuple[Any, ...]]:
+        plan_intent_ids = {intent.intent_id for intent in execution.execution_plan.intents}
+        selected_orders = tuple(order for order in orders if getattr(order, "intent_id", None) in plan_intent_ids)
+        selected_order_ids = {getattr(order, "order_id", None) for order in selected_orders}
+        selected_fills = tuple(fill for fill in fills if getattr(fill, "order_id", None) in selected_order_ids)
+        selected_fill_ids = {getattr(fill, "fill_id", None) for fill in selected_fills}
+        selected_events = tuple(
+            event
+            for event in events
+            if getattr(event, "order_id", None) in selected_order_ids
+            and (getattr(event, "fill", None) is None or getattr(getattr(event, "fill", None), "fill_id", None) in selected_fill_ids)
+        )
+        selected_cash_entries = tuple(
+            entry for entry in cash_entries if getattr(entry, "fill_id", None) in selected_fill_ids
+        )
+        return selected_orders, selected_fills, selected_events, selected_cash_entries
+
+    def _paper_repository_for_local_sim(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+    ) -> Any:
+        if context.paper_repository is not None:
+            return context.paper_repository
+        if isinstance(self.repository, InMemorySimulationRuntimeRepository):
+            repository = InMemoryPaperTradingV2Repository()
+            object.__setattr__(context, "paper_repository", repository)
+            return repository
+        return self._build_dependency(
+            _default_paper_repository_factory,
+            "PaperTradingV2Repository",
+            binding=binding,
+            trade_date=run.trade_date,
+        )
+
+    def _validate_local_sim_snapshot_for_success(
+        self,
+        *,
+        run: SimulationDailyRun,
+        execution: SimulationExecutionResult,
+        orders: tuple[Any, ...],
+        fills: tuple[Any, ...],
+        cash_entries: tuple[Any, ...],
+    ) -> None:
+        if len(orders) != len(execution.execution_plan.intents):
+            raise DataUnavailableError(
+                "LocalSim execution snapshot order count does not match execution plan intents",
+                context={
+                    "run_id": run.run_id,
+                    "plan_id": execution.execution_plan.plan_id,
+                    "expected_order_count": len(execution.execution_plan.intents),
+                    "actual_order_count": len(orders),
+                },
+            )
+        if not fills or not cash_entries:
+            raise DataUnavailableError(
+                "LocalSim execution cannot succeed without durable fills and cash ledger entries",
+                context={
+                    "run_id": run.run_id,
+                    "plan_id": execution.execution_plan.plan_id,
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "cash_ledger_count": len(cash_entries),
+                },
+            )
+
+    @staticmethod
+    def _local_sim_persistence_failure_stage(exc: BaseException) -> str:
+        message = str(exc)
+        if "no execution snapshot" in message:
+            return "LOCAL_SIM_PERSISTENCE_SNAPSHOT_MISSING"
+        if "order count does not match" in message:
+            return "LOCAL_SIM_PERSISTENCE_ORDER_MISMATCH"
+        if "without durable fills and cash ledger entries" in message:
+            return "LOCAL_SIM_PERSISTENCE_EMPTY_EFFECTS"
+        return "LOCAL_SIM_PERSISTENCE_FAILED"
+
+    @staticmethod
+    def _ensure_local_sim_paper_run(
+        *,
+        repository: Any,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+    ) -> None:
+        portfolio_id = str(context.portfolio_id or run.strategy_id)
+        existing = repository.get_run_by_portfolio_date(portfolio_id, run.trade_date)
+        if existing is not None and existing.run_id != run.run_id:
+            raise RuntimeConfigInvalidError(
+                "LocalSim simulation runtime cannot persist into a different Paper v2 run for the same portfolio/date",
+                context={
+                    "simulation_run_id": run.run_id,
+                    "existing_run_id": existing.run_id,
+                    "portfolio_id": portfolio_id,
+                    "trade_date": run.trade_date.isoformat(),
+                },
+            )
+        if existing is None:
+            data_source = MinuteDataSource(str(context.market_data_source or MinuteDataSource.DB_HISTORICAL.value))
+            repository.create_run(
+                PaperRun(
+                    run_id=run.run_id,
+                    portfolio_id=portfolio_id,
+                    trade_date=run.trade_date,
+                    status=RunStatus.RUNNING,
+                    data_source=data_source,
+                    runtime_config={
+                        "source": "simulation_runtime_local_sim",
+                        "simulation_run_id": run.run_id,
+                        "selection_evidence_id": run.selection_evidence_id,
+                        "execution_plan_id": run.execution_plan_id,
+                    },
+                )
+            )
+
+    @staticmethod
+    def _local_sim_position_marks(
+        *,
+        positions: dict[str, PositionLot],
+        context: SimulationRunContext,
+        execution: SimulationExecutionResult,
+    ) -> dict[str, float]:
+        marks = SimulationLifecycleScheduler._performance_marks(context)
+        for intent in execution.execution_plan.intents:
+            if intent.symbol not in marks and intent.price_policy.get("reference_price") is not None:
+                marks[intent.symbol] = float(intent.price_policy["reference_price"])
+            if intent.symbol not in marks and intent.price_policy.get("limit_price") is not None:
+                marks[intent.symbol] = float(intent.price_policy["limit_price"])
+        missing = sorted(symbol for symbol in positions if symbol not in marks)
+        if missing:
+            raise DataUnavailableError(
+                "LocalSim persistence requires mark prices for all persisted positions",
+                context={"symbols": missing, "plan_id": execution.execution_plan.plan_id},
+            )
+        return {symbol: float(marks[symbol]) for symbol in positions}
+
+    @staticmethod
+    def _cash_after_local_sim(cash_entries: tuple[Any, ...], context: SimulationRunContext) -> float:
+        if cash_entries:
+            return float(getattr(cash_entries[-1], "cash_after"))
+        if context.cash is not None:
+            return float(context.cash)
+        raise DataUnavailableError("LocalSim persistence requires account cash or cash ledger entries")
+
+    @staticmethod
+    def _local_sim_snapshot_time(*, fills: tuple[Any, ...], events: tuple[Any, ...], run: SimulationDailyRun) -> datetime:
+        if fills:
+            return max(getattr(fill, "trade_time") for fill in fills)
+        if events:
+            return max(getattr(event, "event_time") for event in events)
+        return datetime.combine(run.trade_date, time(15, 0), tzinfo=UTC)
 
     @staticmethod
     def _performance_marks(context: SimulationRunContext) -> dict[str, float]:

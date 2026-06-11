@@ -24,6 +24,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.trading_core.errors import DataUnavailableError
 
 TRADE_DATE = date(2026, 5, 21)
 
@@ -168,6 +169,37 @@ def client(repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str])
         lambda: SimulationRuntimeOpsService(repository=repo)
     )
     return TestClient(app)
+
+
+def _mark_localsim_run_succeeded_with_persistence(
+    repo: InMemorySimulationRuntimeRepository,
+    run_id: str,
+    *,
+    intent_count: int = 1,
+) -> None:
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.SUCCEEDED,
+        payload_patch={
+            "broker_called": True,
+            "submitted_intents": intent_count,
+            "last_stage": "SUCCEEDED",
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v1",
+                "status": "PERSISTED",
+                "paper_v2_run_id": run_id,
+                "order_count": intent_count,
+                "fill_count": intent_count,
+                "order_event_count": intent_count,
+                "cash_ledger_count": intent_count,
+                "position_count": intent_count,
+                "snapshot_time": datetime(2026, 5, 21, 9, 31, tzinfo=UTC).isoformat(),
+                "cash": 99000.0,
+                "nav": 100000.0,
+            },
+        },
+        payload_unset=("submit_failure",),
+    )
 
 
 def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(client: TestClient) -> None:
@@ -353,6 +385,14 @@ def test_live_admission_evidence_requires_successful_dual_simulation_runs() -> N
     repo.update_simulation_daily_run(qmt.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
 
     service = SimulationRuntimeOpsService(repository=repo)
+    with pytest.raises(DataUnavailableError, match="durable Paper v2"):
+        service.build_live_admission_evidence(
+            paper_v2_run_id=local.run.run_id,
+            miniqmt_sim_run_id=qmt.run.run_id,
+            target_broker_backend="minqmt_live",
+        )
+
+    _mark_localsim_run_succeeded_with_persistence(repo, local.run.run_id)
     evidence = service.build_live_admission_evidence(
         paper_v2_run_id=local.run.run_id,
         miniqmt_sim_run_id=qmt.run.run_id,
@@ -460,7 +500,7 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
     assert qmt.run is not None
     assert qmt.run.account_group_id == "ag_minqmt_qmt_sim_account_sim"
     assert qmt.run.strategy_slot_id == "slot_ops_api_qmt"
-    repo.update_simulation_daily_run(local.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
+    _mark_localsim_run_succeeded_with_persistence(repo, local.run.run_id)
     repo.update_simulation_daily_run(qmt.run.run_id, status=SimulationDailyRunStatus.SUCCEEDED)
 
     app = FastAPI()

@@ -223,7 +223,7 @@ class SimulationLifecycleOrchestrator:
 
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             if local_broker is None:
-                self._mark_submit_failure(
+                self.mark_submit_failure(
                     run=run,
                     stage="LOCAL_SIM_BROKER_UNAVAILABLE",
                     exc=BrokerUnavailableError(
@@ -238,11 +238,11 @@ class SimulationLifecycleOrchestrator:
             try:
                 local_result = self.local_bridge.submit_plan(plan=plan, broker=local_broker)
             except Exception as exc:
-                self._mark_submit_failure(run=run, stage="LOCAL_SIM_SUBMIT_FAILED", exc=exc)
+                self.mark_submit_failure(run=run, stage="LOCAL_SIM_SUBMIT_FAILED", exc=exc)
                 raise
-            succeeded = self.repository.update_simulation_daily_run(
+            submitted = self.repository.update_simulation_daily_run(
                 run.run_id,
-                status=SimulationDailyRunStatus.SUCCEEDED,
+                status=SimulationDailyRunStatus.INTRADAY_RUNNING,
                 payload_patch={
                     "broker_called": True,
                     "submitted_intents": len(local_result.order_intents),
@@ -250,13 +250,13 @@ class SimulationLifecycleOrchestrator:
                         handle.model_dump(mode="json") for handle in local_result.handles
                     ],
                     "local_sim_synchronous_terminal": True,
-                    "last_stage": "SUCCEEDED",
+                    "last_stage": "LOCAL_SIM_DURABLE_PERSISTENCE_PENDING",
                     "submit_failure": None,
                 },
                 payload_unset=("submit_failure",),
             )
             return SimulationExecutionResult(
-                run=succeeded,
+                run=submitted,
                 execution_plan=plan,
                 broker_backend=binding.broker_backend,
                 status="SUBMITTED",
@@ -266,7 +266,7 @@ class SimulationLifecycleOrchestrator:
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
             if managed_order_service is None:
-                self._mark_submit_failure(
+                self.mark_submit_failure(
                     run=run,
                     stage="MINIQMT_SERVICE_UNAVAILABLE",
                     exc=BrokerUnavailableError(
@@ -287,7 +287,7 @@ class SimulationLifecycleOrchestrator:
                     price_by_symbol=price_by_symbol,
                 )
             except Exception as exc:
-                self._mark_submit_failure(run=run, stage="MINIQMT_SUBMIT_FAILED", exc=exc)
+                self.mark_submit_failure(run=run, stage="MINIQMT_SUBMIT_FAILED", exc=exc)
                 raise
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
             broker_called = any(result.broker_called for result in qmt_result.results)
@@ -321,7 +321,7 @@ class SimulationLifecycleOrchestrator:
             context={"broker_backend": binding.broker_backend.value},
         )
 
-    def _mark_submit_failure(self, *, run: SimulationDailyRun, stage: str, exc: BaseException) -> SimulationDailyRun:
+    def mark_submit_failure(self, *, run: SimulationDailyRun, stage: str, exc: BaseException) -> SimulationDailyRun:
         context = getattr(exc, "context", None)
         return self.repository.update_simulation_daily_run(
             run.run_id,
