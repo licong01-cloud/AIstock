@@ -731,10 +731,11 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
     )
 
     latest = repo.get_simulation_daily_run(build.run.run_id)
-    assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
-    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert result.status == "SUBMITTED"
+    assert result.run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert latest.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert result.run.run_payload_json["submitted_intents"] == len(build.execution_plan.intents)
-    assert result.run.run_payload_json["last_stage"] == "SUCCEEDED"
+    assert result.run.run_payload_json["last_stage"] == "LOCAL_SIM_DURABLE_PERSISTENCE_PENDING"
     assert result.run.run_payload_json["broker_called"] is True
     assert "submit_failure" not in result.run.run_payload_json
     assert "submit_failure" not in latest.run_payload_json

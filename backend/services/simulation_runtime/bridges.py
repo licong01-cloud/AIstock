@@ -37,9 +37,21 @@ MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
 
 
 @dataclass(frozen=True)
+class LocalSimExecutionSnapshot:
+    orders: tuple[Any, ...]
+    fills: tuple[Any, ...]
+    events: tuple[Any, ...]
+    cash_entries: tuple[Any, ...]
+    positions: dict[str, Any]
+    account: Any | None = None
+    handle_statuses: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
 class LocalSimPlanSubmitResult:
     order_intents: tuple[OrderIntent, ...]
     handles: tuple[OrderHandle, ...]
+    execution_snapshot: LocalSimExecutionSnapshot | None = None
 
 
 class LocalSimExecutionBridge:
@@ -52,7 +64,30 @@ class LocalSimExecutionBridge:
     def submit_plan(self, *, plan: ExecutionPlan, broker: BrokerBackend) -> LocalSimPlanSubmitResult:
         order_intents = self.build_order_intents(plan)
         handles = tuple(broker.submit_order_intent(intent) for intent in order_intents)
-        return LocalSimPlanSubmitResult(order_intents=tuple(order_intents), handles=handles)
+        return LocalSimPlanSubmitResult(
+            order_intents=tuple(order_intents),
+            handles=handles,
+            execution_snapshot=self._export_execution_snapshot(broker=broker, handles=handles),
+        )
+
+    @staticmethod
+    def _export_execution_snapshot(*, broker: BrokerBackend, handles: tuple[OrderHandle, ...]) -> LocalSimExecutionSnapshot | None:
+        exporter = getattr(broker, "export_execution_snapshot", None)
+        if callable(exporter):
+            raw = exporter(handles=handles)
+            if isinstance(raw, LocalSimExecutionSnapshot):
+                return raw
+            if isinstance(raw, dict):
+                return LocalSimExecutionSnapshot(
+                    orders=tuple(raw.get("orders") or ()),
+                    fills=tuple(raw.get("fills") or ()),
+                    events=tuple(raw.get("events") or ()),
+                    cash_entries=tuple(raw.get("cash_entries") or ()),
+                    positions=dict(raw.get("positions") or {}),
+                    account=raw.get("account"),
+                    handle_statuses=tuple(raw.get("handle_statuses") or ()),
+                )
+        return None
 
     @staticmethod
     def _to_order_intent(plan_intent: ExecutionPlanIntent, *, plan: ExecutionPlan) -> OrderIntent:

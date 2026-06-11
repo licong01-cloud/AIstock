@@ -454,6 +454,33 @@ class LocalSimBackend(BrokerBackend):
         with self._lock:
             return dict(self._ledger.positions)
 
+    def export_execution_snapshot(self, *, handles: Iterable[OrderHandle] | None = None) -> dict[str, Any]:
+        """Export synchronous LocalSim side effects for durable adapter persistence."""
+
+        self._ensure_alive()
+        with self._lock:
+            if handles is None:
+                records = list(self._records.values())
+            else:
+                records = []
+                for handle in handles:
+                    record = self._records.get(handle.handle_id)
+                    if record is None:
+                        raise BrokerSubmitError(
+                            "unknown OrderHandle",
+                            context={"handle_id": handle.handle_id},
+                        )
+                    records.append(record)
+            return {
+                "orders": tuple(record.order for record in records),
+                "fills": tuple(fill for record in records for fill in record.fills),
+                "events": tuple(event for record in records for event in record.events),
+                "cash_entries": tuple(self._ledger.cash_entries),
+                "positions": dict(self._ledger.positions),
+                "account": self.query_account(),
+                "handle_statuses": tuple(record.status for record in records),
+            }
+
     def market_data_channel(self) -> MarketDataChannel:
         return MarketDataChannel(
             backend_id=self.backend_id,

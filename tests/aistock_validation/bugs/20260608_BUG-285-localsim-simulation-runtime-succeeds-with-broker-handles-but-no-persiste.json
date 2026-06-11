@@ -2,9 +2,18 @@
   "actual": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-08 reports both local_sim runs SUCCEEDED, broker_called=true, submitted_intents=40 and 8. DB read shows paper_v2.orders/fills/cash_ledger/positions counts are all 0 for paper_b26d2312d986441f8497f7484c05f0ec and paper_e225bf8a68244c54b4cc25506dadad81; run payload strategy_performance remains cash=500000 positions=[].",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260608_BUG-285-localsim-simulation-runtime-succeeds-with-broker-handles-but-no-persiste.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "tests/aistock_validation/history/paper_trading_v2/20260611_013028_l3_2026-06-11-pre-open-aistock-and-miniqmt-simulation-readiness.md"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "Codex",
   "bug_id": "BUG-285",
   "closed_at": null,
   "closure_requirements": [
@@ -20,16 +29,43 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260608-020a11f4cdf9",
       "timestamp": "2026-06-08T06:11:12.093251Z"
+    },
+    {
+      "action": "root_pollution_remediated",
+      "actor": "Codex",
+      "note": "Moved Codex-created 2026-06-11 pre-open validation evidence out of canonical root and into the BUG-285 worktree; canonical root verified clean.",
+      "timestamp": "2026-06-11T04:16:39.074712Z"
+    },
+    {
+      "action": "scope_expanded_for_fix",
+      "actor": "Codex",
+      "note": "Expanded BUG-285 allowed_write_scope to the LocalSim simulation runtime persistence path, ops evidence gate, targeted tests, and the moved validation evidence file.",
+      "timestamp": "2026-06-11T04:16:39.074712Z"
+    },
+    {
+      "action": "fix_implemented",
+      "actor": "Codex",
+      "note": "LocalSim broker handles now only reach INTRADAY_RUNNING until execution snapshot orders/fills/cash/positions are durably persisted into Paper v2 state; missing or empty persistence fails retryably instead of reporting SUCCEEDED.",
+      "timestamp": "2026-06-11T04:16:39.074712Z"
+    },
+    {
+      "action": "validation_completed",
+      "actor": "Codex",
+      "note": "Targeted simulation runtime tests, py_compile, validation_module_registry_l0, l0, and PAPER_V2_L3_SKIP_UI paper_v2_l3 passed; production runtime, backend/frontend restart, and DDL were not touched.",
+      "timestamp": "2026-06-11T04:16:39.074712Z"
     }
   ],
   "evidence_uris": [
-    "runtime-db://2026-06-08/local-sim-succeeded-submitted-40-8-but-zero-persisted-orders-fills-cash-positions"
+    "runtime-db://2026-06-08/local-sim-succeeded-submitted-40-8-but-zero-persisted-orders-fills-cash-positions",
+    "runtime-db://2026-06-11/local-sim-succeeded-submitted-41-8-but-zero-persisted-orders-fills-cash-positions",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260611_013028_l3_2026-06-11-pre-open-aistock-and-miniqmt-simulation-readiness.md",
+    "unit-test://BUG-285/local-sim-durable-persistence-required-before-success"
   ],
   "expected": "LocalSim simulation runtime must persist executed orders/fills/cash/positions or fail with actionable evidence; SUCCEEDED must not be reported when only transient broker handles exist and no durable portfolio state changes are recorded.",
   "first_seen_at": "2026-06-08T06:11:12.093256Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-285-localsim-simulation-runtime-succeeds-with-broker-20260608",
   "fix_commit": null,
-  "fixed_at": null,
+  "fixed_at": "2026-06-11T04:16:39.074712Z",
   "github_issue_number": 833,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/833",
   "last_seen_at": "2026-06-08T06:11:12.093256Z",
@@ -42,12 +78,17 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-08&limit=50; query paper_v2.orders/fills/cash_ledger/positions for the two local_sim portfolio IDs.",
   "required_verification": [
-    "l0"
+    "targeted_localsim_persistence_pytest",
+    "affected_simulation_runtime_pytest",
+    "py_compile_changed_localsim_paths",
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3_skip_ui"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -56,7 +97,7 @@
     "fingerprint": "020a11f4cdf913ef55233452",
     "source_event_id": "FE-20260608-020a11f4cdf9"
   },
-  "verification_run_id": null,
+  "verification_run_id": "BUG-285-20260611-localsim-durable-persistence",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
@@ -68,5 +109,14 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -p no:cacheprovider -> 36 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_ops_api.py -q -p no:cacheprovider -> 22 passed",
+    "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py -q -p no:cacheprovider -> 15 passed",
+    "python -m py_compile backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/bridges.py backend/services/paper_trading_v2/broker/localsim.py backend/services/simulation_runtime/lifecycle.py backend/services/simulation_runtime/ops.py -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership mapped=12 unmapped=0 ambiguous=0)",
+    "python -m nox -s l0 -> passed (guardrail blocking=0)",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed (l0, paper_v2_backend 613 passed 1 skipped 2 xfailed, paper_v2_data_quality PASS with legacy WARN, data_quality_deep 10 passed 21 skipped)"
+  ]
 }

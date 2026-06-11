@@ -282,6 +282,51 @@ class SimulationRuntimeOpsService:
                     "execution_plan_hash": run.execution_plan_hash,
                 },
             )
+        if expected_backend == SimulationBrokerBackend.LOCAL_SIM:
+            SimulationRuntimeOpsService._require_localsim_persisted_effects_for_live_evidence(run)
+
+    @staticmethod
+    def _require_localsim_persisted_effects_for_live_evidence(run: SimulationDailyRun) -> None:
+        payload = run.run_payload_json
+        broker_called = bool(payload.get("broker_called"))
+        submitted_intents = SimulationRuntimeOpsService._safe_int(payload.get("submitted_intents"))
+        planned_intents = SimulationRuntimeOpsService._safe_int(payload.get("execution_plan_intent_count"))
+        no_rebalance_required = bool(payload.get("no_rebalance_required"))
+        expected_order_count = max(submitted_intents, planned_intents)
+        if not broker_called and submitted_intents <= 0 and (planned_intents <= 0 or no_rebalance_required):
+            return
+        persistence = payload.get("local_sim_persistence")
+        if not isinstance(persistence, dict):
+            raise DataUnavailableError(
+                "live admission LocalSim evidence requires durable Paper v2 order/fill/cash/position persistence",
+                context={
+                    "run_id": run.run_id,
+                    "broker_called": broker_called,
+                    "submitted_intents": submitted_intents,
+                    "execution_plan_intent_count": planned_intents,
+                },
+            )
+        status = str(persistence.get("status") or "").upper()
+        order_count = SimulationRuntimeOpsService._safe_int(persistence.get("order_count"))
+        fill_count = SimulationRuntimeOpsService._safe_int(persistence.get("fill_count"))
+        cash_count = SimulationRuntimeOpsService._safe_int(persistence.get("cash_ledger_count"))
+        if status != "PERSISTED" or order_count < expected_order_count or fill_count <= 0 or cash_count <= 0:
+            raise DataUnavailableError(
+                "live admission LocalSim evidence has incomplete durable execution effects",
+                context={
+                    "run_id": run.run_id,
+                    "submitted_intents": submitted_intents,
+                    "execution_plan_intent_count": planned_intents,
+                    "local_sim_persistence": persistence,
+                },
+            )
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _live_evidence_for_run(run: SimulationDailyRun, *, validation_backend: str) -> dict[str, Any]:
@@ -306,6 +351,7 @@ class SimulationRuntimeOpsService:
             "execution_plan_id": run.execution_plan_id,
             "execution_plan_hash": run.execution_plan_hash,
             "strategy_performance": run.run_payload_json.get("strategy_performance"),
+            "local_sim_persistence": run.run_payload_json.get("local_sim_persistence"),
             "reconcile_after_submit": run.run_payload_json.get("reconcile_after_submit"),
         }
 
@@ -397,6 +443,7 @@ class SimulationRuntimeOpsService:
             "account_group_id": run.account_group_id or payload.get("account_group_id"),
             "strategy_slot_id": run.strategy_slot_id or payload.get("strategy_slot_id"),
             "sync_before_submit": payload.get("sync_before_submit"),
+            "local_sim_persistence": payload.get("local_sim_persistence"),
             "reconcile_after_submit": payload.get("reconcile_after_submit"),
             "tail_handling": payload.get("tail_handling"),
         }
@@ -430,14 +477,17 @@ class SimulationRuntimeOpsService:
     def _orders_projection(run: SimulationDailyRun, broker_context: dict[str, Any]) -> list[dict[str, Any]]:
         local_handles = broker_context.get("broker_order_handles")
         if isinstance(local_handles, list):
+            persistence = broker_context.get("local_sim_persistence")
+            persisted = isinstance(persistence, dict) and str(persistence.get("status") or "").upper() == "PERSISTED"
             return [
                 {
                     "source": "local_sim_handle",
                     "handle_id": item.get("handle_id"),
                     "intent_id": item.get("intent_id"),
                     "backend_id": item.get("backend_id"),
-                    "state": "submitted",
+                    "state": "persisted" if persisted else "submitted",
                     "submitted_at": item.get("submitted_at"),
+                    "paper_v2_run_id": persistence.get("paper_v2_run_id") if isinstance(persistence, dict) else None,
                 }
                 for item in local_handles
                 if isinstance(item, dict)
@@ -469,6 +519,19 @@ class SimulationRuntimeOpsService:
 
     @staticmethod
     def _fills_projection(run: SimulationDailyRun, broker_context: dict[str, Any]) -> list[dict[str, Any]]:
+        local_persistence = broker_context.get("local_sim_persistence")
+        if isinstance(local_persistence, dict):
+            return [
+                {
+                    "source": "local_sim_persistence_summary",
+                    "status": local_persistence.get("status"),
+                    "paper_v2_run_id": local_persistence.get("paper_v2_run_id"),
+                    "fill_count": local_persistence.get("fill_count"),
+                    "cash_ledger_count": local_persistence.get("cash_ledger_count"),
+                    "position_count": local_persistence.get("position_count"),
+                    "snapshot_time": local_persistence.get("snapshot_time"),
+                }
+            ]
         sync = broker_context.get("sync_before_submit")
         if not isinstance(sync, dict):
             return []

@@ -9,6 +9,8 @@ import pytest
 
 from backend.services.paper_trading_v2.models import PaperPortfolio
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
+from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
+from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.broker.base import OrderHandle
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
@@ -275,6 +277,57 @@ def _position_context(*, portfolio_id: str, local_broker=None) -> SimulationRunC
         },
         current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0},
         local_broker=local_broker,
+    )
+
+
+def _local_sim_execution_policy() -> dict[str, Any]:
+    return {
+        "policy_id": "exec_policy_twap",
+        "policy_sha256": "exec_policy_hash_twap",
+        "policy_json": {
+            "algo_code": "TWAP",
+            "algo_config": {
+                "allow_partial_fill": True,
+                "split_count": 1,
+            },
+        },
+    }
+
+
+def _local_sim_context_with_real_broker(
+    *,
+    portfolio_id: str,
+    release: Any,
+    cash: float = 100_000,
+    positions: dict[str, PositionLot] | None = None,
+    paper_repository: InMemoryPaperTradingV2Repository | None = None,
+) -> SimulationRunContext:
+    manifest = _score_weighted_manifest(release)
+    current_positions = dict(positions or {})
+    broker = LocalSimBackend(
+        portfolio_id=portfolio_id,
+        initial_cash=cash,
+        initial_available_cash=cash,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        manifest=manifest,
+        package_id=release.package_id,
+        market_data_provider=FakeLocalSimMarketDataProvider(),
+        execution_policy=_local_sim_execution_policy(),
+        initial_positions=current_positions,
+    )
+    return SimulationRunContext(
+        portfolio_id=portfolio_id,
+        current_positions=current_positions,
+        current_prices={
+            symbol: 10.0
+            for symbol in {"000001.SZ", "688001.SH", *current_positions}
+        },
+        top_k=1,
+        execution_policy_payload=_local_sim_execution_policy(),
+        local_broker=broker,
+        paper_repository=paper_repository,
+        cash=cash,
+        market_data_source=MinuteDataSource.DB_HISTORICAL.value,
     )
 
 
@@ -601,9 +654,15 @@ def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resub
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
     fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
-    broker = FakeLocalSimBroker()
+    paper_repo = InMemoryPaperTradingV2Repository()
     context_provider = CountingContextProvider(
-        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared", local_broker=broker)}
+        by_binding_id={
+            local_binding.binding_id: _local_sim_context_with_real_broker(
+                portfolio_id="portfolio_shared",
+                release=release,
+                paper_repository=paper_repo,
+            )
+        }
     )
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
@@ -619,7 +678,16 @@ def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resub
     )
     assert first.results[0].status == "SUBMITTED"
     assert first.results[0].run.run_payload_json["broker_called"] is True
-    broker.submitted.clear()
+    run_id = first.results[0].run.run_id
+    persisted_order_count = len(paper_repo.list_orders_for_run(run_id))
+    assert persisted_order_count == len(first.results[0].execution_plan.intents)
+    assert paper_repo.list_fills_for_run(run_id)
+    assert paper_repo.cash_entries[run_id]
+    payload = first.results[0].run.run_payload_json
+    assert payload["local_sim_persistence"]["status"] == "PERSISTED"
+    assert payload["local_sim_persistence"]["fill_count"] == len(paper_repo.list_fills_for_run(run_id))
+    assert payload["strategy_performance"]["cash"] < 100_000
+    assert payload["strategy_performance"]["positions"]
 
     restarted = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -631,7 +699,7 @@ def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resub
     assert restarted.reused_count == 1
     assert len(fake_selection.calls) == 1
     assert context_provider.calls == [local_binding.binding_id]
-    assert broker.submitted == []
+    assert len(paper_repo.list_orders_for_run(run_id)) == persisted_order_count
     assert restarted.results[0].execution_plan.plan_id == first.results[0].execution_plan.plan_id
 
 
@@ -640,7 +708,12 @@ def test_scheduler_submits_existing_local_plan_after_restart_when_broker_was_not
     assert local_binding is not None
     fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
     plan_only_context = StaticSimulationRunContextProvider(
-        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared")}
+        by_binding_id={
+            local_binding.binding_id: _local_sim_context_with_real_broker(
+                portfolio_id="portfolio_shared",
+                release=release,
+            )
+        }
     )
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
@@ -653,9 +726,15 @@ def test_scheduler_submits_existing_local_plan_after_restart_when_broker_was_not
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=False,
     )
-    broker = FakeLocalSimBroker()
+    paper_repo = InMemoryPaperTradingV2Repository()
     scheduler.context_provider = CountingContextProvider(
-        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared", local_broker=broker)}
+        by_binding_id={
+            local_binding.binding_id: _local_sim_context_with_real_broker(
+                portfolio_id="portfolio_shared",
+                release=release,
+                paper_repository=paper_repo,
+            )
+        }
     )
     restarted_context = scheduler.context_provider
 
@@ -670,9 +749,10 @@ def test_scheduler_submits_existing_local_plan_after_restart_when_broker_was_not
     assert restarted.results[0].status == "SUBMITTED"
     assert len(fake_selection.calls) == 1
     assert restarted_context.calls == [local_binding.binding_id]
-    assert [intent.intent_id for intent in broker.submitted] == [
-        intent.intent_id for intent in planned.results[0].execution_plan.intents
-    ]
+    run_id = restarted.results[0].run.run_id
+    assert len(paper_repo.list_orders_for_run(run_id)) == len(planned.results[0].execution_plan.intents)
+    assert paper_repo.list_fills_for_run(run_id)
+    assert paper_repo.cash_entries[run_id]
     assert restarted.results[0].run.run_payload_json["broker_called"] is True
     assert restarted.results[0].run.run_payload_json["broker_order_handles"][0]["backend_id"] == "local_sim"
 
@@ -685,7 +765,12 @@ def test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called() -
         repository=repo,
         selection_service=fake_selection,
         context_provider=StaticSimulationRunContextProvider(
-            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared")}
+            by_binding_id={
+                local_binding.binding_id: _local_sim_context_with_real_broker(
+                    portfolio_id="portfolio_shared",
+                    release=release,
+                )
+            }
         ),
     )
     planned = scheduler.run_once(
@@ -701,9 +786,15 @@ def test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called() -
     )
     assert interrupted.run_payload_json.get("broker_called") is None
 
-    broker = FakeLocalSimBroker()
+    paper_repo = InMemoryPaperTradingV2Repository()
     scheduler.context_provider = CountingContextProvider(
-        by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_shared", local_broker=broker)}
+        by_binding_id={
+            local_binding.binding_id: _local_sim_context_with_real_broker(
+                portfolio_id="portfolio_shared",
+                release=release,
+                paper_repository=paper_repo,
+            )
+        }
     )
     recovered = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -714,11 +805,48 @@ def test_scheduler_recovers_submitting_local_plan_when_broker_was_not_called() -
 
     assert recovered.results[0].status == "SUBMITTED"
     assert recovered.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
-    assert [intent.intent_id for intent in broker.submitted] == [
-        intent.intent_id for intent in planned.results[0].execution_plan.intents
-    ]
+    run_id = recovered.results[0].run.run_id
+    assert len(paper_repo.list_orders_for_run(run_id)) == len(planned.results[0].execution_plan.intents)
+    assert paper_repo.list_fills_for_run(run_id)
+    assert paper_repo.cash_entries[run_id]
     assert recovered.results[0].run.run_payload_json["broker_called"] is True
     assert recovered.results[0].run.run_payload_json["last_stage"] == "SUCCEEDED"
+
+
+def test_scheduler_fails_localsim_submit_without_durable_execution_snapshot() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(
+                    portfolio_id="portfolio_shared",
+                    local_broker=FakeLocalSimBroker(),
+                )
+            }
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+    runs = repo.list_simulation_daily_runs(
+        trade_date=TRADE_DATE,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        limit=10,
+    )
+
+    assert result.failed_count == 1
+    assert result.results[0].error["context"]["run_id"] == runs[0].run_id
+    assert runs[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert runs[0].run_payload_json["broker_called"] is True
+    assert "local_sim_persistence" not in runs[0].run_payload_json
+    assert runs[0].run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_PERSISTENCE_SNAPSHOT_MISSING"
 
 
 def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
@@ -1565,21 +1693,23 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
         strategy_id="strategy_local_scheduler_b",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
     )
-    broker_a = FakeLocalSimBroker()
-    broker_b = FakeLocalSimBroker()
+    paper_repo = InMemoryPaperTradingV2Repository()
     selection = FakeSelectionService(release, candidates=_candidate_rows())
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=selection,
         context_provider=StaticSimulationRunContextProvider(
             by_binding_id={
-                local_binding_a.binding_id: _position_context(
+                local_binding_a.binding_id: _local_sim_context_with_real_broker(
                     portfolio_id="portfolio_local_a",
-                    local_broker=broker_a,
+                    release=release,
+                    paper_repository=paper_repo,
                 ),
-                local_binding_b.binding_id: SimulationRunContext(
+                local_binding_b.binding_id: _local_sim_context_with_real_broker(
                     portfolio_id="portfolio_local_b",
-                    current_positions={
+                    release=release,
+                    paper_repository=paper_repo,
+                    positions={
                         "000001.SZ": PositionLot(
                             portfolio_id="portfolio_local_b",
                             symbol="000001.SZ",
@@ -1597,8 +1727,6 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
                             trade_date=date(2026, 5, 20),
                         ),
                     },
-                    current_prices={"000001.SZ": 10.0, "000004.SZ": 6.0},
-                    local_broker=broker_b,
                 ),
             }
         ),
@@ -1611,8 +1739,6 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
         submit=True,
     )
     submitted_by_strategy = {item.strategy_id: item for item in submitted.results}
-    broker_a.submitted.clear()
-    broker_b.submitted.clear()
     restarted = scheduler.run_once(
         trade_date=TRADE_DATE,
         data_source="DB_HISTORICAL",
@@ -1626,10 +1752,13 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
     assert len({item.execution_plan.plan_id for item in submitted_by_strategy.values()}) == 2
     assert submitted_by_strategy[local_binding_a.strategy_id].run.run_payload_json["strategy_performance"]["initial_capital"] == 100000.0
     assert submitted_by_strategy[local_binding_b.strategy_id].run.run_payload_json["strategy_performance"]["positions"][0]["symbol"] == "000001.SZ"
+    for item in submitted_by_strategy.values():
+        run_id = item.run.run_id
+        assert paper_repo.list_orders_for_run(run_id)
+        assert paper_repo.list_fills_for_run(run_id)
+        assert paper_repo.cash_entries[run_id]
     assert len(selection.calls) == 2
     assert restarted.reused_count == 2
-    assert broker_a.submitted == []
-    assert broker_b.submitted == []
 
 
 def test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile() -> None:
