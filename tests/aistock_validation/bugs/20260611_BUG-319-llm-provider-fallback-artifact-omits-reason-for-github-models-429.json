@@ -1,0 +1,74 @@
+{
+  "actual": "test-plan-advice --provider github_models --invoke-llm --output ... returns llm_invoked=false and writes only minimal public artifact, hiding github_models inference request failed status=429.",
+  "allowed_write_scope": [
+    "scripts/llm_provider_adapter.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "tests/aistock_validation/bugs/20260611_BUG-319-llm-provider-fallback-artifact-omits-reason-for-github-models-429.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-319",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T08:32:14.546987Z",
+  "description": "test-plan-advice --provider github_models --invoke-llm --output ... returns llm_invoked=false and writes only minimal public artifact, hiding github_models inference request failed status=429.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-09e2c426a21e",
+      "timestamp": "2026-06-11T08:32:14.546983Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "When live LLM invocation falls back, compact output and public artifact include safe provider/model plus llm_invocation_evidence reason and redacted error category/status, without secrets or full prompts/logs.",
+  "first_seen_at": "2026-06-11T08:32:14.546987Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 956,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/956",
+  "last_seen_at": "2026-06-11T08:32:14.546987Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/llm_provider_adapter.py test-plan-advice --provider github_models --changed-file scripts/llm_provider_adapter.py --module validation.runner --invoke-llm --output tmp/validation/code-intelligence/github-models-test-plan-fallback.json --json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "LLM provider fallback artifact omits reason for GitHub Models 429",
+  "trigger_condition": {
+    "fingerprint": "09e2c426a21eef3e20e2ef94",
+    "source_event_id": "FE-20260611-09e2c426a21e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
