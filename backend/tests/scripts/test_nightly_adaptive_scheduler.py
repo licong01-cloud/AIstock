@@ -90,6 +90,35 @@ def test_nightly_adaptive_scheduler_codegraph_missing_is_warning_only(tmp_path: 
     assert report["queue_summary"]["allowed_plan_keys"]
 
 
+def test_nightly_adaptive_scheduler_incomplete_codegraph_index_is_warning_only(tmp_path: Path) -> None:
+    artifact = tmp_path / "codegraph-freshness.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "freshness": "incomplete_index",
+                "index_file_coverage": {"missing_files": ["scripts/llm_provider_adapter.py"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    codegraph = scheduler.codegraph_freshness_from_artifact(artifact, None)
+    report = scheduler.build_report(
+        provider="deterministic",
+        config_path=scheduler.llm_provider_adapter.DEFAULT_CONFIG_PATH,
+        changed_files=["scripts/llm_provider_adapter.py"],
+        statuses={},
+        codegraph=codegraph,
+        resource_budget_seconds=900,
+    )
+
+    assert codegraph["freshness"] == "stale"
+    assert codegraph["raw_freshness"] == "incomplete_index"
+    assert report["workflow_gate"] == "warning"
+    assert report["queue_summary"]["allowed_plan_keys"]
+
+
 def test_nightly_adaptive_scheduler_compact_stdout(capsys, tmp_path: Path) -> None:
     output = tmp_path / "scheduler.json"
 

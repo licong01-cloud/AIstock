@@ -6190,8 +6190,13 @@ def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any],
     return result
 
 
-def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, Any]:
-    """Keep closed auto-filed issues from retaining the active status label."""
+def _sync_closed_issue_status_labels(
+    issue_number: int | str,
+    *,
+    required_label: str | None = None,
+    add_fixed: bool = True,
+) -> dict[str, Any]:
+    """Keep a closed issue from retaining active workflow labels."""
     try:
         view = _execute_checked(
             [
@@ -6215,22 +6220,26 @@ def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, A
         for item in payload.get("labels") or []
         if isinstance(item, dict)
     }
-    if str(payload.get("state") or "").upper() != "CLOSED" or "auto-filed" not in labels or "status:open" not in labels:
+    if str(payload.get("state") or "").upper() != "CLOSED":
         return {"ok": True, "skipped": True}
-    return _execute_checked(
-        [
-            "gh",
-            "issue",
-            "edit",
-            str(issue_number),
-            "--repo",
-            GITHUB_REPO,
-            "--remove-label",
-            "status:open",
-        ],
-        cwd=REPO_ROOT,
-        timeout=60,
-    )
+    if required_label and required_label not in labels:
+        return {"ok": True, "skipped": True}
+    remove_labels = [label for label in ("status:open", "status:in_progress") if label in labels]
+    add_labels = ["status:fixed"] if add_fixed and "status:fixed" not in labels else []
+    if not remove_labels and not add_labels:
+        return {"ok": True, "skipped": True}
+    args = ["gh", "issue", "edit", str(issue_number), "--repo", GITHUB_REPO]
+    for label in remove_labels:
+        args.extend(["--remove-label", label])
+    for label in add_labels:
+        args.extend(["--add-label", label])
+    result = _execute_checked(args, cwd=REPO_ROOT, timeout=60)
+    return {**result, "removed_labels": remove_labels, "added_labels": add_labels}
+
+
+def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, Any]:
+    """Keep closed auto-filed issues from retaining the active status label."""
+    return _sync_closed_issue_status_labels(issue_number, required_label="auto-filed", add_fixed=False)
 
 
 def build_ci_issue_janitor_plan(
@@ -7507,10 +7516,12 @@ def _sync_github_issue_after_close(
         timeout=60,
     )
     close = _run_command(["gh", "issue", "close", str(issue_number), "--repo", GITHUB_REPO], cwd=root, timeout=60)
+    label_sync = _sync_closed_issue_status_labels(issue_number)
     return {
-        "status": "synced" if comment.get("ok") and close.get("ok") else "warning",
+        "status": "synced" if comment.get("ok") and close.get("ok") and label_sync.get("ok") else "warning",
         "comment": comment,
         "close": close,
+        "label_sync": _pick(label_sync, "ok", "returncode", "skipped", "removed_labels", "added_labels"),
         "comment_path": _repo_rel(tmp_comment, root),
     }
 

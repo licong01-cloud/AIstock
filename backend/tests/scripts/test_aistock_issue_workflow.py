@@ -5583,6 +5583,35 @@ def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: py
     assert any(command[:3] == ["gh", "issue", "edit"] and "--remove-label" in command for command in commands)
 
 
+def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "state": "CLOSED",
+                        "labels": [{"name": "aistock:bug"}, {"name": "status:open"}],
+                    }
+                ),
+            }
+        if args[:3] == ["gh", "issue", "edit"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    result = workflow._sync_closed_issue_status_labels(931)
+
+    assert result["ok"] is True
+    edit = [command for command in commands if command[:3] == ["gh", "issue", "edit"]][0]
+    assert edit[edit.index("--remove-label") + 1] == "status:open"
+    assert edit[edit.index("--add-label") + 1] == "status:fixed"
+
+
 def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch: pytest.MonkeyPatch) -> None:
     edit_called = False
 
@@ -6227,6 +6256,7 @@ def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
     result = workflow._sync_github_issue_after_close(record, payload, root=isolated_workflow_root)
 
     assert result["status"] == "synced"
+    assert result["label_sync"]["ok"] is True
     comment_path = isolated_workflow_root / result["comment_path"]
     text = comment_path.read_text(encoding="utf-8")
     assert "close-sync persisted to the current registry worktree" in text

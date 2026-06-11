@@ -61,6 +61,83 @@ def test_github_model_catalog_fails_closed_without_r1():
         adapter.select_github_model(catalog, selector)
 
 
+def test_fetch_github_models_catalog_falls_back_to_gh_auth_token(monkeypatch):
+    config = adapter.load_config()
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+
+        class Result:
+            returncode = 0
+            stdout = "gh-token\n"
+            stderr = ""
+
+        return Result()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"models": [{"id": "deepseek/deepseek-r1", "publisher": "DeepSeek"}]}).encode("utf-8")
+
+    captured_headers: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout=20):
+        captured_headers.update(dict(request.header_items()))
+        return FakeResponse()
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(adapter.subprocess, "run", fake_run)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    payload = adapter.fetch_github_models_catalog(config)
+
+    assert payload["models"][0]["id"] == "deepseek/deepseek-r1"
+    assert calls == [["gh", "auth", "token"]]
+    assert captured_headers["Authorization"] == "Bearer gh-token"
+
+
+def test_fetch_github_models_catalog_uses_gh_token_env_before_cli(monkeypatch):
+    config = adapter.load_config()
+    called_cli = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called_cli
+        called_cli = True
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"models":[]}'
+
+    captured_headers: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout=20):
+        captured_headers.update(dict(request.header_items()))
+        return FakeResponse()
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "env-gh-token")
+    monkeypatch.setattr(adapter.subprocess, "run", fake_run)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    adapter.fetch_github_models_catalog(config)
+
+    assert captured_headers["Authorization"] == "Bearer env-gh-token"
+    assert called_cli is False
+
+
 def test_invalid_provider_json_fails_closed():
     with pytest.raises(adapter.ProviderAdapterError):
         adapter.parse_json_response("{not-json")

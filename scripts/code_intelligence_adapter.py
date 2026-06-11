@@ -19,6 +19,13 @@ DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.6"
 UNDERSTAND_ANYTHING_REPO = "Lum1104/Understand-Anything"
 CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
 DEFAULT_UA_MODULES = ["issue_workflow", "validation_center", "paper_v2", "research_assistant", "qe"]
+DEFAULT_CODEGRAPH_CRITICAL_FILES = [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/nightly.yml",
+]
 CODE_INTELLIGENCE_ARTIFACT_ROOTS = (
     Path("tmp") / "validation" / "code-intelligence",
     Path("tests") / "aistock_validation" / "history" / "code-intelligence",
@@ -276,6 +283,33 @@ def _codegraph_bootstrap_command() -> str:
     return f"{command} init -i"
 
 
+def _codegraph_reindex_command(graph_root: Path | str | None = None) -> str:
+    command = _codegraph_command() or "codegraph"
+    target = str(graph_root or REPO_ROOT)
+    return f"{command} index {target}"
+
+
+def _catalog_codegraph_critical_files(root: Path) -> list[str]:
+    catalog = _load_catalog(root)
+    config = catalog.get("codegraph") if isinstance(catalog.get("codegraph"), dict) else {}
+    raw = config.get("critical_files") or config.get("index_must_include") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if str(item).strip()]
+
+
+def _codegraph_critical_files(root: Path) -> list[str]:
+    candidates = _catalog_codegraph_critical_files(root) or DEFAULT_CODEGRAPH_CRITICAL_FILES
+    selected: list[str] = []
+    for item in candidates:
+        normalized = _norm_repo_path(item)
+        if not normalized or any(char in normalized for char in "*?["):
+            continue
+        if (root / normalized).is_file():
+            selected.append(normalized)
+    return sorted(set(selected))
+
+
 def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
     if not path.exists() or not path.is_file():
         return None
@@ -430,10 +464,10 @@ def latest_codegraph_freshness(
         effective_source = "live_status"
         notes.extend(effective.get("notes") or [])
     if latest is None:
-        if effective_source != "live_status":
+        if effective_source not in {"live_status", "live_status_critical_file_coverage"}:
             warnings.append("No CodeGraph freshness artifact found; use latest-freshness --refresh-if-stale or live doctor/status fallback.")
     elif latest.get("freshness") != "fresh":
-        if effective_source != "live_status":
+        if effective_source not in {"live_status", "live_status_critical_file_coverage"}:
             warnings.append(f"Latest CodeGraph freshness is {latest.get('freshness') or 'unknown'}.")
     current_git_commit = _git_snapshot(root).get("head")
     stale_metadata_warning = bool(
@@ -447,6 +481,21 @@ def latest_codegraph_freshness(
         warnings.append(
             "Latest CodeGraph freshness artifact commit differs from current HEAD, but effective freshness is fresh; use as warning-only usable graph metadata."
         )
+    file_coverage: dict[str, Any] | None = None
+    if live_status and (effective or {}).get("freshness") == "fresh":
+        file_coverage = _codegraph_index_file_coverage(root=root, status=live_status, skip_external=skip_external)
+        if file_coverage.get("workflow_gate") == "warning":
+            effective = {
+                **(effective or {}),
+                "freshness": "incomplete_index",
+                "freshness_basis": "critical_file_coverage",
+                "workflow_gate": "warning",
+                "index_file_coverage": file_coverage,
+            }
+            effective_source = f"{effective_source}_critical_file_coverage"
+            missing = ", ".join((file_coverage.get("missing_files") or [])[:5])
+            suffix = f": {missing}" if missing else ""
+            warnings.append(f"Effective CodeGraph index is missing critical workflow files{suffix}.")
     return {
         "schema_version": "aistock_codegraph_latest_freshness_v1",
         "generated_at": _utc_now(),
@@ -459,6 +508,7 @@ def latest_codegraph_freshness(
         "refreshed": refreshed,
         "current_git_commit": current_git_commit,
         "stale_metadata_warning": stale_metadata_warning,
+        "index_file_coverage": file_coverage,
         "warnings": warnings,
         "notes": notes,
     }
@@ -668,6 +718,78 @@ def _index_age(index_path: Path) -> dict[str, Any]:
     }
 
 
+def _codegraph_index_file_coverage(
+    *,
+    root: Path,
+    status: dict[str, Any],
+    skip_external: bool = False,
+) -> dict[str, Any]:
+    critical_files = _codegraph_critical_files(root)
+    graph_root = Path(str(status.get("graph_root") or root))
+    command = str(status.get("command") or _codegraph_command() or "")
+    base = {
+        "strategy": "codegraph_files_exact_path_probe",
+        "checked_files": critical_files,
+        "present_files": [],
+        "missing_files": [],
+        "errors": [],
+        "workflow_gate": "ready",
+        "reindex_command": _codegraph_reindex_command(graph_root),
+    }
+    if not critical_files:
+        return {**base, "skipped": True, "reason": "no_existing_critical_files"}
+    if skip_external:
+        return {**base, "skipped": True, "reason": "external_check_skipped", "workflow_gate": "warning"}
+    if not (status.get("available") and status.get("index_exists") and command):
+        return {**base, "skipped": True, "reason": "codegraph_unavailable_or_missing_index", "workflow_gate": "warning"}
+
+    present: list[str] = []
+    missing: list[str] = []
+    errors: list[dict[str, str]] = []
+    for repo_path in critical_files:
+        result = _run_command(
+            [
+                command,
+                "files",
+                "--path",
+                str(graph_root),
+                "--pattern",
+                repo_path,
+                "--format",
+                "flat",
+                "--json",
+            ],
+            cwd=root,
+            timeout=30,
+        )
+        if not result.get("ok"):
+            errors.append({"file": repo_path, "error": _compact_text(str(result.get("stderr") or result.get("stdout") or ""), max_chars=180)})
+            continue
+        try:
+            files_payload = json.loads(str(result.get("stdout") or "[]"))
+        except json.JSONDecodeError:
+            errors.append({"file": repo_path, "error": "codegraph files returned non-json output"})
+            continue
+        indexed_paths = {
+            _norm_repo_path(item.get("path") or item.get("file") or "")
+            for item in files_payload
+            if isinstance(item, dict)
+        }
+        if repo_path in indexed_paths:
+            present.append(repo_path)
+        else:
+            missing.append(repo_path)
+
+    return {
+        **base,
+        "skipped": False,
+        "present_files": sorted(present),
+        "missing_files": sorted(missing),
+        "errors": errors,
+        "workflow_gate": "warning" if missing or errors else "ready",
+    }
+
+
 def build_codegraph_freshness_artifact(
     *,
     root: Path | None = None,
@@ -724,6 +846,14 @@ def build_codegraph_freshness_artifact(
             freshness = "stale"
             freshness_basis = "mtime"
             warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
+    file_coverage = _codegraph_index_file_coverage(root=root, status=status, skip_external=skip_external)
+    if file_coverage.get("missing_files") or file_coverage.get("errors"):
+        if freshness == "fresh":
+            freshness = "incomplete_index"
+            freshness_basis = "critical_file_coverage"
+        missing = ", ".join((file_coverage.get("missing_files") or [])[:5])
+        suffix = f": {missing}" if missing else ""
+        warnings.append(f"CodeGraph index is missing critical workflow files{suffix}; run {file_coverage.get('reindex_command')}.")
     payload = {
         "schema_version": "aistock_codegraph_freshness_v1",
         "generated_at": _utc_now(),
@@ -739,6 +869,7 @@ def build_codegraph_freshness_artifact(
         "working_tree_dirty": status.get("working_tree_dirty"),
         "max_age_hours": max_age_hours,
         "index_age": age,
+        "index_file_coverage": file_coverage,
         "index_summary": status.get("index_summary"),
         "version": status.get("version") or status.get("expected_version"),
         "status": status.get("status"),
@@ -756,6 +887,7 @@ def build_codegraph_freshness_artifact(
 def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
     age = payload.get("index_age") or {}
     summary = payload.get("index_summary") or {}
+    coverage = payload.get("index_file_coverage") or {}
     lines = [
         "## CodeGraph Freshness",
         "",
@@ -768,6 +900,7 @@ def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
         f"- index_modified_at: `{age.get('modified_at') or 'missing'}`",
         f"- index_age_seconds: `{age.get('age_seconds') if age.get('age_seconds') is not None else 'unknown'}`",
         f"- files/nodes/edges: `{summary.get('files', 'unknown')}` / `{summary.get('nodes', 'unknown')}` / `{summary.get('edges', 'unknown')}`",
+        f"- critical_file_coverage: `{len(coverage.get('present_files') or [])}` / `{len(coverage.get('checked_files') or [])}`",
         "",
         "This artifact is warning-only and does not replace nox, pytest, Validation Center, or production gates.",
     ]
@@ -1382,7 +1515,10 @@ def build_context_artifacts(
 
 
 def _norm_repo_path(path: str | Path) -> str:
-    return str(path).replace("\\", "/").lstrip("./")
+    normalized = str(path).replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def _read_text_if_exists(path: Path) -> str:
@@ -1443,10 +1579,28 @@ def _discover_repo_test_fallbacks(
         hits = sorted(module for module in modules if module in text)
         if hits:
             discovered[test_path] = hits
+    direct_matches: dict[str, list[str]] = {}
+    for changed in changed_files:
+        normalized = _norm_repo_path(changed)
+        if not (normalized.startswith("scripts/") and normalized.endswith(".py")):
+            continue
+        stem = Path(normalized).stem
+        for candidate in (
+            f"backend/tests/scripts/test_{stem}.py",
+            f"tests/scripts/test_{stem}.py",
+            f"tests/test_{stem}.py",
+        ):
+            if filter_glob and not fnmatch.fnmatch(candidate, filter_glob):
+                continue
+            if candidate in discovered or not (root / candidate).is_file():
+                continue
+            direct_matches.setdefault(candidate, []).append(f"direct:{normalized}")
+            discovered[candidate] = direct_matches[candidate]
     return sorted(discovered), {
-        "strategy": "python_import_text_scan",
+        "strategy": "python_import_text_scan_plus_direct_script_test_map",
         "modules": sorted(modules),
         "matched_tests": discovered,
+        "direct_matches": direct_matches,
         "enabled": bool(modules),
     }
 
