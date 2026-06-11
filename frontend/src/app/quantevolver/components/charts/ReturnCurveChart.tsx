@@ -1,9 +1,36 @@
 "use client";
 
 import React, { useMemo } from "react";
-import dynamic from "next/dynamic";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false }) as any;
+type PlotlyComponent = React.ComponentType<any>;
+
+function PlotlyChart(props: any) {
+  const [Plot, setPlot] = React.useState<PlotlyComponent | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    import("react-plotly.js")
+      .then((module) => {
+        if (!cancelled) setPlot(() => module.default as PlotlyComponent);
+      })
+      .catch((error) => console.error("Failed to load Plotly chart", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!Plot) {
+    const placeholderHeight = props?.style?.height ?? props?.layout?.height ?? 260;
+    return (
+      <div style={{ height: placeholderHeight, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
+        Loading chart...
+      </div>
+    );
+  }
+
+  return <Plot {...props} />;
+}
+
 
 const plotStyle = { width: "100%" };
 const CONFIG = { responsive: true, displayModeBar: false } as const;
@@ -226,8 +253,8 @@ export default React.memo(function ReturnCurveChart({
       <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4, fontFamily: "monospace" }}>
         {dateRangeText}
       </div>
-      <Plot data={returnTraces} layout={returnLayout} config={CONFIG} style={plotStyle} />
-      {ddTraces.length > 0 && <Plot data={ddTraces} layout={ddLayout} config={CONFIG} style={plotStyle} />}
+      <PlotlyChart data={returnTraces} layout={returnLayout} config={CONFIG} style={plotStyle} />
+      {ddTraces.length > 0 && <PlotlyChart data={ddTraces} layout={ddLayout} config={CONFIG} style={plotStyle} />}
     </div>
   );
 });
