@@ -1,0 +1,88 @@
+{
+  "actual": "python scripts/code_intelligence_adapter.py verify-clients reports workflow_gate=warning, stale_metadata_warning=true, latest_git_commit differs from HEAD, and Understand Anything freshness=base_current stale_but_usable=true.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/20260611_BUG-316-codegraph-understand-anything-freshness-artifact-drift-keeps-issue-workf.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_code_intelligence_adapter.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-316",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Verify CodeGraph stale-fresh artifacts are refreshed to the current HEAD when live status is fresh.",
+    "Verify Understand Anything base_current remains actionable without making client verification warning-only."
+  ],
+  "created_at": "2026-06-11T07:09:11.302556Z",
+  "description": "python scripts/code_intelligence_adapter.py verify-clients reports workflow_gate=warning, stale_metadata_warning=true, latest_git_commit differs from HEAD, and Understand Anything freshness=base_current stale_but_usable=true.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-835108f2e0e4",
+      "timestamp": "2026-06-11T07:09:11.302554Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "verify-clients should persist or resolve CodeGraph freshness against current HEAD after successful graph verification, expose compact status-only output, and keep UA freshness actionable: fresh when refreshed or a precise non-blocking refresh-needed status without stale artifact drift.",
+  "first_seen_at": "2026-06-11T07:09:11.302556Z",
+  "fix_branch": null,
+  "fix_commit": "ad0027d647980ec6680b476aafd17b91fb6bdf84",
+  "fixed_at": "2026-06-11T07:31:58.024977Z",
+  "github_issue_number": 946,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/946",
+  "last_seen_at": "2026-06-11T07:09:11.302556Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/947",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts\\code_intelligence_adapter.py verify-clients",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CodeGraph/Understand Anything freshness artifact drift keeps issue workflow in warning state",
+  "trigger_condition": {
+    "fingerprint": "835108f2e0e473488ffebaf7",
+    "source_event_id": "FE-20260611-835108f2e0e4"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -p no:cacheprovider -> 37 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-316 --module validation -> workflow_gate=ready",
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_center_backend -> 420 passed",
+    "PR CI #947 -> 12 passed 0 failed 0 pending"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

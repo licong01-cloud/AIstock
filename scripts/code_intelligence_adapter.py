@@ -94,6 +94,33 @@ def _emit(payload: dict[str, Any], output: str | None = None) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
+def _compact_token(value: Any, *, limit: int = 180) -> str:
+    text = str(value if value is not None else "unknown").strip()
+    text = re.sub(r"\s+", "_", text)
+    if len(text) > limit:
+        return text[: limit - 3] + "..."
+    return text or "unknown"
+
+
+def _emit_compact_line(
+    prefix: str,
+    fields: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    output: str | None = None,
+    output_format: str = "compact",
+) -> None:
+    if output and output != "-":
+        _write_json(Path(output), payload)
+    if output == "-" or output_format == "full-json":
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+        return
+    gate = str(fields.get("workflow_gate") or fields.get("status") or "unknown").lower()
+    marker = "PASS" if gate in {"ready", "ok", "configured"} else "WARN"
+    body = " ".join(f"{key}={_compact_token(value)}" for key, value in fields.items() if value is not None)
+    sys.stdout.write(f"{marker} {prefix} {body}\n")
+
+
 def _repo_rel(path: Path, root: Path | None = None) -> str:
     root = root or REPO_ROOT
     try:
@@ -432,11 +459,60 @@ def _live_codegraph_freshness_payload(status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _persist_effective_codegraph_freshness(
+    root: Path,
+    effective: dict[str, Any],
+    *,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Persist compact effective freshness so clients do not inherit stale metadata."""
+    target_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / "latest"
+    json_path = target_dir / "codegraph-freshness.json"
+    md_path = target_dir / "codegraph-freshness.md"
+    payload = dict(effective)
+    payload.update(
+        {
+            "schema_version": "aistock_codegraph_freshness_v1",
+            "artifact_type": "codegraph_freshness",
+            "provider": payload.get("provider") or "codegraph",
+            "artifact_path": _repo_rel(json_path, root),
+            "summary_ref": _repo_rel(md_path, root),
+            "persisted_from": payload.get("artifact_type") or "effective_freshness",
+            "persisted_at": _utc_now(),
+        }
+    )
+    payload.setdefault("generated_at", _utc_now())
+    payload.setdefault("workflow_gate", "ready" if payload.get("freshness") == "fresh" else "warning")
+    payload.setdefault("blocking_for_issue_workflow", False)
+    _write_json(json_path, payload)
+    _write_text(md_path, render_codegraph_freshness_markdown(payload))
+    return {
+        "schema_version": payload.get("schema_version"),
+        "artifact_type": "codegraph_freshness",
+        "provider": payload.get("provider") or "codegraph",
+        "workflow_gate": payload.get("workflow_gate"),
+        "freshness": payload.get("freshness"),
+        "freshness_basis": payload.get("freshness_basis"),
+        "status": payload.get("status"),
+        "generated_at": payload.get("generated_at"),
+        "git_commit": payload.get("git_commit"),
+        "graph_root": payload.get("graph_root"),
+        "graph_root_source": payload.get("graph_root_source"),
+        "artifact_path": _repo_rel(json_path, root),
+        "summary_ref": _repo_rel(md_path, root),
+        "index_summary": payload.get("index_summary") or {},
+        "warnings": payload.get("warnings") or [],
+        "notes": payload.get("notes") or [],
+        "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
+    }
+
+
 def latest_codegraph_freshness(
     root: Path | None = None,
     *,
     live_status: dict[str, Any] | None = None,
     refresh_if_stale: bool = False,
+    persist_effective: bool = False,
     output_dir: Path | None = None,
     max_age_hours: float = 36.0,
     skip_external: bool = False,
@@ -470,13 +546,42 @@ def latest_codegraph_freshness(
         if effective_source not in {"live_status", "live_status_critical_file_coverage"}:
             warnings.append(f"Latest CodeGraph freshness is {latest.get('freshness') or 'unknown'}.")
     current_git_commit = _git_snapshot(root).get("head")
+    if (
+        latest
+        and latest.get("git_commit")
+        and current_git_commit
+        and str(latest.get("git_commit")) != str(current_git_commit)
+        and latest.get("freshness") == "fresh"
+        and _codegraph_live_status_is_fresh(live_status)
+        and str((live_status or {}).get("git_commit") or "") == str(current_git_commit)
+    ):
+        effective = _live_codegraph_freshness_payload(live_status or {})
+        effective_source = "live_status_current_head"
+        notes.extend(effective.get("notes") or [])
     stale_metadata_warning = bool(
         latest
         and latest.get("git_commit")
         and current_git_commit
         and str(latest.get("git_commit")) != str(current_git_commit)
         and (effective or {}).get("freshness") == "fresh"
+        and str((effective or {}).get("git_commit") or latest.get("git_commit")) != str(current_git_commit)
     )
+    needs_effective_persist = bool(
+        persist_effective
+        and latest
+        and latest.get("git_commit")
+        and current_git_commit
+        and str(latest.get("git_commit")) != str(current_git_commit)
+        and effective
+        and (effective or {}).get("freshness") == "fresh"
+        and str((effective or {}).get("git_commit") or "") == str(current_git_commit)
+    )
+    if needs_effective_persist:
+        latest = _persist_effective_codegraph_freshness(root, effective, output_dir=output_dir)
+        effective = latest
+        effective_source = "persisted_effective_artifact"
+        refreshed = True
+        stale_metadata_warning = False
     if stale_metadata_warning:
         warnings.append(
             "Latest CodeGraph freshness artifact commit differs from current HEAD, but effective freshness is fresh; use as warning-only usable graph metadata."
@@ -1253,8 +1358,9 @@ def build_understand_anything_summary_manifest(
         "blocking_for_issue_workflow": False,
         "approval_required_for_long_term_memory": True,
     }
-    _write_json(output_dir / "ua-summary-manifest.json", payload)
-    return payload
+    manifest_path = output_dir / "ua-summary-manifest.json"
+    _write_json(manifest_path, payload)
+    return {**payload, "artifact_path": _repo_rel(manifest_path, root)}
 
 
 def render_understand_anything_summary_markdown(payload: dict[str, Any]) -> str:
@@ -1811,7 +1917,12 @@ def build_client_verification(
     output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / item_id
     output_dir.mkdir(parents=True, exist_ok=True)
     status = codegraph_status(root, skip_external=skip_external)
-    freshness = latest_codegraph_freshness(root, live_status=status)
+    freshness = latest_codegraph_freshness(
+        root,
+        live_status=status,
+        persist_effective=True,
+        output_dir=root / "tmp" / "validation" / "code-intelligence" / "latest",
+    )
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
@@ -1885,7 +1996,7 @@ def build_client_verification(
         )
     context_quality = context.get("context_quality") if isinstance(context.get("context_quality"), dict) else {}
     warnings.extend(str(item) for item in context_quality.get("warnings") or [])
-    if ua.get("freshness") in {"base_current", "stale"}:
+    if ua.get("freshness") == "stale":
         warnings.append(
             f"Understand Anything graph freshness is {ua.get('freshness')}; use as warning-only base context."
         )
@@ -2153,7 +2264,21 @@ def cmd_ua_summary(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_nodes=args.max_nodes,
     )
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "ua-summary",
+        {
+            "status": payload.get("status"),
+            "module": payload.get("module"),
+            "freshness": payload.get("freshness"),
+            "nodes_used": payload.get("nodes_used", 0),
+            "edges_used": payload.get("edges_used", 0),
+            "summary_ref": payload.get("summary_ref"),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2164,7 +2289,21 @@ def cmd_ua_summary_all(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_nodes=args.max_nodes,
     )
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "ua-summary-all",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "modules": len(payload.get("modules") or []),
+            "fresh": payload.get("fresh_summary_count", 0),
+            "base_current": payload.get("base_current_summary_count", 0),
+            "stale": payload.get("stale_summary_count", 0),
+            "missing": payload.get("missing_summary_count", 0),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2285,6 +2424,12 @@ def build_parser() -> argparse.ArgumentParser:
     ua_summary.add_argument("--output-dir")
     ua_summary.add_argument("--max-nodes", type=int)
     ua_summary.add_argument("--output")
+    ua_summary.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints status and artifact refs only; full-json emits the complete payload.",
+    )
     ua_summary.set_defaults(func=cmd_ua_summary)
 
     ua_summary_all = sub.add_parser("ua-summary-all", help="Build read-only Understand Anything summaries for standard AIstock modules.")
@@ -2293,6 +2438,12 @@ def build_parser() -> argparse.ArgumentParser:
     ua_summary_all.add_argument("--output-dir")
     ua_summary_all.add_argument("--max-nodes", type=int)
     ua_summary_all.add_argument("--output")
+    ua_summary_all.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints counts and artifact refs only; full-json emits the complete manifest.",
+    )
     ua_summary_all.set_defaults(func=cmd_ua_summary_all)
 
     ua_configure = sub.add_parser(

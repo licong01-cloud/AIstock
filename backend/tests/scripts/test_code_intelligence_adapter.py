@@ -850,6 +850,87 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
     assert "Understand Anything Summary" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
 
 
+def test_ua_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": "validation.workflow", "label": "validation workflow"},
+                    {"id": "validation.runner", "label": "validation runner"},
+                ],
+                "edges": [{"source": "validation.workflow", "target": "validation.runner", "type": "calls"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS ua-summary ")
+    assert "summary_ref=" in stdout
+    assert "artifact_path=" in stdout
+    assert "selected_nodes" not in stdout
+    assert "selected_edges" not in stdout
+
+
+def test_ua_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps({"nodes": [{"id": "validation.workflow", "label": "validation workflow"}], "edges": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path), "--output-format", "full-json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["schema_version"] == "aistock_understand_anything_summary_v1"
+    assert payload["selected_nodes"][0]["id"] == "validation.workflow"
+
+
+def test_ua_summary_all_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "build_understand_anything_summary",
+        lambda **kwargs: {
+            "module": kwargs["module"],
+            "status": "ok",
+            "freshness": "fresh",
+            "summary_ref": f"tmp/validation/code-intelligence/ua-{kwargs['module']}-summary.md",
+            "artifact_path": f"tmp/validation/code-intelligence/ua-{kwargs['module']}-summary.json",
+        },
+    )
+
+    result = adapter.main(["ua-summary-all", "--module", "validation", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS ua-summary-all ")
+    assert "modules=1" in stdout
+    assert "artifact_path=" in stdout
+    assert "summary_refs" not in stdout
+
+
 def test_understand_anything_summary_marks_ancestor_graph_as_base_current(tmp_path: Path, monkeypatch) -> None:
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
@@ -1061,6 +1142,54 @@ def test_latest_freshness_marks_stale_metadata_warning_without_blocking(tmp_path
     assert any("differs from current HEAD" in item for item in payload["warnings"])
 
 
+def test_latest_freshness_can_persist_effective_fresh_artifact(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "fresh.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "old123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
+                "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+    live_status = {
+        "available": True,
+        "index_exists": True,
+        "status": "ok",
+        "status_check": {"ok": True},
+        "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        "git_commit": "new456",
+        "graph_root": str(tmp_path),
+        "graph_root_source": "current_worktree",
+    }
+
+    payload = adapter.latest_codegraph_freshness(
+        tmp_path,
+        live_status=live_status,
+        persist_effective=True,
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["refreshed"] is True
+    assert payload["effective_source"] == "persisted_effective_artifact"
+    assert payload["stale_metadata_warning"] is False
+    assert payload["latest"]["git_commit"] == "new456"
+    assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json").exists()
+
+
 def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "home"
     codex_skill = home / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md"
@@ -1153,12 +1282,14 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
 
     assert payload["schema_version"] == "aistock_code_intelligence_client_verification_v1"
     assert payload["workflow_gate"] == "warning"
-    assert payload["freshness"]["stale_metadata_warning"] is True
+    assert payload["freshness"]["stale_metadata_warning"] is False
+    assert payload["freshness"]["effective_source"] == "persisted_effective_artifact"
     assert payload["context"]["noisy_context_warning"] is True
     assert payload["context"]["broad_scan_required"] is False
     assert payload["clients"]["codex_issue_skill"]["status"] == "ready"
     assert payload["clients"]["claude_issue_command"]["status"] == "ready"
     assert payload["understand_anything"]["stale_but_usable"] is True
+    assert not any("Understand Anything graph freshness is base_current" in item for item in payload["warnings"])
     assert payload["efficiency"]["large_graph_payload_inlined"] is False
     assert "selected_nodes" not in json.dumps(payload["understand_anything"])
     assert "Code Intelligence Client Verification" in markdown
