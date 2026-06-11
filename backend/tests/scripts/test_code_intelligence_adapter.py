@@ -97,6 +97,31 @@ def test_verify_clients_command_defaults_to_compact_stdout(tmp_path: Path, monke
     assert "selected_nodes" not in stdout
 
 
+def test_doctor_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok", "index_exists": True},
+            "codegraph_freshness": {"effective": {"freshness": "fresh"}},
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(["doctor", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS code-intelligence-doctor ")
+    assert "codegraph=ok" in stdout
+    assert "effective=fresh" in stdout
+    assert "selected_nodes" not in stdout
+
+
 def test_readiness_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         adapter,
@@ -114,6 +139,28 @@ def test_readiness_command_full_json_is_explicit(tmp_path: Path, monkeypatch, ca
     )
 
     result = adapter.main(["latest-freshness", "--root", str(tmp_path), "--output-format", "full-json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["selected_nodes"][0]["id"] == "explicit-json"
+
+
+def test_doctor_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok", "index_exists": True},
+            "codegraph_freshness": {"effective": {"freshness": "fresh"}},
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "selected_nodes": [{"id": "explicit-json"}],
+        },
+    )
+
+    result = adapter.main(["doctor", "--root", str(tmp_path), "--output-format", "full-json"])
     payload = json.loads(capsys.readouterr().out)
 
     assert result == 0

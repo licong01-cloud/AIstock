@@ -2301,7 +2301,27 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    _emit(build_doctor_report(Path(args.root) if args.root else REPO_ROOT, skip_external=args.skip_external), args.output)
+    payload = build_doctor_report(Path(args.root) if args.root else REPO_ROOT, skip_external=args.skip_external)
+    codegraph = payload.get("codegraph") if isinstance(payload.get("codegraph"), dict) else {}
+    freshness = payload.get("codegraph_freshness") if isinstance(payload.get("codegraph_freshness"), dict) else {}
+    effective = freshness.get("effective") if isinstance(freshness.get("effective"), dict) else {}
+    ua = payload.get("understand_anything") if isinstance(payload.get("understand_anything"), dict) else {}
+    _emit_compact_line(
+        "code-intelligence-doctor",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "codegraph": codegraph.get("status"),
+            "index": str(bool(codegraph.get("index_exists"))).lower(),
+            "effective": effective.get("freshness"),
+            "ua": ua.get("status"),
+            "ua_freshness": ua.get("freshness"),
+            "warnings": len(payload.get("warnings") or []),
+            "blocking": len(payload.get("blocking") or []),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2529,6 +2549,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--root")
     doctor.add_argument("--skip-external", action="store_true")
     doctor.add_argument("--output")
+    doctor.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints readiness status only; full-json emits the complete payload.",
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     freshness = sub.add_parser("freshness", help="Build a warning-only CodeGraph freshness artifact.")
