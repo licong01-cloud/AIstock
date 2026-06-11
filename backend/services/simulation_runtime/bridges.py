@@ -34,6 +34,8 @@ from .models import ExecutionPlan, ExecutionPlanIntent, MiniQMTUnsupportedExecut
 
 
 MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
+MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_RATIO = Decimal("0.02")
+MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_AMOUNT = Decimal("10000")
 
 
 @dataclass(frozen=True)
@@ -377,6 +379,14 @@ class MiniQMTExecutionBridge:
                     "reason": child_metadata.get("vnpy_reason"),
                 },
             }
+            if child.side == OrderSide.BUY:
+                metadata.update(
+                    {
+                        "miniqmt_cash_preflight_shrink_enabled": True,
+                        "miniqmt_cash_shrink_max_overshoot_ratio": str(MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_RATIO),
+                        "miniqmt_cash_shrink_max_overshoot": str(MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_AMOUNT),
+                    }
+                )
             return ManagedOrderRequest(
                 account_id=account_id,
                 strategy_name=strategy_name,

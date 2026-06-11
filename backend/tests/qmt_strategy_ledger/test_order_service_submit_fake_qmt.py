@@ -205,6 +205,94 @@ def test_submit_batch_aggregates_cash_before_broker_call() -> None:
     assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
 
 
+def test_submit_batch_shrinks_opted_in_near_cash_overshoot_before_broker_call() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("447106.86")))
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002, 1082167003, 1082167004])
+    requests = [
+        replace(
+            _buy_request("remark_shrink_a", quantity=13000),
+            symbol="000001.SZ",
+            price=Decimal("4.043076923"),
+        ),
+        replace(
+            _buy_request("remark_shrink_b", quantity=12800),
+            symbol="000002.SZ",
+            price=Decimal("4.5875"),
+        ),
+        replace(
+            _buy_request("remark_shrink_c", quantity=12600),
+            symbol="000004.SZ",
+            price=Decimal("4.692380952"),
+        ),
+        replace(
+            _buy_request("remark_shrink_d", quantity=20000),
+            symbol="000005.SZ",
+            price=Decimal("14.00638462"),
+        ),
+    ]
+    requests = [
+        replace(
+            request,
+            metadata={
+                "miniqmt_cash_preflight_shrink_enabled": True,
+                "miniqmt_cash_shrink_max_overshoot_ratio": "0.02",
+                "miniqmt_cash_shrink_max_overshoot": "10000",
+            },
+        )
+        for request in requests
+    ]
+
+    result = _service(repo, broker).submit_batch(requests)
+
+    assert result.success is True
+    assert result.batch_status == OrderBatchStatus.SUCCEEDED.value
+    assert len(broker.place_order_payloads) == 4
+    assert sum(Decimal(str(payload["price"])) * Decimal(payload["order_volume"]) for payload in broker.place_order_payloads) <= Decimal(
+        "447106.86"
+    )
+    assert any(payload["order_volume"] < 20000 for payload in broker.place_order_payloads)
+    intent = repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_shrink_d")
+    assert intent is not None
+    assert intent.metadata["miniqmt_cash_preflight_shrunk"] is True
+    assert intent.metadata["miniqmt_cash_preflight_original_quantity"] == 20000
+    assert intent.metadata["miniqmt_cash_preflight_adjusted_quantity"] < 20000
+    assert intent.metadata["miniqmt_cash_preflight_shrink_reason"] == "near_cash_overshoot_within_configured_safety_buffer"
+
+
+def test_submit_batch_does_not_shrink_material_cash_shortfall() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("10000")))
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+    requests = [
+        replace(
+            _buy_request("remark_material_short_a"),
+            metadata={
+                "miniqmt_cash_preflight_shrink_enabled": True,
+                "miniqmt_cash_shrink_max_overshoot_ratio": "0.02",
+                "miniqmt_cash_shrink_max_overshoot": "10000",
+            },
+        ),
+        replace(
+            _buy_request("remark_material_short_b"),
+            metadata={
+                "miniqmt_cash_preflight_shrink_enabled": True,
+                "miniqmt_cash_shrink_max_overshoot_ratio": "0.02",
+                "miniqmt_cash_shrink_max_overshoot": "10000",
+            },
+        ),
+    ]
+
+    result = _service(repo, broker).submit_batch(requests)
+
+    assert result.success is False
+    assert result.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
+    assert broker.place_order_payloads == []
+    assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
+
+
 def test_submit_batch_uses_available_cash_for_independent_buys_before_dependent_buy() -> None:
     repo = _repo()
     account = repo.get_virtual_account("strat_a")
