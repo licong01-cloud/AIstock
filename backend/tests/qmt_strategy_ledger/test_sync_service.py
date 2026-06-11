@@ -254,6 +254,142 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
     assert repo.get_virtual_account("strat_a") == account
 
 
+def test_sync_service_skips_stale_previous_day_broker_orders_and_trades() -> None:
+    repo = _repo_with_strategy()
+    _apply_buy_freeze(repo, amount=Decimal("10250"))
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_stale",
+                "order_sysid": "sys_stale",
+                "stock_code": "300604.SZ",
+                "order_time": "1779028200",
+                "order_time_iso": "2026-05-18T09:10:00+08:00",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10.25,
+                "traded_volume": 1000,
+                "traded_price": 10.25,
+                "order_status": 56,
+                "status_msg": "filled",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_stale",
+                "stock_code": "300604.SZ",
+                "order_type": BUY_ORDER_TYPE,
+                "traded_time": "101530",
+                "traded_price": 10.25,
+                "traded_volume": 1000,
+                "traded_amount": 10250,
+                "order_id": "order_stale",
+                "order_sysid": "sys_stale",
+                "commission": 5,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_seen == 1
+    assert summary.trades_seen == 1
+    assert summary.orders_upserted == 0
+    assert summary.trades_inserted == 0
+    assert summary.unattributed_orders == 0
+    assert summary.unattributed_trades == 0
+    assert summary.cash_entries_appended == 0
+    assert summary.lots_created == 0
+    assert summary.stale_orders_skipped == 1
+    assert summary.stale_trades_skipped == 1
+    assert summary.stale_broker_snapshot is True
+    assert {item["reason"] for item in summary.stale_broker_payload_samples} == {
+        "BROKER_ORDER_DATE_MISMATCH",
+        "BROKER_TRADE_LINKED_TO_STALE_ORDER",
+    }
+    assert repo._order_ledgers == {}
+    assert repo._trade_ledgers == {}
+    assert repo.list_unattributed_orders(account_id=ACCOUNT_ID, trade_date=NEXT_TRADE_DATE) == []
+    assert repo.list_unattributed_trades(account_id=ACCOUNT_ID, trade_date=NEXT_TRADE_DATE) == []
+    assert repo.list_position_lots("strat_a", symbol="300604.SZ") == []
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("10250.000000")
+
+
+def test_sync_service_skips_trade_with_explicit_mismatched_broker_trade_date() -> None:
+    repo = _repo_with_strategy()
+    _apply_buy_freeze(repo, amount=Decimal("10250"))
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_current",
+                "order_sysid": "sys_current",
+                "stock_code": "300604.SZ",
+                "order_time_iso": "2026-05-19T09:10:00+08:00",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10.25,
+                "traded_volume": 1000,
+                "traded_price": 10.25,
+                "order_status": 56,
+                "status_msg": "filled",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_stale_date",
+                "stock_code": "300604.SZ",
+                "order_type": BUY_ORDER_TYPE,
+                "trade_date": "2026-05-18",
+                "traded_time": "101530",
+                "traded_price": 10.25,
+                "traded_volume": 1000,
+                "traded_amount": 10250,
+                "order_id": "order_current",
+                "order_sysid": "sys_current",
+                "commission": 5,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_seen == 1
+    assert summary.trades_seen == 1
+    assert summary.orders_upserted == 1
+    assert summary.trades_inserted == 0
+    assert summary.stale_orders_skipped == 0
+    assert summary.stale_trades_skipped == 1
+    assert summary.stale_broker_payload_samples[0]["reason"] == "BROKER_TRADE_DATE_MISMATCH"
+    assert repo._trade_ledgers == {}
+    assert repo.list_unattributed_trades(account_id=ACCOUNT_ID, trade_date=NEXT_TRADE_DATE) == []
+    assert [entry.entry_type for entry in repo.list_cash_entries("strat_a")] == [CashEntryType.FREEZE_BUY]
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("10250.000000")
+
+
 def test_sync_service_attributes_truncated_strategy_name_by_managed_order_remark() -> None:
     repo = _repo_with_strategy()
     repo.upsert_unattributed_order(
