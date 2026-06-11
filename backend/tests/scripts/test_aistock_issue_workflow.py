@@ -1093,6 +1093,79 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     assert compact["bug_id_allocation"]["next_number"] == 218
 
 
+def test_doctor_warns_for_invalid_unrelated_worktree_allocator(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    _write_json(workflow.BUGS_ROOT / ".bug_id_allocator.json", {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 328})
+    stale_bugs_root = (
+        isolated_workflow_root
+        / "worktrees"
+        / "BUG-326-other-window"
+        / "tests"
+        / "aistock_validation"
+        / "bugs"
+    )
+    stale_bugs_root.mkdir(parents=True)
+    (stale_bugs_root / ".bug_id_allocator.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok"},
+            "understand_anything": {"status": "available"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=True)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["blocking"] == []
+    assert payload["bug_id_allocation"]["next_number"] == 329
+    assert any("skipped unrelated invalid BUG id allocator" in item for item in payload["bug_id_allocation"]["warnings"])
+    assert any("bug id allocation: skipped unrelated invalid BUG id allocator" in item for item in payload["warnings"])
+    assert compact["bug_id_allocation"]["next_number"] == 329
+
+
+def test_bug_allocation_report_keeps_canonical_allocator_strict(isolated_workflow_root: Path) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    allocator.parent.mkdir(parents=True, exist_ok=True)
+    allocator.write_text("{", encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="invalid bug id allocator"):
+        workflow._bug_id_allocation_report(isolated_workflow_root)
+
+
 def test_doctor_compact_reports_codegraph_bootstrap_next_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

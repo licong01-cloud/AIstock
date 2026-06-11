@@ -1554,6 +1554,25 @@ def _unique_existing_paths(paths: list[Path]) -> list[Path]:
     return unique
 
 
+def _path_identity(path: Path) -> str:
+    try:
+        return str(path.resolve()).lower()
+    except OSError:
+        return str(path.absolute()).lower()
+
+
+def _strict_bug_id_scan_roots(root: Path | None = None) -> set[str]:
+    repo_root = root or REPO_ROOT
+    return {
+        _path_identity(path)
+        for path in (
+            _bugs_root(repo_root),
+            _bugs_root(REPO_ROOT),
+            _bugs_root(_canonical_root()),
+        )
+    }
+
+
 def _bug_id_scan_roots(root: Path | None = None) -> list[Path]:
     repo_root = root or REPO_ROOT
     candidates = [
@@ -1598,16 +1617,27 @@ def _scan_bug_id_reservations() -> list[dict[str, Any]]:
     return sources
 
 
-def _scan_bug_registry_ids(root: Path | None = None) -> list[dict[str, Any]]:
+def _scan_bug_registry_ids(
+    root: Path | None = None,
+    *,
+    tolerate_unrelated_allocator_errors: bool = False,
+    warnings: list[str] | None = None,
+) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
+    strict_roots = _strict_bug_id_scan_roots(root)
     for bugs_root in _bug_id_scan_roots(root):
         allocator = bugs_root / ".bug_id_allocator.json"
         if allocator.exists():
             try:
                 payload = _load_json(allocator)
                 number = int(payload.get("last_allocated") or 0)
-            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+            except (OSError, json.JSONDecodeError, WorkflowError, TypeError, ValueError) as exc:
+                if tolerate_unrelated_allocator_errors and _path_identity(bugs_root) not in strict_roots:
+                    if warnings is not None:
+                        warnings.append(f"skipped unrelated invalid BUG id allocator: {allocator} ({type(exc).__name__})")
+                    number = 0
+                else:
+                    raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
             if number > 0:
                 sources.append(
                     {
@@ -1712,10 +1742,15 @@ def _bug_id_allocation_report(
     *,
     include_github: bool = False,
     github_required: bool = False,
+    tolerate_unrelated_allocator_errors: bool = True,
 ) -> dict[str, Any]:
-    sources = _scan_bug_registry_ids(root)
-    sources.extend(_scan_bug_id_reservations())
     warnings: list[str] = []
+    sources = _scan_bug_registry_ids(
+        root,
+        tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
+        warnings=warnings,
+    )
+    sources.extend(_scan_bug_id_reservations())
     if include_github:
         github_sources, github_warnings = _scan_github_bug_ids()
         sources.extend(github_sources)
@@ -1886,7 +1921,7 @@ def _write_allocator(next_number: int, root: Path | None = None) -> None:
     if allocator.exists():
         try:
             current = int(_load_json(allocator).get("last_allocated") or 0)
-        except (TypeError, ValueError) as exc:
+        except (OSError, json.JSONDecodeError, WorkflowError, TypeError, ValueError) as exc:
             raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
     if current > next_number:
         next_number = current
@@ -5551,7 +5586,12 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
             warnings.append("GitHub repo check failed for licong01-cloud/AIstock")
 
     bug_id_allocation = _bug_id_allocation_summary(
-        _bug_id_allocation_report(REPO_ROOT, include_github=not skip_external, github_required=False)
+        _bug_id_allocation_report(
+            REPO_ROOT,
+            include_github=not skip_external,
+            github_required=False,
+            tolerate_unrelated_allocator_errors=True,
+        )
     )
     for warning in bug_id_allocation.get("warnings") or []:
         warnings.append(f"bug id allocation: {warning}")
