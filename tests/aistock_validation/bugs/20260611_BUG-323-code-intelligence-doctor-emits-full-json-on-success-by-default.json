@@ -28,8 +28,8 @@
   "expected": "Successful code intelligence doctor output should default to compact PASS/WARN status with key readiness fields only, while full JSON remains available via --output-format full-json or --output.",
   "first_seen_at": "2026-06-11T10:46:32.241562Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "83c6c8717146fb5aa1bb2b2154bde05fc588390c",
+  "fixed_at": "2026-06-11T11:01:12.053527Z",
   "github_issue_number": 967,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/967",
   "last_seen_at": "2026-06-11T10:46:32.241562Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/969",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,14 @@
     "fingerprint": "6ddf13937649580c7d1a2443",
     "source_event_id": "FE-20260611-6ddf13937649"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> 49 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 420 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
