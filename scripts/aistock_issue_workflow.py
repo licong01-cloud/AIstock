@@ -606,6 +606,32 @@ def _compact_ci_issue_janitor(value: Any) -> dict[str, Any] | None:
     return compact
 
 
+def _compact_code_intelligence_client_verification(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    codegraph = value.get("codegraph") if isinstance(value.get("codegraph"), dict) else {}
+    freshness = value.get("freshness") if isinstance(value.get("freshness"), dict) else {}
+    ua = value.get("understand_anything") if isinstance(value.get("understand_anything"), dict) else {}
+    clients = value.get("clients") if isinstance(value.get("clients"), dict) else {}
+    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), dict) else {}
+    ready_clients = sum(1 for item in clients.values() if isinstance(item, dict) and item.get("status") == "ready")
+    return {
+        "codegraph_status": codegraph.get("status"),
+        "effective_freshness": freshness.get("effective_freshness"),
+        "latest_artifact_ref": freshness.get("latest_artifact_ref"),
+        "understand_anything_status": ua.get("status"),
+        "understand_anything_freshness": ua.get("freshness"),
+        "clients_ready": f"{ready_clients}/{len(clients)}",
+        "context_ref": artifacts.get("context_ref"),
+        "affected_tests_ref": artifacts.get("affected_tests_ref"),
+        "ua_summary_ref": artifacts.get("ua_summary_ref"),
+        "artifact_path": value.get("artifact_path"),
+        "next_actions": (value.get("efficiency") or {}).get("next_actions")
+        if isinstance(value.get("efficiency"), dict)
+        else [],
+    }
+
+
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     schema = str(payload.get("schema_version") or "")
     if not schema:
@@ -809,6 +835,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_ci_issue_janitor(payload) or {})
     elif schema.endswith("_promote_ci_issue_v1"):
         compact.update(_compact_promote_ci_issue(payload) or {})
+    elif schema == "aistock_code_intelligence_client_verification_v1":
+        compact.update(_compact_code_intelligence_client_verification(payload))
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
         compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
     elif schema.endswith("_missing_bug_record_v1"):
@@ -939,6 +967,18 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
             (
                 f"{prefix} workflow_gate={gate} mode={compact.get('mode') or payload.get('mode') or 'unknown'} "
                 f"next={compact.get('next_command') or 'none'}"
+            )
+        ]
+    if schema == "aistock_code_intelligence_client_verification_v1":
+        next_actions = ";".join(compact.get("next_actions") or []) or "none"
+        return [
+            (
+                f"{prefix} verify-clients workflow_gate={gate} "
+                f"codegraph={compact.get('codegraph_status') or 'unknown'} "
+                f"effective={compact.get('effective_freshness') or 'unknown'} "
+                f"ua={compact.get('understand_anything_status') or 'unknown'} "
+                f"clients_ready={compact.get('clients_ready') or 'unknown'} "
+                f"next={next_actions}"
             )
         ]
     return [
@@ -9533,6 +9573,25 @@ def cmd_install_client(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
 
+def cmd_verify_clients(args: argparse.Namespace) -> int:
+    changed = list(args.changed_file or [])
+    if args.changed_files_file:
+        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+    payload = code_intelligence.build_client_verification(
+        item_id=args.item_id,
+        query=args.query,
+        changed_files=changed,
+        module=args.module,
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        skip_external=args.skip_external,
+    )
+    if args.output_md:
+        _write_text(Path(args.output_md), code_intelligence.render_client_verification_summary(payload))
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready", "warning"} else 2
+
+
 def cmd_triage_ci_issue(args: argparse.Namespace) -> int:
     payload = build_triage_ci_issue_plan(
         issue_number=args.issue,
@@ -9792,6 +9851,22 @@ def build_parser() -> argparse.ArgumentParser:
     install_client.add_argument("--claude-home")
     add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
+
+    verify_clients = sub.add_parser(
+        "verify-clients",
+        help="Verify CodeGraph, Understand Anything, and Codex/Claude workflow client readiness.",
+    )
+    verify_clients.add_argument("--item-id", default="VERIFY-CODE-INTELLIGENCE")
+    verify_clients.add_argument("--query", default="AIstock code intelligence workflow verification")
+    verify_clients.add_argument("--changed-file", action="append")
+    verify_clients.add_argument("--changed-files-file")
+    verify_clients.add_argument("--module", default="validation")
+    verify_clients.add_argument("--root")
+    verify_clients.add_argument("--output-dir")
+    verify_clients.add_argument("--skip-external", action="store_true")
+    verify_clients.add_argument("--output-md")
+    add_output_options(verify_clients)
+    verify_clients.set_defaults(func=cmd_verify_clients)
 
     triage_ci = sub.add_parser("triage-ci-issue", help="Summarize and classify an auto-filed CI/Nightly GitHub Issue.")
     triage_ci.add_argument("--issue", required=True, help="GitHub Issue number to triage.")

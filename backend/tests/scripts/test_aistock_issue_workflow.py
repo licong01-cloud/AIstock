@@ -163,6 +163,39 @@ def test_emit_summary_for_watch_ci_keeps_counts_without_rollup(capsys: pytest.Ca
     assert "statusCheckRollup" not in out
 
 
+def test_emit_summary_for_verify_clients_keeps_compact_readiness_line(capsys: pytest.CaptureFixture[str]) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_code_intelligence_client_verification_v1",
+            "workflow_gate": "ready",
+            "codegraph": {"status": "ok"},
+            "freshness": {"effective_freshness": "fresh"},
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "clients": {
+                "codex_issue_skill": {"status": "ready"},
+                "claude_issue_command": {"status": "ready"},
+            },
+            "artifacts": {
+                "context_ref": "tmp/issue_workflow/BUG-331/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/BUG-331/affected-tests.json",
+                "ua_summary_ref": "tmp/issue_workflow/BUG-331/ua-validation-summary.md",
+            },
+            "efficiency": {"next_actions": ["read_task_card_code_intelligence_refs"]},
+            "selected_nodes": [{"id": "noisy"}],
+        },
+        output_format="summary",
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("PASS verify-clients")
+    assert "workflow_gate=ready" in out
+    assert "codegraph=ok" in out
+    assert "clients_ready=2/2" in out
+    assert "read_task_card_code_intelligence_refs" in out
+    assert "{" not in out
+    assert "selected_nodes" not in out
+
+
 def test_compact_merge_output_hides_verbose_finalizer_and_postmortem_lists(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1023,6 +1056,61 @@ def test_code_intelligence_doctor_reports_bootstrap_command(
     assert payload["codegraph"]["bootstrap_command"] == "codegraph init -i"
     assert payload["bootstrap_commands"]["codegraph"] == "codegraph init -i"
     assert any("codegraph init -i" in item for item in payload["warnings"])
+
+
+def test_verify_clients_command_bridges_code_intelligence_adapter(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_verification(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["item_id"] == "BUG-331"
+        assert kwargs["module"] == "validation"
+        assert kwargs["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+        assert kwargs["root"] == isolated_workflow_root
+        return {
+            "schema_version": "aistock_code_intelligence_client_verification_v1",
+            "workflow_gate": "ready",
+            "codegraph": {"status": "ok"},
+            "freshness": {"effective_freshness": "fresh"},
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "clients": {
+                "codex_issue_skill": {"status": "ready"},
+                "claude_issue_command": {"status": "ready"},
+            },
+            "artifacts": {
+                "context_ref": "tmp/issue_workflow/BUG-331/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/BUG-331/affected-tests.json",
+                "ua_summary_ref": "tmp/issue_workflow/BUG-331/ua-validation-summary.md",
+            },
+            "efficiency": {"next_actions": ["read_task_card_code_intelligence_refs"]},
+        }
+
+    monkeypatch.setattr(workflow.code_intelligence, "build_client_verification", fake_verification)
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--item-id",
+            "BUG-331",
+            "--module",
+            "validation",
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            "--root",
+            str(isolated_workflow_root),
+            "--output-format",
+            "summary",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert result == 0
+    assert "PASS verify-clients workflow_gate=ready" in out
+    assert "codegraph=ok" in out
+    assert "clients_ready=2/2" in out
+    assert "{" not in out
+
 
 def test_doctor_reports_ready_when_client_entries_exist(
     isolated_workflow_root: Path,
