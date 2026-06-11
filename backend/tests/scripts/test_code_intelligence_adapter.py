@@ -15,6 +15,111 @@ def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch, 
     assert not (tmp_path / "-").exists()
 
 
+def test_freshness_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_codegraph_freshness_artifact",
+        lambda **kwargs: {
+            "workflow_gate": "ready",
+            "freshness": "fresh",
+            "freshness_basis": "codegraph_status",
+            "git_commit": "abc123",
+            "warnings": [],
+            "summary_ref": "tmp/validation/code-intelligence/codegraph-freshness.md",
+            "artifact_path": "tmp/validation/code-intelligence/codegraph-freshness.json",
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(["freshness", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS codegraph-freshness ")
+    assert "artifact_path=" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_latest_freshness_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "latest_codegraph_freshness",
+        lambda **kwargs: {
+            "workflow_gate": "ready",
+            "current_git_commit": "abc123",
+            "effective_source": "artifact",
+            "stale_metadata_warning": False,
+            "refreshed": False,
+            "latest": {"git_commit": "abc123", "artifact_path": "tmp/validation/code-intelligence/latest.json"},
+            "effective": {"freshness": "fresh", "artifact_path": "tmp/validation/code-intelligence/latest.json"},
+            "warnings": [],
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(["latest-freshness", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS latest-freshness ")
+    assert "effective=fresh" in stdout
+    assert "stale_metadata_warning=false" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_verify_clients_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_client_verification",
+        lambda **kwargs: {
+            "workflow_gate": "ready",
+            "artifact_path": "tmp/validation/code-intelligence/client-verification.json",
+            "codegraph": {"status": "ok"},
+            "freshness": {"effective_freshness": "fresh"},
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "clients": {"codex": {"status": "ready"}, "claude": {"status": "ready"}},
+            "artifacts": {
+                "context_ref": "tmp/issue_workflow/VERIFY/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/VERIFY/affected-tests.json",
+                "ua_summary_ref": "tmp/validation/code-intelligence/ua-validation-summary.md",
+            },
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(["verify-clients", "--item-id", "VERIFY", "--module", "validation", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS verify-clients ")
+    assert "clients_ready=2/2" in stdout
+    assert "context_ref=" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_readiness_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "latest_codegraph_freshness",
+        lambda **kwargs: {
+            "workflow_gate": "ready",
+            "current_git_commit": "abc123",
+            "effective_source": "artifact",
+            "stale_metadata_warning": False,
+            "refreshed": False,
+            "latest": {"git_commit": "abc123"},
+            "effective": {"freshness": "fresh"},
+            "selected_nodes": [{"id": "explicit-json"}],
+        },
+    )
+
+    result = adapter.main(["latest-freshness", "--root", str(tmp_path), "--output-format", "full-json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["selected_nodes"][0]["id"] == "explicit-json"
+
+
 def test_code_intelligence_doctor_falls_back_without_codegraph(
     tmp_path: Path,
     monkeypatch,
