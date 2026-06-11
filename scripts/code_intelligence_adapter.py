@@ -94,6 +94,33 @@ def _emit(payload: dict[str, Any], output: str | None = None) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
+def _compact_token(value: Any, *, limit: int = 180) -> str:
+    text = str(value if value is not None else "unknown").strip()
+    text = re.sub(r"\s+", "_", text)
+    if len(text) > limit:
+        return text[: limit - 3] + "..."
+    return text or "unknown"
+
+
+def _emit_compact_line(
+    prefix: str,
+    fields: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    output: str | None = None,
+    output_format: str = "compact",
+) -> None:
+    if output and output != "-":
+        _write_json(Path(output), payload)
+    if output == "-" or output_format == "full-json":
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+        return
+    gate = str(fields.get("workflow_gate") or fields.get("status") or "unknown").lower()
+    marker = "PASS" if gate in {"ready", "ok", "configured"} else "WARN"
+    body = " ".join(f"{key}={_compact_token(value)}" for key, value in fields.items() if value is not None)
+    sys.stdout.write(f"{marker} {prefix} {body}\n")
+
+
 def _repo_rel(path: Path, root: Path | None = None) -> str:
     root = root or REPO_ROOT
     try:
@@ -1331,8 +1358,9 @@ def build_understand_anything_summary_manifest(
         "blocking_for_issue_workflow": False,
         "approval_required_for_long_term_memory": True,
     }
-    _write_json(output_dir / "ua-summary-manifest.json", payload)
-    return payload
+    manifest_path = output_dir / "ua-summary-manifest.json"
+    _write_json(manifest_path, payload)
+    return {**payload, "artifact_path": _repo_rel(manifest_path, root)}
 
 
 def render_understand_anything_summary_markdown(payload: dict[str, Any]) -> str:
@@ -2236,7 +2264,21 @@ def cmd_ua_summary(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_nodes=args.max_nodes,
     )
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "ua-summary",
+        {
+            "status": payload.get("status"),
+            "module": payload.get("module"),
+            "freshness": payload.get("freshness"),
+            "nodes_used": payload.get("nodes_used", 0),
+            "edges_used": payload.get("edges_used", 0),
+            "summary_ref": payload.get("summary_ref"),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2247,7 +2289,21 @@ def cmd_ua_summary_all(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_nodes=args.max_nodes,
     )
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "ua-summary-all",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "modules": len(payload.get("modules") or []),
+            "fresh": payload.get("fresh_summary_count", 0),
+            "base_current": payload.get("base_current_summary_count", 0),
+            "stale": payload.get("stale_summary_count", 0),
+            "missing": payload.get("missing_summary_count", 0),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2368,6 +2424,12 @@ def build_parser() -> argparse.ArgumentParser:
     ua_summary.add_argument("--output-dir")
     ua_summary.add_argument("--max-nodes", type=int)
     ua_summary.add_argument("--output")
+    ua_summary.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints status and artifact refs only; full-json emits the complete payload.",
+    )
     ua_summary.set_defaults(func=cmd_ua_summary)
 
     ua_summary_all = sub.add_parser("ua-summary-all", help="Build read-only Understand Anything summaries for standard AIstock modules.")
@@ -2376,6 +2438,12 @@ def build_parser() -> argparse.ArgumentParser:
     ua_summary_all.add_argument("--output-dir")
     ua_summary_all.add_argument("--max-nodes", type=int)
     ua_summary_all.add_argument("--output")
+    ua_summary_all.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints counts and artifact refs only; full-json emits the complete manifest.",
+    )
     ua_summary_all.set_defaults(func=cmd_ua_summary_all)
 
     ua_configure = sub.add_parser(
