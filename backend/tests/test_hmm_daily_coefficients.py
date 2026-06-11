@@ -117,7 +117,7 @@ def test_extract_signal_preset_coefficients_ignores_flat_metadata_without_coeffi
     assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
 
 
-def test_extract_signal_preset_coefficients_rejects_builtin_metadata_only_preset() -> None:
+def test_extract_signal_preset_coefficients_rejects_builtin_metadata_only_preset_by_default() -> None:
     with pytest.raises(ValueError, match="HMM signal_preset has no coefficients: preset_A"):
         HMMTrainingService._extract_signal_preset_coefficients(
             {
@@ -130,6 +130,46 @@ def test_extract_signal_preset_coefficients_rejects_builtin_metadata_only_preset
             },
             "preset_A",
         )
+
+
+def test_extract_signal_preset_coefficients_can_use_default_for_selection_auto_generation() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "Preset A",
+                    "description": "metadata-only runtime preset",
+                }
+            }
+        },
+        "preset_A",
+        allow_builtin_metadata_default=True,
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
+def test_extract_signal_preset_coefficients_uses_metadata_range_for_precomputed_builtin_metadata() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "Stage3 sparse penalty preset_A only",
+                    "description": "Precomputed sparse coefficients for QE default split only.",
+                    "coefficients": {
+                        "precomputed_daily": True,
+                        "source_score_column": "score",
+                        "score_method": "sparse_penalty",
+                        "range": [0.955, 1.0],
+                    },
+                }
+            }
+        },
+        "preset_A",
+        allow_builtin_metadata_default=True,
+    )
+
+    assert coeffs == {"trending": 1.0, "neutral": 1.0, "fading": 0.955}
 
 
 def test_extract_signal_preset_coefficients_rejects_custom_metadata_only_preset() -> None:
@@ -158,6 +198,48 @@ def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_pa
     assert plan["output_filename"] == "coefficients_preset_A_2026-04-28_2026-04-28.json"
     assert plan["output_path"] == str(model_path.parent / plan["output_filename"])
     assert plan["existing_artifact"] is False
+
+
+def test_preview_daily_coefficients_accepts_precomputed_builtin_metadata_preset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        svc,
+        "_get_config",
+        lambda config_id: {
+            "config_id": config_id,
+            "display_name": "HMM precomputed metadata config",
+            "model_type": "sector_hmm",
+            "config_json": {
+                "runtime_generation_supported": False,
+                "precomputed_only": True,
+                "signal_presets": {
+                    "preset_A": {
+                        "label": "Stage3 sparse penalty preset_A only",
+                        "description": "Precomputed sparse coefficients for QE default split only.",
+                        "coefficients": {
+                            "precomputed_daily": True,
+                            "source_score_column": "score",
+                            "score_method": "sparse_penalty",
+                            "range": [0.955, 1.0],
+                        },
+                    }
+                },
+            },
+        },
+    )
+
+    plan = svc.preview_daily_coefficients(
+        "snapshot_1",
+        signal_preset="preset_A",
+        as_of_date=date(2026, 4, 27),
+        effective_trade_date=date(2026, 4, 28),
+    )
+
+    assert plan["preset_coeffs"] == {"trending": 1.0, "neutral": 1.0, "fading": 0.955}
+    assert plan["output_filename"] == "coefficients_preset_A_2026-04-28_2026-04-28.json"
 
 
 def test_preview_daily_coefficients_rejects_same_day_effective(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

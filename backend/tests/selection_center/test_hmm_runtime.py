@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
+from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.runtime_profile import RuntimeHMMProfile
 from backend.services.trading_core.errors import ArtifactGenerationFailedError, HMMRuntimeUnavailableError
 
@@ -243,3 +244,28 @@ def test_preflight_coefficients_preserves_metadata_only_generation_failure_conte
     assert exc_info.value.error_code == "ARTIFACT_GENERATION_FAILED"
     assert exc_info.value.context["reason"] == "missing_artifact"
     assert exc_info.value.context["error"] == "HMM signal_preset has no coefficients: preset_A"
+
+
+def test_adjust_candidates_marks_existing_reason_as_hmm_adjusted(tmp_path: Path) -> None:
+    model_path = _model_path(tmp_path)
+    _write_coefficients(tmp_path, _valid_payload())
+    runtime = SectorHMMRuntime(snapshot_provider=_SnapshotProvider(model_path))
+
+    adjusted = runtime.adjust_candidates(
+        candidates=[
+            SelectionCandidate(
+                symbol="000001.SZ",
+                score=1.0,
+                rank=1,
+                component_scores={"artifact_source": "live_qe_model_inference"},
+                reason="live_qe_model_inference_score",
+            )
+        ],
+        trade_date=TRADE_DATE,
+        profile=_profile(),
+        package_id="pkg_hmm_reason",
+        manifest_sha256="manifest_sha",
+    )
+
+    assert adjusted[0].reason == "live_qe_model_inference_score|hmm_adjusted"
+    assert adjusted[0].component_scores["hmm"]["source_reason"] == "live_qe_model_inference_score"
