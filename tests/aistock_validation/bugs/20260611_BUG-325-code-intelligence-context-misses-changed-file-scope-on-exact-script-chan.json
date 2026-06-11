@@ -30,8 +30,8 @@
   "expected": "For changed-file scoped workflow tasks, code intelligence context should surface the scoped file itself or a concise scoped fallback before unrelated graph hits, while keeping compact success output.",
   "first_seen_at": "2026-06-11T11:32:32.456534Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "93b36b9c371b91fe225ed20885dc5eac05eb1cd3",
+  "fixed_at": "2026-06-11T11:57:57.982280Z",
   "github_issue_number": 974,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/974",
   "last_seen_at": "2026-06-11T11:32:32.456534Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/975",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,15 @@
     "fingerprint": "6cdf08ec4feb5adb1a55cae7",
     "source_event_id": "FE-20260611-6cdf08ec4feb"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> 54 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 420 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --root <worktree> --item-id BUG-325-VERIFY --module validation --changed-file scripts/code_intelligence_adapter.py -> workflow_gate=ready"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
