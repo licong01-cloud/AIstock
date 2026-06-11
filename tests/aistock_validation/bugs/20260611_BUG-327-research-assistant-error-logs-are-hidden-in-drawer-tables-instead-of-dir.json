@@ -1,0 +1,112 @@
+{
+  "actual": "The right-side page shows nested drawer/table error details and the operator only sees a final JSON-like blocker such as blocker_id=proposal-blocker-3, status=approval_required, reason=local_data_apply_repair_confirmed, next_step=Review the Workbench preflight and provide explicit confirmation before execution.",
+  "allowed_write_scope": [
+    "frontend/src/components/research-assistant/BlockerCard.tsx",
+    "frontend/src/components/research-assistant/EvidenceCard.tsx",
+    "frontend/src/components/research-assistant/AssistantShared.tsx",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/app/research-assistant/workbench/page.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260611_BUG-327-research-assistant-error-logs-are-hidden-in-drawer-tables-instead-of-dir.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-327",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T14:42:53.870213Z",
+  "description": "The right-side page shows nested drawer/table error details and the operator only sees a final JSON-like blocker such as blocker_id=proposal-blocker-3, status=approval_required, reason=local_data_apply_repair_confirmed, next_step=Review the Workbench preflight and provide explicit confirmation before execution.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-c08ab7583a18",
+      "timestamp": "2026-06-11T14:42:53.870209Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant chat/workbench/trace error and blocker details should render as direct readable log blocks that show reason, next_step, provenance and raw diagnostic JSON/text in a single visible log segment. Multi-layer table/drawer presentation must not be required to read error logs.",
+  "first_seen_at": "2026-06-11T14:42:53.870213Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 978,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/978",
+  "last_seen_at": "2026-06-11T14:42:53.870213Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /research-assistant, trigger local data sync check/repair blocker, then inspect the right-side error details panel.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant error logs are hidden in drawer tables instead of direct log blocks",
+  "trigger_condition": {
+    "fingerprint": "c08ab7583a18381583334bbe",
+    "source_event_id": "FE-20260611-c08ab7583a18"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/components/research-assistant/BlockerCard.tsx",
+      "frontend/src/components/research-assistant/EvidenceCard.tsx",
+      "frontend/src/components/research-assistant/AssistantShared.tsx",
+      "frontend/src/app/research-assistant/chat/page.tsx",
+      "frontend/src/app/research-assistant/workbench/page.tsx",
+      "frontend/tests/research-assistant/research-assistant.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/table",
+    "ui_routes": [
+      "/table"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

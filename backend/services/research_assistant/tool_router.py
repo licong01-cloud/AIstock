@@ -16,10 +16,48 @@ PLAN_TERMS = ("plan", "preview", "preflight", "validate", "check", "diagnose", "
 DETAIL_TERMS = ("get", "detail", "details", "show", "inspect", "explain", "single", "one", "specific", "详情", "查看", "解释", "单个", "具体")
 SEARCH_TERMS = ("search", "find", "list", "which", "what", "overview", "summary", "status", "搜索", "查找", "列表", "哪些", "有什么", "有哪些", "概览", "概要", "状态", "可用", "看看")
 
+LOCAL_DATA_STATUS_TERMS = (
+    "status",
+    "overview",
+    "summary",
+    "health",
+    "readiness",
+    "ready",
+    "check",
+    "inspect",
+    "sync status",
+    "sync overview",
+    "sync readiness",
+    "sync health",
+    "同步情况",
+    "同步状态",
+    "同步概览",
+    "同步健康",
+    "检查",
+    "查看",
+    "状态",
+    "概览",
+    "健康",
+    "就绪",
+)
+LOCAL_DATA_REPAIR_TERMS = ("repair", "gap", "fix", "修复", "缺口", "补齐", "修复计划")
+LOCAL_DATA_DATASET_TERMS = ("dataset", "trade_date", "calendar", "数据集", "交易日", "日历")
+LOCAL_DATA_ANCHOR_TERMS = (
+    "local data",
+    "local_data",
+    "local-data",
+    "data sync",
+    "data_sync",
+    "sync target",
+    "本地数据",
+    "数据同步",
+)
+
 TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.MCP_CAPABILITY, ("tool", "server", "capability", "mcp"), "assistant_list_mcp_tools"),
-    (McpDomain.LOCAL_DATA, ("repair", "gap"), "local_data_plan_repair"),
-    (McpDomain.LOCAL_DATA, ("dataset", "trade_date", "calendar"), "local_data_get_dataset_status"),
+    (McpDomain.LOCAL_DATA, LOCAL_DATA_STATUS_TERMS, "local_data_health_overview"),
+    (McpDomain.LOCAL_DATA, LOCAL_DATA_REPAIR_TERMS, "local_data_plan_repair"),
+    (McpDomain.LOCAL_DATA, LOCAL_DATA_DATASET_TERMS, "local_data_get_dataset_status"),
     (McpDomain.QE_WAREHOUSE, ("outbox",), "qe_archive_list_outbox"),
     (McpDomain.QE_WAREHOUSE, ("backfill", "ruku", "louruku", "bulu"), "qe_archive_backfill_preview"),
     (McpDomain.QE_WAREHOUSE, ("source status", "source"), "qe_archive_get_source_status"),
@@ -106,9 +144,11 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             score += 8
         if spec.domain == McpDomain.LOCAL_DATA and _contains_any(lower, WAREHOUSE_TERMS):
             score -= 6
+        if spec.domain == McpDomain.LOCAL_DATA and _contains_any(lower, LOCAL_DATA_ANCHOR_TERMS) and _contains_any(lower, LOCAL_DATA_STATUS_TERMS):
+            score += 8
         if spec.domain == McpDomain.LOCAL_DATA and (
-            ("repair" in lower or "gap" in lower or "sync" in lower)
-            and any(token in lower for token in ("stock_daily", "trade_date", "dataset", "calendar", "local"))
+            _contains_any(lower, LOCAL_DATA_REPAIR_TERMS + ("sync", "同步"))
+            and any(token in lower for token in ("stock_daily", "trade_date", "dataset", "calendar", "local", "本地数据", "数据集"))
         ):
             score += 8
         if spec.domain == McpDomain.RESEARCH_PIPELINE and (
@@ -168,6 +208,16 @@ def select_tool(domain: McpDomain, message: str) -> str:
     lower = _norm(message)
     spec = spec_for_domain(domain)
     summary_terms = ('overview', 'summary', 'catalog', 'list', 'available', '概要', '概览', '列表', '有哪些', '有什么', '可用')
+    if domain == McpDomain.LOCAL_DATA:
+        has_repair = _contains_any(lower, LOCAL_DATA_REPAIR_TERMS)
+        has_dataset = _contains_any(lower, LOCAL_DATA_DATASET_TERMS)
+        has_status_check = _contains_any(lower, LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + PLAN_TERMS)
+        if has_repair:
+            return "local_data_plan_repair"
+        if has_dataset and has_status_check:
+            return "local_data_get_dataset_status"
+        if has_status_check:
+            return "local_data_health_overview"
     if _contains_any(lower, summary_terms):
         for hint_domain, terms, tool in TOOL_HINTS:
             if hint_domain == domain and _contains_any(lower, terms):

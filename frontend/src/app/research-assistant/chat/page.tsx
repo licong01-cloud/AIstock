@@ -36,7 +36,7 @@ import uiCopy from "@/lib/research-assistant/ui-copy";
 type RailStep = { label: string; status: string };
 type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
-type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
+type Proposal = JsonObject & { title?: string; risk?: string; approval_required?: boolean; status?: string; action_proposal_id?: string; reason?: string; next_step?: string; as_of?: string };
 type LocalDataPhaseCard = { key?: string; phase?: string; title?: string; label?: string; status?: string; description?: string };
 type McpResultCard = JsonObject & { title?: string; summary?: string; route?: string; next_step?: string; summary_first?: boolean };
 type McpRouteDecision = {
@@ -265,12 +265,14 @@ function extractBlockerCards(cards: JsonObject): AssistantBlockerCard[] {
   });
   const proposalBlockers = recordList(cards.action_proposals).flatMap((proposal, index) => {
     if (!proposal.approval_required && proposal.status !== "approval_required") return [];
+    const blockerId = String(proposal.action_proposal_id || `proposal-blocker-${index + 1}`);
     return [{
-      blocker_id: String(proposal.action_proposal_id || `proposal-blocker-${index + 1}`),
+      ...proposal,
+      blocker_id: blockerId,
       status: "approval_required",
-      reason: String(proposal.title || "High risk action requires approval"),
-      next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
-      provenance: { source: "action_proposals" },
+      reason: String(proposal.reason || proposal.title || "High risk action requires approval"),
+      next_step: String(proposal.next_step || "Review the Workbench preflight and provide explicit confirmation before execution."),
+      provenance: { source: "action_proposals", action_proposal_id: proposal.action_proposal_id || blockerId },
       as_of: typeof proposal.as_of === "string" ? proposal.as_of : undefined,
     } as AssistantBlockerCard];
   });

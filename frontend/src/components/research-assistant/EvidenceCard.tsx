@@ -1,6 +1,6 @@
 "use client";
 
-import { DetailDrawer, StatusPill, display } from "@/components/research-assistant/AssistantShared";
+import { DiagnosticLogBlock, StatusPill, display } from "@/components/research-assistant/AssistantShared";
 import type { AssistantEvidenceCard, AssistantEvidenceRef, JsonObject } from "@/lib/research-assistant/api";
 
 const REQUIRED_EVIDENCE_FIELDS = ["source", "provenance", "as_of"] as const;
@@ -58,7 +58,11 @@ export function EvidenceCard({ card }: { card: AssistantEvidenceCard }) {
                 <span>provenance</span><strong>{isObject(ref.provenance) ? Object.keys(ref.provenance).join(", ") : "-"}</strong>
               </div>
               {missing.length ? <p className="ra-muted">insufficient: {missing.join(", ")}</p> : null}
-              <DetailDrawer title="provenance / source detail" data={ref} />
+              <DiagnosticLogBlock
+                title="Evidence provenance log"
+                data={ref}
+                testId="ra-evidence-log"
+              />
             </div>
           );
         })}

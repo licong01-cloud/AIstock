@@ -1,6 +1,6 @@
 "use client";
 
-import { DetailDrawer, StatusPill, display } from "@/components/research-assistant/AssistantShared";
+import { DiagnosticLogBlock, StatusPill, display } from "@/components/research-assistant/AssistantShared";
 import type { AssistantBlockerCard, JsonObject } from "@/lib/research-assistant/api";
 
 function blockerTone(status: string): string {
@@ -39,7 +39,11 @@ export function BlockerCard({ card }: { card: AssistantBlockerCard }) {
         <span>as_of</span><strong>{display(card.as_of)}</strong>
         <span>provenance</span><strong>{card.provenance ? Object.keys(card.provenance).join(", ") : "-"}</strong>
       </div>
-      <DetailDrawer title="blocker detail" data={card} />
+      <DiagnosticLogBlock
+        title="Blocker diagnostic log"
+        data={card}
+        testId="ra-blocker-log"
+      />
     </article>
   );
 }

@@ -2021,11 +2021,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if any(term in lower for term in ("shucang", "guidang", "outbox", "backfill", "warehouse", "archive")):
             return False
         local_markers = [
-            "????",
-            "????",
-            "????",
+            "本地数据",
+            "数据同步",
+            "同步情况",
             "trade_date",
-            "???",
+            "数据集",
+            "交易日",
+            "日历",
             "local_data",
             "local data",
             "data sync",
