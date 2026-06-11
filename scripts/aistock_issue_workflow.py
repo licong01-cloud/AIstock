@@ -5042,25 +5042,120 @@ def build_triage_p0(*, include_fixed: bool = False) -> dict[str, Any]:
     }
 
 
-def build_run_p0_plan(*, module: str | None = None, include_fixed: bool = False) -> dict[str, Any]:
+def _github_issue_p0_items(*, include_fixed: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+    github_sources, warnings = _scan_github_bug_ids()
+    accepted_states = {"OPEN"}
+    if include_fixed:
+        accepted_states.update({"CLOSED", "MERGED"})
+    items: list[dict[str, Any]] = []
+    for issue in github_sources:
+        if issue.get("kind") != "github_issue":
+            continue
+        severity = _infer_bug_severity_from_github_issue(issue)
+        if severity != "P0":
+            continue
+        state = str(issue.get("github_state") or "").upper()
+        if state not in accepted_states:
+            continue
+        module = _infer_bug_module_from_github_issue(issue)
+        bug_id = str(issue.get("bug_id") or "")
+        issue_number = issue.get("github_issue_number")
+        issue_url = str(issue.get("source") or _github_issue_url(issue_number))
+        items.append(
+            {
+                "bug_id": bug_id,
+                "title": issue.get("title"),
+                "status": "open" if state == "OPEN" else "fixed",
+                "module": module,
+                "github_issue_number": issue_number,
+                "github_issue_url": issue_url,
+                "missing_github_linkage": [],
+                "missing_local_bug_json": True,
+                "required_verification": [],
+                "allowed_write_scope": [],
+                "source_bug_json": None,
+                "source_channel": "github",
+                "next_command": _adopt_bug_command(
+                    bug_id=bug_id,
+                    title=str(issue.get("title") or bug_id),
+                    module=module,
+                    severity=severity,
+                    issue_number=issue_number,
+                    issue_url=issue_url,
+                ),
+            }
+        )
+    return items, warnings
+
+
+def _dedupe_run_p0_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in items:
+        bug_id = str(item.get("bug_id") or "").strip().upper()
+        if not bug_id:
+            continue
+        existing = deduped.get(bug_id)
+        if existing and existing.get("source_channel") != "github":
+            continue
+        deduped[bug_id] = item
+    return sorted(deduped.values(), key=lambda item: (str(item.get("module")), str(item.get("bug_id"))))
+
+
+def build_run_p0_plan(
+    *,
+    module: str | None = None,
+    include_fixed: bool = False,
+    source: str = "local",
+    mode: str = "plan",
+) -> dict[str, Any]:
+    source = (source or "local").strip().lower()
+    mode = (mode or "plan").strip().lower()
+    if source not in {"local", "github", "both", "nightly"}:
+        raise WorkflowError("--source must be one of: local, github, both, nightly")
+    if mode != "plan":
+        raise WorkflowError("run-p0 currently supports --mode plan only")
+    warnings: list[str] = []
     triage = build_triage_p0(include_fixed=include_fixed)
-    items = triage["items"]
-    groups = triage["groups"]
+    local_items = [
+        {
+            **item,
+            "missing_local_bug_json": False,
+            "source_channel": "local",
+            "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {item['bug_id']} --mode plan --create-worktree",
+        }
+        for item in triage["items"]
+    ]
+    if source == "local":
+        items = local_items
+    elif source == "github":
+        items, github_warnings = _github_issue_p0_items(include_fixed=include_fixed)
+        warnings.extend(github_warnings)
+    elif source == "both":
+        github_items, github_warnings = _github_issue_p0_items(include_fixed=include_fixed)
+        warnings.extend(github_warnings)
+        items = _dedupe_run_p0_items([*local_items, *github_items])
+    else:
+        items = []
+        warnings.append("nightly source has no separate registry scan yet; use promoted BUG/GitHub records with --source both")
+    groups = triage["groups"] if source in {"local", "both"} else []
     if module:
         items = [item for item in items if str(item.get("module") or "") == module]
         groups = [group for group in groups if str(group.get("module") or "") == module]
-    recommended = items[0]["bug_id"] if items else None
+    recommended_item = items[0] if items else None
+    recommended = str(recommended_item.get("bug_id")) if recommended_item else None
     return {
         "schema_version": "aistock_issue_workflow_run_p0_v1",
         "generated_at": _utc_now(),
+        "workflow_gate": "planned" if recommended else "no_matching_p0",
         "module": module,
+        "source": source,
+        "mode": mode,
         "count": len(items),
         "items": items,
         "groups": groups,
+        "warnings": warnings,
         "recommended_first_issue": recommended,
-        "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {recommended} --mode plan --create-worktree"
-        if recommended
-        else None,
+        "next_command": str(recommended_item.get("next_command")) if recommended_item else None,
     }
 
 
@@ -9318,7 +9413,12 @@ def cmd_triage_p0(args: argparse.Namespace) -> int:
 
 
 def cmd_run_p0(args: argparse.Namespace) -> int:
-    payload = build_run_p0_plan(module=args.module, include_fixed=args.include_fixed)
+    payload = build_run_p0_plan(
+        module=args.module,
+        include_fixed=args.include_fixed,
+        source=args.source,
+        mode=args.mode,
+    )
     _emit_args(payload, args)
     return 0
 
@@ -9818,6 +9918,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_p0 = sub.add_parser("run-p0", help="Plan current P0 handling and recommend the next issue command.")
     run_p0.add_argument("--module")
+    run_p0.add_argument("--source", choices=["local", "github", "both", "nightly"], default="local")
+    run_p0.add_argument("--mode", choices=["plan"], default="plan")
     run_p0.add_argument("--include-fixed", action="store_true")
     add_output_options(run_p0)
     run_p0.set_defaults(func=cmd_run_p0)

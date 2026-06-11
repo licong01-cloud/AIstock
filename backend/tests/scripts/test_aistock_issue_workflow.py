@@ -603,9 +603,67 @@ def test_run_p0_recommends_next_issue_command(isolated_workflow_root: Path) -> N
     payload = workflow.build_run_p0_plan(module="paper_v2")
 
     assert payload["schema_version"] == "aistock_issue_workflow_run_p0_v1"
+    assert payload["source"] == "local"
+    assert payload["mode"] == "plan"
     assert payload["count"] == 1
     assert payload["recommended_first_issue"] == "BUG-199"
     assert "run --bug-id BUG-199" in payload["next_command"]
+
+
+def test_run_p0_accepts_documented_source_both_and_mode_plan(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug(severity="P0", module="validation"))
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-199",
+                    "number": 199,
+                    "kind": "github_issue",
+                    "source": "https://github.example/issues/199",
+                    "github_issue_number": 199,
+                    "github_state": "OPEN",
+                    "title": "BUG-199 P0: Local mirror already exists",
+                    "labels": [{"name": "module:validation"}, {"name": "P0"}],
+                },
+                {
+                    "bug_id": "BUG-200",
+                    "number": 200,
+                    "kind": "github_issue",
+                    "source": "https://github.example/issues/200",
+                    "github_issue_number": 200,
+                    "github_state": "OPEN",
+                    "title": "BUG-200 P0: GitHub-only issue",
+                    "labels": [{"name": "module:validation"}, {"name": "severity:p0"}],
+                },
+            ],
+            [],
+        ),
+    )
+
+    payload = workflow.build_run_p0_plan(module="validation", source="both", mode="plan")
+
+    assert payload["workflow_gate"] == "planned"
+    assert payload["source"] == "both"
+    assert payload["mode"] == "plan"
+    assert [item["bug_id"] for item in payload["items"]] == ["BUG-199", "BUG-200"]
+    github_only = payload["items"][1]
+    assert github_only["missing_local_bug_json"] is True
+    assert github_only["source_channel"] == "github"
+    assert "--github-issue-number 200" in github_only["next_command"]
+    assert "run --bug-id BUG-199" in payload["next_command"]
+
+
+def test_run_p0_parser_accepts_documented_source_and_mode() -> None:
+    args = workflow.build_parser().parse_args(["run-p0", "--module", "validation", "--source", "both", "--mode", "plan"])
+
+    assert args.source == "both"
+    assert args.mode == "plan"
 
 
 def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) -> None:
