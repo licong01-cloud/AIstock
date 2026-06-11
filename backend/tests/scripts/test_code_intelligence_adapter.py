@@ -568,6 +568,105 @@ def test_codegraph_freshness_ready_for_up_to_date_index(tmp_path: Path, monkeypa
     assert "CodeGraph Freshness" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
 
 
+def test_codegraph_freshness_uses_configured_graph_source_root(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "canonical"
+    workspace = tmp_path / "runner-workspace"
+    source.mkdir()
+    workspace.mkdir()
+    (source / ".git").mkdir()
+    (workspace / ".git").mkdir()
+    (source / ".codegraph").mkdir()
+    (source / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    for relative in (".github/workflows/nightly.yml", "scripts/code_intelligence_adapter.py"):
+        (source / relative).parent.mkdir(parents=True, exist_ok=True)
+        (source / relative).write_text("# indexed\n", encoding="utf-8")
+        (workspace / relative).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / relative).write_text("# checkout\n", encoding="utf-8")
+    monkeypatch.setenv(adapter.GRAPH_SOURCE_ROOT_ENV, str(source))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(adapter, "_same_repo_remote", lambda left, right: True)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        if args[:2] == ["codegraph", "status"]:
+            assert args[2] == str(source)
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+                "stderr": "",
+            }
+        if args[:2] == ["codegraph", "files"]:
+            assert args[args.index("--path") + 1] == str(source)
+            pattern = args[args.index("--pattern") + 1]
+            return {"ok": True, "returncode": 0, "stdout": json.dumps([{"path": pattern}]), "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.build_codegraph_freshness_artifact(
+        root=workspace,
+        output_dir=workspace / "tmp" / "validation" / "code-intelligence" / "run-1",
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["freshness"] == "fresh"
+    assert payload["root"] == str(workspace)
+    assert payload["graph_root"] == str(source)
+    assert payload["graph_root_source"] == "configured_env"
+    assert payload["graph_commit_relation"] == "same"
+    assert payload["artifact_path"] == "tmp/validation/code-intelligence/run-1/codegraph-freshness.json"
+    assert (workspace / payload["artifact_path"]).exists()
+
+
+def test_codegraph_freshness_warns_when_configured_graph_source_is_not_related(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "canonical"
+    workspace = tmp_path / "runner-workspace"
+    source.mkdir()
+    workspace.mkdir()
+    (source / ".git").mkdir()
+    (workspace / ".git").mkdir()
+    (source / ".codegraph").mkdir()
+    (source / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    monkeypatch.setenv(adapter.GRAPH_SOURCE_ROOT_ENV, str(source))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(adapter, "_same_repo_remote", lambda left, right: True)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "head": "source123" if root == source else "workspace456",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: False)
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+            "stderr": "",
+        },
+    )
+
+    payload = adapter.build_codegraph_freshness_artifact(root=workspace)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"] == "stale"
+    assert payload["freshness_basis"] == "configured_graph_root_commit"
+    assert any("Configured CodeGraph root commit" in item for item in payload["warnings"])
+
+
 def test_codegraph_freshness_warns_when_critical_file_missing_from_index(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".codegraph").mkdir()
     (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
