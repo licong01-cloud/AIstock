@@ -218,10 +218,13 @@ class FakeSelectionService:
 
     def run_selection(self, **kwargs):
         self.calls.append(kwargs)
+        runtime_release = kwargs.get("runtime_release") or self.release
+        target_trade_date = kwargs.get("trade_date") or TRADE_DATE
         evidence = _evidence(
-            self.release,
+            runtime_release,
             candidates=self.candidates,
             valid_no_candidate=self.valid_no_candidate,
+            target_trade_date=target_trade_date,
         )
         no_candidate_reason = "unit test no candidate day" if self.valid_no_candidate else None
         return StrategyPackageSelectionResult(
@@ -610,6 +613,169 @@ def test_scheduler_persists_no_rebalance_evidence_when_targets_match_current_pos
     assert evidence["selected_symbols"] == ["000001.SZ", "688001.SH"]
     assert evidence["target_symbols"] == ["000001.SZ", "688001.SH"]
     assert all(row["delta_quantity"] == 0 for row in evidence["rows"])
+
+
+def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_runs() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    local_binding = local_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    repo.bindings[local_binding.binding_id] = local_binding
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={local_binding.strategy_id: _position_context(portfolio_id="portfolio_roll_forward")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    rerun = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert result.total_bindings == 1
+    assert result.planned_count == 1
+    rolled_binding = result.results[0].run
+    assert rolled_binding is not None
+    assert rolled_binding.binding_id != local_binding.binding_id
+    new_binding = repo.get_simulation_release_binding(rolled_binding.binding_id)
+    assert new_binding.strategy_id == local_binding.strategy_id
+    assert new_binding.effective_from == next_trade_day
+    assert new_binding.effective_to == next_trade_day
+    assert new_binding.binding_config_json["metadata"]["purpose"] == "localsim_unattended_daily_roll_forward"
+    assert new_binding.binding_config_json["metadata"]["extends_binding_id"] == local_binding.binding_id
+    new_release = repo.get_strategy_runtime_release(new_binding.release_id)
+    assert new_release.base_release_id == release.release_id
+    assert new_release.effective_from == next_trade_day
+    assert new_release.effective_to == next_trade_day
+    assert rerun.reused_count == 1
+    assert rerun.results[0].run.binding_id == new_binding.binding_id
+    local_bindings = repo.list_simulation_release_bindings(
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        approval_states=[SimulationBindingApprovalState.SIM_VALIDATING],
+        limit=10,
+    )
+    assert len([binding for binding in local_bindings if binding.effective_from == next_trade_day]) == 1
+
+
+def test_scheduler_rolls_forward_new_localsim_strategy_without_manual_next_day_binding() -> None:
+    release, local_binding_a, _, repo = _release_and_bindings()
+    assert local_binding_a is not None
+    local_binding_b = _create_extra_binding(
+        release=release,
+        repo=repo,
+        strategy_id="strategy_new_localsim_package",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    for binding in (local_binding_a, local_binding_b):
+        expired = binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+        repo.bindings[expired.binding_id] = expired
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={
+                local_binding_a.strategy_id: _position_context(portfolio_id="portfolio_roll_a"),
+                local_binding_b.strategy_id: _position_context(portfolio_id="portfolio_roll_b"),
+            }
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert result.total_bindings == 2
+    assert result.planned_count == 2
+    assert {item.strategy_id for item in result.results} == {
+        local_binding_a.strategy_id,
+        local_binding_b.strategy_id,
+    }
+    assert all(item.run.binding_id not in {local_binding_a.binding_id, local_binding_b.binding_id} for item in result.results)
+
+
+def test_scheduler_roll_forward_keeps_active_binding_when_limit_is_full() -> None:
+    _, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    active_binding = local_binding.model_copy(update={"effective_from": next_trade_day, "effective_to": next_trade_day})
+    repo.bindings[active_binding.binding_id] = active_binding
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(repo.get_strategy_runtime_release(active_binding.release_id), candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={active_binding.strategy_id: _position_context(portfolio_id="portfolio_limit_full")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        limit=1,
+    )
+
+    assert result.total_bindings == 1
+    assert result.results[0].binding_id == active_binding.binding_id
+    assert result.planned_count == 1
+    assert len(repo.bindings) == 2
+
+
+def test_repository_latest_binding_ignores_future_manual_binding_for_roll_forward() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    future_day = next_trade_day + timedelta(days=3)
+    expired = local_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    future = _create_extra_binding(
+        release=release,
+        repo=repo,
+        strategy_id=local_binding.strategy_id,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_name="Future LocalSim 2026-05-25",
+    ).model_copy(update={"effective_from": future_day, "effective_to": future_day})
+    repo.bindings[expired.binding_id] = expired
+    repo.bindings[future.binding_id] = future
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={local_binding.strategy_id: _position_context(portfolio_id="portfolio_future_binding")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert result.total_bindings == 1
+    assert result.planned_count == 1
+    assert result.results[0].run is not None
+    assert result.results[0].run.binding_id not in {expired.binding_id, future.binding_id}
+    rolled = repo.get_simulation_release_binding(result.results[0].run.binding_id)
+    assert rolled.effective_from == next_trade_day
+    assert rolled.binding_config_json["metadata"]["extends_binding_id"] == expired.binding_id
 
 
 def test_scheduler_passes_release_selection_runtime_config_to_selection_service() -> None:

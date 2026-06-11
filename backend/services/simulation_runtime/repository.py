@@ -227,6 +227,57 @@ class SimulationRuntimeRepository:
         )
         return [self._binding_from_row(row) for row in rows]
 
+    def list_latest_simulation_release_bindings(
+        self,
+        *,
+        strategy_id: str | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        approval_states: Iterable[SimulationBindingApprovalState | str] | None = None,
+        effective_from_on_or_before: date | None = None,
+        limit: int = 100,
+    ) -> list[SimulationReleaseBinding]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if strategy_id is not None:
+            clauses.append("strategy_id = %s")
+            params.append(strategy_id)
+        if broker_backend is not None:
+            backend = (
+                broker_backend.value
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else str(broker_backend)
+            )
+            clauses.append("broker_backend = %s")
+            params.append(backend)
+        states = [
+            state.value if isinstance(state, SimulationBindingApprovalState) else str(state)
+            for state in (approval_states or [])
+        ]
+        if states:
+            placeholders = ", ".join(["%s"] * len(states))
+            clauses.append(f"approval_state IN ({placeholders})")
+            params.extend(states)
+        if effective_from_on_or_before is not None:
+            clauses.append("(effective_from IS NULL OR effective_from <= %s)")
+            params.append(effective_from_on_or_before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self._fetch_rows(
+            f"""
+            SELECT *
+            FROM (
+                SELECT DISTINCT ON (strategy_id, broker_backend) *
+                FROM paper_v2.simulation_release_binding
+                {where}
+                ORDER BY strategy_id, broker_backend, effective_from DESC NULLS LAST, created_at DESC, binding_id DESC
+            ) latest
+            ORDER BY created_at DESC, binding_id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        return [self._binding_from_row(row) for row in rows]
+
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
         existing_by_hash = self.get_daily_selection_evidence_by_hash(evidence.artifact_hash)
         if existing_by_hash is not None:
@@ -835,6 +886,54 @@ class InMemorySimulationRuntimeRepository:
             ]
         rows.sort(key=lambda item: (item.created_at, item.binding_id), reverse=True)
         return rows[:limit]
+
+    def list_latest_simulation_release_bindings(
+        self,
+        *,
+        strategy_id: str | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        approval_states: Iterable[SimulationBindingApprovalState | str] | None = None,
+        effective_from_on_or_before: date | None = None,
+        limit: int = 100,
+    ) -> list[SimulationReleaseBinding]:
+        rows = list(self.bindings.values())
+        if strategy_id is not None:
+            rows = [row for row in rows if row.strategy_id == strategy_id]
+        if broker_backend is not None:
+            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            rows = [row for row in rows if row.broker_backend == backend]
+        states = {
+            state if isinstance(state, SimulationBindingApprovalState) else SimulationBindingApprovalState(str(state))
+            for state in (approval_states or [])
+        }
+        if states:
+            rows = [row for row in rows if row.approval_state in states]
+        if effective_from_on_or_before is not None:
+            rows = [
+                row
+                for row in rows
+                if row.effective_from is None or row.effective_from <= effective_from_on_or_before
+            ]
+        latest: dict[tuple[str, SimulationBrokerBackend], SimulationReleaseBinding] = {}
+        for row in rows:
+            key = (row.strategy_id, row.broker_backend)
+            current = latest.get(key)
+            if current is None or (
+                row.effective_from or date.min,
+                row.created_at,
+                row.binding_id,
+            ) > (
+                current.effective_from or date.min,
+                current.created_at,
+                current.binding_id,
+            ):
+                latest[key] = row
+        ordered = sorted(
+            latest.values(),
+            key=lambda item: (item.created_at, item.binding_id),
+            reverse=True,
+        )
+        return ordered[:limit]
 
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
         if evidence.artifact_hash in self.daily_selection_hash_index:
