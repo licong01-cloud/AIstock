@@ -32,8 +32,8 @@
   "expected": "LocalSim bindings for approved simulation strategies should support unattended daily operation across trading days. Existing and newly created LocalSim strategy packages should continue to generate one daily run/plan per trading day without manual per-day binding creation, while preserving immutable run/release/evidence audit semantics.",
   "first_seen_at": "2026-06-11T09:44:27.799135Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3abfd296465ec7d45ee518af30f95a36d8395d09",
+  "fixed_at": "2026-06-11T14:46:19.352566Z",
   "github_issue_number": 961,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/961",
   "last_seen_at": "2026-06-11T09:44:27.799135Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/968",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,17 @@
     "fingerprint": "f6119d7bf5677132e3798a23",
     "source_event_id": "FE-20260611-f6119d7bf567"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 40 passed",
+    "python -m nox -s localsim_unattended_l3 -> 52 passed",
+    "python -m ruff check backend/services/simulation_runtime/repository.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/simulation_runtime/repository.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s paper_v2_ui -> 25 passed, 1 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
