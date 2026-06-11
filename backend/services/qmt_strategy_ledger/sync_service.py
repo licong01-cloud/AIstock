@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from .lot_availability import (
     DbTradingCalendarProvider,
@@ -39,6 +40,8 @@ from .models import (
     new_id,
 )
 from .repository import InMemoryQmtStrategyLedgerRepository
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class ReadOnlyQmtClient(Protocol):
@@ -76,6 +79,10 @@ class SyncSummary:
     positions_seen: int
     lots_unlocked: int = 0
     raw_positions: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    stale_orders_skipped: int = 0
+    stale_trades_skipped: int = 0
+    stale_broker_snapshot: bool = False
+    stale_broker_payload_samples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +108,10 @@ class SyncSummary:
             "positions_seen": self.positions_seen,
             "lots_unlocked": self.lots_unlocked,
             "raw_positions": list(self.raw_positions),
+            "stale_orders_skipped": self.stale_orders_skipped,
+            "stale_trades_skipped": self.stale_trades_skipped,
+            "stale_broker_snapshot": self.stale_broker_snapshot,
+            "stale_broker_payload_samples": list(self.stale_broker_payload_samples),
         }
 
 
@@ -132,9 +143,57 @@ class QmtStrategyLedgerSyncService:
         self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
 
     def sync_snapshot(self) -> SyncSummary:
-        orders = self._qmt_client.get_orders(cancelable_only=False)
-        trades = self._qmt_client.get_trades()
+        raw_orders = self._qmt_client.get_orders(cancelable_only=False)
+        raw_trades = self._qmt_client.get_trades()
         positions = self._qmt_client.get_positions()
+
+        orders: list[dict[str, Any]] = []
+        stale_order_ids: set[str] = set()
+        stale_payload_samples: list[dict[str, Any]] = []
+        stale_orders_skipped = 0
+        for payload in raw_orders:
+            broker_date = _broker_order_payload_date(payload)
+            if broker_date is not None and broker_date != self._trade_date:
+                stale_orders_skipped += 1
+                order_id = RawQmtOrder.from_dict(payload).order_id
+                if order_id:
+                    stale_order_ids.add(order_id)
+                stale_payload_samples.append(
+                    _stale_payload_sample(
+                        payload_type="order",
+                        payload=payload,
+                        broker_date=broker_date,
+                        expected_trade_date=self._trade_date,
+                        reason="BROKER_ORDER_DATE_MISMATCH",
+                    )
+                )
+                continue
+            orders.append(payload)
+
+        trades: list[dict[str, Any]] = []
+        stale_trade_order_ids: set[str] = set()
+        stale_trades_skipped = 0
+        for payload in raw_trades:
+            trade = RawQmtTrade.from_dict(payload)
+            broker_date = _broker_trade_payload_date(payload)
+            linked_stale_order = bool(trade.order_id and trade.order_id in stale_order_ids)
+            if linked_stale_order or (broker_date is not None and broker_date != self._trade_date):
+                if trade.order_id:
+                    stale_trade_order_ids.add(trade.order_id)
+                stale_trades_skipped += 1
+                stale_payload_samples.append(
+                    _stale_payload_sample(
+                        payload_type="trade",
+                        payload=payload,
+                        broker_date=broker_date,
+                        expected_trade_date=self._trade_date,
+                        reason="BROKER_TRADE_LINKED_TO_STALE_ORDER"
+                        if linked_stale_order
+                        else "BROKER_TRADE_DATE_MISMATCH",
+                    )
+                )
+                continue
+            trades.append(payload)
 
         accounts = self._repository.list_virtual_accounts(account_id=self._account_id)
         strategy_id_by_name = {account.strategy_name: account.strategy_id for account in accounts}
@@ -240,7 +299,11 @@ class QmtStrategyLedgerSyncService:
             )
             orders_upserted += 1
             status_events_appended += 1
-            if order.order_type == BUY_ORDER_TYPE and order.order_status in {STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED}:
+            if (
+                order.order_type == BUY_ORDER_TYPE
+                and order.order_status in {STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED}
+                and order.order_id not in stale_trade_order_ids
+            ):
                 terminal_buy_orders.append((order, strategy_id, intent.intent_id))
                 submit_status = _intent_status_from_order_status(order.order_status)
                 if submit_status is not None:
@@ -381,9 +444,9 @@ class QmtStrategyLedgerSyncService:
         return SyncSummary(
             account_id=self._account_id,
             trade_date=self._trade_date,
-            orders_seen=len(orders),
+            orders_seen=len(raw_orders),
             orders_upserted=orders_upserted,
-            trades_seen=len(trades),
+            trades_seen=len(raw_trades),
             trades_inserted=trades_inserted,
             trades_existing=trades_existing,
             unattributed_orders=unattributed_orders,
@@ -401,6 +464,10 @@ class QmtStrategyLedgerSyncService:
             positions_seen=len(positions),
             lots_unlocked=lots_unlocked,
             raw_positions=tuple(dict(item) for item in positions),
+            stale_orders_skipped=stale_orders_skipped,
+            stale_trades_skipped=stale_trades_skipped,
+            stale_broker_snapshot=stale_orders_skipped > 0 or stale_trades_skipped > 0,
+            stale_broker_payload_samples=tuple(stale_payload_samples[:10]),
         )
 
     def _unlock_tplus1_lots(self, strategy_ids: Any) -> int:
@@ -785,6 +852,9 @@ def _parse_trade_time(trade_date: date, value: str) -> datetime | None:
     cleaned = str(value or "").strip()
     if not cleaned:
         return None
+    parsed_datetime = _parse_payload_datetime(cleaned)
+    if parsed_datetime is not None:
+        return parsed_datetime
     for fmt in ("%H%M%S", "%H:%M:%S"):
         try:
             parsed = datetime.strptime(cleaned, fmt)
@@ -792,6 +862,109 @@ def _parse_trade_time(trade_date: date, value: str) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _broker_order_payload_date(payload: dict[str, Any]) -> date | None:
+    return (
+        _parse_payload_date(payload.get("order_time_iso"))
+        or _parse_payload_date((payload.get("diagnostic") or {}).get("order_time_iso") if isinstance(payload.get("diagnostic"), dict) else None)
+        or _parse_payload_date(payload.get("order_datetime"))
+        or _parse_payload_date(payload.get("order_date"))
+        or _parse_payload_date(payload.get("order_time"))
+    )
+
+
+def _broker_trade_payload_date(payload: dict[str, Any]) -> date | None:
+    return (
+        _parse_payload_date(payload.get("traded_time_iso"))
+        or _parse_payload_date(payload.get("trade_time_iso"))
+        or _parse_payload_date(payload.get("trade_datetime"))
+        or _parse_payload_date(payload.get("trade_date"))
+        or _parse_payload_date(payload.get("traded_date"))
+        or _parse_payload_date(payload.get("traded_time"))
+    )
+
+
+def _parse_payload_date(value: Any) -> date | None:
+    dt = _parse_payload_datetime(value)
+    if dt is not None:
+        return dt.astimezone(CHINA_TZ).date() if dt.tzinfo is not None else dt.date()
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    candidates: list[tuple[str, str]] = []
+    if len(cleaned) >= 10 and cleaned[4:5] == "-" and cleaned[7:8] == "-":
+        candidates.append((cleaned[:10], "%Y-%m-%d"))
+    if len(cleaned) == 8 and cleaned.isdigit():
+        candidates.append((cleaned, "%Y%m%d"))
+    for candidate, fmt in candidates:
+        try:
+            return datetime.strptime(candidate, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_payload_datetime(value: Any) -> datetime | None:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    normalized = cleaned.replace("Z", "+00:00")
+    try:
+        if "T" in normalized or "-" in normalized:
+            return datetime.fromisoformat(normalized)
+    except ValueError:
+        pass
+    digits = cleaned
+    if digits.isdigit() and len(digits) == 14:
+        try:
+            return datetime.strptime(digits, "%Y%m%d%H%M%S").replace(tzinfo=CHINA_TZ)
+        except ValueError:
+            return None
+    if not digits.isdigit():
+        return None
+    try:
+        raw_epoch = int(digits)
+    except ValueError:
+        return None
+    if len(digits) >= 13:
+        raw_epoch = raw_epoch // 1000
+    if len(digits) < 10 or raw_epoch < 946684800:
+        return None
+    try:
+        return datetime.fromtimestamp(raw_epoch, tz=UTC).astimezone(CHINA_TZ)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _stale_payload_sample(
+    *,
+    payload_type: str,
+    payload: dict[str, Any],
+    broker_date: date | None,
+    expected_trade_date: date,
+    reason: str,
+) -> dict[str, Any]:
+    sample_keys = (
+        "order_id",
+        "traded_id",
+        "order_sysid",
+        "stock_code",
+        "order_time",
+        "order_time_iso",
+        "traded_time",
+        "traded_time_iso",
+        "strategy_name",
+        "order_remark",
+    )
+    sample = {key: payload.get(key) for key in sample_keys if key in payload}
+    return {
+        "payload_type": payload_type,
+        "reason": reason,
+        "expected_trade_date": expected_trade_date.isoformat(),
+        "broker_payload_date": broker_date.isoformat() if broker_date is not None else None,
+        "payload": sample,
+    }
 
 
 def _unattributed_id(prefix: str, account_id: str, trade_date: date, row_id: str) -> str:
