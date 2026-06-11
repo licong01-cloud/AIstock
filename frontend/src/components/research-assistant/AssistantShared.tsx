@@ -57,6 +57,15 @@ function JsonPreview({ value }: { value: unknown }) {
   );
 }
 
+function diagnosticLogText(data: unknown): string {
+  if (typeof data === "string") return data;
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+
 function labelForKey(key: string): string {
   return key
     .replace(/[_-]+/g, " ")
@@ -78,6 +87,19 @@ export function DetailDrawer({ title, data }: { title: string; data: unknown }) 
       <summary>{title}</summary>
       <JsonPreview value={data} />
     </details>
+  );
+}
+
+export function DiagnosticLogBlock({ title, data, lines, testId = "ra-diagnostic-log" }: { title: string; data?: unknown; lines?: string[]; testId?: string }) {
+  const lineText = (lines || []).filter(Boolean).join("\n");
+  const dataText = data === undefined ? "" : diagnosticLogText(data);
+  const logText = [lineText, dataText].filter(Boolean).join("\n");
+  if (!logText) return null;
+  return (
+    <section className="ra-error ra-diagnostic-log" data-testid={testId} aria-label={title}>
+      <strong>{title}</strong>
+      <pre className="ra-json-preview">{logText}</pre>
+    </section>
   );
 }
 

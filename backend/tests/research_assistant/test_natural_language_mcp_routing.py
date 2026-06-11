@@ -1,7 +1,23 @@
 from __future__ import annotations
 
+from typing import Any
+
 from backend.services.research_assistant.domain_ontology import McpDomain
+from backend.services.research_assistant.models import ChatTurnRequest
+from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
+from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService
 from backend.services.research_assistant.tool_router import route_examples, route_request
+
+
+class _LocalDataCheckLlm:
+    def complete(self, **kwargs: Any) -> LlmCallResult:
+        return LlmCallResult(
+            content="Local data sync status summary is available from the selected MCP route.",
+            provider="fake",
+            model="fake-local-data-route",
+            duration_ms=1,
+            usage={},
+        )
 
 
 def test_route_examples_cover_at_least_40_natural_language_cases() -> None:
@@ -140,6 +156,62 @@ def test_bug_160_utf8_chinese_business_mcp_overviews_are_routed() -> None:
         assert route["tool_name"] == tool
         assert route["side_effect"] in {"read_only", "plan_or_preflight"}
         assert route["server_key"] != "aistock-local-data"
+
+
+def test_bug_326_local_data_sync_check_routes_to_read_only_health_overview() -> None:
+    cases = [
+        "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5",
+        "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u72b6\u6001",
+        "\u67e5\u770b\u672c\u5730\u6570\u636e\u540c\u6b65\u6982\u89c8",
+        "check local data sync status",
+        "local data sync readiness overview",
+    ]
+    for message in cases:
+        route = route_request(message)
+        assert route["domain"] == "local_data"
+        assert route["server_key"] == "aistock-local-data"
+        assert route["tool_name"] == "local_data_health_overview"
+        assert route["side_effect"] == "read_only"
+        assert route["tool_name"] != "local_data_apply_repair_confirmed"
+
+
+def test_bug_326_local_data_repair_or_sync_execution_stays_preflight_only() -> None:
+    cases = [
+        "\u4fee\u590d\u672c\u5730\u6570\u636e\u7f3a\u53e3",
+        "\u6267\u884c\u672c\u5730\u6570\u636e\u540c\u6b65",
+        "repair local data gap",
+        "sync local data now",
+    ]
+    for message in cases:
+        route = route_request(message)
+        assert route["domain"] == "local_data"
+        assert route["server_key"] == "aistock-local-data"
+        assert route["tool_name"] == "local_data_plan_repair"
+        assert route["side_effect"] == "plan_or_preflight"
+        assert route["tool_name"] != "local_data_apply_repair_confirmed"
+
+
+def test_bug_326_chat_local_data_sync_check_uses_grounded_read_only_route() -> None:
+    svc = ResearchAssistantService(
+        repository=InMemoryResearchAssistantRepository(),
+        llm_client=_LocalDataCheckLlm(),
+    )
+    svc.seed_catalogs()
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5"))
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "local_data"
+    assert route["server_key"] == "aistock-local-data"
+    assert route["tool_name"] == "local_data_health_overview"
+    assert route["side_effect"] == "read_only"
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_health_overview"
+    assert result["cards"]["react_grounding"]["evidence_guard"]["reason"] == "ok"
+    assert "max tool iterations reached without reliable evidence" not in result["assistant_message"]["content_text"]
+    assert "source=" in result["assistant_message"]["content_text"]
+    assert "as_of=" in result["assistant_message"]["content_text"]
 
 
 def test_bug_158_chinese_business_mcp_overviews_do_not_route_to_local_data() -> None:

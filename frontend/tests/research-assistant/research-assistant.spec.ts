@@ -316,6 +316,57 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
   await expect(main).not.toContainText("{");
 });
 
+
+
+test("Research Assistant blocker errors are visible as direct log blocks", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "Local data repair requires explicit confirmation; diagnostic detail is rendered as a direct log block.",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: false },
+      action_proposals: [
+        { title: "read-only health overview", approval_required: false, status: "read_only" },
+        { title: "repair plan", approval_required: false, status: "plan_only" },
+        {
+          action_proposal_id: "proposal-blocker-3",
+          title: "local_data_apply_repair_confirmed",
+          approval_required: true,
+          status: "approval_required",
+          reason: "local_data_apply_repair_confirmed",
+          next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
+          provenance: { source: "action_proposals" },
+        },
+      ],
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("check local data sync status");
+  await browserPage.locator(".ra-chat-send").click();
+
+  const blockerLog = browserPage.getByTestId("ra-blocker-log");
+  await expect(blockerLog).toBeVisible();
+  await expect(blockerLog).toContainText("proposal-blocker-3");
+  await expect(blockerLog).toContainText("approval_required");
+  await expect(blockerLog).toContainText("local_data_apply_repair_confirmed");
+  await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
+  await expect(blockerLog).toContainText("action_proposals");
+  await expect(blockerLog.locator("pre")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
+  await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
+});
+
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
@@ -388,11 +439,12 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
   await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
 
   await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: "Action Proposal 执行控制台" })).toBeVisible();
-  await expect(browserPage.getByText("输入 JSON")).toBeVisible();
-  await browserPage.getByRole("button", { name: "执行 preflight" }).click();
-  await browserPage.getByText("dry-run / preflight debug payload").click();
-  await expect(browserPage.getByText("Missing Confirmations").first()).toBeVisible();
+  await expect(browserPage.getByRole("heading", { name: /Action Proposal/ })).toBeVisible();
+  await expect(browserPage.locator("#ra-legacy-payload")).toBeVisible();
+  await browserPage.getByRole("button", { name: /preflight/ }).click();
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("missing_confirmations");
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(0);
 });
 
 

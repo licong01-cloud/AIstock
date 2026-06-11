@@ -7,7 +7,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { AgentTeamsRunView } from "@/components/research-assistant/AgentTeamsRunView";
-import { ApiErrorBox, DetailDrawer, EmptyState, asObject, display, formatDateTime } from "@/components/research-assistant/AssistantShared";
+import { ApiErrorBox, DetailDrawer, DiagnosticLogBlock, EmptyState, asObject, display, formatDateTime } from "@/components/research-assistant/AssistantShared";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
   LOCAL_DATA_MANAGEMENT_PHASES,
@@ -118,6 +118,7 @@ function HumanResultCard({ result }: { result: AssistantActionProposalResult | n
         <p>{display(error.human_reason)}</p>
         <p className="pv2-muted">{workbenchCopy.result.nextStepPrefix}{display(error.next_step)}</p>
         <p className="pv2-muted">{workbenchCopy.result.auditLinkPrefix}<span className="pv2-mono">{display(error.audit_link)}</span></p>
+        <DiagnosticLogBlock title="Action error log" data={error} testId="ra-action-error-log" />
       </div>
     );
   }
@@ -451,9 +452,9 @@ export default function ResearchAssistantWorkbenchPage() {
               {summarizeActionEvents(actionEvents).map(([key, value]) => <span className="pv2-chip" key={key}>{key}: {display(value)}</span>)}
             </div>
           ) : null}
-          {preflight ? <DetailDrawer title={workbenchCopy.sections.debugPreflightPayload} data={preflight} /> : null}
-          {executeResult ? <DetailDrawer title={workbenchCopy.sections.debugExecutePayload} data={executeResult} /> : null}
-          {actionEvents ? <DetailDrawer title={workbenchCopy.sections.auditEventPayload} data={actionEvents} /> : null}
+          {preflight ? <DiagnosticLogBlock title={workbenchCopy.sections.debugPreflightPayload} data={preflight} testId="ra-workbench-preflight-log" /> : null}
+          {executeResult ? <DiagnosticLogBlock title={workbenchCopy.sections.debugExecutePayload} data={executeResult} testId="ra-workbench-execute-log" /> : null}
+          {actionEvents ? <DiagnosticLogBlock title={workbenchCopy.sections.auditEventPayload} data={actionEvents} testId="ra-workbench-audit-log" /> : null}
         </SectionCard>
 
         <SectionCard title={workbenchCopy.sections.legacyTitle} eyebrow={workbenchCopy.sections.legacyEyebrow}>
@@ -473,7 +474,7 @@ export default function ResearchAssistantWorkbenchPage() {
             <button className="pv2-button-ghost" type="button" onClick={() => void runLegacyDryRun()} disabled={!selectedTool || !legacyParsedPayload || legacyBusy !== null}>{legacyBusy === "dry_run" ? workbenchCopy.sections.dryRunRunning : workbenchCopy.sections.executeDryRun}</button>
           </div>
           {!legacyParsedPayload ? <span className="pv2-error-meta">{workbenchCopy.sections.invalidExecutionJson}</span> : null}
-          {dryRunResult ? <DetailDrawer title="dry-run / preflight debug payload" data={dryRunResult} /> : <EmptyState title={workbenchCopy.sections.waitingDryRunTitle} hint={workbenchCopy.sections.waitingDryRunHint} />}
+          {dryRunResult ? <DiagnosticLogBlock title="dry-run / preflight debug payload" data={dryRunResult} testId="ra-workbench-dry-run-log" /> : <EmptyState title={workbenchCopy.sections.waitingDryRunTitle} hint={workbenchCopy.sections.waitingDryRunHint} />}
         </SectionCard>
       </div>
 
