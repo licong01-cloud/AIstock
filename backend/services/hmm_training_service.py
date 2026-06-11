@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 import calendar
@@ -544,6 +545,27 @@ class HMMTrainingService:
             "notes",
             "metadata",
             "version",
+            "precomputed_daily",
+            "source_score_column",
+            "score_method",
+            "transform",
+            "range",
+            "ranges",
+            "coefficient_low",
+            "coefficient_high",
+            "coefficient_min",
+            "coefficient_max",
+            "coefficient_start",
+            "coefficient_end",
+            "source_config_id",
+            "source_snapshot_id",
+            "source_coefficients_path",
+            "coefficients_path",
+            "coefficient_window",
+            "coefficient_windows",
+            "date_count",
+            "sector_count",
+            "strict_no_leakage",
         }
 
     @classmethod
@@ -560,10 +582,16 @@ class HMMTrainingService:
             if isinstance(nested, dict):
                 if "1" in nested and isinstance(nested["1"], dict):
                     return nested["1"]
+                metadata_keys = cls._signal_preset_metadata_keys()
                 for value in nested.values():
                     if isinstance(value, dict):
                         return value
-                return nested
+                scalar_coeffs = {
+                    str(key): value
+                    for key, value in nested.items()
+                    if str(key) not in metadata_keys and not isinstance(value, dict)
+                }
+                return scalar_coeffs or None
             return None
 
         metadata_keys = cls._signal_preset_metadata_keys()
@@ -591,13 +619,78 @@ class HMMTrainingService:
         if not isinstance(preset_coeffs, dict) or not preset_coeffs:
             return False
         metadata_keys = cls._signal_preset_metadata_keys()
-        return all(str(key) in metadata_keys for key in preset_coeffs)
+        for key, value in preset_coeffs.items():
+            key_text = str(key)
+            if key_text == "coefficients" and isinstance(value, dict):
+                if not cls._is_metadata_only_signal_preset(value):
+                    return False
+                continue
+            if key_text not in metadata_keys:
+                return False
+        return True
+
+    @classmethod
+    def _builtin_metadata_default_coefficients(
+        cls,
+        cfg: Dict[str, Any],
+        raw_preset_coeffs: Any,
+        *,
+        signal_preset: str,
+        default_presets: Dict[str, Dict[str, float]],
+    ) -> Dict[str, float] | None:
+        if signal_preset not in default_presets or not cls._is_metadata_only_signal_preset(raw_preset_coeffs):
+            return None
+        range_hint = cls._coefficient_range_hint(cfg, raw_preset_coeffs)
+        if range_hint is None:
+            return dict(default_presets[signal_preset])
+        low, high = range_hint
+        return {"trending": high, "neutral": 1.0, "fading": low}
+
+    @classmethod
+    def _coefficient_range_hint(cls, cfg: Dict[str, Any], raw_preset_coeffs: Any) -> tuple[float, float] | None:
+        candidates: list[Any] = []
+        if isinstance(raw_preset_coeffs, dict):
+            candidates.append(raw_preset_coeffs)
+            nested = raw_preset_coeffs.get("coefficients")
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        candidates.append(cfg)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            raw_range = candidate.get("range")
+            if isinstance(raw_range, (list, tuple)) and len(raw_range) >= 2:
+                parsed = cls._parse_positive_coefficient_range(raw_range[0], raw_range[1])
+                if parsed is not None:
+                    return parsed
+            parsed = cls._parse_positive_coefficient_range(
+                candidate.get("coefficient_low", candidate.get("coefficient_min")),
+                candidate.get("coefficient_high", candidate.get("coefficient_max")),
+            )
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _parse_positive_coefficient_range(raw_low: Any, raw_high: Any) -> tuple[float, float] | None:
+        try:
+            low = float(raw_low)
+            high = float(raw_high)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(low) or not math.isfinite(high) or low <= 0 or high <= 0:
+            return None
+        if low > high:
+            low, high = high, low
+        return (low, high)
 
     @classmethod
     def _extract_signal_preset_coefficients(
         cls,
         config_json: Any,
         signal_preset: str,
+        *,
+        allow_builtin_metadata_default: bool = False,
     ) -> Dict[str, float]:
         cfg = cls._normalise_config_json(config_json)
         default_presets = cls._default_signal_presets()
@@ -612,11 +705,22 @@ class HMMTrainingService:
             signal_preset=signal_preset,
         )
         if not isinstance(preset_coeffs, dict) or not preset_coeffs:
-            # Metadata-only presets are invalid even for built-in names. Using
-            # default coefficients here hides a broken runtime HMM config.
-            if cls._is_metadata_only_signal_preset(raw_preset_coeffs):
+            if (
+                allow_builtin_metadata_default
+                and signal_preset in default_presets
+                and cls._is_metadata_only_signal_preset(raw_preset_coeffs)
+            ):
+                # Built-in preset_A/B have stable state coefficients. This lets
+                # selection-time auto-generation materialize a dated cache for
+                # metadata-only precomputed snapshots without neutral fallback.
+                preset_coeffs = cls._builtin_metadata_default_coefficients(
+                    cfg,
+                    raw_preset_coeffs,
+                    signal_preset=signal_preset,
+                    default_presets=default_presets,
+                )
+            else:
                 raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
-            raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
         result: Dict[str, float] = {}
         for label, raw_value in preset_coeffs.items():
             try:
@@ -660,6 +764,7 @@ class HMMTrainingService:
         preset_coeffs = self._extract_signal_preset_coefficients(
             config_row["config_json"],
             preset_key,
+            allow_builtin_metadata_default=True,
         )
 
         requested_as_of = _coerce_date(as_of_date, field_name="as_of_date") if as_of_date else None

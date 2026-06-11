@@ -169,13 +169,14 @@ class SectorHMMRuntime:
                 "coefficient": coefficient,
                 "raw_score": raw_score,
                 "raw_rank": candidate.rank,
+                "source_reason": candidate.reason,
             }
             adjusted.append(
                 candidate.model_copy(
                     update={
                         "score": raw_score * coefficient,
                         "component_scores": component_scores,
-                        "reason": candidate.reason or "hmm_adjusted",
+                        "reason": _hmm_adjusted_reason(candidate.reason),
                     }
                 )
             )
@@ -618,6 +619,15 @@ def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
 
 def _safe_key(value: str | None) -> str:
     return str(value or "").strip().replace("/", "_").replace("\\", "_").replace("..", "_")
+
+
+def _hmm_adjusted_reason(reason: str | None) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return "hmm_adjusted"
+    if "hmm" in text.casefold():
+        return text
+    return f"{text}|hmm_adjusted"
 
 
 def _validate_preset(
