@@ -200,6 +200,7 @@ def test_context_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch,
     assert result == 0
     assert stdout.startswith("PASS codegraph-context ")
     assert "context_ref=" in stdout
+    assert "scoped_fallback=false" in stdout
     assert "selected_nodes" not in stdout
 
 
@@ -1545,12 +1546,76 @@ def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_pa
     )
 
     assert payload["status"] == "ok"
-    assert payload["context_quality"]["quality"] == "no_direct_scope_hit"
-    assert payload["context_quality"]["noisy_context_warning"] is True
+    assert payload["context_quality"]["quality"] == "scoped_fallback"
+    assert payload["context_quality"]["matched_changed_files"] == ["scripts/aistock_issue_workflow.py"]
+    assert payload["context_quality"]["scoped_fallback_inserted"] is True
+    assert payload["context_quality"]["noisy_context_warning"] is False
     assert payload["context_quality"]["broad_scan_required"] is False
     markdown = (tmp_path / payload["context_markdown"]).read_text(encoding="utf-8")
     assert "Code Intelligence Context Guidance" in markdown
-    assert "do not trust unrelated entry points" in markdown
+    assert "## Scoped Changed-File Context" in markdown
+
+
+def test_context_inserts_scoped_changed_file_context_before_noisy_graph_hits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    changed = tmp_path / "scripts" / "code_intelligence_adapter.py"
+    changed.parent.mkdir(parents=True)
+    changed.write_text(
+        "class CodeIntelligenceError(ValueError):\n"
+        "    pass\n\n"
+        "def build_context_artifacts():\n"
+        "    return {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+            "git_commit": "abc123",
+            "working_tree_dirty": False,
+            "graph_root": str(tmp_path),
+            "graph_root_source": "current_worktree",
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "unrelated qlib workflow symbol",
+            "stderr": "",
+        },
+    )
+
+    payload = adapter.build_context_artifacts(
+        item_id="BUG-325",
+        query="workflow compact output smoke",
+        changed_files=["scripts/code_intelligence_adapter.py"],
+        root=tmp_path,
+    )
+
+    quality = payload["context_quality"]
+    assert payload["status"] == "ok"
+    assert payload["channel"] == "scoped_fallback"
+    assert quality["quality"] == "scoped_fallback"
+    assert quality["matched_changed_files"] == ["scripts/code_intelligence_adapter.py"]
+    assert quality["scoped_fallback_inserted"] is True
+    assert quality["noisy_context_warning"] is False
+    assert payload["scoped_file_context"]["enabled"] is True
+    assert payload["scoped_file_context"]["outlines"][0]["line_count"] == 5
+    markdown = (tmp_path / payload["context_markdown"]).read_text(encoding="utf-8")
+    assert markdown.index("## Scoped Changed-File Context") < markdown.index("unrelated qlib workflow symbol")
+    assert "scripts/code_intelligence_adapter.py" in markdown
+    assert "`CodeIntelligenceError:1`" in markdown
+    assert "`build_context_artifacts:4`" in markdown
 
 
 def test_latest_freshness_marks_stale_metadata_warning_without_blocking(tmp_path: Path, monkeypatch) -> None:
@@ -1725,10 +1790,11 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     markdown = adapter.render_client_verification_summary(payload)
 
     assert payload["schema_version"] == "aistock_code_intelligence_client_verification_v1"
-    assert payload["workflow_gate"] == "warning"
+    assert payload["workflow_gate"] == "ready"
     assert payload["freshness"]["stale_metadata_warning"] is False
     assert payload["freshness"]["effective_source"] == "persisted_effective_artifact"
-    assert payload["context"]["noisy_context_warning"] is True
+    assert payload["context"]["noisy_context_warning"] is False
+    assert payload["context"]["scoped_fallback_inserted"] is True
     assert payload["context"]["broad_scan_required"] is False
     assert payload["clients"]["codex_issue_skill"]["status"] == "ready"
     assert payload["clients"]["claude_issue_command"]["status"] == "ready"
@@ -1766,3 +1832,4 @@ def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, m
     assert payload["fresh_summary_count"] == 1
     assert payload["base_current_summary_count"] == 1
     assert payload["stale_summary_count"] == 0
+
