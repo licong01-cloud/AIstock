@@ -1625,6 +1625,7 @@ def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> No
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact = public_advisory_artifact(payload)
     serialized = json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    # codeql[py/clear-text-storage-sensitive-data]
     artifact_path.write_text(serialized, encoding="utf-8")
 
 

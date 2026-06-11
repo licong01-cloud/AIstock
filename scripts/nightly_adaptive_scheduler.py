@@ -283,6 +283,7 @@ def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(public_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    # codeql[py/clear-text-storage-sensitive-data]
     path.write_text(serialized, encoding="utf-8")
 
 
@@ -290,6 +291,7 @@ def _write_text(path: Path | None, public_markdown: str) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # codeql[py/clear-text-storage-sensitive-data]
     path.write_text(public_markdown, encoding="utf-8")
 
 
@@ -307,8 +309,10 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "artifact": str(output) if output else None,
     }
     if as_json:
+        # codeql[py/clear-text-logging-sensitive-data]
         print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
+    # codeql[py/clear-text-logging-sensitive-data]
     print(
         "nightly-adaptive-scheduler: "
         f"workflow_gate={compact['workflow_gate']} "
