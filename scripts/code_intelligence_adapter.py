@@ -2199,7 +2199,21 @@ def cmd_freshness(args: argparse.Namespace) -> int:
         max_age_hours=args.max_age_hours,
         skip_external=args.skip_external,
     )
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "codegraph-freshness",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "freshness": payload.get("freshness"),
+            "basis": payload.get("freshness_basis"),
+            "git_commit": payload.get("git_commit"),
+            "warnings": len(payload.get("warnings") or []),
+            "summary_ref": payload.get("summary_ref"),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2211,7 +2225,24 @@ def cmd_latest_freshness(args: argparse.Namespace) -> int:
         max_age_hours=args.max_age_hours,
         skip_external=args.skip_external,
     )
-    _emit(payload, args.output)
+    effective = payload.get("effective") if isinstance(payload.get("effective"), dict) else {}
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else {}
+    _emit_compact_line(
+        "latest-freshness",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "effective": effective.get("freshness"),
+            "source": payload.get("effective_source"),
+            "current_commit": payload.get("current_git_commit"),
+            "latest_commit": latest.get("git_commit"),
+            "stale_metadata_warning": str(bool(payload.get("stale_metadata_warning"))).lower(),
+            "refreshed": str(bool(payload.get("refreshed"))).lower(),
+            "artifact_path": effective.get("artifact_path") or latest.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2350,7 +2381,30 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
     )
     if args.output_md:
         _write_text(Path(args.output_md), render_client_verification_summary(payload))
-    _emit(payload, args.output)
+    codegraph = payload.get("codegraph") if isinstance(payload.get("codegraph"), dict) else {}
+    freshness = payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {}
+    ua = payload.get("understand_anything") if isinstance(payload.get("understand_anything"), dict) else {}
+    clients = payload.get("clients") if isinstance(payload.get("clients"), dict) else {}
+    ready_clients = sum(1 for item in clients.values() if isinstance(item, dict) and item.get("status") == "ready")
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    _emit_compact_line(
+        "verify-clients",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "codegraph": codegraph.get("status"),
+            "effective": freshness.get("effective_freshness"),
+            "ua": ua.get("status"),
+            "ua_freshness": ua.get("freshness"),
+            "clients_ready": f"{ready_clients}/{len(clients)}",
+            "context_ref": artifacts.get("context_ref"),
+            "affected_tests_ref": artifacts.get("affected_tests_ref"),
+            "ua_summary_ref": artifacts.get("ua_summary_ref"),
+            "artifact_path": payload.get("artifact_path"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2370,6 +2424,12 @@ def build_parser() -> argparse.ArgumentParser:
     freshness.add_argument("--max-age-hours", type=float, default=36.0)
     freshness.add_argument("--skip-external", action="store_true")
     freshness.add_argument("--output")
+    freshness.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints status and artifact refs only; full-json emits the complete payload.",
+    )
     freshness.set_defaults(func=cmd_freshness)
 
     latest_freshness = sub.add_parser(
@@ -2382,6 +2442,12 @@ def build_parser() -> argparse.ArgumentParser:
     latest_freshness.add_argument("--max-age-hours", type=float, default=36.0)
     latest_freshness.add_argument("--skip-external", action="store_true")
     latest_freshness.add_argument("--output")
+    latest_freshness.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints status and artifact refs only; full-json emits the complete payload.",
+    )
     latest_freshness.set_defaults(func=cmd_latest_freshness)
 
     run_manifest = sub.add_parser(
@@ -2482,6 +2548,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify_clients.add_argument("--skip-external", action="store_true")
     verify_clients.add_argument("--output")
     verify_clients.add_argument("--output-md")
+    verify_clients.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints readiness status and artifact refs only; full-json emits the complete payload.",
+    )
     verify_clients.set_defaults(func=cmd_verify_clients)
     return parser
 
