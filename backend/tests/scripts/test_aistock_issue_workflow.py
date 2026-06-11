@@ -951,6 +951,7 @@ def test_code_intelligence_doctor_reports_bootstrap_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT", raising=False)
     monkeypatch.setattr(workflow.code_intelligence, "_codegraph_command", lambda: "codegraph")
     monkeypatch.setattr(
         workflow.code_intelligence,

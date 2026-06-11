@@ -44,6 +44,7 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
+  AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
 
 permissions:
   contents: read
