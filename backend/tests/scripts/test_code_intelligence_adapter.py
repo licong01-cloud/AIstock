@@ -625,6 +625,58 @@ def test_codegraph_freshness_uses_configured_graph_source_root(tmp_path: Path, m
     assert (workspace / payload["artifact_path"]).exists()
 
 
+def test_configured_graph_source_accepts_git_worktree_with_local_clone_remote(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "canonical"
+    workspace = tmp_path / "runner-workspace"
+    source.mkdir()
+    workspace.mkdir()
+    (source / ".codegraph").mkdir()
+    (source / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    monkeypatch.setenv(adapter.GRAPH_SOURCE_ROOT_ENV, str(source))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+
+    def fake_git(args, cwd=None, check=False):
+        if args == ["config", "--get", "remote.origin.url"]:
+            return {
+                "ok": True,
+                "stdout": str(source) if cwd == workspace else "git@github.com:licong01-cloud/AIstock.git",
+            }
+        if args == ["rev-parse", "--is-inside-work-tree"]:
+            return {"ok": True, "stdout": "true"}
+        return {"ok": False, "stdout": "", "stderr": "unexpected git"}
+
+    monkeypatch.setattr(adapter, "_git", fake_git)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        if args[:2] == ["codegraph", "status"]:
+            assert args[2] == str(source)
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+                "stderr": "",
+            }
+        if args[:2] == ["codegraph", "files"]:
+            return {"ok": True, "returncode": 0, "stdout": "[]", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    status = adapter.codegraph_status(workspace)
+
+    assert status["graph_root"] == str(source)
+    assert status["graph_root_source"] == "configured_env"
+    assert status["index_exists"] is True
+    assert status["graph_source_warnings"] == []
+
+
 def test_codegraph_freshness_warns_when_configured_graph_source_is_not_related(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "canonical"
     workspace = tmp_path / "runner-workspace"
