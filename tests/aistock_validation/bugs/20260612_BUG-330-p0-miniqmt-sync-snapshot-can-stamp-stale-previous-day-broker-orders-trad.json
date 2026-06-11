@@ -1,0 +1,73 @@
+{
+  "actual": "2026-06-12 00:xx read-only /api/v1/qmt/orders?cancelable_only=false returned orders with order_time_iso=2026-06-11T09:25:49+08:00; /api/v1/qmt/orders?cancelable_only=true returned previous-day records with cancelable_stale_warning=true; /api/v1/qmt/trades returned previous-day trades. sync_service.py currently uses self._trade_date for all returned orders/trades and has no broker payload date guard.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "tests/aistock_validation/bugs/20260612_BUG-330-p0-miniqmt-sync-snapshot-can-stamp-stale-previous-day-broker-orders-trad.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-330",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T16:20:40.422670Z",
+  "description": "2026-06-12 00:xx read-only /api/v1/qmt/orders?cancelable_only=false returned orders with order_time_iso=2026-06-11T09:25:49+08:00; /api/v1/qmt/orders?cancelable_only=true returned previous-day records with cancelable_stale_warning=true; /api/v1/qmt/trades returned previous-day trades. sync_service.py currently uses self._trade_date for all returned orders/trades and has no broker payload date guard.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-93b259094d53",
+      "timestamp": "2026-06-11T16:20:40.422666Z"
+    }
+  ],
+  "evidence_uris": [
+    "http://127.0.0.1:8001/api/v1/qmt/orders?cancelable_only=false returned 2026-06-11 order_time_iso while validating 2026-06-12; sync_service.py:134-324 no date filter"
+  ],
+  "expected": "MiniQMT sync_snapshot must be trade-date strict: broker orders/trades whose parsed order_time/traded_time date does not equal the requested trade_date are skipped or fail-fast with explicit stale-broker-snapshot diagnostics, and must not be inserted into qmt_strategy.order_ledger, trade_ledger, unattributed_order, or unattributed_trade for the wrong date. Scheduler/reconcile should surface an actionable warning/error instead of silently stamping stale broker records as current-day evidence.",
+  "first_seen_at": "2026-06-11T16:20:40.422670Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 986,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/986",
+  "last_seen_at": "2026-06-11T16:20:40.422670Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/qmt/orders?cancelable_only=false and /api/v1/qmt/trades before 2026-06-12 open; inspect order_time_iso/traded_time. Code: QmtStrategyLedgerSyncService.sync_snapshot in backend/services/qmt_strategy_ledger/sync_service.py stamps OrderLedgerRecord/TradeLedgerRecord/Unattributed* with self._trade_date without comparing broker payload date.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT] sync snapshot can stamp stale previous-day broker orders/trades as current trade_date",
+  "trigger_condition": {
+    "fingerprint": "93b259094d53dab6211c88ae",
+    "source_event_id": "FE-20260612-93b259094d53"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
