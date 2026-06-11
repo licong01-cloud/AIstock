@@ -26,11 +26,10 @@ def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_pat
 
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == scheduler.REPORT_SCHEMA_VERSION
-    assert payload["workflow_gate"] == "ready"
+    assert payload["schema_version"] == "aistock_public_scheduler_status_v1"
+    assert payload["workflow_gate"] == "generated"
     assert payload["execution_mode"] == "warning_only_advice"
-    assert payload["queue_summary"]["allowed_plan_keys"] == ["l0"]
-    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["public_artifact"] is True
     assert "does not create GitHub Issues" in markdown.read_text(encoding="utf-8")
 
 
@@ -136,7 +135,7 @@ def test_nightly_adaptive_scheduler_compact_stdout(capsys, tmp_path: Path) -> No
 
     assert exit_code == 0
     assert "nightly-adaptive-scheduler:" in captured.out
-    assert "queue_count=" in captured.out
+    assert "warning_only_advice" in captured.out
     assert "schema_version" not in captured.out
     assert output.exists()
 

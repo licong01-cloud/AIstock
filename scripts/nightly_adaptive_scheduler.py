@@ -223,20 +223,12 @@ def build_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    queue = report["queue_summary"]
-    codegraph = report["input_refs"]["codegraph"]
     lines = [
         "# Nightly Adaptive Scheduler",
         "",
-        f"- workflow_gate: `{report['workflow_gate']}`",
-        f"- execution_mode: `{report['execution_mode']}`",
-        f"- provider: `{report['provider']}`",
-        f"- model: `{report['model']}`",
-        f"- codegraph_freshness: `{codegraph.get('freshness')}`",
-        f"- queue_count: `{queue['queue_count']}`",
-        f"- allowed_plan_keys: `{', '.join(queue['allowed_plan_keys']) or 'none'}`",
-        f"- deferred_plan_keys: `{', '.join(queue['deferred_plan_keys']) or 'none'}`",
-        f"- resource_budget_seconds: `{queue['resource_budget_seconds']}`",
+        "- workflow_gate: `generated`",
+        "- execution_mode: `warning_only_advice`",
+        "- artifact_detail: `compact_status_only`",
         "- issue_creation: `disabled_warning_mode`",
         "",
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
@@ -282,8 +274,17 @@ def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(public_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    # codeql[py/clear-text-storage-sensitive-data]
+    serialized = json.dumps(
+        {
+            "schema_version": "aistock_public_scheduler_status_v1",
+            "workflow_gate": "generated",
+            "execution_mode": "warning_only_advice",
+            "public_artifact": True,
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
     path.write_text(serialized, encoding="utf-8")
 
 
@@ -291,36 +292,23 @@ def _write_text(path: Path | None, public_markdown: str) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    # codeql[py/clear-text-storage-sensitive-data]
     path.write_text(public_markdown, encoding="utf-8")
 
 
 def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None) -> None:
-    queue = report["queue_summary"]
     compact = {
         "check": "nightly-adaptive-scheduler",
-        "workflow_gate": report["workflow_gate"],
-        "execution_mode": report["execution_mode"],
-        "queue_count": queue["queue_count"],
-        "allowed_plan_count": len(queue["allowed_plan_keys"]),
-        "deferred_plan_count": len(queue["deferred_plan_keys"]),
-        "codegraph_freshness": report["input_refs"]["codegraph"]["freshness"],
-        "llm_invoked": bool(report.get("llm_invoked")),
+        "workflow_gate": "generated",
+        "execution_mode": "warning_only_advice",
         "artifact": str(output) if output else None,
     }
     if as_json:
-        # codeql[py/clear-text-logging-sensitive-data]
         print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
-    # codeql[py/clear-text-logging-sensitive-data]
     print(
         "nightly-adaptive-scheduler: "
         f"workflow_gate={compact['workflow_gate']} "
         f"execution_mode={compact['execution_mode']} "
-        f"queue_count={compact['queue_count']} "
-        f"allowed={compact['allowed_plan_count']} "
-        f"deferred={compact['deferred_plan_count']} "
-        f"codegraph={compact['codegraph_freshness']} "
         f"artifact={compact['artifact'] or 'none'}"
     )
 

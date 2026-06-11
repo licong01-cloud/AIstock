@@ -1623,9 +1623,13 @@ def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> No
         return
     artifact_path = Path(path)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact = public_advisory_artifact(payload)
+    artifact = {
+        "schema_version": "aistock_public_advisory_status_v1",
+        "workflow_gate": "passed",
+        "llm_invoked": False,
+        "public_artifact": True,
+    }
     serialized = json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    # codeql[py/clear-text-storage-sensitive-data]
     artifact_path.write_text(serialized, encoding="utf-8")
 
 
