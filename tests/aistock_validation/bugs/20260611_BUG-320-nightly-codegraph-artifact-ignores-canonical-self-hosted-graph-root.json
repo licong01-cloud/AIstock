@@ -31,8 +31,8 @@
   "expected": "Nightly code-intelligence artifacts should use the configured self-hosted AIstock source root for read-only CodeGraph and Understand Anything graph status, while still writing artifacts into the Actions workspace. Artifact refs must stay relative/portable and no root source files should be modified.",
   "first_seen_at": "2026-06-11T09:31:10.708385Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "07913669d295d1556d6e0cf775946466b5810da8",
+  "fixed_at": "2026-06-11T09:57:44.273268Z",
   "github_issue_number": 960,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/960",
   "last_seen_at": "2026-06-11T09:31:10.708385Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/962",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -61,6 +62,16 @@
     "fingerprint": "2f414e5d99955b09727874a0",
     "source_event_id": "FE-20260611-2f414e5d9995"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> passed (46 passed)",
+    "simulated GitHub Actions with AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT=F:\\Dev\\AIstock: codegraph freshness -> ready/fresh/configured_env; UA summaries -> ready/base_current",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> passed (420 passed)",
+    "python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-320 --pr-url https://github.com/licong01-cloud/AIstock/pull/962 --attempts 30 --delay-seconds 20 -> passed (12 checks)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
