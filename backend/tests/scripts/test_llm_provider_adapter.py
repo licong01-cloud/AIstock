@@ -394,6 +394,39 @@ def test_test_plan_advice_live_llm_error_falls_back_without_blocking(monkeypatch
     assert "ghp_secret" not in payload["llm_invocation_evidence"]["error"]
 
 
+def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_path):
+    def fake_invoke(*args, **kwargs):
+        raise adapter.ProviderAdapterError("github_models inference request failed status=429 token=ghp_secret")
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+    output = tmp_path / "test-plan-advice.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "test-plan-advice",
+            "--provider",
+            "github_models",
+            "--changed-file",
+            "scripts/llm_provider_adapter.py",
+            "--module",
+            "validation.runner",
+            "--invoke-llm",
+            "--output",
+            str(output),
+        ]
+    )
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert artifact["public_artifact"] is True
+    assert artifact["schema_version"] == adapter.TEST_PLAN_ADVICE_SCHEMA_VERSION
+    assert artifact["llm_invocation_evidence"]["invoked"] is False
+    assert artifact["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
+    assert "status=429" in artifact["llm_invocation_evidence"]["error"]
+    assert "ghp_secret" not in json.dumps(artifact)
+
+
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
 
@@ -509,6 +542,41 @@ def test_nightly_scheduler_advice_cli_uses_compact_success_output(capsys, tmp_pa
     assert '"queue_count":' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
+
+
+def test_nightly_scheduler_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_path):
+    def fake_invoke(*args, **kwargs):
+        raise adapter.ProviderAdapterError("github_models inference request failed status=429 token=ghp_secret")
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+    output = tmp_path / "nightly-scheduler-advice.json"
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-scheduler-advice",
+            "--provider",
+            "github_models",
+            "--changed-file",
+            "scripts/llm_provider_adapter.py",
+            "--recent-failure-module",
+            "validation.runner",
+            "--codegraph-freshness",
+            "fresh",
+            "--invoke-llm",
+            "--output",
+            str(output),
+        ]
+    )
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert artifact["public_artifact"] is True
+    assert artifact["schema_version"] == adapter.NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION
+    assert artifact["llm_invocation_evidence"]["invoked"] is False
+    assert artifact["llm_invocation_evidence"]["reason"] == "nightly_scheduler_advice_live_provider_failed_fallback"
+    assert "status=429" in artifact["llm_invocation_evidence"]["error"]
+    assert "ghp_secret" not in json.dumps(artifact)
 
 
 def test_prompt_evaluation_has_20_fixtures_and_compact_metrics():
