@@ -2402,7 +2402,22 @@ def cmd_context(args: argparse.Namespace) -> int:
         max_symbols=args.max_symbols,
         skip_external=args.skip_external,
     )
-    _emit(payload, args.output)
+    quality = payload.get("context_quality") if isinstance(payload.get("context_quality"), dict) else {}
+    fallback = payload.get("fallback") if isinstance(payload.get("fallback"), dict) else {}
+    _emit_compact_line(
+        "codegraph-context",
+        {
+            "status": payload.get("status"),
+            "quality": quality.get("quality"),
+            "changed_files": len(payload.get("changed_files") or []),
+            "context_ref": payload.get("context_markdown"),
+            "fallback_used": str(bool(fallback.get("used"))).lower(),
+            "graph_root_source": payload.get("graph_root_source"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2417,7 +2432,22 @@ def cmd_affected_tests(args: argparse.Namespace) -> int:
         filter_glob=args.filter,
         skip_external=args.skip_external,
     )
-    _emit(payload, args.output)
+    fallback = payload.get("fallback") if isinstance(payload.get("fallback"), dict) else {}
+    _emit_compact_line(
+        "codegraph-affected-tests",
+        {
+            "status": payload.get("status"),
+            "quality": payload.get("quality"),
+            "changed_files": len(payload.get("changed_files") or []),
+            "suggested_tests": len(payload.get("suggested_tests") or []),
+            "artifact_path": payload.get("artifact_path"),
+            "fallback_used": str(bool(fallback.get("used"))).lower(),
+            "graph_root_source": payload.get("graph_root_source"),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2495,7 +2525,22 @@ def cmd_summary(args: argparse.Namespace) -> int:
     )
     if args.output_md:
         _write_text(Path(args.output_md), render_summary_markdown(payload))
-    _emit(payload, args.output)
+    _emit_compact_line(
+        "code-intelligence-summary",
+        {
+            "status": payload.get("status"),
+            "latest_freshness": payload.get("latest_freshness"),
+            "affected_tests": payload.get("affected_tests_count", 0),
+            "context_ref": payload.get("context_ref"),
+            "affected_tests_ref": payload.get("affected_tests_ref"),
+            "ua_summary_ref": payload.get("understand_anything_summary_ref"),
+            "fallback_used": str(bool(payload.get("fallback_used"))).lower(),
+            "stale_metadata_warning": str(bool(payload.get("stale_metadata_warning"))).lower(),
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
     return 0
 
 
@@ -2611,6 +2656,12 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--max-symbols", type=int, default=12)
     context.add_argument("--skip-external", action="store_true")
     context.add_argument("--output")
+    context.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints context refs only; full-json emits the complete payload.",
+    )
     context.set_defaults(func=cmd_context)
 
     affected = sub.add_parser("affected-tests", help="Build a CodeGraph affected-tests artifact.")
@@ -2621,6 +2672,12 @@ def build_parser() -> argparse.ArgumentParser:
     affected.add_argument("--root")
     affected.add_argument("--skip-external", action="store_true")
     affected.add_argument("--output")
+    affected.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints affected-test counts and refs only; full-json emits the complete payload.",
+    )
     affected.set_defaults(func=cmd_affected_tests)
 
     ua_summary = sub.add_parser("ua-summary", help="Build a read-only Understand Anything graph summary artifact.")
@@ -2671,6 +2728,12 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--skip-external", action="store_true")
     summary.add_argument("--output")
     summary.add_argument("--output-md")
+    summary.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints summary refs only; full-json emits the complete payload.",
+    )
     summary.set_defaults(func=cmd_summary)
 
     verify_clients = sub.add_parser(

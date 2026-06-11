@@ -167,6 +167,147 @@ def test_doctor_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsy
     assert payload["selected_nodes"][0]["id"] == "explicit-json"
 
 
+def test_context_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_context_artifacts",
+        lambda **kwargs: {
+            "status": "ok",
+            "changed_files": ["scripts/code_intelligence_adapter.py"],
+            "context_markdown": "tmp/issue_workflow/VERIFY/codegraph-context.md",
+            "context_quality": {"quality": "scoped"},
+            "fallback": {"used": False},
+            "graph_root_source": "current_worktree",
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(
+        [
+            "context",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--changed-file",
+            "scripts/code_intelligence_adapter.py",
+            "--root",
+            str(tmp_path),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS codegraph-context ")
+    assert "context_ref=" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_affected_tests_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_affected_tests_artifact",
+        lambda **kwargs: {
+            "status": "ok",
+            "quality": "partial_codegraph_plus_repo_fallback",
+            "changed_files": ["scripts/code_intelligence_adapter.py"],
+            "suggested_tests": ["backend/tests/scripts/test_code_intelligence_adapter.py"],
+            "artifact_path": "tmp/issue_workflow/VERIFY/affected-tests.json",
+            "fallback": {"used": False},
+            "graph_root_source": "current_worktree",
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(
+        [
+            "affected-tests",
+            "--item-id",
+            "VERIFY",
+            "--changed-file",
+            "scripts/code_intelligence_adapter.py",
+            "--root",
+            str(tmp_path),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS codegraph-affected-tests ")
+    assert "suggested_tests=1" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_summary",
+        lambda **kwargs: {
+            "status": "ok",
+            "latest_freshness": "fresh",
+            "affected_tests_count": 1,
+            "context_ref": "tmp/issue_workflow/VERIFY/codegraph-context.md",
+            "affected_tests_ref": "tmp/issue_workflow/VERIFY/affected-tests.json",
+            "understand_anything_summary_ref": "tmp/issue_workflow/VERIFY/ua-validation-summary.md",
+            "fallback_used": False,
+            "stale_metadata_warning": False,
+            "selected_nodes": [{"id": "should-not-inline"}],
+        },
+    )
+
+    result = adapter.main(
+        [
+            "summary",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--changed-file",
+            "scripts/code_intelligence_adapter.py",
+            "--module",
+            "validation",
+            "--root",
+            str(tmp_path),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS code-intelligence-summary ")
+    assert "affected_tests=1" in stdout
+    assert "selected_nodes" not in stdout
+
+
+def test_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "build_summary",
+        lambda **kwargs: {
+            "status": "ok",
+            "latest_freshness": "fresh",
+            "selected_nodes": [{"id": "explicit-json"}],
+        },
+    )
+
+    result = adapter.main(
+        [
+            "summary",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--root",
+            str(tmp_path),
+            "--output-format",
+            "full-json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["selected_nodes"][0]["id"] == "explicit-json"
+
+
 def test_code_intelligence_doctor_falls_back_without_codegraph(
     tmp_path: Path,
     monkeypatch,
