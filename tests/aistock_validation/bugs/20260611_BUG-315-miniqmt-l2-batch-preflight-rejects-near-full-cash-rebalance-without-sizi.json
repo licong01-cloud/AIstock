@@ -32,8 +32,8 @@
   "expected": "MiniQMT multi-strategy simulation should avoid deterministic tiny cash overshoot by sizing buys with an explicit cash safety buffer or controlled shrink-to-cash behavior, while preserving fail-fast for real insufficient cash and SELL_PROCEEDS_REQUIRED cases.",
   "first_seen_at": "2026-06-11T06:56:57.981501Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "761fa2f0750377e5028f28eb4dd2ef16a5bba0a5",
+  "fixed_at": "2026-06-11T08:34:29.504527Z",
   "github_issue_number": 945,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/945",
   "last_seen_at": "2026-06-11T06:56:57.981501Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/948",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -60,6 +61,14 @@
     "fingerprint": "22f41ac8f48486c43f71ac09",
     "source_event_id": "FE-20260611-22f41ac8f484"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py -q -> 14 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_target_rebalance_shared.py -q -> 12 passed",
+    "python -m ruff check backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/bridges.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "gh pr checks 948 --watch=false -> pending-free required checks still being evaluated; latest watch summary passed=150 failed=0 pending=52"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
