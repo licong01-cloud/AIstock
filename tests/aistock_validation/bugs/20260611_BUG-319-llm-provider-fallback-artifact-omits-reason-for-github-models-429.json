@@ -28,8 +28,8 @@
   "expected": "When live LLM invocation falls back, compact output and public artifact include safe provider/model plus llm_invocation_evidence reason and redacted error category/status, without secrets or full prompts/logs.",
   "first_seen_at": "2026-06-11T08:32:14.546987Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a83284751748f961bb13875abafdfb4afad847fd",
+  "fixed_at": "2026-06-11T08:43:59.926354Z",
   "github_issue_number": 956,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/956",
   "last_seen_at": "2026-06-11T08:32:14.546987Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/958",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -57,6 +58,11 @@
     "fingerprint": "09e2c426a21eef3e20e2ef94",
     "source_event_id": "FE-20260611-09e2c426a21e"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_llm_provider_adapter.py -q -p no:cacheprovider -> 35 passed",
+    "python scripts/llm_provider_adapter.py test-plan-advice --provider github_models --changed-file scripts/llm_provider_adapter.py --module validation.runner --invoke-llm --output tmp/validation/code-intelligence/github-models-test-plan-fallback.json --json -> artifact includes safe fallback evidence",
+    "python -m nox -s validation_center_backend -> 420 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
