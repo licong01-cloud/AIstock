@@ -46,6 +46,12 @@ class ConfigManager:
                 "required": False,
                 "type": "text",
             },
+            "TDX_BLOCK_DIR": {
+                "value": "",
+                "description": "通达信板块文件目录路径（如 C:\\zd_gjzq\\T0002\\blocknew），启用通达信板块管理功能",
+                "required": False,
+                "type": "text",
+            },
             # Qlib / WSL / 路径配置
             "QLIB_WSL_DISTRO": {
                 "value": "Ubuntu-22.04",
@@ -366,6 +372,9 @@ class ConfigManager:
             lines.append("# ========== TDX本地数据源（可选）==========")
             lines.append(
                 f'TDX_API_BASE="{config.get("TDX_API_BASE", "http://localhost:8080")}"'
+            )
+            lines.append(
+                f'TDX_BLOCK_DIR="{config.get("TDX_BLOCK_DIR", "")}"'
             )
             lines.append("")
 

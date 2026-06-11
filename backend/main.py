@@ -73,6 +73,7 @@ from .routers import (
     rdagent_llm_config_endpoints,
     dispatch,
     hmm_training,
+    tdx_blocks,
 )
 from .routers import llm_config, simulation_runtime
 try:
@@ -549,6 +550,7 @@ def create_app() -> FastAPI:
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
+    app.include_router(tdx_blocks.router, prefix="/api/v1")
     app.include_router(llm_config.router)
     app.include_router(dispatch.router, prefix="/api/v1")
     if rl_execution is not None:

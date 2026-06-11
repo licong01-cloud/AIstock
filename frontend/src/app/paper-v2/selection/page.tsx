@@ -9,6 +9,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
+import { advisoryApi } from "@/lib/api/advisory";
 import { asText, dataSourceLabel, formatNumber, formatPercent, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
 import type { HmmConfig, JsonObject, SelectablePackage, SelectionCandidate, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
@@ -87,6 +88,9 @@ export default function PaperV2SelectionPage() {
   const [excluded, setExcluded] = useState<Record<string, unknown[]> | null>(null);
   const [watchlistCategoryName, setWatchlistCategoryName] = useState("");
   const [watchlistResult, setWatchlistResult] = useState<SelectionWatchlistImportResult | null>(null);
+  const [tdxAvailable, setTdxAvailable] = useState(false);
+  const [tdxSyncing, setTdxSyncing] = useState(false);
+  const [tdxSyncResult, setTdxSyncResult] = useState<{ display_name: string; count: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -124,6 +128,14 @@ export default function PaperV2SelectionPage() {
   }, [runPage]);
 
   useEffect(() => { loadPackages(); }, [loadPackages]);
+
+  useEffect(() => {
+    let alive = true;
+    advisoryApi.tdxAvailable().then((available) => {
+      if (alive) setTdxAvailable(available);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -285,6 +297,22 @@ export default function PaperV2SelectionPage() {
     }
   }
 
+  async function syncToTdx() {
+    if (!watchlistResult) return;
+    setTdxSyncing(true);
+    setTdxSyncResult(null);
+    setError(null);
+    try {
+      const catName = watchlistCategoryName || watchlistResult.category_name;
+      const result = await advisoryApi.tdxSyncFromCategory(catName);
+      setTdxSyncResult({ display_name: result.display_name, count: result.count });
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setTdxSyncing(false);
+    }
+  }
+
   async function deleteSelectedRuns() {
     const ids = Object.entries(selectedRuns).filter(([, checked]) => checked).map(([id]) => id);
     if (!ids.length) return;
@@ -404,7 +432,7 @@ export default function PaperV2SelectionPage() {
 
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
-      <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<div className="pv2-row-actions"><a className="pv2-button-ghost" data-testid="selection-create-advisory" href={run ? `/paper-v2/advisory?selection_run_id=${encodeURIComponent(run.run_id)}&package_ids=${encodeURIComponent(run.package_ids.join(","))}` : "/paper-v2/advisory"}>创建荐股任务</a><button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button></div>}>
+      <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<div className="pv2-row-actions"><a className="pv2-button-ghost" data-testid="selection-create-advisory" href={run ? `/paper-v2/advisory?selection_run_id=${encodeURIComponent(run.run_id)}&package_ids=${encodeURIComponent(run.package_ids.join(","))}` : "/paper-v2/advisory"}>创建荐股任务</a><button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>{tdxAvailable && <button className="pv2-button" data-testid="selection-tdx-sync" onClick={syncToTdx} disabled={!watchlistResult || tdxSyncing} type="button">📡 加入通达信自选</button>}</div>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
           <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" data-testid="selection-watchlist-name" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
           <div className="pv2-field"><label>目标交易日</label><div className="pv2-chip">{run?.trade_date || tradeDate}</div></div>
@@ -436,6 +464,11 @@ export default function PaperV2SelectionPage() {
         {watchlistResult ? (
           <NoticePanel title="已加入自选股票池" tone="success">
             分类 {watchlistCategoryName || watchlistResult.category_id}，来源 {watchlistResult.entry_source}，加入 {watchlistResult.imported_symbols.length} 只股票，入池基准时间 {watchlistResult.entry_as_of}。
+          </NoticePanel>
+        ) : null}
+        {tdxSyncResult ? (
+          <NoticePanel title="已同步到通达信" tone="success">
+            板块「{tdxSyncResult.display_name}」，已同步 {tdxSyncResult.count} 只股票到通达信客户端。
           </NoticePanel>
         ) : null}
       </SectionCard>

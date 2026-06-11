@@ -1,0 +1,124 @@
+{
+  "actual": "在选股中心和荐股中心页面，用户将已加入自选股票池的股票一键同步到本地通达信客户端的自定义板块。后端新增 sync_from_category 服务方法和 POST /sync-from-category 端点，前端两个页面各添加'加入通达信自选'按钮。前置条件: TDX_BLOCK_DIR 已配置且功能分支 feat/tdx-block-management-20260609 已有 .blk 读写基础设施。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "backend/services/tdx_block_service.py",
+    "backend/routers/tdx_blocks.py",
+    "backend/routers/__init__.py",
+    "backend/config_manager_compat.py",
+    "backend/main.py",
+    "frontend/src/app/tdx-blocks",
+    "frontend/src/lib/navigation/nav-groups.ts",
+    ".env.example",
+    "tests/aistock_validation/bugs/20260612_BUG-332-feat-tdx-watchlist-sync.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "claude-code",
+  "bug_id": "BUG-332",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T16:51:58.526581Z",
+  "description": "在选股中心和荐股中心页面，用户将已加入自选股票池的股票一键同步到本地通达信客户端的自定义板块。后端新增 sync_from_category 服务方法和 POST /sync-from-category 端点，前端两个页面各添加'加入通达信自选'按钮。前置条件: TDX_BLOCK_DIR 已配置且功能分支 feat/tdx-block-management-20260609 已有 .blk 读写基础设施。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-e95f10623b00",
+      "timestamp": "2026-06-11T16:51:58.526576Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-11T16:51:58.526581Z",
+  "fix_branch": "bug/BUG-332-feat-tdx-watchlist-sync-20260612",
+  "fix_commit": "373edb6a",
+  "fixed_at": null,
+  "github_issue_number": 991,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/991",
+  "last_seen_at": "2026-06-11T16:51:58.526581Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a (新功能)",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "feat: TDX watchlist sync - 一键加入通达信自选",
+  "trigger_condition": {
+    "fingerprint": "e95f10623b00844c57546261",
+    "source_event_id": "FE-20260612-e95f10623b00"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2"
+    ],
+    "ui_issue": true,
+    "ui_route": "/sync-from-category",
+    "ui_routes": [
+      "/sync-from-category",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
