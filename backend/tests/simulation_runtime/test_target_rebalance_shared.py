@@ -596,6 +596,63 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
     assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
 
 
+def test_miniqmt_vnpy_bridge_marks_buy_requests_cash_shrink_eligible() -> None:
+    _, binding, plan = _compiled_plan_for_bridge(
+        backend=SimulationBrokerBackend.MINIQMT_SIM,
+        execution_policy_payload={
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {},
+            "schedule_window": {"mode": "open_to_close"},
+        },
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256="exec_policy_hash_sniper_miniqmt",
+    )
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=binding.strategy_id,
+            strategy_name=binding.strategy_name or binding.strategy_id,
+            display_name="Shared MiniQMT Strategy",
+            account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id=new_id("lot"),
+            strategy_id=binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_open_000003",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            status=PositionLotStatus.OPEN,
+        )
+    )
+    bridge = MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(
+            repository=qmt_repo,
+            broker=FakeManagedOrderBroker(),  # type: ignore[arg-type]
+            calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), date(2026, 5, 21)]),
+        )
+    )
+
+    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol={"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")})
+
+    buy_requests = [request for request in preview.requests if request.side == "BUY"]
+    assert buy_requests
+    assert all(request.metadata["miniqmt_cash_preflight_shrink_enabled"] is True for request in buy_requests)
+    assert {request.metadata["miniqmt_cash_shrink_max_overshoot_ratio"] for request in buy_requests} == {"0.02"}
+    assert {request.metadata["miniqmt_cash_shrink_max_overshoot"] for request in buy_requests} == {"10000"}
+
+
 def test_lifecycle_orchestrator_builds_dual_backend_plans_from_same_evidence_and_is_idempotent() -> None:
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)

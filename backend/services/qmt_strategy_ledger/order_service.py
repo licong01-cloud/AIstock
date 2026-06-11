@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from hashlib import sha1
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from backend.execution_algos.board_lot import board_lot_rule, round_to_board_lot
 
@@ -46,6 +46,7 @@ _DEPENDENT_BUY_PROCEEDS_ERROR_CODES = frozenset(
         "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
     }
 )
+_CASH_SHRINK_REASON_KEY = "miniqmt_cash_preflight_shrink_reason"
 
 
 class ManagedOrderBroker(Protocol):
@@ -406,6 +407,7 @@ class QmtManagedOrderService:
 
     def submit_batch(self, requests: list[ManagedOrderRequest]) -> ManagedBatchSubmitResult:
         requests = _batch_submission_order(requests)
+        requests = _shrink_near_cash_overshoot_requests(requests, preview_order=self.preview_order)
         batch_id = _batch_id_for_requests(requests)
         deferred_batch = self._existing_dependent_buy_batch(batch_id)
         if deferred_batch is not None:
@@ -1319,6 +1321,154 @@ def _batch_submission_order(requests: list[ManagedOrderRequest]) -> list[Managed
             key=lambda item: (0 if item[1].order_type == SELL_ORDER_TYPE else 1, item[0]),
         )
     ]
+
+
+def _shrink_near_cash_overshoot_requests(
+    requests: list[ManagedOrderRequest],
+    *,
+    preview_order: Callable[[ManagedOrderRequest], OrderPreflightResult],
+) -> list[ManagedOrderRequest]:
+    """Apply deterministic board-lot shrink only when the plan explicitly opts in."""
+
+    adjusted = list(requests)
+    buy_indexes_by_key: dict[tuple[str, str], list[int]] = {}
+    for index, request in enumerate(adjusted):
+        if request.order_type != BUY_ORDER_TYPE or not _cash_shrink_enabled(request):
+            continue
+        buy_indexes_by_key.setdefault((request.account_id, request.strategy_name), []).append(index)
+
+    for key, indexes in buy_indexes_by_key.items():
+        if any(
+            request.order_type == SELL_ORDER_TYPE and (request.account_id, request.strategy_name) == key
+            for request in adjusted
+        ):
+            continue
+        preflights = [preview_order(adjusted[index]) for index in indexes]
+        total_freeze = sum(preflight.freeze_amount for preflight in preflights)
+        available_cash = _shared_available_cash(preflights)
+        if available_cash is None or total_freeze <= available_cash:
+            continue
+        shrink_metadata = adjusted[indexes[0]].metadata
+        overshoot = total_freeze - available_cash
+        max_tolerance = min(
+            _metadata_decimal(shrink_metadata, "miniqmt_cash_shrink_max_overshoot") or Decimal("0"),
+            available_cash * (
+                _metadata_decimal(shrink_metadata, "miniqmt_cash_shrink_max_overshoot_ratio") or Decimal("0")
+            ),
+        )
+        if max_tolerance <= Decimal("0") or overshoot > max_tolerance:
+            continue
+        proposed_adjusted = list(adjusted)
+        remaining = overshoot
+        shrink_events: list[dict[str, Any]] = []
+        adjusted_indexes: set[int] = set()
+        freeze_by_index = {index: preflight.freeze_amount for index, preflight in zip(indexes, preflights, strict=True)}
+        for index in sorted(indexes, key=lambda item: (freeze_by_index[item], item), reverse=True):
+            if remaining <= Decimal("0"):
+                break
+            request = proposed_adjusted[index]
+            if request.price <= Decimal("0"):
+                continue
+            try:
+                min_qty, increment = board_lot_rule(request.symbol)
+            except ValueError:
+                continue
+            if request.quantity <= min_qty:
+                continue
+            steps_needed = int((remaining / (request.price * Decimal(increment))).to_integral_value(rounding=ROUND_CEILING))
+            shrink_qty = max(increment, steps_needed * increment)
+            max_shrink_qty = max(((request.quantity - min_qty) // increment) * increment, 0)
+            shrink_qty = min(shrink_qty, max_shrink_qty)
+            if shrink_qty <= 0:
+                continue
+            new_quantity = request.quantity - shrink_qty
+            proposed_adjusted[index] = _shrink_request_quantity(
+                request,
+                new_quantity=new_quantity,
+                original_batch_required_cash=total_freeze,
+                available_cash=available_cash,
+            )
+            adjusted_indexes.add(index)
+            reduction = request.price * Decimal(shrink_qty)
+            remaining -= reduction
+            shrink_events.append(
+                {
+                    "order_remark": request.order_remark,
+                    "symbol": request.symbol,
+                    "original_quantity": request.quantity,
+                    "adjusted_quantity": new_quantity,
+                    "reduced_cash": float(reduction),
+                }
+            )
+        if remaining > Decimal("0"):
+            continue
+        adjusted = [
+            _attach_group_shrink_summary(proposed_adjusted[index], shrink_events=shrink_events)
+            if index in adjusted_indexes
+            else proposed_adjusted[index]
+            for index in range(len(proposed_adjusted))
+        ]
+    return adjusted
+
+
+def _cash_shrink_enabled(request: ManagedOrderRequest) -> bool:
+    raw = request.metadata.get("miniqmt_cash_preflight_shrink_enabled")
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _shared_available_cash(preflights: list[OrderPreflightResult]) -> Decimal | None:
+    available_values = [preflight.available_cash for preflight in preflights if preflight.available_cash is not None]
+    if len(available_values) != len(preflights):
+        return None
+    first = available_values[0] if available_values else None
+    if first is None or any(value != first for value in available_values):
+        return None
+    return first
+
+
+def _metadata_decimal(metadata: dict[str, Any], key: str) -> Decimal | None:
+    raw = metadata.get(key)
+    if raw in (None, ""):
+        return None
+    try:
+        return Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _shrink_request_quantity(
+    request: ManagedOrderRequest,
+    *,
+    new_quantity: int,
+    original_batch_required_cash: Decimal,
+    available_cash: Decimal,
+) -> ManagedOrderRequest:
+    metadata = dict(request.metadata)
+    metadata.update(
+        {
+            "miniqmt_cash_preflight_shrunk": True,
+            "miniqmt_cash_preflight_original_quantity": request.quantity,
+            "miniqmt_cash_preflight_adjusted_quantity": new_quantity,
+            "miniqmt_cash_preflight_original_freeze": str(request.price * Decimal(request.quantity)),
+            "miniqmt_cash_preflight_adjusted_freeze": str(request.price * Decimal(new_quantity)),
+            "miniqmt_cash_preflight_available_cash": str(available_cash),
+            "miniqmt_cash_preflight_original_batch_required_cash": str(original_batch_required_cash),
+            _CASH_SHRINK_REASON_KEY: "near_cash_overshoot_within_configured_safety_buffer",
+        }
+    )
+    return replace(request, quantity=new_quantity, metadata=metadata)
+
+
+def _attach_group_shrink_summary(
+    request: ManagedOrderRequest,
+    *,
+    shrink_events: list[dict[str, Any]],
+) -> ManagedOrderRequest:
+    metadata = dict(request.metadata)
+    metadata["miniqmt_cash_preflight_shrink_events"] = list(shrink_events)
+    return replace(request, metadata=metadata)
 
 
 def _without_preflight_error_codes(

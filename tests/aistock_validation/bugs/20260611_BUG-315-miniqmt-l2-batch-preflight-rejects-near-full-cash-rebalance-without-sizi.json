@@ -1,0 +1,75 @@
+{
+  "actual": "L2 generated 8 buy intents requiring 450452.0 against 447106.86 cash; submit_batch marked all 8 failed with BATCH_INSUFFICIENT_CASH and no broker calls.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "tests/aistock_validation/bugs/20260611_BUG-315-miniqmt-l2-batch-preflight-rejects-near-full-cash-rebalance-without-sizi.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-315",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T06:56:57.981501Z",
+  "description": "L2 generated 8 buy intents requiring 450452.0 against 447106.86 cash; submit_batch marked all 8 failed with BATCH_INSUFFICIENT_CASH and no broker calls.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-22f41ac8f484",
+      "timestamp": "2026-06-11T06:56:57.981497Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime API 2026-06-11 14:40 +08 simrun_44560ed2c0394586"
+  ],
+  "expected": "MiniQMT multi-strategy simulation should avoid deterministic tiny cash overshoot by sizing buys with an explicit cash safety buffer or controlled shrink-to-cash behavior, while preserving fail-fast for real insufficient cash and SELL_PROCEEDS_REQUIRED cases.",
+  "first_seen_at": "2026-06-11T06:56:57.981501Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 945,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/945",
+  "last_seen_at": "2026-06-11T06:56:57.981501Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-11; inspect simrun_44560ed2c0394586 errors[0].code=BATCH_INSUFFICIENT_CASH",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "MiniQMT L2 batch preflight rejects near-full-cash rebalance without sizing buffer",
+  "trigger_condition": {
+    "fingerprint": "22f41ac8f48486c43f71ac09",
+    "source_event_id": "FE-20260611-22f41ac8f484"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
