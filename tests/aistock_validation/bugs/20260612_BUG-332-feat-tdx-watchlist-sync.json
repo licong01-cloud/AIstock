@@ -39,8 +39,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-11T16:51:58.526581Z",
   "fix_branch": "bug/BUG-332-feat-tdx-watchlist-sync-20260612",
-  "fix_commit": "373edb6a",
-  "fixed_at": null,
+  "fix_commit": "22df5573abd96d903e6c9781d2db842dab22236f",
+  "fixed_at": "2026-06-11T17:36:15.273923Z",
   "github_issue_number": 991,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/991",
   "last_seen_at": "2026-06-11T16:51:58.526581Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/994",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -107,6 +108,11 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 613 passed",
+    "CI validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
