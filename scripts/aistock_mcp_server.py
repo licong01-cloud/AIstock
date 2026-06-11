@@ -1655,6 +1655,61 @@ def start_validation_execution(
 
 
 @mcp.tool()
+def schedule_validation_from_llm_advice(
+    provider: str = "github_models",
+    trigger: str = "manual",
+    changed_files: list[str] | None = None,
+    recent_failure_modules: list[str] | None = None,
+    recent_failure_plan_keys: list[str] | None = None,
+    codegraph_freshness: str = "unknown",
+    resource_budget_seconds: int = 900,
+    workspace_path: str | None = None,
+    execute: bool = False,
+    requested_by: str = "mcp_agent",
+    backend_port: int | None = None,
+    frontend_port: int | None = None,
+    timeout_seconds: int | None = None,
+    expected_branch: str | None = None,
+    expected_commit: str | None = None,
+    failure_event_ref: str | None = None,
+    bug_id: str | None = None,
+    github_issue_number: int | None = None,
+    github_issue_url: str | None = None,
+) -> dict[str, Any]:
+    """Gate LLM-suggested validation plans before optional controlled execution.
+
+    The LLM is limited to plan-key advice. ``execute=False`` is the default;
+    when execution is requested, Validation Center still enforces the
+    runner-enabled catalog, workspace, port, and business-state gates.
+    """
+    body: dict[str, Any] = {
+        "provider": provider,
+        "trigger": trigger,
+        "changed_files": changed_files or [],
+        "recent_failure_modules": recent_failure_modules or [],
+        "recent_failure_plan_keys": recent_failure_plan_keys or [],
+        "codegraph_freshness": codegraph_freshness,
+        "resource_budget_seconds": resource_budget_seconds,
+        "execute": execute,
+        "requested_by": requested_by,
+    }
+    optional_values = {
+        "workspace_path": workspace_path,
+        "backend_port": backend_port,
+        "frontend_port": frontend_port,
+        "timeout_seconds": timeout_seconds,
+        "expected_branch": expected_branch,
+        "expected_commit": expected_commit,
+        "failure_event_ref": failure_event_ref,
+        "bug_id": bug_id,
+        "github_issue_number": github_issue_number,
+        "github_issue_url": github_issue_url,
+    }
+    body.update({key: value for key, value in optional_values.items() if value is not None})
+    return _client().post("/llm/schedule", json_body=body)
+
+
+@mcp.tool()
 def get_validation_execution_status(execution_id: str) -> dict[str, Any]:
     """Get the status / exit code / artifacts of a controlled validation execution."""
     safe = _sanitize_identifier(execution_id, "execution_id")

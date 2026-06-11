@@ -52,6 +52,10 @@ BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
+SUPERSEDED_CI_CLASSIFICATIONS = {
+    "superseded_by_later_main_success",
+    "superseded_by_later_branch_success",
+}
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
@@ -119,6 +123,14 @@ from scripts import code_intelligence_adapter as code_intelligence  # noqa: E402
 
 class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
+
+
+class WorkflowPayloadError(WorkflowError):
+    """Raised with a compact machine-readable recovery payload."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(str(payload.get("message") or payload.get("reason") or "workflow payload error"))
+        self.payload = payload
 
 
 def _estimate_tokens(text: str) -> int:
@@ -281,6 +293,7 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "context_estimated_tokens",
         "artifact_estimated_tokens",
         "top_phase",
+        "token_usage_status",
     )
 
 
@@ -798,6 +811,20 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_promote_ci_issue(payload) or {})
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
         compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
+    elif schema.endswith("_missing_bug_record_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "reason",
+                "github_issue",
+                "inferred_module",
+                "inferred_severity",
+                "blocking",
+                "warnings",
+                "next_actions",
+                "next_command",
+            )
+        )
     else:
         for key in (
             "module",
@@ -1271,15 +1298,22 @@ def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
 def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifact_metrics: dict[str, Any]) -> dict[str, Any]:
     phase_rows = _phase_cost_table(timing)
     top_phase = max(phase_rows, key=lambda item: item["dominant_seconds"], default=None)
-    context_tokens = sum(
+    context_token_values = [
         int(item.get("estimated_tokens") or 0)
         for item in context_metrics.values()
-        if isinstance(item, dict)
-    )
-    artifact_tokens = sum(
+        if isinstance(item, dict) and item.get("exists") is not False and "estimated_tokens" in item
+    ]
+    artifact_token_values = [
         int(item.get("estimated_tokens") or 0)
         for item in artifact_metrics.values()
-        if isinstance(item, dict)
+        if isinstance(item, dict) and item.get("exists") is not False and "estimated_tokens" in item
+    ]
+    context_tokens: int | None = sum(context_token_values) if context_token_values else None
+    artifact_tokens: int | None = sum(artifact_token_values) if artifact_token_values else None
+    total_tokens: int | None = (
+        (context_tokens or 0) + (artifact_tokens or 0)
+        if context_tokens is not None or artifact_tokens is not None
+        else None
     )
     return {
         "schema_version": "aistock_issue_workflow_h6_summary_v1",
@@ -1289,7 +1323,8 @@ def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifac
         "top_phase": top_phase,
         "context_estimated_tokens": context_tokens,
         "artifact_estimated_tokens": artifact_tokens,
-        "total_estimated_tokens": context_tokens + artifact_tokens,
+        "total_estimated_tokens": total_tokens,
+        "token_usage_status": "estimated" if total_tokens is not None else "unknown",
         "queue_seconds": timing.get("queue_seconds"),
         "active_fix_seconds": timing.get("active_fix_seconds"),
         "local_validation_seconds": timing.get("local_validation_seconds"),
@@ -1342,6 +1377,44 @@ def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str,
         "fallback_reason": fallback_reason,
         "readiness_next_command": next_command,
         "blocking_for_issue_workflow": False,
+    }
+
+
+def _code_intelligence_efficiency_summary(code_intel: dict[str, Any] | None) -> dict[str, Any]:
+    """Record graph-first usage without expanding graph artifacts in successful output."""
+
+    code_intel = code_intel or {}
+    affected_tests = code_intel.get("affected_tests") if isinstance(code_intel.get("affected_tests"), dict) else {}
+    context = code_intel.get("context") if isinstance(code_intel.get("context"), dict) else {}
+    fallback = context.get("fallback") if isinstance(context.get("fallback"), dict) else {}
+    ua = code_intel.get("understand_anything") if isinstance(code_intel.get("understand_anything"), dict) else {}
+    context_ref = code_intel.get("context_ref")
+    affected_tests_ref = code_intel.get("affected_tests_ref")
+    ua_summary_ref = code_intel.get("understand_anything_summary_ref")
+    graph_refs = [item for item in (context_ref, affected_tests_ref, ua_summary_ref) if item]
+    fallback_used = bool(
+        code_intel.get("fallback_used")
+        or fallback.get("used")
+        or str(code_intel.get("status") or "").lower() == "fallback"
+    )
+    fallback_reason = fallback.get("reason") or code_intel.get("fallback_reason")
+    if not fallback_reason and fallback_used:
+        fallback_reason = "graph_context_fallback"
+    broad_scan_avoided = bool(graph_refs) and not fallback_used
+    return {
+        "schema_version": "aistock_issue_workflow_code_intelligence_efficiency_v1",
+        "graph_first_context_used": broad_scan_avoided,
+        "codegraph_context_ref": context_ref,
+        "affected_tests_ref": affected_tests_ref,
+        "understand_anything_summary_ref": ua_summary_ref,
+        "affected_tests_count": code_intel.get("affected_tests_count") or len(affected_tests.get("suggested_tests") or []),
+        "affected_quality": code_intel.get("affected_quality"),
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "broad_scan_avoided": broad_scan_avoided,
+        "estimated_broad_scan_tokens_avoided": 8000 if broad_scan_avoided else None,
+        "understand_anything_status": ua.get("status"),
+        "full_graph_payload_included": False,
     }
 
 
@@ -1577,7 +1650,7 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
             "--limit",
             str(limit),
             "--json",
-            "number,title,url,state",
+            "number,title,url,state,labels",
         ],
         timeout=timeout,
     )
@@ -1604,6 +1677,8 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
                 "source": issue.get("url") or f"github_issue:{issue.get('number')}",
                 "github_issue_number": issue.get("number"),
                 "github_state": issue.get("state"),
+                "title": title,
+                "labels": issue.get("labels") or [],
             }
         )
     if len(issues) >= limit:
@@ -1616,6 +1691,20 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
             }
         )
     return sources, []
+
+
+def _github_bug_issue_for_id(bug_id: str, *, limit: int = 1000, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
+    normalized = bug_id.strip().upper()
+    sources, warnings = _scan_github_bug_ids(limit=limit, timeout=timeout)
+    matches = [
+        item
+        for item in sources
+        if str(item.get("bug_id") or "").upper() == normalized and item.get("kind") == "github_issue"
+    ]
+    if not matches:
+        return None, warnings
+    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
+    return matches[0], warnings
 
 
 def _bug_id_allocation_report(
@@ -2553,7 +2642,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     workflow = str(summary.get("workflow") or "").strip()
     branch = str(summary.get("branch") or "").strip()
     run_id = str(summary.get("run_id") or "").strip()
-    if not workflow or branch != "main" or not run_id.isdigit():
+    if not workflow or not branch or not run_id.isdigit():
         return None
     result = _run_command(
         [
@@ -2599,8 +2688,18 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             "head_sha": item.get("headSha"),
             "created_at": item.get("createdAt"),
             "display_title": item.get("displayTitle"),
+            "branch": branch,
+            "supersede_scope": "main" if branch == "main" else "same_branch",
         }
     return None
+
+
+def _superseded_success_phrase(superseding_run: dict[str, Any], workflow: str | None) -> str:
+    workflow_name = workflow or "CI"
+    branch = str(superseding_run.get("branch") or "").strip()
+    if superseding_run.get("supersede_scope") == "same_branch" and branch:
+        return f"later successful {workflow_name} run on the same branch {branch}"
+    return f"later successful main {workflow_name} run"
 
 
 def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
@@ -2708,6 +2807,113 @@ def _find_bug_by_github_issue(issue_number: int | str) -> tuple[dict[str, Any], 
     return None
 
 
+def _shell_quote(value: str) -> str:
+    text = str(value)
+    return '"' + text.replace('"', '\\"') + '"'
+
+
+def _github_issue_label_names(issue: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for item in issue.get("labels") or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name:
+            names.append(name)
+    return flow._unique_strings(names)
+
+
+def _infer_bug_module_from_github_issue(issue: dict[str, Any]) -> str | None:
+    for label in _github_issue_label_names(issue):
+        lower = label.lower()
+        if lower.startswith("module:"):
+            value = lower.split(":", 1)[1].strip()
+            return value or None
+        if lower == "paper-v2":
+            return "paper_v2"
+        if lower == "qe":
+            return "qe"
+    return None
+
+
+def _infer_bug_severity_from_github_issue(issue: dict[str, Any]) -> str | None:
+    text = " ".join([str(issue.get("title") or ""), *_github_issue_label_names(issue)])
+    match = re.search(r"\bP([0-3])\b", text, flags=re.IGNORECASE)
+    return f"P{match.group(1)}" if match else None
+
+
+def _adopt_bug_command(*, bug_id: str, title: str, module: str | None, severity: str | None, issue_number: Any, issue_url: str) -> str:
+    module_arg = module or "<module>"
+    severity_arg = severity or "P1"
+    return (
+        "python scripts/aistock_issue_workflow.py submit-bug "
+        f"--bug-id {bug_id} --title {_shell_quote(title)} "
+        f"--module {module_arg} --severity {severity_arg} "
+        f"--github-issue-number {issue_number} --github-issue-url {issue_url} "
+        "--create-fix-worktree --apply"
+    )
+
+
+def _missing_bug_record_recovery_payload(bug_id: str) -> dict[str, Any]:
+    normalized = bug_id.strip().upper()
+    github_issue, warnings = _github_bug_issue_for_id(normalized)
+    if not github_issue:
+        return {
+            "schema_version": "aistock_issue_workflow_missing_bug_record_v1",
+            "generated_at": _utc_now(),
+            "bug_id": normalized,
+            "workflow_gate": "blocked",
+            "reason": "local_bug_json_missing",
+            "blocking": [f"BUG record not found: {normalized}"],
+            "warnings": warnings,
+            "next_command": _adopt_bug_command(
+                bug_id=normalized,
+                title=f"{normalized} <title>",
+                module=None,
+                severity=None,
+                issue_number="<issue_number>",
+                issue_url="<issue_url>",
+            ),
+        }
+
+    issue_number = github_issue.get("github_issue_number")
+    issue_url = str(github_issue.get("source") or _github_issue_url(issue_number))
+    issue_title = str(github_issue.get("title") or normalized)
+    module = _infer_bug_module_from_github_issue(github_issue)
+    severity = _infer_bug_severity_from_github_issue(github_issue)
+    return {
+        "schema_version": "aistock_issue_workflow_missing_bug_record_v1",
+        "generated_at": _utc_now(),
+        "bug_id": normalized,
+        "workflow_gate": "missing_bug_record",
+        "reason": "github_issue_exists_without_local_bug_json",
+        "github_issue": {
+            "number": issue_number,
+            "url": issue_url,
+            "state": github_issue.get("github_state"),
+            "title": issue_title,
+            "labels": _github_issue_label_names(github_issue),
+        },
+        "inferred_module": module,
+        "inferred_severity": severity,
+        "blocking": [f"{normalized} exists on GitHub but local BUG JSON is missing from this checkout"],
+        "warnings": warnings,
+        "next_actions": [
+            "adopt_or_reconstruct_bug_json_in_isolated_worktree",
+            "avoid_creating_duplicate_bug_id",
+        ],
+        "next_command": _adopt_bug_command(
+            bug_id=normalized,
+            title=issue_title,
+            module=module,
+            severity=severity,
+            issue_number=issue_number,
+            issue_url=issue_url,
+        ),
+    }
+
+
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
     if issue_json:
         path = Path(issue_json)
@@ -2722,7 +2928,7 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
         if str(record.get("bug_id") or "").upper() == normalized:
             matches.append((record, path))
     if not matches:
-        raise WorkflowError(f"BUG record not found: {normalized}")
+        raise WorkflowPayloadError(_missing_bug_record_recovery_payload(normalized))
     if len(matches) > 1:
         raise WorkflowError(f"Multiple BUG records found for {normalized}: {[str(path) for _, path in matches]}")
     return matches[0]
@@ -3424,6 +3630,21 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
         "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
         "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "latest_freshness": code_intelligence_summary.get("latest_freshness"),
+        "latest_freshness_ref": code_intelligence_summary.get("latest_freshness_ref"),
+        "consume_command": code_intelligence_summary.get("consume_command"),
+        "verify_command": code_intelligence_summary.get("verify_command"),
+        "stale_metadata_warning": bool(code_intelligence_summary.get("stale_metadata_warning")),
+        "context_quality": (
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("quality")
+            if isinstance(code_intelligence_summary.get("context"), dict)
+            else None
+        ),
+        "noisy_context_warning": bool(
+            ((code_intelligence_summary.get("context") or {}).get("context_quality") or {}).get("noisy_context_warning")
+        )
+        if isinstance(code_intelligence_summary.get("context"), dict)
+        else False,
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
@@ -3550,6 +3771,13 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- context_ref: `{code_intel.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
         f"- affected_tests_count: `{code_intel.get('affected_tests_count', 0)}`",
+        f"- latest_freshness: `{code_intel.get('latest_freshness') or 'not_available'}`",
+        f"- latest_freshness_ref: `{code_intel.get('latest_freshness_ref') or 'not_available'}`",
+        f"- consume_command: `{code_intel.get('consume_command') or 'python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale'}`",
+        f"- verify_command: `{code_intel.get('verify_command') or 'python scripts/code_intelligence_adapter.py verify-clients'}`",
+        f"- context_quality: `{code_intel.get('context_quality') or 'unknown'}`",
+        f"- stale_metadata_warning: `{str(bool(code_intel.get('stale_metadata_warning'))).lower()}`",
+        f"- noisy_context_warning: `{str(bool(code_intel.get('noisy_context_warning'))).lower()}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
         f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
         f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
@@ -3982,11 +4210,13 @@ def build_workflow_smoke_plan(
     blocking: list[str] = []
     warnings: list[str] = []
     dirty_before = _git_status_paths(REPO_ROOT)
+    doctor_payload: dict[str, Any] | None = None
     fast_path: dict[str, Any] | None = None
     start: dict[str, Any] | None = None
     finish: dict[str, Any] | None = None
     postmortem_preview: dict[str, Any] | None = None
     try:
+        doctor_payload = build_doctor_report(skip_external=True)
         fast_path = build_fast_path_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -4055,6 +4285,9 @@ def build_workflow_smoke_plan(
         "dirty_paths_after": dirty_after,
         "new_dirty_paths": new_paths,
         "unexpected_dirty_paths": unexpected,
+        "client_manifest": (doctor_payload or {}).get("client_manifest"),
+        "restart_recommended": (doctor_payload or {}).get("restart_recommended"),
+        "h7_code_intelligence": (doctor_payload or {}).get("h7_code_intelligence"),
         "fast_path": fast_path,
         "start": start,
         "finish": finish,
@@ -4075,6 +4308,7 @@ def _smoke_nightly_status_payload() -> dict[str, Any]:
             "drValidate": "success",
             "nightlyL3": "failure",
             "paperV2Live": "skipped",
+            "codeIntelligence": "success",
         },
         "run_id": "999999999",
         "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
@@ -4318,6 +4552,9 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "promotion_requires_registry_worktree": "--create-registry-worktree --apply" in str(entrypoints.get("promote") or ""),
         "needs_bug_json_recorded": handoff.get("needs_bug_json") is True,
         "candidate_history_tmp_only": bool(candidate_history_path and _path_under_repo_tmp_validation(candidate_history_path)),
+        "synthetic_marker_recorded": issue_payload.get("synthetic") is True
+        and issue_payload.get("failure_kind") == "synthetic_smoke"
+        and "aistock-failure-kind:synthetic_smoke" in body,
     }
     for label, ok in closed_loop_checks.items():
         if not ok:
@@ -4351,6 +4588,8 @@ def build_nightly_intake_smoke_plan() -> dict[str, Any]:
         "warnings": warnings,
         "dry_run": True,
         "github_writes": False,
+        "failure_kind": issue_payload.get("failure_kind"),
+        "synthetic": issue_payload.get("synthetic") is True,
         "production_gates": _production_gates_payload(),
         "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
         "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
@@ -5524,6 +5763,7 @@ def build_postmortem_plan(
     phase_cost_table = _phase_cost_table(timing)
     h6_summary = _h6_summary(timing, context_metrics, artifact_metrics)
     h7_code_intelligence = _code_intelligence_readiness(state.get("code_intelligence") or {})
+    code_intelligence_efficiency = _code_intelligence_efficiency_summary(state.get("code_intelligence") or {})
     payload = {
         "schema_version": "aistock_issue_workflow_postmortem_v1",
         "generated_at": _utc_now(),
@@ -5543,6 +5783,7 @@ def build_postmortem_plan(
         "context_metrics": context_metrics,
         "artifact_metrics": artifact_metrics,
         "h7_code_intelligence": h7_code_intelligence,
+        "code_intelligence_efficiency": code_intelligence_efficiency,
         "active_workflows": active,
         "duplicate_active_count": duplicate_active_count,
         "stale_pr_check": stale_pr_check,
@@ -5552,6 +5793,8 @@ def build_postmortem_plan(
             "event_count": timing.get("event_count"),
             "context_estimated_tokens": h6_summary.get("context_estimated_tokens"),
             "artifact_estimated_tokens": h6_summary.get("artifact_estimated_tokens"),
+            "code_intelligence_broad_scan_avoided": code_intelligence_efficiency.get("broad_scan_avoided"),
+            "estimated_broad_scan_tokens_avoided": code_intelligence_efficiency.get("estimated_broad_scan_tokens_avoided"),
             "top_phase": h6_summary.get("top_phase"),
         },
         "production_gates": state.get("production_gates") or {},
@@ -5588,8 +5831,9 @@ def build_postmortem_plan(
                 "## H6 Cost Summary",
                 "",
                 f"- Top phase: `{(h6_summary.get('top_phase') or {}).get('phase') or 'none'}`",
-                f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens')}`",
-                f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens')}`",
+                f"- Token usage status: `{h6_summary.get('token_usage_status') or 'unknown'}`",
+                f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens') if h6_summary.get('context_estimated_tokens') is not None else 'unknown'}`",
+                f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens') if h6_summary.get('artifact_estimated_tokens') is not None else 'unknown'}`",
                 f"- Queue seconds: `{h6_summary.get('queue_seconds') or 'not_recorded'}`",
                 f"- Active fix seconds: `{h6_summary.get('active_fix_seconds') or 'not_recorded'}`",
                 f"- Local validation seconds: `{h6_summary.get('local_validation_seconds') or 'not_recorded'}`",
@@ -5608,6 +5852,8 @@ def build_postmortem_plan(
                 f"- understand_anything_next_command: `{h7_code_intelligence.get('understand_anything_next_command') or 'not_required'}`",
                 f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
                 f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
+                f"- broad_scan_avoided: `{str(bool(code_intelligence_efficiency.get('broad_scan_avoided'))).lower()}`",
+                f"- estimated_broad_scan_tokens_avoided: `{code_intelligence_efficiency.get('estimated_broad_scan_tokens_avoided') if code_intelligence_efficiency.get('estimated_broad_scan_tokens_avoided') is not None else 'unknown'}`",
                 "",
                 "## Production Gates",
                 "",
@@ -5643,7 +5889,7 @@ def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
     ]
     if any(token in title_body or token in errors for token in infra_signatures):
         return "infra_blocker"
-    if any(token in title_body for token in ["flaky", "timeout", "network", "runner"]):
+    if any(token in title_body for token in ["flaky", "timeout", "network"]):
         return "infra_flaky"
     if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
         return "test_fixture_gap_or_real_regression"
@@ -5695,15 +5941,21 @@ def build_triage_ci_issue_plan(
     superseding_run = _find_superseding_main_success(summary)
     superseded_action = None
     if superseding_run and linked is None:
-        classification = "superseded_by_later_main_success"
+        same_branch = superseding_run.get("supersede_scope") == "same_branch"
+        classification = "superseded_by_later_branch_success" if same_branch else "superseded_by_later_main_success"
+        success_phrase = _superseded_success_phrase(superseding_run, str(summary.get("workflow") or "CI"))
         close_command = (
             f"gh issue close {issue.get('number')} --repo {GITHUB_REPO} --comment "
-            f"\"Superseded by later successful main {summary.get('workflow') or 'CI'} run: {superseding_run.get('run_url')}. "
+            f"\"Superseded by {success_phrase}: {superseding_run.get('run_url')}. "
             "No BUG JSON promotion is required.\""
         )
         superseded_action = {
-            "workflow_gate": "superseded_by_latest_main_success",
-            "reason": "A later successful default-branch run of the same workflow supersedes this CI failure.",
+            "workflow_gate": "superseded_by_latest_branch_success" if same_branch else "superseded_by_latest_main_success",
+            "reason": (
+                "A later successful run of the same workflow on the same branch supersedes this CI failure."
+                if same_branch
+                else "A later successful default-branch run of the same workflow supersedes this CI failure."
+            ),
             "superseding_run": superseding_run,
             "next_command": close_command,
             "production_gates": {
@@ -5732,7 +5984,7 @@ def build_triage_ci_issue_plan(
     )
     actionable = classification in ACTIONABLE_CI_CLASSIFICATIONS
     triage_action: str | None = None
-    if not actionable and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"}:
+    if not actionable and classification not in {"infra_flaky", "infra_blocker", *SUPERSEDED_CI_CLASSIFICATIONS}:
         triage_action = "triage_incomplete_collect_failure_diagnostics_before_bug_promotion"
         failure_event["candidate_status"] = "triage_incomplete"
         context_pack["failure_event"] = failure_event
@@ -5750,12 +6002,13 @@ def build_triage_ci_issue_plan(
         ]
         context_pack["agent_handoff"] = handoff
     if superseded_action:
-        failure_event["candidate_status"] = "superseded_by_later_main_success"
+        failure_event["candidate_status"] = classification
         failure_event["superseded_action"] = superseded_action
         context_pack["failure_event"] = failure_event
         context_pack["superseded_action"] = superseded_action
+        verification_scope = "same branch" if classification == "superseded_by_later_branch_success" else "default-branch"
         context_pack["required_verification"] = [
-            "Verify the superseding default-branch run for the same workflow is successful.",
+            f"Verify the superseding {verification_scope} run for the same workflow is successful.",
             "Close the auto-filed GitHub Issue with the superseding run URL; do not promote BUG JSON.",
         ]
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
@@ -5823,7 +6076,7 @@ def build_triage_ci_issue_plan(
             if classification in {"infra_flaky", "infra_blocker"} and linked is None
             else (
                 superseded_action["next_command"]
-                if classification == "superseded_by_later_main_success" and linked is None and superseded_action
+                if classification in SUPERSEDED_CI_CLASSIFICATIONS and linked is None and superseded_action
                 else (
                     f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
                     "--create-registry-worktree --apply"
@@ -5883,12 +6136,13 @@ def _list_open_auto_filed_ci_issues(*, limit: int = 50) -> list[dict[str, Any]]:
 
 
 def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[str, Any], workflow: str | None) -> dict[str, Any]:
+    success_phrase = _superseded_success_phrase(superseding_run, workflow)
     comment = (
-        f"Superseded by later successful main {workflow or 'CI'} run: {superseding_run.get('run_url')}. "
+        f"Superseded by {success_phrase}: {superseding_run.get('run_url')}. "
         "No BUG JSON promotion is required. production_ddl_gate=noop; "
         "production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop."
     )
-    return _execute_checked(
+    result = _execute_checked(
         [
             "gh",
             "issue",
@@ -5902,6 +6156,9 @@ def _close_superseded_ci_issue(issue_number: int | str, superseding_run: dict[st
         cwd=REPO_ROOT,
         timeout=60,
     )
+    label_result = _sync_closed_auto_filed_issue_labels(issue_number)
+    result["label_sync"] = _pick(label_result, "ok", "returncode", "skipped")
+    return result
 
 
 def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any], workflow: str | None) -> dict[str, Any]:
@@ -5914,7 +6171,7 @@ def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any],
         "production_ddl_gate=noop; production_frontend_dependency_gate=noop; "
         "production_backend_dependency_gate=noop."
     )
-    return _execute_checked(
+    result = _execute_checked(
         [
             "gh",
             "issue",
@@ -5924,6 +6181,52 @@ def _close_infra_ci_issue(issue_number: int | str, infra_action: dict[str, Any],
             GITHUB_REPO,
             "--comment",
             comment,
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    label_result = _sync_closed_auto_filed_issue_labels(issue_number)
+    result["label_sync"] = _pick(label_result, "ok", "returncode", "skipped")
+    return result
+
+
+def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, Any]:
+    """Keep closed auto-filed issues from retaining the active status label."""
+    try:
+        view = _execute_checked(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--repo",
+                GITHUB_REPO,
+                "--json",
+                "state,labels",
+            ],
+            cwd=REPO_ROOT,
+            timeout=60,
+        )
+        payload = json.loads(str(view.get("stdout") or "{}"))
+    except Exception as exc:
+        return {"ok": False, "skipped": False, "reason": str(exc)}
+    labels = {
+        str(item.get("name") or "")
+        for item in payload.get("labels") or []
+        if isinstance(item, dict)
+    }
+    if str(payload.get("state") or "").upper() != "CLOSED" or "auto-filed" not in labels or "status:open" not in labels:
+        return {"ok": True, "skipped": True}
+    return _execute_checked(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--remove-label",
+            "status:open",
         ],
         cwd=REPO_ROOT,
         timeout=60,
@@ -5968,7 +6271,7 @@ def build_ci_issue_janitor_plan(
         entry["linked_bug"] = triage.get("linked_bug")
         entry["github_issue"] = triage.get("github_issue")
         if (
-            triage.get("classification_recommendation") == "superseded_by_later_main_success"
+            triage.get("classification_recommendation") in SUPERSEDED_CI_CLASSIFICATIONS
             and not triage.get("linked_bug")
             and isinstance(triage.get("superseded_action"), dict)
         ):
@@ -6089,7 +6392,7 @@ def build_promote_ci_issue_plan(
             "infra_action": triage.get("infra_action"),
             "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
         }
-    if triage.get("classification_recommendation") == "superseded_by_later_main_success":
+    if triage.get("classification_recommendation") in SUPERSEDED_CI_CLASSIFICATIONS:
         action = triage.get("superseded_action") if isinstance(triage.get("superseded_action"), dict) else {}
         return {
             "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
@@ -6219,45 +6522,84 @@ def _is_reparse_or_symlink(path: Path) -> bool:
 
 
 def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:
+    sample_limit = 20
     profile: dict[str, Any] = {
         "path": str(path),
         "inside_worktree_root": _is_inside(path, _default_worktree_root()) if path.exists() else False,
         "regular_entries": [],
         "reparse_entries": [],
         "empty_dirs": [],
+        "regular_entry_count": 0,
+        "reparse_entry_count": 0,
+        "empty_dir_count": 0,
+        "sample_limit": sample_limit,
+        "top_regular_dirs": {},
         "missing": not path.exists(),
     }
     if not path.exists():
         profile["safe_reparse_or_empty_only"] = True
         return profile
 
+    def add_sample(key: str, rel: str) -> None:
+        count_key = {
+            "regular_entries": "regular_entry_count",
+            "reparse_entries": "reparse_entry_count",
+            "empty_dirs": "empty_dir_count",
+        }[key]
+        profile[count_key] += 1
+        if len(profile[key]) < sample_limit:
+            profile[key].append(rel)
+        if key == "regular_entries":
+            top = rel.split("/", 1)[0] if "/" in rel else rel
+            top_dirs = profile["top_regular_dirs"]
+            top_dirs[top] = int(top_dirs.get(top, 0)) + 1
+
     def scan_dir(directory: Path) -> None:
         try:
             children = sorted(directory.iterdir(), key=lambda item: item.as_posix())
         except OSError:
-            profile["regular_entries"].append(_repo_rel(directory, path))
+            add_sample("regular_entries", _repo_rel(directory, path))
             return
         if not children and directory != path:
-            profile["empty_dirs"].append(_repo_rel(directory, path))
+            add_sample("empty_dirs", _repo_rel(directory, path))
             return
         for child in children:
             rel = _repo_rel(child, path)
             if _is_reparse_or_symlink(child):
-                profile["reparse_entries"].append(rel)
+                add_sample("reparse_entries", rel)
             elif child.is_dir():
                 scan_dir(child)
             else:
-                profile["regular_entries"].append(rel)
+                add_sample("regular_entries", rel)
 
     scan_dir(path)
-    profile["safe_reparse_or_empty_only"] = bool(profile["inside_worktree_root"]) and not profile["regular_entries"]
+    profile["regular_entries_truncated"] = profile["regular_entry_count"] > len(profile["regular_entries"])
+    profile["reparse_entries_truncated"] = profile["reparse_entry_count"] > len(profile["reparse_entries"])
+    profile["empty_dirs_truncated"] = profile["empty_dir_count"] > len(profile["empty_dirs"])
+    profile["top_regular_dirs"] = dict(
+        sorted(
+            profile["top_regular_dirs"].items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:10]
+    )
+    profile["safe_reparse_or_empty_only"] = bool(profile["inside_worktree_root"]) and not profile["regular_entry_count"]
     return profile
+
+
+def _orphan_worktree_refusal_message(profile: dict[str, Any]) -> str:
+    return (
+        "refusing orphan worktree cleanup with regular files: "
+        f"count={profile.get('regular_entry_count', 0)} "
+        f"samples={profile.get('regular_entries') or []} "
+        f"top_dirs={profile.get('top_regular_dirs') or {}} "
+        "full file list intentionally omitted; close open processes or delete the orphan directory manually"
+    )
 
 
 def _remove_reparse_or_empty_tree(path: Path) -> dict[str, Any]:
     profile = _orphan_worktree_dir_profile(path)
     if not profile.get("safe_reparse_or_empty_only"):
-        raise WorkflowError(f"refusing orphan worktree cleanup with regular files: {profile.get('regular_entries')}")
+        raise WorkflowError(_orphan_worktree_refusal_message(profile))
     removed: list[str] = []
     if not path.exists():
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "profile": profile, "removed": removed}
@@ -7844,6 +8186,7 @@ def _build_close_sync_cleanup_after_merge_plan(
     close_sync_pr_merge: dict[str, Any],
     cleanup: bool,
     apply: bool,
+    sync_root: bool = False,
 ) -> dict[str, Any] | None:
     if not cleanup or close_sync_pr_merge.get("workflow_gate") not in {"merged", "already_merged"}:
         return None
@@ -7860,7 +8203,7 @@ def _build_close_sync_cleanup_after_merge_plan(
         worktree=worktree,
         pr_url=close_sync_commit.get("pr_url") or close_sync_pr_merge.get("pr_url"),
         apply=bool(apply and close_sync_pr_merge.get("auto_merge")),
-        sync_root=False,
+        sync_root=sync_root,
     )
 
 
@@ -8076,12 +8419,22 @@ def build_merge_finalizer_plan(
                 apply=merge_close_sync_pr,
                 sync_root=sync_root,
             )
+    close_sync_cleanup_sync_root = bool(
+        sync_root
+        and close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
+        and (
+            cleanup_plan is None
+            or cleanup_plan.get("workflow_gate") != "cleanup_done"
+            or not cleanup_plan.get("sync_root")
+        )
+    )
     close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
         close_sync_pr_merge=close_sync_pr_merge,
         cleanup=cleanup,
         apply=apply,
+        sync_root=close_sync_cleanup_sync_root,
     )
     try:
         postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
@@ -9536,6 +9889,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except WorkflowPayloadError as exc:
+        _emit_args(exc.payload, args)
+        return 2
     except WorkflowError as exc:
         print(f"aistock_issue_workflow error: {exc}", file=sys.stderr)
         return 2

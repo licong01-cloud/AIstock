@@ -61,6 +61,7 @@ _ACCOUNT_GROUP_SLOTS = "account_group_slots"
 _ACCOUNT_GROUP_ALIASES = frozenset({_ACCOUNT_GROUP_SLOTS, "account_group", "strategy_slot"})
 _EXCLUSIVE_ACCOUNT_ALIASES = frozenset({_EXCLUSIVE_ACCOUNT, _EXCLUSIVE_ACCOUNT_LEGACY, "exclusive_account_phase1"})
 _SUPPORTED_ACCOUNT_MODES = sorted(_EXCLUSIVE_ACCOUNT_ALIASES | _ACCOUNT_GROUP_ALIASES)
+_CANONICAL_RUNTIME_OWNER = "MiniQMTExecutionRuntime"
 
 
 class _OrderRecord:
@@ -399,6 +400,18 @@ class MiniQMTSimBackend(BrokerBackend):
             "order_remark": record.order_remark,
             "account_group_id": str(record.intent.metadata.get("account_group_id") or ""),
             "strategy_slot_id": str(record.intent.metadata.get("strategy_slot_id") or ""),
+            "runtime_owner": str(record.intent.metadata.get("runtime_owner") or ""),
+            "runtime_id": str(record.intent.metadata.get("runtime_id") or ""),
+            "runtime_algo_instance_id": str(
+                record.intent.metadata.get("runtime_algo_instance_id")
+                or record.intent.metadata.get("algo_instance_id")
+                or ""
+            ),
+            "runtime_child_order_id": str(
+                record.intent.metadata.get("runtime_child_order_id")
+                or record.intent.metadata.get("child_order_id")
+                or ""
+            ),
         }
 
     def query_status_from_native(
@@ -604,9 +617,10 @@ class MiniQMTSimBackend(BrokerBackend):
         if not self._is_legacy_account_mode:
             return BrokerBindCapacity(
                 backend_id=self.backend_id,
-                max_concurrent_packages=64,
+                max_concurrent_packages=1_000_000_000,
                 rejection_reason_if_exceeded=(
-                    "MiniQMTSim account_group_slots capacity is governed by account-group slot funds and preflight"
+                    "MiniQMTSim account_group_slots does not enforce a fixed strategy count; "
+                    "slot capacity is governed by funds and trading-rule preflight"
                 ),
             )
         return BrokerBindCapacity(
@@ -668,6 +682,7 @@ class MiniQMTSimBackend(BrokerBackend):
         strategy_slot_id = _required_metadata_text(metadata, "strategy_slot_id")
         strategy_name = _required_metadata_text(metadata, "strategy_name")
         order_remark = _required_metadata_text(metadata, "order_remark")
+        _enforce_runtime_owned_account_group_intent(intent)
         if self._account_group_id is not None and account_group_id != self._account_group_id:
             raise BrokerSubmitError(
                 "OrderIntent.account_group_id does not match MiniQMTSim account group",
@@ -930,6 +945,50 @@ def _required_metadata_text(metadata: dict[str, Any], key: str) -> str:
     raise BrokerSubmitError(
         "MiniQMTSim account-group order intent is missing required slot attribution",
         context={"missing_metadata_key": key, "required_metadata_keys": ["account_group_id", "strategy_slot_id", "strategy_name", "order_remark"]},
+    )
+
+
+def _enforce_runtime_owned_account_group_intent(intent: OrderIntent) -> None:
+    """Keep account-group MiniQMT orders behind the canonical runtime boundary."""
+
+    metadata = intent.metadata or {}
+    owner = str(metadata.get("runtime_owner") or "").strip()
+    runtime_id = str(metadata.get("runtime_id") or "").strip()
+    algo_instance_id = str(
+        metadata.get("runtime_algo_instance_id")
+        or metadata.get("algo_instance_id")
+        or ""
+    ).strip()
+    child_order_id = str(
+        metadata.get("runtime_child_order_id")
+        or metadata.get("child_order_id")
+        or ""
+    ).strip()
+    missing = [
+        key
+        for key, value in {
+            "runtime_id": runtime_id,
+            "runtime_algo_instance_id": algo_instance_id,
+            "runtime_child_order_id": child_order_id,
+        }.items()
+        if not value
+    ]
+    if owner == _CANONICAL_RUNTIME_OWNER and not missing:
+        return
+    raise BrokerSubmitError(
+        "MiniQMTSim account-group order intent must be emitted by MiniQMTExecutionRuntime",
+        context={
+            "intent_id": intent.intent_id,
+            "runtime_owner": owner,
+            "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
+            "missing_runtime_metadata_keys": missing,
+            "required_runtime_metadata_keys": [
+                "runtime_owner",
+                "runtime_id",
+                "runtime_algo_instance_id",
+                "runtime_child_order_id",
+            ],
+        },
     )
 
 

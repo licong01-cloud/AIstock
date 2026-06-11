@@ -23,6 +23,15 @@ FAILURES_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "runs" / "failures"
 MODULE_REGISTRY = CATALOG_ROOT / "module_registry.yaml"
 FILE_OWNERSHIP = CATALOG_ROOT / "file_ownership.yaml"
 TEST_PLANS = CATALOG_ROOT / "test_plans.yaml"
+PR_COMMENT_MAX_CHARS = 55000
+TIER_COMPLEXITY_THRESHOLDS = {
+    "changed_files_t2": 8,
+    "changed_files_t3": 20,
+    "impacted_modules_t2": 4,
+    "impacted_modules_t3": 8,
+    "layers_t2": 3,
+    "layers_t3": 5,
+}
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
     "docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md",
@@ -136,6 +145,12 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
 
 
 def _unique_strings(items: list[Any]) -> list[str]:
@@ -287,13 +302,27 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     plans = _plans_by_key()
     ownership = match_changed_files(changed_files)
     impacted = list(ownership["impacted_modules"])
+    primary_modules = _unique_strings(
+        str(item.get("primary_module"))
+        for item in ownership.get("matched_rules") or []
+        if item.get("primary_module")
+    )
     if module and module not in impacted:
         impacted.insert(0, module)
+    if module and module not in primary_modules:
+        primary_modules.insert(0, module)
     if not impacted and module:
         impacted = [module]
+    if not primary_modules and impacted:
+        primary_modules = [impacted[0]]
 
     required: list[str] = []
     recommended: list[str] = []
+    primary_required: set[str] = set()
+    for module_id in primary_modules:
+        entry = modules.get(module_id) or {}
+        module_plans = entry.get("test_plans") or {}
+        primary_required.update(str(item) for item in _as_list(module_plans.get("required_on_change")))
     for module_id in impacted:
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
@@ -303,6 +332,13 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         required.append("l0")
     required = [plan for plan in _unique_strings(required) if plan in plans]
     recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
+    required, recommended, plan_promotions = _promote_indirect_required_to_recommended(
+        required,
+        recommended,
+        primary_required={plan for plan in primary_required if plan in plans},
+    )
+    recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
+    required = sorted(required, key=_plan_priority)
 
     skip_reasons = {
         plan_key: "not selected by changed-file ownership or requested module"
@@ -321,12 +357,92 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     return {
         "schema_version": "aistock_validation_selection_v1",
         "impacted_modules": impacted,
+        "primary_modules": primary_modules,
         "ownership": ownership,
         "required_plans": required,
         "recommended_plans": recommended,
+        "plan_promotions": plan_promotions,
         "nightly_plans": ["AIstock Nightly L3 + DR"],
         "skip_reasons": skip_reasons,
         "production_gates": gates,
+    }
+
+
+def _plan_priority(plan_key: str) -> int:
+    priority = {
+        "l0": 0,
+        "validation_module_registry_l0": 10,
+        "guardrail_changed_files": 20,
+    }
+    return priority.get(plan_key, 100)
+
+
+def _promote_indirect_required_to_recommended(
+    required: list[str],
+    recommended: list[str],
+    *,
+    primary_required: set[str],
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Keep CI selection narrow: indirect impact modules inform recommendations, not required gates."""
+
+    always_required = {"l0"}
+    final_required: list[str] = []
+    final_recommended = list(recommended)
+    promotions: list[dict[str, str]] = []
+    for plan in _unique_strings(required):
+        if plan in primary_required or plan in always_required:
+            final_required.append(plan)
+        else:
+            final_recommended.append(plan)
+            promotions.append(
+                {
+                    "plan_key": plan,
+                    "reason": "selected_from_indirect_impact_module",
+                    "target": "recommended",
+                }
+            )
+    return _unique_strings(final_required), _unique_strings(final_recommended), promotions
+
+
+def _infer_complexity_tier(
+    *,
+    changed_files: list[str],
+    ownership: dict[str, Any],
+    impacted_modules: list[str],
+    feature_signals: list[str],
+) -> dict[str, Any]:
+    layers = _unique_strings(str(item.get("layer") or "") for item in ownership.get("matched_rules") or [] if item.get("layer"))
+    changed_count = len(_unique_strings(changed_files))
+    impacted_count = len(_unique_strings(impacted_modules))
+    tier = "T0"
+    reasons: list[str] = []
+    if changed_count >= TIER_COMPLEXITY_THRESHOLDS["changed_files_t3"]:
+        tier = "T3"
+        reasons.append(f"changed_files>={TIER_COMPLEXITY_THRESHOLDS['changed_files_t3']}")
+    elif changed_count >= TIER_COMPLEXITY_THRESHOLDS["changed_files_t2"]:
+        tier = "T2"
+        reasons.append(f"changed_files>={TIER_COMPLEXITY_THRESHOLDS['changed_files_t2']}")
+    if changed_count >= 3 and impacted_count >= TIER_COMPLEXITY_THRESHOLDS["impacted_modules_t3"]:
+        tier = _highest_task_tier([tier, "T3"]) or tier
+        reasons.append(f"impacted_modules>={TIER_COMPLEXITY_THRESHOLDS['impacted_modules_t3']}")
+    elif changed_count >= 3 and impacted_count >= TIER_COMPLEXITY_THRESHOLDS["impacted_modules_t2"]:
+        tier = _highest_task_tier([tier, "T2"]) or tier
+        reasons.append(f"impacted_modules>={TIER_COMPLEXITY_THRESHOLDS['impacted_modules_t2']}")
+    if len(layers) >= TIER_COMPLEXITY_THRESHOLDS["layers_t3"]:
+        tier = _highest_task_tier([tier, "T3"]) or tier
+        reasons.append(f"layers>={TIER_COMPLEXITY_THRESHOLDS['layers_t3']}")
+    elif len(layers) >= TIER_COMPLEXITY_THRESHOLDS["layers_t2"]:
+        tier = _highest_task_tier([tier, "T2"]) or tier
+        reasons.append(f"layers>={TIER_COMPLEXITY_THRESHOLDS['layers_t2']}")
+    if feature_signals and tier == "T0" and changed_count >= 3:
+        tier = "T1"
+        reasons.append("feature_signal")
+    return {
+        "task_tier": tier,
+        "reasons": reasons,
+        "changed_file_count": changed_count,
+        "impacted_module_count": impacted_count,
+        "layers": layers,
     }
 
 
@@ -999,6 +1115,42 @@ def evaluate_design_compliance_gate(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def evaluate_feature_linkage_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Warn when a medium/large feature PR lacks issue/design linkage or scoped boundaries."""
+
+    inferred = summary.get("linkage_inference") or {}
+    feature_signals = _as_list(inferred.get("feature_signals"))
+    task_tier = _highest_task_tier(_as_list(summary.get("task_tier"))) or "T0"
+    scope = summary.get("scope_check") or {}
+    linked = bool(summary.get("linked_issues"))
+    design_present = bool(inferred.get("design_acceptance_present"))
+    scope_defined = scope.get("status") in {"passed", "failed", "missing_scope"}
+    checks = {
+        "feature_signal": bool(feature_signals),
+        "tier_needs_linkage": task_tier in {"T2", "T3"},
+        "linked_issue_or_design": linked or design_present,
+        "scope_defined": scope_defined,
+    }
+    missing: list[str] = []
+    if checks["feature_signal"] and checks["tier_needs_linkage"]:
+        if not checks["linked_issue_or_design"]:
+            missing.append("linked_issue_or_design")
+        if not checks["scope_defined"]:
+            missing.append("scope_definition")
+    gate = "warning" if missing else "not_applicable"
+    if checks["feature_signal"] and checks["tier_needs_linkage"] and not missing:
+        gate = "passed"
+    return {
+        "workflow_gate": gate,
+        "checks": checks,
+        "blocking": [],
+        "warnings": missing,
+        "suggested_action": "link a GitHub Issue/design doc or provide allowed_write_scope for medium/large feature PRs"
+        if missing
+        else None,
+    }
+
+
 def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = False) -> dict[str, Any]:
     """Evaluate the opt-in high-risk PR evidence gate without changing normal PR behavior."""
     issue_record = summary.get("issue_record") or {}
@@ -1055,6 +1207,64 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     }
 
 
+def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Create a compact LLM-ready PR summary without prompts, logs, or secrets."""
+
+    validation = summary.get("selected_validation") if isinstance(summary.get("selected_validation"), dict) else {}
+    scope = summary.get("scope_check") if isinstance(summary.get("scope_check"), dict) else {}
+    p0p1_gate = summary.get("p0p1_evidence_gate") if isinstance(summary.get("p0p1_evidence_gate"), dict) else {}
+    design_gate = summary.get("design_compliance_gate") if isinstance(summary.get("design_compliance_gate"), dict) else {}
+    compact = {
+        "schema_version": "aistock_pr_quality_llm_summary_v1",
+        "provider": "deterministic",
+        "model": "compact-pr-quality-summary-v1",
+        "invoked": False,
+        "input_policy": "pr_metadata_changed_files_catalog_summary_only",
+        "prompt_persisted": False,
+        "changed_file_count": len(summary.get("changed_files") or []),
+        "linked_issue_count": len(summary.get("linked_issues") or []),
+        "impacted_modules": list(summary.get("impacted_modules") or [])[:8],
+        "scope_check": scope.get("status"),
+        "p0p1_evidence_gate": p0p1_gate.get("workflow_gate"),
+        "design_compliance_gate": design_gate.get("workflow_gate"),
+        "required_validation_count": len(validation.get("required_plans") or []),
+        "recommended_validation_count": len(validation.get("recommended_plans") or []),
+        "production_gates": {
+            "production_ddl_gate": summary.get("production_ddl_gate"),
+            "production_frontend_dependency_gate": summary.get("production_frontend_dependency_gate"),
+            "production_backend_dependency_gate": summary.get("production_backend_dependency_gate"),
+        },
+        "code_intelligence": {
+            "used": "not_available_in_pr_quality_summary",
+            "fallback_reason": "code_intelligence_artifact_built_in_separate_pr_quality_step",
+        },
+    }
+    prompt_payload = json.dumps(compact, ensure_ascii=False, sort_keys=True)
+    compact["compact_summary_chars"] = len(prompt_payload)
+    compact["estimated_prompt_tokens"] = _estimate_tokens(prompt_payload)
+    compact["token_usage_status"] = "estimated"
+    compact["full_json_included"] = False
+    compact["status_check_rollup_included"] = False
+    compact["estimated_completion_tokens"] = None
+    compact["estimated_cost_usd"] = None
+    return compact
+
+
+def evaluate_pr_comment_budget(summary_markdown: str, code_intelligence_markdown: str = "") -> dict[str, Any]:
+    summary_chars = len(summary_markdown or "")
+    code_intel_chars = len(code_intelligence_markdown or "")
+    total_chars = summary_chars + code_intel_chars
+    return {
+        "schema_version": "aistock_pr_comment_budget_v1",
+        "max_chars": PR_COMMENT_MAX_CHARS,
+        "summary_chars": summary_chars,
+        "code_intelligence_chars": code_intel_chars,
+        "total_chars": total_chars,
+        "workflow_gate": "passed" if total_chars <= PR_COMMENT_MAX_CHARS else "warning",
+        "truncated": total_chars > PR_COMMENT_MAX_CHARS,
+    }
+
+
 def build_pr_quality(
     *,
     base: str,
@@ -1066,6 +1276,12 @@ def build_pr_quality(
     changed_files = changed_files if changed_files is not None else changed_files_from_git(base, head)
     inferred = _infer_pr_quality_context(changed_files, base=base, head=head)
     validation = select_validation(changed_files, module=(issue_record or {}).get("module"))
+    complexity = _infer_complexity_tier(
+        changed_files=changed_files,
+        ownership=validation.get("ownership") or {},
+        impacted_modules=validation.get("impacted_modules") or [],
+        feature_signals=inferred["feature_signals"],
+    )
     record_scope = _as_list((issue_record or {}).get("allowed_write_scope"))
     inferred_scope = inferred["inferred_allowed_scope"]
     scope = record_scope or inferred_scope
@@ -1098,9 +1314,16 @@ def build_pr_quality(
         "head": head,
         "issue_record": issue_record or {},
         "linked_issues": linked,
-        "task_tier": _highest_task_tier(inferred["task_tier_signals"]) or ("T1" if linked else "T0"),
+        "task_tier": _highest_task_tier(
+            _as_list((issue_record or {}).get("task_tier"))
+            + _as_list((issue_record or {}).get("tier"))
+            + inferred["task_tier_signals"]
+            + [str(complexity.get("task_tier") or "")]
+        )
+        or ("T1" if linked else "T0"),
         "changed_files": changed_files,
         "impacted_modules": validation["impacted_modules"],
+        "complexity_inference": complexity,
         "scope_check": scope_result,
         "linkage_inference": {
             "branch": inferred["branch"],
@@ -1126,11 +1349,14 @@ def build_pr_quality(
     }
     summary["p0p1_evidence_gate"] = evaluate_pr_quality_gate(summary, enforce_p0_p1=enforce_p0_p1_evidence)
     summary["design_compliance_gate"] = evaluate_design_compliance_gate(summary)
+    summary["feature_linkage_gate"] = evaluate_feature_linkage_gate(summary)
+    summary["llm_triage_summary"] = build_pr_quality_llm_summary(summary)
     summary.pop("issue_record", None)
     return summary
 
 
 def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
+    llm_summary = summary.get("llm_triage_summary") if isinstance(summary.get("llm_triage_summary"), dict) else {}
     gates = [
         f"- production_ddl_gate: `{summary.get('production_ddl_gate')}`",
         f"- production_frontend_dependency_gate: `{summary.get('production_frontend_dependency_gate')}`",
@@ -1147,10 +1373,12 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- linkage_inference: `{(summary.get('linkage_inference') or {}).get('status')}`",
         f"- p0p1_evidence_gate: `{(summary.get('p0p1_evidence_gate') or {}).get('workflow_gate')}`",
         f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
+        f"- feature_linkage_gate: `{(summary.get('feature_linkage_gate') or {}).get('workflow_gate')}`",
         f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
         *gates,
+        f"- llm_summary: provider=`{llm_summary.get('provider') or 'none'}` invoked=`{llm_summary.get('invoked')}` prompt_tokens=`{llm_summary.get('estimated_prompt_tokens')}` token_status=`{llm_summary.get('token_usage_status') or 'unknown'}`",
         "",
     ]
     violations = (summary.get("scope_check") or {}).get("violations") or []
@@ -1161,6 +1389,23 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         lines.extend(["### P0/P1 Evidence Gate Blocking", *[f"- `{item}`" for item in gate["blocking"]], ""])
     elif gate.get("warnings"):
         lines.extend(["### P0/P1 Evidence Gate Warnings", *[f"- `{item}`" for item in gate["warnings"]], ""])
+    feature_gate = summary.get("feature_linkage_gate") or {}
+    if feature_gate.get("warnings"):
+        lines.extend(["### Feature Linkage Warnings", *[f"- `{item}`" for item in feature_gate["warnings"]], ""])
+    if llm_summary:
+        lines.extend(
+            [
+                "### Compact LLM Summary",
+                f"- input_policy: `{llm_summary.get('input_policy')}`",
+                f"- prompt_persisted: `{llm_summary.get('prompt_persisted')}`",
+                f"- changed_file_count: `{llm_summary.get('changed_file_count')}`",
+                f"- required_validation_count: `{llm_summary.get('required_validation_count')}`",
+                f"- code_intelligence: `{(llm_summary.get('code_intelligence') or {}).get('used')}`",
+                f"- full_json_included: `{llm_summary.get('full_json_included')}`",
+                f"- status_check_rollup_included: `{llm_summary.get('status_check_rollup_included')}`",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1323,10 +1568,12 @@ def cmd_pr_check(args: argparse.Namespace) -> int:
         changed_files=changed_files,
         enforce_p0_p1_evidence=enforce_p0_p1,
     )
+    rendered_md = render_pr_quality_markdown(summary)
+    summary["pr_comment_budget"] = evaluate_pr_comment_budget(rendered_md)
     if args.output_md:
         path = Path(args.output_md)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_pr_quality_markdown(summary), encoding="utf-8")
+        path.write_text(rendered_md, encoding="utf-8")
     _write_json(Path(args.output_json) if args.output_json else None, summary)
     status = (summary.get("scope_check") or {}).get("status")
     evidence_gate = (summary.get("p0p1_evidence_gate") or {}).get("workflow_gate")

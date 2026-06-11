@@ -163,17 +163,19 @@ def test_model_strategy_execution_modules_call_facades_and_confirm_before_http()
 
     _registry, mcp, calls = _registry_with_capture(model_registry)
     mcp.tools["model_registry_list"]()
-    mcp.tools["model_registry_get"]("model_1")
-    mcp.tools["model_registry_compare_trials"]("model_1")
-    mcp.tools["model_registry_get_seed_stability"]("model_1")
-    mcp.tools["model_registry_get_hyperparam_history"]("model_1")
-    mcp.tools["model_registry_get_artifacts"]("model_1")
+    mcp.tools["model_registry_get"]("task_1::loop_1")
+    mcp.tools["model_registry_compare_trials"]("task_1::loop_1")
+    mcp.tools["model_registry_get_seed_stability"]("task_1::loop_1")
+    mcp.tools["model_registry_get_hyperparam_history"]("task_1::loop_1")
+    mcp.tools["model_registry_get_artifacts"]("task_1::loop_1")
     mcp.tools["model_registry_plan_register"]({"object_type": "spec"})
     mcp.tools["model_registry_register_confirmed"]({"object_type": "spec", "payload": {}}, confirm=model_registry.REGISTER_MODEL_CONFIRM)
     mcp.tools["model_registry_deprecate_confirmed"]({"object_id": "model_1"}, confirm=model_registry.DEPRECATE_MODEL_CONFIRM)
     assert len(calls) == model_registry.TOOL_COUNT
     assert all(call["path"].startswith("/api/v1/model-registry/") for call in calls)
     assert calls[0]["query"]["limit"] == "20"
+    assert calls[1]["path"] == "/api/v1/model-registry/models/detail"
+    assert calls[1]["query"]["model_id"] == "task_1::loop_1"
 
     _registry, mcp, calls = _registry_with_capture(strategy_governance)
     mcp.tools["strategy_governance_list_packages"]()
@@ -218,7 +220,102 @@ def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
             "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
         }
     ]
-    assert qe_experiment.TOOL_COUNT == 27
+    assert qe_experiment.TOOL_COUNT == 33
+
+
+def test_qe_experiment_template_create_and_run_tool_confirms_before_http() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+    payload = {
+        "template_kind": "single_experiment",
+        "title": "direct smoke",
+        "config_json": {
+            "factor_names": ["Alpha001"],
+            "model_id": "model_lgbm_v1",
+            "custom_params": {"random_seed": 42},
+        },
+        "node_id": "node_1",
+    }
+
+    with pytest.raises(ValueError, match=qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM):
+        mcp.tools["qe_template_create_and_run_confirmed"](**payload, confirm_direct_run="WRONG")
+    assert calls == []
+
+    mcp.tools["qe_template_create_and_run_confirmed"](
+        **payload,
+        confirm_direct_run=qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+        approval_note="unit",
+    )
+
+    assert calls == [
+        {
+            "method": "POST",
+            "path": "/api/v1/qe-templates/create-and-run",
+            "query": {},
+            "body": {
+                "template_kind": "single_experiment",
+                "title": "direct smoke",
+                "description": None,
+                "config_json": {
+                    "factor_names": ["Alpha001"],
+                    "model_id": "model_lgbm_v1",
+                    "custom_params": {"random_seed": 42},
+                },
+                "archive_policy": "AUTO",
+                "confirm_direct_run": qe_experiment.QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+                "node_id": "node_1",
+                "force_full_train": False,
+                "approved_by": "mcp_gateway",
+                "approval_note": "unit",
+            },
+        }
+    ]
+
+
+def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+    single_payload = {
+        "factor_names": ["Alpha001"],
+        "model_id": "model_lgbm_v1",
+        "custom_params": {"random_seed": 42},
+    }
+    custom_loop = {
+        "factor_keys": ["Alpha001||alpha158"],
+        "model_id": "model_lgbm_v1",
+        "runtime_flags": {"random_seed": 42},
+    }
+
+    with pytest.raises(ValueError, match=qe_experiment.QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM):
+        mcp.tools["qe_single_experiment_update_config_confirmed"]("exp-1", single_payload, confirm_update="WRONG")
+    with pytest.raises(ValueError, match=qe_experiment.QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM):
+        mcp.tools["qe_custom_evo_update_config_confirmed"]("task-1", "task", [custom_loop], confirm_update="WRONG")
+    assert calls == []
+
+    mcp.tools["qe_single_experiment_create_pending"](single_payload, created_by_name="unit")
+    mcp.tools["qe_single_experiment_get_config"]("exp-1")
+    mcp.tools["qe_single_experiment_update_config_confirmed"](
+        "exp-1",
+        single_payload,
+        confirm_update=qe_experiment.QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM,
+    )
+    mcp.tools["qe_custom_evo_create_pending"]("pending custom", [custom_loop], node_id="node-1")
+    mcp.tools["qe_custom_evo_update_config_confirmed"](
+        "task-1",
+        "edited custom",
+        [custom_loop],
+        confirm_update=qe_experiment.QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM,
+    )
+
+    assert [call["method"] for call in calls] == ["POST", "GET", "PUT", "POST", "PUT"]
+    assert [call["path"] for call in calls] == [
+        "/api/v1/quantevolver/experiments/pending",
+        "/api/v1/quantevolver/experiments/exp-1/editable-config",
+        "/api/v1/quantevolver/experiments/exp-1/editable-config",
+        "/api/v1/quantevolver/evolution/custom-tasks",
+        "/api/v1/quantevolver/evolution/tasks/task-1/custom-evo-config",
+    ]
+    assert calls[0]["body"]["created_by_name"] == "unit"
+    assert calls[3]["body"]["auto_start"] is False
+    assert calls[3]["body"]["node_id"] == "node-1"
 
 
 

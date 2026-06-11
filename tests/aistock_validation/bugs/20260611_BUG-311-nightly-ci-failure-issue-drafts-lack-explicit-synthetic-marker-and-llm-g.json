@@ -1,0 +1,89 @@
+{
+  "actual": "Smoke artifacts under tmp/validation/nightly_failure_issue/smoke can be mistaken for real drafts, historical closed auto-filed issues still show status:open labels, and LLM diagnostics are mostly dry-run/advice without a clear daily acceptance gate for real-problem discovery.",
+  "allowed_write_scope": [
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/bugs/20260611_BUG-311-nightly-ci-failure-issue-drafts-lack-explicit-synthetic-marker-and-llm-g.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "noxfile.py",
+    "backend/services/validation/plan_catalog.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-311",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T16:44:29.481115Z",
+  "description": "Smoke artifacts under tmp/validation/nightly_failure_issue/smoke can be mistaken for real drafts, historical closed auto-filed issues still show status:open labels, and LLM diagnostics are mostly dry-run/advice without a clear daily acceptance gate for real-problem discovery. Scope expanded to include focused workflow tests for the new synthetic/real and label-sync behavior.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-1ff889e4e3eb",
+      "timestamp": "2026-06-10T16:44:29.481112Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Synthetic smoke artifacts are unmistakable and never promoted as real failures; real auto-filed issues have consistent labels after closure; daily/nightly LLM-guided diagnostics use GitHub/AIstock pipeline context to identify actionable failures, generate compact high-quality issue drafts, and keep all artifacts under ignored tmp paths.",
+  "first_seen_at": "2026-06-10T16:44:29.481115Z",
+  "fix_branch": null,
+  "fix_commit": "6df73ff86a19f103dd7519d7e5e98185bd5d8968",
+  "fixed_at": "2026-06-10T17:39:12.683668Z",
+  "github_issue_number": 926,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/926",
+  "last_seen_at": "2026-06-10T16:44:29.481115Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/927",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py nightly-intake-smoke --output-format summary; gh search issues --repo licong01-cloud/AIstock 'label:auto-filed' --json number,title,state,labels --limit 20",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly/CI failure issue drafts lack explicit synthetic marker and LLM-guided daily diagnostics acceptance",
+  "trigger_condition": {
+    "fingerprint": "1ff889e4e3ebe30dacb07dea",
+    "source_event_id": "FE-20260611-1ff889e4e3eb"
+  },
+  "validation_evidence": [
+    "PR #927 GitHub checks -> success",
+    "python -m nox -s validation_workflow_automation -> passed",
+    "python -m nox -s validation_center_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

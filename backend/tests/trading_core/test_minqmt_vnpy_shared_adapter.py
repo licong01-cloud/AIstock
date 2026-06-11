@@ -188,7 +188,7 @@ def _vnpy_plan(algo_code: str, algo_config: dict[str, Any] | None = None):
     return binding, runtime_repo.save_execution_plan(plan)
 
 
-def test_miniqmt_bridge_uses_shared_vnpy_adapter_for_child_requests() -> None:
+def test_miniqmt_bridge_uses_runtime_owned_vnpy_algo_for_child_requests() -> None:
     binding, plan = _vnpy_plan("SNIPER_MINIQMT")
     bridge = MiniQMTExecutionBridge(
         managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
@@ -201,13 +201,17 @@ def test_miniqmt_bridge_uses_shared_vnpy_adapter_for_child_requests() -> None:
     )
 
     assert requests
-    assert all(request.metadata["source"] == "shared_vnpy_execution_adapter" for request in requests)
+    assert all(request.metadata["source"] == "runtime_owned_vnpy_algo" for request in requests)
+    assert all(request.metadata["runtime_owner"] == "MiniQMTExecutionRuntime" for request in requests)
+    assert all(request.metadata["runtime_child_order_id"] for request in requests)
+    assert all(request.metadata["runtime_algo_instance_id"] for request in requests)
     assert all("vnpy_action" in request.metadata for request in requests)
     assert all("-vn" in request.order_remark for request in requests)
     assert requests[0].metadata["execution_policy_id"] == plan.execution_policy_version_id
     assert requests[0].metadata["execution_policy_sha256"] == plan.execution_policy_sha256
+    assert requests[0].metadata["execution_algo_code"] == "SNIPER_MINIQMT"
     assert requests[0].metadata["source_attribution"]["upstream_source_file"].endswith("sniper_algo.py")
-    assert requests[0].metadata["vnpy_execution_diagnostic"]["adapter"] == "UnifiedMiniQMTVnpyExecutionAdapter"
+    assert "vnpy_execution_diagnostic" not in requests[0].metadata
 
 
 def test_miniqmt_bridge_rejects_vnpy_id_only_plan_without_policy_snapshot() -> None:

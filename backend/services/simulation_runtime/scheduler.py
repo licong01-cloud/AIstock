@@ -72,6 +72,13 @@ DEFAULT_SCHEDULER_WINDOWS = (
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 
+_MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES = frozenset(
+    {
+        "SELL_PROCEEDS_REQUIRED",
+        "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
+    }
+)
+
 
 @dataclass(frozen=True)
 class SimulationRunContext:
@@ -1535,7 +1542,7 @@ class SimulationLifecycleScheduler:
             local_broker=context.local_broker,
             managed_order_service=context.managed_order_service,
             mode=mode,
-            price_by_symbol=context.price_by_symbol,
+            price_by_symbol=context.price_by_symbol or context.current_prices,
         )
         if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
@@ -1671,7 +1678,7 @@ class SimulationLifecycleScheduler:
                 local_broker=context.local_broker,
                 managed_order_service=context.managed_order_service,
                 mode=mode,
-                price_by_symbol=context.price_by_symbol,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
             )
             if self._mini_qmt_batch_failed_without_broker_side_effect(execution.run.run_payload_json):
                 self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
@@ -1884,8 +1891,14 @@ class SimulationLifecycleScheduler:
         plan: ExecutionPlan,
         submit: bool,
     ) -> bool:
-        if not submit or not plan.intents or run.run_payload_json.get("broker_called"):
+        if not submit or not plan.intents:
             return False
+        if run.run_payload_json.get("broker_called"):
+            return (
+                binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+                and SimulationLifecycleScheduler._mini_qmt_batch_has_deferred_dependent_buy(run.run_payload_json)
+            )
         statuses = {
             SimulationDailyRunStatus.CREATED,
             SimulationDailyRunStatus.PRECHECKING,
@@ -1944,6 +1957,35 @@ class SimulationLifecycleScheduler:
             }
             and SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
         )
+
+    @staticmethod
+    def _mini_qmt_batch_has_deferred_dependent_buy(payload: dict[str, Any]) -> bool:
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
+        if status != "PARTIAL" or bool(batch.get("compensation_required")):
+            return False
+        results = batch.get("results")
+        if not isinstance(results, list):
+            return False
+        saw_deferred_buy = False
+        for result in results:
+            if not isinstance(result, dict) or bool(result.get("success")):
+                continue
+            if bool(result.get("broker_called")):
+                return False
+            preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+            errors = preflight.get("errors")
+            if not isinstance(errors, list):
+                return False
+            error_codes = {
+                str(error.get("code") or "").upper()
+                for error in errors
+                if isinstance(error, dict) and str(error.get("code") or "").strip()
+            }
+            if not error_codes or not error_codes <= _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES:
+                return False
+            saw_deferred_buy = True
+        return saw_deferred_buy
 
     @staticmethod
     def _mini_qmt_batch_succeeded(payload: dict[str, Any]) -> bool:

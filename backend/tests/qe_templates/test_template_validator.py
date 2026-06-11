@@ -311,3 +311,104 @@ def test_template_delete_endpoint_requires_confirmation() -> None:
 
     assert exc_info.value.status_code == 400
     assert "QE_TEMPLATE_DELETE" in str(exc_info.value.detail)
+
+
+def test_template_create_and_run_endpoint_orchestrates_approval_materialize_and_run(monkeypatch) -> None:
+    from fastapi import BackgroundTasks, HTTPException
+    from backend.routers.qe_templates import (
+        QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+        QETemplateCreateAndRunRequest,
+        create_and_run_qe_template,
+    )
+
+    calls: dict[str, object] = {}
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self.rows = {}
+
+        def create(self, record):  # type: ignore[no-untyped-def]
+            row = {
+                "template_id": record.template_id,
+                "template_kind": record.template_kind,
+                "title": record.title,
+                "status": "draft",
+                "config_json": dict(record.config_json),
+            }
+            self.rows[record.template_id] = row
+            calls["created"] = row
+            return row
+
+        def update(self, template_id, updates):  # type: ignore[no-untyped-def]
+            row = {**self.rows[template_id], **dict(updates)}
+            self.rows[template_id] = row
+            calls.setdefault("updates", []).append(dict(updates))
+            return row
+
+        def get(self, template_id):  # type: ignore[no-untyped-def]
+            return self.rows.get(template_id)
+
+    fake_repo = FakeRepo()
+
+    class FakeMaterializer:
+        async def materialize(self, template_id):  # type: ignore[no-untyped-def]
+            calls["materialized_template_id"] = template_id
+            fake_repo.update(template_id, {"status": "materialized", "submitted_experiment_id": "qe_direct_1"})
+            return {"template": fake_repo.get(template_id), "materialized": {"experiment_id": "qe_direct_1"}}
+
+    async def fake_run(template_id, request, background_tasks):  # type: ignore[no-untyped-def]
+        calls["run"] = {
+            "template_id": template_id,
+            "confirm_run": request.confirm_run,
+            "node_id": request.node_id,
+            "background_tasks": isinstance(background_tasks, BackgroundTasks),
+        }
+        return {"template_id": template_id, "run_result": {"started": True}}
+
+    monkeypatch.setattr("backend.routers.qe_templates._repo", lambda: fake_repo)
+    monkeypatch.setattr("backend.routers.qe_templates.QETemplateMaterializer", FakeMaterializer)
+    monkeypatch.setattr("backend.routers.qe_templates._run_materialized_qe_template", fake_run)
+
+    with pytest.raises(HTTPException, match=QE_TEMPLATE_CREATE_AND_RUN_CONFIRM):
+        asyncio.run(
+            create_and_run_qe_template(
+                QETemplateCreateAndRunRequest(
+                    template_kind="single_experiment",
+                    title="bad confirm",
+                    config_json={
+                        "factor_names": ["Alpha001"],
+                        "model_id": "model_lgbm_v1",
+                        "custom_params": {"random_seed": 42},
+                    },
+                    confirm_direct_run="WRONG",
+                ),
+                BackgroundTasks(),
+            )
+        )
+    assert calls == {}
+
+    result = asyncio.run(
+        create_and_run_qe_template(
+            QETemplateCreateAndRunRequest(
+                template_kind="single_experiment",
+                title="direct run",
+                config_json={
+                    "factor_names": ["Alpha001"],
+                    "model_id": "model_lgbm_v1",
+                    "custom_params": {"random_seed": 42},
+                },
+                confirm_direct_run=QE_TEMPLATE_CREATE_AND_RUN_CONFIRM,
+                node_id="node_1",
+                approval_note="unit direct run",
+            ),
+            BackgroundTasks(),
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["direct_run"] is True
+    assert calls["run"]["confirm_run"] == "QE_EXPERIMENT_RUN"
+    assert calls["run"]["node_id"] == "node_1"
+    assert calls["run"]["background_tasks"] is True
+    assert calls["materialized_template_id"] == calls["run"]["template_id"]
+    assert any(update.get("approval_json", {}).get("review_channel") == "mcp_gateway_direct_run" for update in calls["updates"])

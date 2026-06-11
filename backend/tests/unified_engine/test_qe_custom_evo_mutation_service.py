@@ -101,7 +101,6 @@ def test_rerun_custom_evo_loop_uses_get_conn_context_manager_for_lock(monkeypatc
             "task-a",
             2,
             {"loop_index": 2, "node_id": "node-b", "label": "replacement"},
-            execution_mode="parallel_2",
             node_parallelism={"node-a": 1, "node-b": 1},
         )
     )
@@ -119,7 +118,6 @@ def test_append_custom_evo_loops_uses_get_conn_context_manager_for_lock(monkeypa
         scheduler.append_custom_evo_loops(
             "task-a",
             [{"node_id": "node-b", "label": "new"}],
-            execution_mode="parallel_2",
             node_parallelism={"node-a": 1, "node-b": 1},
             ack_failed_loop_warning=True,
         )

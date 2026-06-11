@@ -990,7 +990,9 @@ def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
     executor._ensure_live_selection_cutoff(config, trade_date=date(2024, 1, 4))
 
     assert config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
+    assert config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
     assert config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
+    assert config["paper_v2_session"]["selection_cutoff_policy"] == "PREVIOUS_TRADING_DAY_CLOSE"
 
 
 def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:

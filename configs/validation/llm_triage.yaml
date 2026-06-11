@@ -1,0 +1,79 @@
+schema_version: aistock_llm_triage_config_v1
+default_provider: github_models
+providers:
+  github_models:
+    enabled: true
+    base_url: https://models.github.ai
+    catalog_path: /catalog/models
+    model_selector:
+      publisher: DeepSeek
+      required_capabilities:
+        - tool-calling
+        - reasoning
+      required_model_family: deepseek-r1
+      preferred_models:
+        - deepseek/deepseek-r1
+      output_contract: strict_json_prompt
+      allow_lower_tier_fallback: false
+    auth:
+      token_env: GITHUB_TOKEN
+      required_permissions:
+        - models:read
+  deepseek_api:
+    enabled: false
+    base_url_env: DEEPSEEK_BASE_URL
+    default_base_url: https://api.deepseek.com
+    model: deepseek-v4-pro
+    auth:
+      resolver: env_then_aistock_config
+      env_api_key_names:
+        - DEEPSEEK_API_KEY
+      env_api_base_names:
+        - DEEPSEEK_BASE_URL
+      aistock_config_sources:
+        - backend.infra.deepseek_client env contract
+        - backend.config_manager_compat managed DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL
+        - aistock_llm_api_configs provider/model config via backend.routers.rdagent_llm_config_v2
+        - backend.services.quantevolver.llm_client provider fallback
+      provider_id: deepseek
+      model_id: deepseek/deepseek-v4-pro
+  deterministic:
+    enabled: true
+limits:
+  max_prompt_tokens: 12000
+  max_output_tokens: 4000
+  max_log_excerpt_chars: 12000
+  max_issue_body_chars: 12000
+  max_suggestions_per_failure: 5
+  daily_issue_create_limit: 10
+  daily_llm_call_limit: 100
+  fail_closed_when_schema_invalid: true
+guarded_rollout:
+  mode_env: AISTOCK_LLM_TRIAGE_MODE
+  default_mode: warning_only
+  supported_modes:
+    - "off"
+    - warning_only
+    - opt_in_auto_file
+  opt_in_env: AISTOCK_LLM_AUTO_FILE
+  deterministic_auto_file_preserved: true
+  module_allowlist:
+    - validation
+    - validation.runner
+    - validation.center
+    - qe
+    - qe_archive
+    - paper_v2
+    - paper_v2_selection_center
+    - research_assistant
+  required_issue_sections:
+    - Failure Summary
+    - Regression Locator
+    - Agent Handoff
+    - Token Policy
+    - Production Gates
+redaction:
+  redact_env_vars: true
+  redact_tokens: true
+  redact_db_urls: true
+  redact_private_keys: true

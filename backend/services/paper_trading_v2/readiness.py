@@ -8,9 +8,11 @@ from typing import Any, Callable
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
+    refresh_generated_runtime_profile_binding,
     validate_runtime_profile_binding,
 )
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -121,12 +123,18 @@ class PaperTradingReadinessService:
             trade_date=trade_date,
             runtime_config=runtime_config or {},
         )
+        ensure_previous_trading_day_selection_cutoff(
+            config,
+            trade_date=trade_date,
+            calendar_provider=self.calendar_provider,
+        )
         config = normalize_runtime_config_with_backtest_contract(
             manifest,
             config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
             include_contract=True,
         )
+        config = refresh_generated_runtime_profile_binding(config)
         validate_runtime_profile_binding(
             config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},

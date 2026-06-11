@@ -10,20 +10,24 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
 import openai
+
+from .deepseek_config import DEFAULT_DEEPSEEK_MODEL, redact_secret_text, resolve_deepseek_config
 
 
 class DeepSeekClient:
     """DeepSeek API 客户端（供 next_app 使用）。"""
 
-    def __init__(self, model: str = "deepseek-chat") -> None:
-        self.model = model
-        api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, model: str = DEFAULT_DEEPSEEK_MODEL, *, require_api_key: bool = True) -> None:
+        self.config = resolve_deepseek_config(model=model, require_api_key=require_api_key)
+        self.model = self.config.model
+        self.client = (
+            openai.OpenAI(api_key=self.config.api_key, base_url=self.config.base_url)
+            if self.config.has_api_key
+            else None
+        )
 
     # ------------------------------------------------------------------
     # 底层调用封装
@@ -36,6 +40,8 @@ class DeepSeekClient:
         max_tokens: int = 2000,
     ) -> str:
         model_to_use = model or self.model
+        if self.client is None:
+            return "API调用失败: DeepSeek API key is not configured"
 
         # reasoner 模型通常需要更长输出
         if "reasoner" in model_to_use.lower() and max_tokens <= 2000:
@@ -58,7 +64,7 @@ class DeepSeekClient:
                 result += str(message.content)
             return result or "API返回空响应"
         except Exception as e:  # noqa: BLE001
-            return f"API调用失败: {e}"
+            return f"API调用失败: {redact_secret_text(e)}"
 
     # ------------------------------------------------------------------
     # 高层分析方法（提示词保持与旧实现语义接近）

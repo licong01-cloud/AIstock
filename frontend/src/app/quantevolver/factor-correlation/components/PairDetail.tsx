@@ -1,14 +1,41 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import dynamic from "next/dynamic";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import python from "react-syntax-highlighter/dist/esm/languages/hljs/python";
 import atomOneLight from "react-syntax-highlighter/dist/esm/styles/hljs/atom-one-light";
 
 SyntaxHighlighter.registerLanguage("python", python);
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false }) as any;
+type PlotlyComponent = React.ComponentType<any>;
+
+function PlotlyChart(props: any) {
+  const [Plot, setPlot] = React.useState<PlotlyComponent | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    import("react-plotly.js")
+      .then((module) => {
+        if (!cancelled) setPlot(() => module.default as PlotlyComponent);
+      })
+      .catch((error) => console.error("Failed to load Plotly chart", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!Plot) {
+    const placeholderHeight = props?.style?.height ?? props?.layout?.height ?? 260;
+    return (
+      <div style={{ height: placeholderHeight, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
+        Loading chart...
+      </div>
+    );
+  }
+
+  return <Plot {...props} />;
+}
+
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -293,7 +320,7 @@ export default function PairDetail({
           {da?.daily_correlations && da.daily_correlations.length > 0 && (
             <div style={{ background: "#fff", borderRadius: 12, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)", marginBottom: 24 }}>
               <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600, color: "#374151" }}>日频 Spearman 截面相关性</h3>
-              <Plot
+              <PlotlyChart
                 data={[{
                   x: da.daily_correlations.map((d) => d[0]),
                   y: da.daily_correlations.map((d) => d[1]),

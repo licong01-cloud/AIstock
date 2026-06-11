@@ -502,6 +502,22 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
         config_summary = compact_config_summary(row.get("custom_params"))
         if config_summary:
             item["custom_params_summary"] = config_summary
+    status = str(row.get("status") or "").lower()
+    startable = (
+        status in {"created", "pending"}
+        and not row.get("is_evolution_loop")
+        and not row.get("qe_task_id")
+        and not row.get("qe_loop_id")
+        and not row.get("started_at")
+        and not row.get("completed_at")
+    )
+    if startable:
+        item["start_reason"] = "single experiment has not been submitted"
+    else:
+        item["start_reason"] = f"not startable: status={row.get('status') or 'unknown'}"
+    item["startable"] = startable
+    item["editable"] = startable and (row.get("alpha_mode") or "single") == "single"
+    item["resume_allowed"] = False
     return item
 
 
@@ -549,6 +565,11 @@ def compact_task_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "strategy_id",
         "execution_algo",
         "strategy_evo_execution_mode",
+        "editable",
+        "startable",
+        "resume_allowed",
+        "start_reason",
+        "submitted_loop_count",
         "created_at",
         "updated_at",
     )

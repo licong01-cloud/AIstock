@@ -57,11 +57,29 @@ class AdvisoryCloneRequest(BaseModel):
 
 class AdvisoryReviewRequest(BaseModel):
     trade_date: date
+    target_trade_date: date | None = None
+    selection_as_of_trade_date: date | None = None
     selection_run_id: str | None = None
     data_source: str = "DB_HISTORICAL"
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     candidates: list[dict[str, Any]] | None = None
     market_by_symbol: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class AdvisoryBindingPayload(BaseModel):
+    package_mode: str
+    package_ids: list[str] = Field(min_length=1)
+    package_weights: dict[str, float] | None = None
+    target_count: int | None = Field(default=None, gt=0, le=100)
+    runtime_config_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdvisoryBindingApplyRequest(BaseModel):
+    binding: AdvisoryBindingPayload
+    activation_reason: str = Field(min_length=1)
+    source_replay_run_id: str | None = None
+    effective_from_trade_date: date | None = None
+    created_by: str | None = None
 
 
 class AdvisoryReplayRequest(BaseModel):
@@ -73,6 +91,9 @@ class AdvisoryReplayRequest(BaseModel):
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     entry_price_basis: str | None = None
     exit_price_basis: str | None = None
+    draft_binding: AdvisoryBindingPayload | None = None
+    compare_to_binding_version_id: str | None = None
+    include_daily_items: bool = True
 
 
 class AdvisoryQualityReportRequest(BaseModel):
@@ -136,6 +157,48 @@ def update_program(
     try:
         updates = {key: value for key, value in req.model_dump().items() if value is not None}
         return {"ok": True, "program": program_to_dict(service.update_program(program_id, updates))}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/bindings")
+def list_bindings(
+    program_id: str,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "bindings": service.binding_versions(program_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/bindings/active")
+def active_binding(
+    program_id: str,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "binding": service.active_binding(program_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/programs/{program_id}/bindings/apply")
+def apply_binding(
+    program_id: str,
+    req: AdvisoryBindingApplyRequest,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        result = service.apply_binding(
+            program_id,
+            binding=req.binding.model_dump(),
+            activation_reason=req.activation_reason,
+            source_replay_run_id=req.source_replay_run_id,
+            effective_from_trade_date=req.effective_from_trade_date,
+            created_by=req.created_by,
+        )
+        return {"ok": True, **result}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -221,6 +284,30 @@ def reviews(
         _raise_http(exc)
 
 
+@router.get("/programs/{program_id}/list-versions")
+def list_versions(
+    program_id: str,
+    limit: int = Query(default=100, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/list-versions/{list_version_id}")
+def list_version_detail(
+    list_version_id: str,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.recommendation_list_version_detail(list_version_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/programs/{program_id}/returns")
 def returns(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
     try:
@@ -270,8 +357,13 @@ def run_replay(
                 end_date=req.end_date,
                 candidates_by_date=req.candidates_by_date,
                 market_by_date=req.market_by_date,
+                data_source=req.data_source,
+                runtime_config=req.runtime_config,
                 entry_price_basis=req.entry_price_basis,
                 exit_price_basis=req.exit_price_basis,
+                draft_binding=req.draft_binding.model_dump() if req.draft_binding else None,
+                compare_to_binding_version_id=req.compare_to_binding_version_id,
+                include_daily_items=req.include_daily_items,
             ),
         }
     except TradingCoreError as exc:

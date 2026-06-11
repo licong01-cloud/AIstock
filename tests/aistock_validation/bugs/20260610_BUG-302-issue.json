@@ -1,0 +1,130 @@
+{
+  "actual": "荐股中心运行中的所有荐股任务排行榜指标仍为空。运行态证据：GET /api/v1/advisory/leaderboard?sort_by=win_rate 返回 advp_7a6dcc80f848443798eec306a4810d54 latest_review_trade_date=2026-06-09 last_review_status=SUCCEEDED entered_episode_count=20 active_count=20 take_profit_count=0 stop_loss_count=0 win_rate=null avg_return_bps=null；advp_83676ee4d3024b30b3cfc92f2caa2eee latest_review_trade_date=2026-06-08 last_review_status=WAITING_DATA 且 win_rate/avg_return_bps 同为空。此前 BUG-294 仅修复 TopK WAITING_EVIDENCE 场景，但用户确认止盈、止损、胜率、平均涨幅仍没有数据。期望：每日复评后 active/open 持仓也应有可评估盯市收益，排行榜和页面不得长期显示空值；缺失行情时要有明确可验证状态。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "backend/routers/advisory.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20260610_BUG-302-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-302",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T03:55:44.268105Z",
+  "description": "荐股中心运行中的所有荐股任务排行榜指标仍为空。运行态证据：GET /api/v1/advisory/leaderboard?sort_by=win_rate 返回 advp_7a6dcc80f848443798eec306a4810d54 latest_review_trade_date=2026-06-09 last_review_status=SUCCEEDED entered_episode_count=20 active_count=20 take_profit_count=0 stop_loss_count=0 win_rate=null avg_return_bps=null；advp_83676ee4d3024b30b3cfc92f2caa2eee latest_review_trade_date=2026-06-08 last_review_status=WAITING_DATA 且 win_rate/avg_return_bps 同为空。此前 BUG-294 仅修复 TopK WAITING_EVIDENCE 场景，但用户确认止盈、止损、胜率、平均涨幅仍没有数据。期望：每日复评后 active/open 持仓也应有可评估盯市收益，排行榜和页面不得长期显示空值；缺失行情时要有明确可验证状态。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-b7b0f06e2580",
+      "timestamp": "2026-06-10T03:55:44.268102Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "每日复评后，open/active 持仓应基于最新可用行情生成盯市收益；排行榜止盈、止损、胜率、平均涨幅不再长期为空。缺少行情时页面展示可验证的等待行情状态。",
+  "first_seen_at": "2026-06-10T03:55:44.268105Z",
+  "fix_branch": null,
+  "fix_commit": "d6e38e29262b856891e1bea406127ceedbd04f8c",
+  "fixed_at": "2026-06-10T05:54:22.696124Z",
+  "github_issue_number": 897,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/897",
+  "last_seen_at": "2026-06-10T03:55:44.268105Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/905",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "荐股任务排行榜止盈止损胜率平均涨幅全部为空",
+  "trigger_condition": {
+    "fingerprint": "b7b0f06e2580a9e0138a9857",
+    "source_event_id": "FE-20260610-b7b0f06e2580"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:advisory",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "backend/routers/advisory.py",
+      "backend/services/advisory_program.py",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/api/v1/advisory/leaderboard?sort_by=win_rate",
+    "ui_routes": [
+      "/api/v1/advisory/leaderboard?sort_by=win_rate",
+      "/paper-v2/advisory"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_advisory_program.py backend/tests/watchlist/test_advisory_api.py -q -> 27 passed",
+    "python -m ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 success",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep success",
+    "FRONTEND_PORT=3013 BACKEND_PORT=8013 npm --prefix frontend run test:e2e -- tests/paper-v2/paper-v2-advisory-ui.spec.ts -> 3 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

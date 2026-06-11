@@ -93,6 +93,23 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["classification"] == "workflow_validation_only"
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
+    assert payload["prompt_evaluation_required"] is False
+
+
+def test_unrelated_workflow_validation_change_does_not_run_prompt_evaluation(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            ".github/workflows/pr-quality.yml",
+            "scripts/issue_flow.py",
+            "backend/tests/scripts/test_issue_flow.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["prompt_evaluation_required"] is False
     assert payload["close_sync_metadata_only"] is False
 
 
@@ -103,6 +120,26 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
             "scripts/code_intelligence_adapter.py",
             "backend/tests/scripts/test_code_intelligence_adapter.py",
             "docs/standards/aistock_issue_workflow_quickstart.md",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+
+
+def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "prompt_packs/validation_llm/triage_failure.prompt.yml",
+            "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
+            "configs/validation/llm_triage.yaml",
+            "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+            "scripts/llm_provider_adapter.py",
+            "scripts/nightly_adaptive_scheduler.py",
+            "backend/tests/scripts/test_llm_provider_adapter.py",
+            "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         ],
         repo_root=tmp_path,
     )
@@ -249,10 +286,18 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["workflow_validation_required"].endswith(
         "steps.classify.outputs.workflow_validation_required }}"
     )
+    assert jobs["classify-changes"]["outputs"]["prompt_evaluation_required"].endswith(
+        "steps.classify.outputs.prompt_evaluation_required }}"
+    )
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
     assert jobs["workflow-validation-tests"]["if"] == (
         "needs.classify-changes.outputs.workflow_validation_required == 'true'"
     )
+    prompt_eval = jobs["prompt-evaluation"]
+    assert prompt_eval["if"] == "needs.classify-changes.outputs.prompt_evaluation_required == 'true'"
+    prompt_eval_run_steps = "\n".join(str(step.get("run", "")) for step in prompt_eval["steps"])
+    assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
+    assert "prompt-evaluation" in jobs["failure-bug-register"]["needs"]
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
@@ -291,4 +336,5 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
     assert json.loads(out.read_text(encoding="utf-8"))["backend_required"] is False
     assert "backend_required=false" in github_out.read_text(encoding="utf-8")
     assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
+    assert "prompt_evaluation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"

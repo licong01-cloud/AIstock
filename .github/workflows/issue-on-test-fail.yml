@@ -30,6 +30,20 @@ on:
         required: false
         default: false
         type: boolean
+      llm_triage_mode:
+        description: LLM guarded rollout mode. Default stays warning-only.
+        required: false
+        default: warning_only
+        type: choice
+        options:
+          - off
+          - warning_only
+          - opt_in_auto_file
+      llm_auto_file_opt_in:
+        description: Explicitly allow LLM issue-content enhancement when mode is opt_in_auto_file.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -65,8 +79,14 @@ jobs:
           INPUT_SEVERITY: ${{ github.event.inputs.severity || 'P1' }}
           INPUT_SUMMARY: ${{ github.event.inputs.summary || '' }}
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          INPUT_LLM_TRIAGE_MODE: ${{ github.event.inputs.llm_triage_mode || 'warning_only' }}
+          INPUT_LLM_AUTO_FILE_OPT_IN: ${{ github.event.inputs.llm_auto_file_opt_in || 'false' }}
         run: |
           mkdir -p tmp/validation/ci_failure_issue
+          LLM_ARGS=(--llm-triage-mode "${INPUT_LLM_TRIAGE_MODE}")
+          if [ "${INPUT_LLM_AUTO_FILE_OPT_IN}" = "true" ]; then
+            LLM_ARGS+=(--llm-auto-file-opt-in)
+          fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python scripts/ci_failure_issue_summary.py \
               --repo "${{ github.repository }}" \
@@ -82,6 +102,7 @@ jobs:
               --context-output tmp/validation/ci_failure_issue/context-pack.json \
               --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
               --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json \
+              "${LLM_ARGS[@]}" \
               --stdout-format compact
           else
             python scripts/ci_failure_issue_summary.py \
@@ -99,6 +120,7 @@ jobs:
               --context-output tmp/validation/ci_failure_issue/context-pack.json \
               --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md \
               --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json \
+              "${LLM_ARGS[@]}" \
               --stdout-format compact
           fi
 

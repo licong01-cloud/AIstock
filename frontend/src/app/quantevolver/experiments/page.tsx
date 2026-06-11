@@ -45,6 +45,12 @@ type Experiment = {
   max_drawdown_no_cost?: number | null;
   information_ratio_no_cost?: number | null;
   alpha_mode?: string;
+  startable?: boolean;
+  editable?: boolean;
+  resume_allowed?: boolean;
+  start_reason?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   created_at?: string;
   updated_at?: string;
   archive_run_id?: string | null;
@@ -243,6 +249,16 @@ function isHmmExperiment(exp: Experiment): boolean {
     JSON.stringify(exp.daily_strategy_config || {}),
   ].join(" ").toLowerCase();
   return haystack.includes("hmm");
+}
+
+function isExperimentStartable(exp: Experiment): boolean {
+  if (typeof exp.startable === "boolean") return exp.startable;
+  return ["created", "pending"].includes(exp.status)
+    && !exp.is_evolution_loop
+    && !exp.qe_task_id
+    && !exp.qe_loop_id
+    && !exp.started_at
+    && !exp.completed_at;
 }
 
 export default function ExperimentsPage() {
@@ -465,13 +481,17 @@ export default function ExperimentsPage() {
       setLogsExpId(expId);
       setExpandedId(expId);
       await sse.startRun(expId, inheritedNodeId);
-      showToast(inheritedNodeId ? `Submitted to ${inheritedNodeId}` : "Submitted run", true);
+      showToast(isExperimentStartable(exp) ? "已启动待执行实验" : (inheritedNodeId ? `Submitted to ${inheritedNodeId}` : "Submitted run"), true);
       loadAllExperiments();
     } catch (e: any) {
       showToast("Run failed: " + (e?.message || ""), false);
     }
     setActionId(null);
     setActionType("");
+  }
+
+  function editExperiment(exp: Experiment) {
+    window.open(`/quantevolver/compose?edit_experiment_id=${encodeURIComponent(exp.experiment_id)}`, "_blank");
   }
 
   function openLogs(expId: string) {
@@ -963,7 +983,9 @@ export default function ExperimentsPage() {
           const hasMetrics = Object.keys(metrics).length > 0;
           const isActioning = actionId === exp.experiment_id;
           const isShowingLogs = logsExpId === exp.experiment_id;
-          const canRun = exp.status !== "completed" && exp.status !== "running";
+          const canRun = exp.status !== "completed" && exp.status !== "running" && !exp.is_evolution_loop;
+          const canStartPending = isExperimentStartable(exp);
+          const canEditPending = canStartPending && exp.editable !== false;
           const parentTaskArchiveStatus = exp.childLoops.length > 0 ? taskArchiveStatus(exp) : undefined;
           const selfArchiveStatus = experimentArchiveStatus(exp);
           const selfArchiveSelectable = canSelectExperimentForArchive(exp);
@@ -1183,6 +1205,16 @@ export default function ExperimentsPage() {
 
                     {/* 操作按钮 */}
                     <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end", flexWrap: "wrap", alignItems: "center" }}>
+                      {canEditPending && (
+                        <button onClick={() => editExperiment(exp)}
+                          title="编辑待启动单次实验配置"
+                          style={{
+                            padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4,
+                            border: "1px solid #64748b", background: "#f8fafc", color: "#334155", fontWeight: 600,
+                          }}>
+                          编辑
+                        </button>
+                      )}
                       {canRun && (
                         <>
                           <div style={{ display: "flex", gap: 4 }}>
@@ -1199,7 +1231,7 @@ export default function ExperimentsPage() {
                               padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4,
                               border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600,
                             }}>
-                            {isActioning && actionType === "run" ? "提交中..." : "执行回测"}
+                            {isActioning && actionType === "run" ? "提交中..." : (canStartPending ? "启动" : "执行回测")}
                           </button>
                         </>
                       )}

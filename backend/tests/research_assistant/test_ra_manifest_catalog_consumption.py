@@ -97,7 +97,7 @@ def test_ra_catalog_matches_gateway_manifest_without_legacy_drift() -> None:
     tools = default_mcp_tools()
     servers = default_mcp_servers()
 
-    assert len(tools) == len(TOOL_MANIFEST) == 210
+    assert len(tools) == len(TOOL_MANIFEST) == 212
     assert len(servers) == 9
     assert {tool["tool_name"] for tool in tools} == {entry.tool_name for entry in TOOL_MANIFEST}
     assert {tool["server_key"] for tool in tools} <= set(catalog.server_key_to_modules)
@@ -159,7 +159,7 @@ def test_catalog_readiness_uses_manifest_counts_not_legacy_cache_rows() -> None:
     assert checks["mcp_servers"]["source"] == "gateway_manifest_derived_catalog"
     assert checks["mcp_servers"]["present"] == len(default_mcp_servers()) == 9
     assert checks["mcp_tools"]["source"] == "gateway_manifest_derived_catalog"
-    assert checks["mcp_tools"]["present"] == len(TOOL_MANIFEST) == 210
+    assert checks["mcp_tools"]["present"] == len(TOOL_MANIFEST) == 212
 
 
 def test_assistant_list_mcp_tools_summary_adapter_uses_manifest_not_legacy_cache() -> None:
@@ -168,7 +168,7 @@ def test_assistant_list_mcp_tools_summary_adapter_uses_manifest_not_legacy_cache
     tool, _server = svc._resolve_mcp_catalog_tool("research-assistant", "assistant_list_mcp_tools")
 
     all_items, all_total = svc._summary_adapter_items(tool, {}, limit=500, offset=0)
-    assert all_total == len(TOOL_MANIFEST) == 210
+    assert all_total == len(TOOL_MANIFEST) == 212
     assert not any(item["server_key"] == "aistock-qe-archive" for item in all_items)
 
     alias_items, alias_total = svc._summary_adapter_items(

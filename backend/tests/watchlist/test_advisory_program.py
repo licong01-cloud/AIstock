@@ -32,6 +32,11 @@ class FakeTradingCalendar:
         self.requests.append((start_date, end_date))
         return [day for day in self.trading_days if start_date <= day <= end_date]
 
+    def next_trading_day(self, anchor_date: date, *, inclusive: bool = False) -> date:
+        start = anchor_date if inclusive else anchor_date + timedelta(days=1)
+        eligible = [day for day in self.trading_days if day >= start]
+        return eligible[0] if eligible else start
+
 
 def _calendar_days(start_date: date, end_date: date) -> list[date]:
     current = start_date
@@ -110,6 +115,41 @@ def test_advisory_program_create_validates_single_fusion_version_and_clone() -> 
         service.create_program(program_name="bad", package_mode=PACKAGE_MODE_SINGLE, package_ids=["pkg_a", "pkg_b"])
     with pytest.raises(UnsupportedFeatureError):
         service.create_program(program_name="future", package_mode="sleeve_mode_future", package_ids=["pkg_a", "pkg_b"])
+
+
+def test_advisory_list_items_show_stock_name_and_effective_date_uses_candidate_data_day_next_trading_day() -> None:
+    trading_days = [date(2026, 6, 5), date(2026, 6, 8), date(2026, 6, 9)]
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=None,
+        calendar_provider=FakeTradingCalendar(trading_days),
+    )
+    program = _program(service, target_count=1)
+
+    result = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 8),
+        candidates=[
+            {
+                "symbol": "000001.SZ",
+                "stock_name": "平安银行",
+                "rank": 1,
+                "score": 0.9,
+                "reference_price": 10,
+                "next_open_executable": 10,
+                "selection_entry_price_time": "2026-06-05",
+            }
+        ],
+        preview=False,
+    )
+
+    assert result.active_pool[0].stock_name == "平安银行"
+    assert result.active_pool[0].effective_entry_date == date(2026, 6, 8)
+    assert result.list_items[0].stock_name == "平安银行"
+    assert result.list_items[0].effective_trade_date == date(2026, 6, 8)
+    detail = service.recommendation_list_version_detail(result.list_version_id or "")
+    assert detail["items"][0]["stock_name"] == "平安银行"
+    assert detail["items"][0]["symbol_name"] == "平安银行"
 
 
 def test_top20_review_merges_active_pool_hysteresis_and_budget() -> None:
@@ -228,7 +268,7 @@ def test_same_day_stop_loss_is_deferred_until_effective_t1_entry() -> None:
         trade_date=date(2026, 6, 1),
         candidates=[_candidate("000001.SZ", 1, 9.0)],
         market_by_symbol={"000001.SZ": {"next_open_executable": 9.0}},
-        preview=False,
+        preview=True,
     )
 
     episode = result.active_pool[0]
@@ -263,6 +303,91 @@ def test_multi_program_isolation_leaderboard_and_no_sample_fields() -> None:
     assert "last_review_status" in board[0]
     assert "eligible_episode_count" not in board[0]
     assert "data_excluded_count" not in board[0]
+
+
+def test_leaderboard_marks_open_active_episodes_from_latest_market_data() -> None:
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params):
+            return None
+
+        def fetchall(self):
+            return rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return FakeCursor()
+
+    service, repo = _service()
+    program = _program(service, target_count=2, take_profit_bps=500, take_profit_mode="fixed")
+
+    initial = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 1),
+        candidates=[
+            _candidate("000001.SZ", 1, 10.0),
+            _candidate("000002.SZ", 2, 20.0),
+        ],
+        preview=False,
+    )
+    episode_ids = {row.symbol: row.episode_id for row in initial.active_pool}
+    rows = [
+        {
+            "episode_id": episode_ids["000001.SZ"],
+            "symbol": "000001.SZ",
+            "trade_date": date(2026, 6, 2),
+            "mark_price": 11.0,
+            "max_price": 11.0,
+            "min_price": 10.5,
+            "observation_count": 2,
+        },
+        {
+            "episode_id": episode_ids["000002.SZ"],
+            "symbol": "000002.SZ",
+            "trade_date": date(2026, 6, 2),
+            "mark_price": 18.0,
+            "max_price": 20.0,
+            "min_price": 18.0,
+            "observation_count": 2,
+        },
+    ]
+    repo._conn_factory = lambda: FakeConnection()
+
+    metrics = service.program_metrics(program.program_id)
+    board_row = next(row for row in service.leaderboard(sort_by="win_rate") if row["program_id"] == program.program_id)
+    active_rows = {row["symbol"]: row for row in service.active_pool(program.program_id)}
+    return_rows = {row["symbol"]: row for row in service.return_history(program.program_id)}
+
+    assert metrics["take_profit_count"] == 1
+    assert metrics["stop_loss_count"] == 1
+    assert metrics["win_rate"] == 0.5
+    assert metrics["avg_return_bps"] == pytest.approx(0.0)
+    assert metrics["median_return_bps"] == pytest.approx(0.0)
+    assert metrics["max_drawdown_bps"] == pytest.approx(-1000.0)
+    assert metrics["avg_holding_days"] == 2
+    assert metrics["metric_status"] == "READY"
+    assert metrics["metric_evaluable_count"] == 2
+    assert metrics["open_mark_count"] == 2
+    assert metrics["missing_open_mark_count"] == 0
+    assert metrics["metric_mark_trade_date"] == "2026-06-02"
+    assert board_row["take_profit_count"] == 1
+    assert board_row["stop_loss_count"] == 1
+    assert board_row["win_rate"] == 0.5
+    assert board_row["metric_status"] == "READY"
+    assert active_rows["000001.SZ"]["return_bps"] == pytest.approx(1000.0)
+    assert active_rows["000001.SZ"]["win_rate_inclusion_status"] == "OPEN_MARK_TO_MARKET"
+    assert return_rows["000002.SZ"]["still_active_mark_price"] == 18.0
 
 
 def test_replay_uses_default_next_open_entry_basis_and_records_win_rate() -> None:
@@ -375,12 +500,149 @@ def test_review_from_selection_builds_default_authoritative_runtime_config() -> 
     result = service.run_review_from_selection(program.program_id, trade_date=date(2026, 6, 8), preview=True)
 
     assert result.review_status == "SUCCEEDED"
-    assert fake_selection.runtime_config["top_k"] == 20
+    assert fake_selection.runtime_config["top_k"] == 40
     assert fake_selection.runtime_config["display_top_n"] == 20
     assert fake_selection.runtime_config["st_pit_authoritative"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
-    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 20
+    assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 40
+
+
+def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            self.calls.append(
+                {
+                    "package_ids": list(package_ids),
+                    "mode": mode,
+                    "trade_date": trade_date,
+                    "data_source": data_source,
+                    "runtime_config": dict(runtime_config),
+                }
+            )
+            cutoff = runtime_config["advisory_date_context"]["selection_as_of_trade_date"]
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config={
+                    **runtime_config,
+                    "point_in_time_context": {
+                        "reference_price_trade_date": cutoff,
+                        "cutoff_date": cutoff,
+                    },
+                },
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        selection_entry_price_time=f"{trade_date.isoformat()}T10:00:00+08:00",
+                        reference_price=10.0,
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=fake_selection,
+        calendar_provider=FakeTradingCalendar([date(2026, 6, 8), date(2026, 6, 9), date(2026, 6, 10)]),
+    )
+    program = _program(service, target_count=1)
+
+    result = service.run_review_from_selection(
+        program.program_id,
+        trade_date=date(2026, 6, 9),
+        target_trade_date=date(2026, 6, 9),
+        selection_as_of_trade_date=date(2026, 6, 8),
+        preview=False,
+    )
+
+    runtime_config = fake_selection.calls[0]["runtime_config"]
+    assert fake_selection.calls[0]["trade_date"] == date(2026, 6, 9)
+    assert runtime_config["advisory_date_context"] == {
+        "target_trade_date": "2026-06-09",
+        "selection_as_of_trade_date": "2026-06-08",
+    }
+    assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
+    assert runtime_config["selection_artifact_config"]["cutoff_policy"] == "FIXED_CUTOFF"
+    assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    assert result.active_pool[0].effective_entry_date == date(2026, 6, 9)
+    assert result.list_items[0].effective_trade_date == date(2026, 6, 9)
+    assert result.list_items[0].evidence_json["reference_price_trade_date"] == "2026-06-08"
+    assert result.change_summary["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-08"
+
+
+def test_review_marks_active_holding_not_in_current_topk_instead_of_waiting_evidence() -> None:
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params):
+            return None
+
+        def fetchall(self):
+            return [{"symbol": "000001.SZ", "open_li": 11000, "close_li": 11000}]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return FakeCursor()
+
+    service, repo = _service()
+    repo._conn_factory = lambda: FakeConnection()
+    program = _program(service, target_count=1, rank_exit_threshold=1, rank_exit_confirm_days=2)
+
+    service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 1),
+        candidates=[_candidate("000001.SZ", 1, 10.0)],
+        preview=False,
+    )
+    first_review = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 2),
+        candidates=[_candidate("000002.SZ", 1, 20.0)],
+        preview=False,
+    )
+
+    active = next(row for row in first_review.active_pool if row.symbol == "000001.SZ")
+    decision = next(row for row in first_review.decisions if row.symbol == "000001.SZ")
+    assert first_review.review_status == "SUCCEEDED"
+    assert active.return_bps == pytest.approx(1000.0)
+    assert active.current_rank == 2
+    assert active.price_quality_status == "OK"
+    assert decision.action == ACTION_HOLD
+    assert decision.reason_code == "NOT_IN_CURRENT_TOPK"
+    assert decision.review_status == "SUCCEEDED"
+    assert decision.return_bps == pytest.approx(1000.0)
+    assert decision.evidence_json["component_scores"]["active_holding_review"]["reason_code"] == "NOT_IN_CURRENT_TOPK"
+    assert first_review.metrics["win_rate"] == 1.0
+
+    second_review = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 3),
+        candidates=[_candidate("000002.SZ", 1, 20.0)],
+        market_by_symbol={"000001.SZ": {"next_open_executable": 11.5, "mark_price": 11.5}},
+        preview=False,
+    )
+
+    assert any(row.symbol == "000001.SZ" and row.exit_reason == EXIT_ALPHA_RANK_DROP for row in second_review.active_pool)
 
 
 def test_replay_uses_trading_calendar_and_skips_weekend_fixture_gaps() -> None:

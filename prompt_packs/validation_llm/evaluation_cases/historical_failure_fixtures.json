@@ -1,0 +1,667 @@
+{
+  "schema_version": "aistock_validation_llm_evaluation_cases_v1",
+  "cases": [
+    {
+      "case_id": "hist_failure_01",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "Static gate",
+        "module": "validation.runner",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "scripts/llm_provider_adapter.py"
+        ],
+        "dedupe_fingerprint": "fixture-0",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-validation-runner-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "validation_catalog_integrity"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_02",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "Static gate",
+        "module": "validation.center",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "scripts/llm_provider_adapter.py"
+        ],
+        "dedupe_fingerprint": "fixture-1",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-validation-center-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "validation_center_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_03",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "qe.archive validation",
+        "module": "qe.archive",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/qe/archive/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-2",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-qe-archive-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "qe_archive_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_04",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "qe validation",
+        "module": "qe",
+        "error_signature": "self-hosted runner unavailable",
+        "suspected_files": [
+          "backend/tests/qe/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-3",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-qe-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": false,
+        "dedupe_hit": false,
+        "expected_action": "skip",
+        "expected_plan_keys": [],
+        "issue_body_required_sections": [],
+        "false_positive": true
+      }
+    },
+    {
+      "case_id": "hist_failure_05",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "paper_v2_selection_center validation",
+        "module": "paper_v2_selection_center",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/paper_v2_selection_center/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-4",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-paper_v2_selection_center-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "simulation_core_l2"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_06",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "research_assistant validation",
+        "module": "research_assistant",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/research_assistant/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-5",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-research_assistant-summary.md"
+        },
+        "existing_issue_number": 906,
+        "dedupe_status": "hit"
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": true,
+        "expected_action": "comment_existing_issue",
+        "expected_plan_keys": [
+          "research_assistant_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_07",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "model_registry validation",
+        "module": "model_registry",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/model_registry/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-6",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-model_registry-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "model_registry_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_08",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "market.regime_label validation",
+        "module": "market.regime_label",
+        "error_signature": "self-hosted runner unavailable",
+        "suspected_files": [
+          "backend/tests/market/regime_label/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-0",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-market-regime_label-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": false,
+        "dedupe_hit": false,
+        "expected_action": "skip",
+        "expected_plan_keys": [],
+        "issue_body_required_sections": [],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_09",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "rl_execution validation",
+        "module": "rl_execution",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/rl_execution/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-1",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-rl_execution-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "rl_execution_smoke"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_10",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "local_data validation",
+        "module": "local_data",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/local_data/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-2",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-local_data-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "data_sync_autonomy_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_11",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "Static gate",
+        "module": "validation.runner",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "scripts/llm_provider_adapter.py"
+        ],
+        "dedupe_fingerprint": "fixture-3",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-validation-runner-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "validation_catalog_integrity"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_12",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "Static gate",
+        "module": "validation.center",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "scripts/llm_provider_adapter.py"
+        ],
+        "dedupe_fingerprint": "fixture-4",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-validation-center-summary.md"
+        },
+        "existing_issue_number": 912,
+        "dedupe_status": "hit"
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": true,
+        "expected_action": "comment_existing_issue",
+        "expected_plan_keys": [
+          "validation_center_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_13",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "qe.archive validation",
+        "module": "qe.archive",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/qe/archive/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-5",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-qe-archive-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "qe_archive_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_14",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "qe validation",
+        "module": "qe",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/qe/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-6",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-qe-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "qe_mcp_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_15",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "paper_v2_selection_center validation",
+        "module": "paper_v2_selection_center",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/paper_v2_selection_center/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-0",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-paper_v2_selection_center-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "simulation_core_l2"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_16",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "research_assistant validation",
+        "module": "research_assistant",
+        "error_signature": "self-hosted runner unavailable",
+        "suspected_files": [
+          "backend/tests/research_assistant/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-1",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-research_assistant-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": false,
+        "dedupe_hit": false,
+        "expected_action": "skip",
+        "expected_plan_keys": [],
+        "issue_body_required_sections": [],
+        "false_positive": true
+      }
+    },
+    {
+      "case_id": "hist_failure_17",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "model_registry validation",
+        "module": "model_registry",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/model_registry/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-2",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-model_registry-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "model_registry_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_18",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "market.regime_label validation",
+        "module": "market.regime_label",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/market/regime_label/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-3",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-market-regime_label-summary.md"
+        },
+        "existing_issue_number": 918,
+        "dedupe_status": "hit"
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": true,
+        "expected_action": "comment_existing_issue",
+        "expected_plan_keys": [
+          "market_regime_label"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_19",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "AIstock CI",
+        "failed_job": "rl_execution validation",
+        "module": "rl_execution",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/rl_execution/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-4",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-rl_execution-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "rl_execution_smoke"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    },
+    {
+      "case_id": "hist_failure_20",
+      "source": "historical_fixture",
+      "failure_event": {
+        "workflow": "Nightly",
+        "failed_job": "local_data validation",
+        "module": "local_data",
+        "error_signature": "AssertionError: compact fixture regression",
+        "suspected_files": [
+          "backend/tests/local_data/test_fixture.py"
+        ],
+        "dedupe_fingerprint": "fixture-5",
+        "code_intelligence_refs": {
+          "codegraph": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+          "ua_summary": "tmp/validation/code-intelligence/ua-local_data-summary.md"
+        }
+      },
+      "expected": {
+        "actionable": true,
+        "dedupe_hit": false,
+        "expected_action": "create_github_issue",
+        "expected_plan_keys": [
+          "data_sync_autonomy_backend"
+        ],
+        "issue_body_required_sections": [
+          "Failure Summary",
+          "Regression Locator",
+          "Agent Handoff",
+          "Token Policy",
+          "Production Gates"
+        ],
+        "false_positive": false
+      }
+    }
+  ]
+}

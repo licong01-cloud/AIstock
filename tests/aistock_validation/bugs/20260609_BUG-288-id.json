@@ -1,0 +1,135 @@
+{
+  "actual": "荐股中心策略包表格仍显示 strategy_package_id 文本框，需要用户手工输入完整策略包 ID。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260609_BUG-288-id.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-288",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-08T18:45:18.830869Z",
+  "description": "荐股中心策略包表格仍显示 strategy_package_id 文本框，需要用户手工输入完整策略包 ID。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-0791e7cd70cd",
+      "timestamp": "2026-06-08T18:45:18.830866Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "荐股中心添加策略包时通过下拉菜单选择可用策略包，显示人类可读名称/状态/摘要，表单内部保存 package_id；不要求用户手工输入超长策略包 ID。",
+  "first_seen_at": "2026-06-08T18:45:18.830869Z",
+  "fix_branch": null,
+  "fix_commit": "7e7fc6e237b35d9ab39b04dbd8a73fe468398dea",
+  "fixed_at": "2026-06-08T19:54:39.860800Z",
+  "github_issue_number": 839,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/839",
+  "last_seen_at": "2026-06-08T18:45:18.830869Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/842",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 /paper-v2/advisory，查看 创建或管理独立荐股任务 -> 策略包 ID 输入框",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_center_backend",
+    "frontend_tsc",
+    "paper_v2_ui"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "荐股中心创建任务仍强制手工输入策略包ID",
+  "trigger_condition": {
+    "fingerprint": "0791e7cd70cd97263e9af49b",
+    "source_event_id": "FE-20260609-0791e7cd70cd"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/paper-v2/advisory/page.tsx",
+    "ui_routes": [
+      "/src/app/paper-v2/advisory/page.tsx",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "rtk git diff --check -> passed",
+    "rtk npm --prefix frontend run build -> passed; existing React Hook warnings only",
+    "rtk npm --prefix frontend run test:e2e -- --config playwright.paper-v2.config.ts tests/paper-v2/paper-v2-advisory-ui.spec.ts --timeout=120000 with PAPER_V2_FRONTEND_PORT=3016 -> 1 passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed; 8 passed",
+    "rtk python -m nox -s l0 -> passed; blocking=0",
+    "rtk python -m nox -s paper_v2_backend -> passed; 605 passed, 1 skipped, 2 xfailed",
+    "rtk python -m nox -s validation_center_backend -> passed; 389 passed; coverage line=80.07 branch=62.30",
+    "PAPER_V2_L3_SKIP_UI=1 rtk python -m nox -s paper_v2_l3 -> passed; l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep passed; focused advisory Playwright UI run covered paper_v2_ui",
+    "rtk npx tsc --noEmit --pretty false --incremental false in frontend -> blocked by unrelated pre-existing research-assistant test type error outside BUG-288 scope; app build/typecheck passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "actual": "PR #882 was reported as T0 with missing scope/linkage despite 16 changed files and 1300+ additions.",
+  "allowed_write_scope": [
+    "scripts/issue_flow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_issue_flow_pr_quality.py",
+    "tests/aistock_validation/bugs/20260610_BUG-298-pr-quality-treats-large-feature-prs-as-t0-and-misses-linkage-scope.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-298",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T01:40:36.889960Z",
+  "description": "PR #882 was reported as T0 with missing scope/linkage despite 16 changed files and 1300+ additions.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-b59f10e566b8",
+      "timestamp": "2026-06-10T01:40:36.889956Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Medium or large feature PRs should infer appropriate T2/T3 tier from changed-file count, cross-module/layer signals, feature branch/title/body signals, and should surface design/feature linkage guidance without pretending the PR is T0.",
+  "first_seen_at": "2026-06-10T01:40:36.889960Z",
+  "fix_branch": null,
+  "fix_commit": "be0bda0bff950a06359aeaafc9c75a972e6683e7",
+  "fixed_at": "2026-06-10T03:30:57.894130Z",
+  "github_issue_number": 886,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/886",
+  "last_seen_at": "2026-06-10T01:40:36.889960Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/887",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/issue_flow.py pr-check --base origin/main --head feature/qe-runtime-first-pending-tasks",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "PR Quality treats large feature PRs as T0 and misses linkage/scope",
+  "trigger_condition": {
+    "fingerprint": "b59f10e566b857a10743681c",
+    "source_event_id": "FE-20260610-b59f10e566b8"
+  },
+  "validation_evidence": [
+    "PR #887 CI green; local required validations passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

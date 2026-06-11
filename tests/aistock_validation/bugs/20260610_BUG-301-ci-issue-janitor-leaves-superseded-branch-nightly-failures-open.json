@@ -1,0 +1,81 @@
+{
+  "actual": "Issue #853 remains open even though later successful Nightly runs exist. ci-issue-janitor --issue 853 --apply returns no_actionable_ci_issues.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260610_BUG-301-ci-issue-janitor-leaves-superseded-branch-nightly-failures-open.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-301",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T03:49:10.986063Z",
+  "description": "Issue #853 remains open even though later successful Nightly runs exist. ci-issue-janitor --issue 853 --apply returns no_actionable_ci_issues.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-b2bb1dfbf849",
+      "timestamp": "2026-06-10T03:49:10.986059Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issue #853; failed run 27185588632; later same-branch success 27188538840; later main success 27235698004"
+  ],
+  "expected": "For unlinked auto-filed CI/Nightly issues, triage-ci-issue and ci-issue-janitor should classify a failed run as superseded when a later successful run of the same workflow exists on the same branch, not only when a later default-branch success exists. The janitor should close the issue with a compact comment and no BUG JSON promotion.",
+  "first_seen_at": "2026-06-10T03:49:10.986063Z",
+  "fix_branch": null,
+  "fix_commit": "51241e5cc3013056ee70abe2a87e935452322162",
+  "fixed_at": "2026-06-10T05:08:07.054468Z",
+  "github_issue_number": 896,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/896",
+  "last_seen_at": "2026-06-10T03:49:10.986063Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/899",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 853 && python scripts/aistock_issue_workflow.py ci-issue-janitor --issue 853 --apply",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI issue janitor leaves superseded branch nightly failures open",
+  "trigger_condition": {
+    "fingerprint": "b2bb1dfbf849d673839acf07",
+    "source_event_id": "FE-20260610-b2bb1dfbf849"
+  },
+  "validation_evidence": [
+    "PR #899 CI green; local required validations passed after rebase"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

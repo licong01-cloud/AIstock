@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.model_registry import (
@@ -162,6 +164,8 @@ def transition_lifecycle(req: LifecycleTransitionRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 class ModelRegisterPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     payload: dict[str, Any] = Field(default_factory=dict)
     object_type: ModelObjectType = ModelObjectType.SPEC
 
@@ -194,21 +198,211 @@ def _model_record_id(payload: dict[str, Any]) -> str | None:
     )
 
 
+_LEGACY_JSONB_COLUMNS = {
+    "model_config",
+    "dataset_config",
+    "feature_schema",
+    "flattened_feature_list",
+    "model_artifacts",
+    "raw_payload",
+    "model_hyperparameters",
+    "model_training_hyperparameters",
+    "model_variables",
+    "all_metrics",
+    "training_curves",
+    "analysis_profile",
+}
+
+_LEGACY_INSERT_DEFAULTS: dict[str, Any] = {
+    "catalog_version": "legacy_mcp_v1",
+    "catalog_source": "mcp_model_registry",
+    "workspace_id": "mcp_manual",
+}
+
+
+def _legacy_catalog_columns(conn: Any) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'aistock_model_catalog'
+            """
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _legacy_json_value(column: str, value: Any) -> Any:
+    if column in _LEGACY_JSONB_COLUMNS and value is not None:
+        return psycopg2.extras.Json(value)
+    return value
+
+
+def _legacy_model_payload_from_request(req: ModelRegisterPlanRequest) -> dict[str, Any]:
+    payload = dict(req.payload or {})
+    extras = getattr(req, "model_extra", None) or {}
+    for key, value in extras.items():
+        if key not in {"confirm", "payload", "object_type"}:
+            payload.setdefault(key, value)
+    return payload
+
+
+def _legacy_model_id_from_payload(payload: dict[str, Any]) -> str:
+    model_id = payload.get("model_id") or payload.get("legacy_model_id") or payload.get("spec_id")
+    if not model_id and payload.get("task_run_id") and payload.get("loop_id") is not None:
+        model_id = f"{payload['task_run_id']}::loop_{payload['loop_id']}"
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise HTTPException(status_code=422, detail={"error": "model_id_required", "message": "legacy aistock_model_catalog registration requires model_id"})
+    return model_id.strip()
+
+
+def _normalize_legacy_model_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    normalized["model_id"] = _legacy_model_id_from_payload(normalized)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    normalized.setdefault("generated_at_utc", now)
+    for key, value in _LEGACY_INSERT_DEFAULTS.items():
+        normalized.setdefault(key, value)
+    normalized.setdefault("task_run_id", normalized["model_id"])
+    normalized.setdefault("loop_id", 0)
+    normalized.setdefault("workspace_path", f"mcp://model-registry/{normalized['model_id']}")
+    normalized.setdefault("model_name", normalized.get("display_name") or normalized["model_id"])
+    normalized.setdefault("display_name", normalized.get("model_name"))
+    normalized.setdefault("model_type", normalized.get("model_type_tag") or "manual")
+    raw_payload = dict(normalized.get("raw_payload") or {})
+    raw_payload.setdefault("registered_via", "mcp_model_registry")
+    raw_payload.setdefault("registered_at_utc", now)
+    normalized["raw_payload"] = raw_payload
+    return normalized
+
+
+def _legacy_order_clause(columns: set[str]) -> str:
+    parts: list[str] = []
+    if "is_sota" in columns:
+        parts.append("is_sota DESC NULLS LAST")
+    if "ic" in columns:
+        parts.append("ic DESC NULLS LAST")
+    if "generated_at_utc" in columns:
+        parts.append("generated_at_utc DESC NULLS LAST")
+    parts.append("model_id ASC")
+    return ", ".join(parts)
+
+
+def _legacy_qe_selectable_condition(columns: set[str], qe_selectable: bool | None) -> str | None:
+    if qe_selectable is None or "training_failed" not in columns:
+        return None
+    if qe_selectable:
+        return "COALESCE(training_failed, FALSE) = FALSE"
+    return "COALESCE(training_failed, FALSE) = TRUE"
+
+
+def _legacy_list_models(*, limit: int, offset: int, qe_selectable: bool | None = None) -> tuple[list[dict[str, Any]], int]:
+    from backend.db.pg_pool import get_conn
+
+    with get_conn() as conn:
+        columns = _legacy_catalog_columns(conn)
+        where_parts = [condition for condition in [_legacy_qe_selectable_condition(columns, qe_selectable)] if condition]
+        where_clause = " AND ".join(where_parts) if where_parts else "1=1"
+        order_clause = _legacy_order_clause(columns)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) AS total FROM public.aistock_model_catalog WHERE {where_clause}")
+            total = int(cur.fetchone()["total"])
+            cur.execute(
+                f"""
+                SELECT *
+                FROM public.aistock_model_catalog
+                WHERE {where_clause}
+                ORDER BY {order_clause}
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            return [dict(row) for row in cur.fetchall()], total
+
+
+def _legacy_find_model(model_id: str) -> dict[str, Any]:
+    from backend.db.pg_pool import get_conn
+
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise HTTPException(status_code=422, detail={"error": "model_id_required"})
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM public.aistock_model_catalog
+                WHERE model_id = %s
+                   OR task_run_id = %s
+                   OR asset_bundle_id = %s
+                   OR loop_id::TEXT = %s
+                ORDER BY model_id ASC
+                LIMIT 1
+                """,
+                (model_id, model_id, model_id, model_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail={"error": "model_not_found", "model_id": model_id})
+            return dict(row)
+
+
+def _legacy_register_model(payload: dict[str, Any]) -> dict[str, Any]:
+    from backend.db.pg_pool import get_conn
+
+    normalized = _normalize_legacy_model_payload(payload)
+    with get_conn() as conn:
+        columns = _legacy_catalog_columns(conn)
+        writable = [key for key in normalized if key in columns and key != "id"]
+        if "model_id" not in writable:
+            raise HTTPException(status_code=422, detail={"error": "model_id_required"})
+        values = [_legacy_json_value(key, normalized[key]) for key in writable]
+        placeholders = ", ".join(["%s"] * len(writable))
+        column_sql = ", ".join(writable)
+        updates = ", ".join(f"{key} = EXCLUDED.{key}" for key in writable if key != "model_id")
+        conflict_action = f"DO UPDATE SET {updates}" if updates else "DO NOTHING"
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO public.aistock_model_catalog ({column_sql})
+                VALUES ({placeholders})
+                ON CONFLICT (model_id) {conflict_action}
+                RETURNING *
+                """,
+                values,
+            )
+            return dict(cur.fetchone())
+
+
+def _legacy_deprecate_model(model_id: str, *, reason: str, operator: str) -> dict[str, Any]:
+    from backend.db.pg_pool import get_conn
+
+    existing = _legacy_find_model(model_id)
+    raw_payload = dict(existing.get("raw_payload") or {})
+    raw_payload["mcp_deprecated"] = True
+    raw_payload["mcp_deprecated_reason"] = reason
+    raw_payload["mcp_deprecated_by"] = operator
+    raw_payload["mcp_deprecated_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        columns = _legacy_catalog_columns(conn)
+        assignments = ["raw_payload = %s"]
+        values: list[Any] = [psycopg2.extras.Json(raw_payload)]
+        if "is_sota" in columns:
+            assignments.append("is_sota = FALSE")
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                UPDATE public.aistock_model_catalog
+                SET {', '.join(assignments)}
+                WHERE model_id = %s
+                RETURNING *
+                """,
+                [*values, existing["model_id"]],
+            )
+            return dict(cur.fetchone())
+
+
 def _find_model_summary(model_id: str) -> dict[str, Any]:
-    try:
-        compat = _service().list_model_catalog_compat(limit=100, offset=0, qe_selectable=None)
-        legacy = _service().list_legacy_catalog_bridge(limit=100, offset=0, qe_selectable=None)
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
-    for item in compat:
-        payload = item.model_dump(mode="json")
-        if model_id in {payload.get("model_id"), payload.get("trial_id"), payload.get("artifact_id")}:
-            return payload
-    for item in legacy:
-        payload = item.model_dump(mode="json")
-        if model_id in {payload.get("legacy_model_id"), payload.get("task_run_id"), payload.get("loop_id"), payload.get("asset_bundle_id")}:
-            return payload
-    raise HTTPException(status_code=404, detail={"error": "model_not_found", "model_id": model_id})
+    return _legacy_find_model(model_id)
 
 
 def _register_model_object(object_type: ModelObjectType, payload: dict[str, Any]) -> dict[str, Any]:
@@ -231,15 +425,12 @@ def mcp_summary(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=
 
     safe_limit = clamp_limit(limit)
     safe_offset = clamp_offset(offset)
-    try:
-        items = _service().list_model_catalog_compat(limit=safe_limit, offset=safe_offset)
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
-    rows = [_strip_heavy_model_fields(item.model_dump(mode="json")) for item in items]
+    rows, total = _legacy_list_models(limit=safe_limit, offset=safe_offset)
+    rows = [_strip_heavy_model_fields(item) for item in rows]
     return summary_envelope(
         domain="model_registry",
         items=rows,
-        total=len(rows),
+        total=total,
         limit=safe_limit,
         offset=safe_offset,
         omitted_sections=["model_weights", "training_curves", "full_hyperparams", "artifact_payload"],
@@ -259,14 +450,11 @@ def mcp_list_models(
 
     safe_limit = clamp_limit(limit)
     safe_offset = clamp_offset(offset)
-    try:
-        items = _service().list_model_catalog_compat(limit=safe_limit, offset=safe_offset, qe_selectable=qe_selectable)
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
+    items, total = _legacy_list_models(limit=safe_limit, offset=safe_offset, qe_selectable=qe_selectable)
     return summary_envelope(
         domain="model_registry.models",
-        items=[_strip_heavy_model_fields(item.model_dump(mode="json")) for item in items],
-        total=len(items),
+        items=[_strip_heavy_model_fields(item) for item in items],
+        total=total,
         limit=safe_limit,
         offset=safe_offset,
         omitted_sections=["model_weights", "training_curves", "full_hyperparams"],
@@ -274,6 +462,35 @@ def mcp_list_models(
         detail_args_hint={"model_id": "<model_id>"},
         extra={"response_mode": "summary"},
     )
+
+
+@router.get("/models/detail", summary="MCP get model summary-first detail by query")
+def mcp_get_model_by_query(model_id: str = Query(..., min_length=1)) -> dict[str, Any]:
+    return mcp_get_model(model_id)
+
+
+@router.get("/models/trials", summary="MCP list model trials summary by query")
+def mcp_model_trials_by_query(
+    model_id: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return mcp_model_trials(model_id, limit=limit, offset=offset)
+
+
+@router.get("/models/artifacts", summary="MCP model artifact refs by query")
+def mcp_model_artifacts_by_query(model_id: str = Query(..., min_length=1)) -> dict[str, Any]:
+    return mcp_model_artifacts(model_id)
+
+
+@router.get("/models/seed-stability", summary="MCP model seed stability summary by query")
+def mcp_seed_stability_by_query(model_id: str = Query(..., min_length=1)) -> dict[str, Any]:
+    return mcp_seed_stability(model_id)
+
+
+@router.get("/models/hyperparams", summary="MCP model hyperparameter history ref by query")
+def mcp_hyperparams_by_query(model_id: str = Query(..., min_length=1)) -> dict[str, Any]:
+    return mcp_hyperparams(model_id)
 
 
 @router.get("/models/{model_id}", summary="MCP get model summary-first detail")
@@ -301,11 +518,8 @@ def mcp_model_trials(model_id: str, limit: int = Query(20, ge=1, le=100), offset
 
     safe_limit = clamp_limit(limit)
     safe_offset = clamp_offset(offset)
-    try:
-        legacy = _service().list_legacy_catalog_bridge(limit=100, offset=0, qe_selectable=None)
-        rows = [item.model_dump(mode="json") for item in legacy if item.legacy_model_id == model_id or item.task_run_id == model_id or item.loop_id == model_id]
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
+    payload = _legacy_find_model(model_id)
+    rows = [payload]
     window = rows[safe_offset : safe_offset + safe_limit]
     return summary_envelope(
         domain="model_registry.trials",
@@ -372,10 +586,10 @@ def mcp_register_plan(req: ModelRegisterPlanRequest) -> dict[str, Any]:
         "response_mode": "diagnostic",
         "plan_type": "register_model",
         "object_type": req.object_type.value,
-        "object_id_preview": _model_record_id(req.payload),
-        "payload_summary": _strip_heavy_model_fields(req.payload),
+        "object_id_preview": _model_record_id(_legacy_model_payload_from_request(req)),
+        "payload_summary": _strip_heavy_model_fields(_legacy_model_payload_from_request(req)),
         "required_confirmation": REGISTER_MODEL_CONFIRM,
-        "write_api_env_required": "AISTOCK_MODEL_REGISTRY_WRITE_API_ENABLED=true",
+        "target_table": "public.aistock_model_catalog",
         "omitted_sections": ["model_weights", "training_curves", "code_text", "full_hyperparams"],
     }
 
@@ -384,11 +598,7 @@ def mcp_register_plan(req: ModelRegisterPlanRequest) -> dict[str, Any]:
 def mcp_register_confirmed(req: ModelRegisterConfirmedRequest) -> dict[str, Any]:
     if req.confirm != REGISTER_MODEL_CONFIRM:
         raise HTTPException(status_code=400, detail={"error": "confirmation_required", "expected": REGISTER_MODEL_CONFIRM})
-    _assert_write_api_enabled()
-    try:
-        item = _register_model_object(req.object_type, req.payload)
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
+    item = _legacy_register_model(_legacy_model_payload_from_request(req))
     return {
         "ok": True,
         "domain": "model_registry",
@@ -403,22 +613,11 @@ def mcp_register_confirmed(req: ModelRegisterConfirmedRequest) -> dict[str, Any]
 def mcp_deprecate_confirmed(req: ModelDeprecateConfirmedRequest) -> dict[str, Any]:
     if req.confirm != DEPRECATE_MODEL_CONFIRM:
         raise HTTPException(status_code=400, detail={"error": "confirmation_required", "expected": DEPRECATE_MODEL_CONFIRM})
-    _assert_write_api_enabled()
-    status_by_type = {
-        ModelObjectType.TEMPLATE: "retired",
-        ModelObjectType.SPEC: "retired",
-        ModelObjectType.TRIAL: "invalid",
-        ModelObjectType.ARTIFACT: "expired",
+    item = _legacy_deprecate_model(req.object_id, reason=req.reason, operator=req.operator)
+    return {
+        "ok": True,
+        "domain": "model_registry",
+        "response_mode": "detail",
+        "deprecated": _strip_heavy_model_fields(item),
+        "confirmation": DEPRECATE_MODEL_CONFIRM,
     }
-    try:
-        event = _service().transition_status(
-            object_type=req.object_type,
-            object_id=req.object_id,
-            to_status=status_by_type[req.object_type],
-            reason=req.reason,
-            operator=req.operator,
-            context_json={"source": "mcp_model_registry"},
-        )
-    except TradingCoreError as exc:
-        raise _handle_domain_error(exc) from exc
-    return {"ok": True, "domain": "model_registry", "response_mode": "detail", "event": event.model_dump(mode="json"), "confirmation": DEPRECATE_MODEL_CONFIRM}

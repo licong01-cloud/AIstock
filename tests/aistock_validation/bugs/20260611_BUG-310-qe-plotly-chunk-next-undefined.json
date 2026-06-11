@@ -1,0 +1,116 @@
+{
+  "actual": "用户侧页面报 Loading chunk _app-pages-browser_node_modules_react-plotly_js_react-plotly_js failed (error: http://localhost:3000/_next/undefined)。只读复现确认 /quantevolver/evolution 可打开，风险点集中在多个 chart 组件直接 next/dynamic import react-plotly.js。",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+    "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/CorrelationHeatmap.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/PairDetail.tsx",
+    "tests/aistock_validation/bugs/20260611_BUG-310-qe-plotly-chunk-next-undefined.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-310",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T16:39:27.309463Z",
+  "description": "用户侧页面报 Loading chunk _app-pages-browser_node_modules_react-plotly_js_react-plotly_js failed (error: http://localhost:3000/_next/undefined)。只读复现确认 /quantevolver/evolution 可打开，风险点集中在多个 chart 组件直接 next/dynamic import react-plotly.js。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-6251c2c65438",
+      "timestamp": "2026-06-10T16:39:27.309459Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-11 browser probe: /quantevolver/evolution 200 with 54 tasks; chart code uses next/dynamic(() => import('react-plotly.js'))"
+  ],
+  "expected": "QE演进任务页、任务详情和 Loop 图表应稳定加载；Plotly 图表懒加载失败时不应触发 /_next/undefined chunk URL。",
+  "first_seen_at": "2026-06-10T16:39:27.309463Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 925,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/925",
+  "last_seen_at": "2026-06-10T16:39:27.309463Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Browser: open http://localhost:3000/quantevolver/evolution, enter a task detail, expand a loop with return/IC/loss charts",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE演进任务页 Plotly 动态 chunk 请求 /_next/undefined",
+  "trigger_condition": {
+    "fingerprint": "6251c2c65438e6fedb9fdfce",
+    "source_event_id": "FE-20260611-6251c2c65438"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/CorrelationHeatmap.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/PairDetail.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/_next/undefined",
+    "ui_routes": [
+      "/_next/undefined"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

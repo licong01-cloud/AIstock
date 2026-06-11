@@ -1,9 +1,36 @@
 "use client";
 
 import React, { useMemo } from "react";
-import dynamic from "next/dynamic";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false }) as any;
+type PlotlyComponent = React.ComponentType<any>;
+
+function PlotlyChart(props: any) {
+  const [Plot, setPlot] = React.useState<PlotlyComponent | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    import("react-plotly.js")
+      .then((module) => {
+        if (!cancelled) setPlot(() => module.default as PlotlyComponent);
+      })
+      .catch((error) => console.error("Failed to load Plotly chart", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!Plot) {
+    const placeholderHeight = props?.style?.height ?? props?.layout?.height ?? 260;
+    return (
+      <div style={{ height: placeholderHeight, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
+        Loading chart...
+      </div>
+    );
+  }
+
+  return <Plot {...props} />;
+}
+
 
 interface TrajectoryEntry {
   loop_id: number;
@@ -146,7 +173,7 @@ export default React.memo(function MetricsTrajectoryChart({
   }
 
   return (
-    <Plot
+    <PlotlyChart
       data={traces}
       layout={LAYOUT}
       config={CONFIG}

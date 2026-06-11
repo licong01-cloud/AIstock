@@ -453,6 +453,10 @@ def test_account_group_slots_mode_uses_slot_attribution_and_allows_cross_portfol
             "strategy_name": "UnifiedAlpha",
             "order_remark_prefix": "ag622-alpha",
             "order_remark": "ag622-alpha:intent-1",
+            "runtime_owner": "MiniQMTExecutionRuntime",
+            "runtime_id": "mqrt_unit_account_group",
+            "runtime_algo_instance_id": "mqalgo_unit_account_group",
+            "runtime_child_order_id": "mqchild_unit_account_group",
         },
     )
 
@@ -465,6 +469,8 @@ def test_account_group_slots_mode_uses_slot_attribution_and_allows_cross_portfol
     context = backend.order_context(handle)
     assert context["account_group_id"] == "ag_minqmt_62266303_sim"
     assert context["strategy_slot_id"] == "slot_alpha"
+    assert context["runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert context["runtime_child_order_id"] == "mqchild_unit_account_group"
 
 
 def test_account_group_slots_mode_requires_explicit_slot_attribution_without_qmt_call() -> None:
@@ -475,6 +481,27 @@ def test_account_group_slots_mode_requires_explicit_slot_attribution_without_qmt
         backend.submit_order_intent(_intent(metadata={"account_group_id": "ag_minqmt_62266303_sim"}))
 
     assert exc_info.value.context["missing_metadata_key"] == "strategy_slot_id"
+    assert client.place_calls == []
+
+
+def test_account_group_slots_mode_requires_canonical_runtime_metadata_without_qmt_call() -> None:
+    client = FakeQMTClient()
+    backend = _backend(client=client, account_mode="account_group", account_group_id="ag_minqmt_62266303_sim")
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        backend.submit_order_intent(
+            _intent(
+                metadata={
+                    "account_group_id": "ag_minqmt_62266303_sim",
+                    "strategy_slot_id": "slot_alpha",
+                    "strategy_name": "UnifiedAlpha",
+                    "order_remark": "ag622-alpha:intent-1",
+                }
+            )
+        )
+
+    assert exc_info.value.context["required_runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert "runtime_id" in exc_info.value.context["missing_runtime_metadata_keys"]
     assert client.place_calls == []
 
 

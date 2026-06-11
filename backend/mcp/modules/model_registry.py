@@ -40,23 +40,23 @@ def register(registry: "ModuleRegistry") -> None:
 
     @registry.mcp.tool(name="model_registry_get")
     def model_registry_get(model_id: str) -> Any:
-        return client.get(f"/models/{_fragment(registry, model_id, 'model_id')}")
+        return client.get("/models/detail", params={"model_id": model_id})
 
     @registry.mcp.tool(name="model_registry_compare_trials")
     def model_registry_compare_trials(model_id: str, limit: int = 20, offset: int = 0) -> Any:
-        return client.get(f"/models/{_fragment(registry, model_id, 'model_id')}/trials", params={"limit": limit, "offset": offset})
+        return client.get("/models/trials", params={"model_id": model_id, "limit": limit, "offset": offset})
 
     @registry.mcp.tool(name="model_registry_get_seed_stability")
     def model_registry_get_seed_stability(model_id: str) -> Any:
-        return client.get(f"/models/{_fragment(registry, model_id, 'model_id')}/seed-stability")
+        return client.get("/models/seed-stability", params={"model_id": model_id})
 
     @registry.mcp.tool(name="model_registry_get_hyperparam_history")
     def model_registry_get_hyperparam_history(model_id: str) -> Any:
-        return client.get(f"/models/{_fragment(registry, model_id, 'model_id')}/hyperparams")
+        return client.get("/models/hyperparams", params={"model_id": model_id})
 
     @registry.mcp.tool(name="model_registry_get_artifacts")
     def model_registry_get_artifacts(model_id: str) -> Any:
-        return client.get(f"/models/{_fragment(registry, model_id, 'model_id')}/artifacts")
+        return client.get("/models/artifacts", params={"model_id": model_id})
 
     @registry.mcp.tool(name="model_registry_plan_register")
     def model_registry_plan_register(payload: dict[str, Any]) -> Any:

@@ -1,0 +1,81 @@
+{
+  "actual": "2026-06-08旧单策略任务复评生成review_run和list_version，但20条决策全部WAITING_EVIDENCE，return_bps为null，program last_review_status=WAITING_DATA，排行榜win_rate/avg_return_bps为空。",
+  "allowed_write_scope": [
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20260609_BUG-294-topk-waiting-evidence.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-294",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-09T11:00:03.437944Z",
+  "description": "2026-06-08旧单策略任务复评生成review_run和list_version，但20条决策全部WAITING_EVIDENCE，return_bps为null，program last_review_status=WAITING_DATA，排行榜win_rate/avg_return_bps为空。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260609-212e725afd2c",
+      "timestamp": "2026-06-09T11:00:03.437940Z"
+    }
+  ],
+  "evidence_uris": [
+    "read-only runtime diagnosis 2026-06-09: review_run=advrun_f896b52fe87d4ecabbc338d8d3cc94eb, selection_run=sel_68c650dd463540de81d1821325b0832c, kline coverage=20/20, WAITING_EVIDENCE decisions=20"
+  ],
+  "expected": "每日复评应对当前ACTIVE持仓独立盯市计算return_bps；持仓未进入当天TopK应作为排名/换仓证据处理，不能阻断收益统计。复评业务成功时应产生HOLD/EXIT/ENTER或明确可解释状态，排行榜可统计开放持仓收益。",
+  "first_seen_at": "2026-06-09T11:00:03.437944Z",
+  "fix_branch": null,
+  "fix_commit": "ee38fe1eec1438dd3114073adb2cf88cae2c0725",
+  "fixed_at": "2026-06-09T13:14:56.515915Z",
+  "github_issue_number": 860,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/860",
+  "last_seen_at": "2026-06-09T11:00:03.437944Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/866",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/advisory/programs/advp_83676ee4d3024b30b3cfc92f2caa2eee/reviews?limit=60 then compare app.advisory_review_run selection_run_id sel_68c650dd463540de81d1821325b0832c with app.advisory_episode_return active symbols; overlap is 0/20 while market.kline_daily_raw covers 20/20 for 2026-06-08",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "荐股每日复评将持仓不在当天TopK误判为WAITING_EVIDENCE",
+  "trigger_condition": {
+    "fingerprint": "212e725afd2c13dea52ab387",
+    "source_event_id": "FE-20260609-212e725afd2c"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/watchlist/test_advisory_program.py -q -> passed (14 passed after origin/main merge)",
+    "rtk ruff check backend/services/advisory_program.py backend/tests/watchlist/test_advisory_program.py -> passed",
+    "rtk git diff --check origin/main..HEAD -> passed",
+    "rtk nox -s l0 -> passed after origin/main merge",
+    "rtk nox -s validation_module_registry_l0 -> passed after origin/main merge"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

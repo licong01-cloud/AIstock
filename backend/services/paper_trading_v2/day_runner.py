@@ -10,9 +10,11 @@ from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
+    refresh_generated_runtime_profile_binding,
     validate_runtime_profile_binding,
 )
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -38,6 +40,7 @@ from backend.services.strategy_package.live_inference import (
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
+    BrokerSubmitError,
     DataUnavailableError,
     InvalidStateTransitionError,
     PackageAssetInvalidError,
@@ -45,6 +48,7 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 from backend.execution_algos.vnpy_style import is_vnpy_style_algo
+from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeClient
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
@@ -62,7 +66,7 @@ from backend.services.trading_core.models import (
 from backend.services.trading_core.oms import OMS
 
 from .broker import MiniQMTSimBackend
-from .execution import MiniQMTAlgoExecutionResult, MiniQMTLiveAlgoAdapter, build_minqmt_execution_quality_report
+from .execution import MiniQMTAlgoExecutionResult, build_minqmt_execution_quality_report
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     miniqmt_account_group_id,
@@ -176,6 +180,7 @@ class PaperTradingDayRunner:
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
+        minqmt_runtime_client: MiniQMTExecutionRuntimeClient | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -195,6 +200,7 @@ class PaperTradingDayRunner:
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
+        self.minqmt_runtime_client = minqmt_runtime_client or MiniQMTExecutionRuntimeClient()
 
     def run_day(
         self,
@@ -247,12 +253,18 @@ class PaperTradingDayRunner:
             trade_date=trade_date,
             runtime_config=runtime_config or {},
         )
+        ensure_previous_trading_day_selection_cutoff(
+            config,
+            trade_date=trade_date,
+            calendar_provider=self.calendar_provider,
+        )
         config = normalize_runtime_config_with_backtest_contract(
             manifest,
             config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
             include_contract=True,
         )
+        config = refresh_generated_runtime_profile_binding(config)
         validate_runtime_profile_binding(
             config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
@@ -1145,6 +1157,12 @@ class PaperTradingDayRunner:
                         ],
                     },
                 )
+            runtime_hash = self._miniqmt_runtime_config_hash(
+                portfolio=portfolio,
+                run=run,
+                manifest=manifest,
+                execution_policy_context=execution_policy_context,
+            )
             use_vnpy_style_execution = self._miniqmt_uses_vnpy_style_execution(execution_policy_context)
             for intent in ordered_intents:
                 if use_vnpy_style_execution:
@@ -1155,6 +1173,8 @@ class PaperTradingDayRunner:
                         broker=broker,
                         execution_policy_context=execution_policy_context or {},
                         session_id=session_id,
+                        account_slot_context=account_slot_context,
+                        runtime_config_hash=runtime_hash,
                     )
                     orders.extend(algo_result["orders"])
                     fills.extend(algo_result["fills"])
@@ -1168,11 +1188,38 @@ class PaperTradingDayRunner:
                     intent=intent,
                 )
                 try:
-                    handle = broker.submit_order_intent(intent)
-                    native = broker.order_context(handle)
-                    status = broker.query_status(handle)
-                    trade_rows = broker.query_trades(handle)
+                    runtime_result = self.minqmt_runtime_client.submit_paper_order_intents(
+                        portfolio=portfolio,
+                        run=run,
+                        trade_date=trade_date,
+                        intents=[intent],
+                        broker=broker,
+                        runtime_config_hash=runtime_hash,
+                        account_group_id=str(account_slot_context.get("account_group_id") or portfolio.portfolio_id),
+                        strategy_slot_id=str(account_slot_context.get("strategy_slot_id") or portfolio.portfolio_id),
+                    )
+                    runtime_evidence = runtime_result.runtime_evidence.to_dict()
+                    child_result = runtime_result.child_results[0]
+                    if child_result.submit_exception is not None:
+                        exc = child_result.submit_exception
+                        if isinstance(exc, TradingCoreError):
+                            exc.context.setdefault("runtime_evidence", runtime_evidence)
+                        raise exc
+                    handle = child_result.handle
+                    if handle is None or child_result.status is None:
+                        raise BrokerSubmitError(
+                            "MiniQMT runtime client did not return broker handle/status",
+                            context={"intent_id": intent.intent_id, "runtime_evidence": runtime_result.runtime_evidence.to_dict()},
+                        )
+                    native = dict(child_result.native_context)
+                    status = child_result.status
+                    trade_rows = list(child_result.trades)
                 except TradingCoreError as exc:
+                    runtime_evidence = (
+                        exc.context.get("runtime_evidence")
+                        if isinstance(exc.context, dict) and isinstance(exc.context.get("runtime_evidence"), dict)
+                        else None
+                    )
                     submit_native = self._miniqmt_submit_error_native(exc)
                     audit_after = self._miniqmt_broker_audit_snapshot(
                         broker,
@@ -1204,6 +1251,13 @@ class PaperTradingDayRunner:
                             **submit_native,
                         }
                     )
+                    if runtime_evidence is not None:
+                        metadata.update(
+                            {
+                                "runtime_owner": "MiniQMTExecutionRuntime",
+                                "runtime_evidence": runtime_evidence,
+                            }
+                        )
                     final_order = final_order.model_copy(update={"metadata": metadata})
                     event = event.model_copy(update={"metadata": diagnostic})
                     self.repository.save_order(run.run_id, final_order)
@@ -1240,6 +1294,7 @@ class PaperTradingDayRunner:
                     audit_before=audit_before,
                     audit_after=audit_after,
                 )
+                metadata.update({"runtime_owner": "MiniQMTExecutionRuntime", "runtime_evidence": runtime_evidence})
                 order = order.model_copy(update={"metadata": metadata})
                 order_fills = self._miniqmt_fills_from_trades(
                     trade_rows,
@@ -1337,14 +1392,18 @@ class PaperTradingDayRunner:
                         )
                 final_order = final_order.model_copy(
                     update={
-                        "metadata": self._miniqmt_metadata_with_status(
+                        "metadata": {
+                            **self._miniqmt_metadata_with_status(
                             final_order.metadata,
                             status=status,
                             native=native,
                             visible_trade_count=len(trade_rows),
                             audit_before=audit_before,
                             audit_after=audit_after,
-                        ),
+                            ),
+                            "runtime_owner": "MiniQMTExecutionRuntime",
+                            "runtime_evidence": runtime_evidence,
+                        },
                         "avg_fill_price": float(final_order.avg_fill_price) if final_order.avg_fill_price is not None else None,
                     }
                 )
@@ -1361,6 +1420,8 @@ class PaperTradingDayRunner:
                             algo_state={
                                 "broker_backend": "minqmt_sim",
                                 "authority_source": "MINIQMT",
+                                "runtime_owner": "MiniQMTExecutionRuntime",
+                                "runtime_evidence": runtime_evidence,
                                 "broker_handle_id": handle.handle_id,
                                 "miniqmt_order_id": native["miniqmt_order_id"],
                                 "broker_status": status.state,
@@ -1399,6 +1460,8 @@ class PaperTradingDayRunner:
                         "paper_order_status": final_order.status.value,
                         "filled_quantity": final_order.filled_quantity,
                         "broker_diagnostic": diagnostic,
+                        "runtime_owner": "MiniQMTExecutionRuntime",
+                        "runtime_evidence": runtime_evidence,
                     },
                 )
 
@@ -1417,6 +1480,29 @@ class PaperTradingDayRunner:
                 broker.shutdown()
 
     @staticmethod
+    def _miniqmt_runtime_id(run: PaperRun) -> str:
+        payload = [run.run_id, run.trade_date.isoformat()]
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        return f"mqrt_paper_{digest[:24]}"
+
+    @staticmethod
+    def _miniqmt_runtime_config_hash(
+        *,
+        portfolio: Any,
+        run: PaperRun,
+        manifest: Any,
+        execution_policy_context: dict[str, Any] | None,
+    ) -> str:
+        payload = {
+            "portfolio_id": portfolio.portfolio_id,
+            "run_id": run.run_id,
+            "package_id": manifest.package_id,
+            "manifest_sha256": getattr(manifest, "manifest_sha256", None),
+            "execution_policy_context": execution_policy_context or {},
+        }
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _miniqmt_uses_vnpy_style_execution(execution_policy_context: dict[str, Any] | None) -> bool:
         policy_json = execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
         return isinstance(policy_json, dict) and is_vnpy_style_algo(policy_json.get("algo_code"))
@@ -1430,17 +1516,26 @@ class PaperTradingDayRunner:
         broker: MiniQMTSimBackend,
         execution_policy_context: dict[str, Any],
         session_id: str | None,
+        account_slot_context: dict[str, str],
+        runtime_config_hash: str,
     ) -> dict[str, list[Any]]:
-        adapter = MiniQMTLiveAlgoAdapter(
+        result = self.minqmt_runtime_client.execute_paper_vnpy_intent(
+            portfolio=type("PaperMiniQMTPortfolioRef", (), {"portfolio_id": intent.portfolio_id})(),
+            run=run,
+            trade_date=trade_date,
+            intent=intent,
             broker=broker,
-            policy_context=execution_policy_context,
+            execution_policy_context=execution_policy_context,
+            runtime_config_hash=runtime_config_hash,
+            account_group_id=str(account_slot_context.get("account_group_id") or intent.portfolio_id),
+            strategy_slot_id=str(account_slot_context.get("strategy_slot_id") or intent.portfolio_id),
             quote_provider=self._miniqmt_quote_provider(broker),
         )
-        result = adapter.execute_intent(intent, trade_date=trade_date)
+        runtime_evidence = result.diagnostic.get("runtime_evidence") if isinstance(result.diagnostic, dict) else None
         self.repository.save_run_event(
             run_id=run.run_id,
             event_type="MINIQMT_VNPY_STYLE_EXECUTION_STARTED",
-            message="MiniQMT order intent routed through selected vn.py-style execution asset",
+            message="MiniQMT order intent routed through MiniQMTExecutionRuntime and selected vn.py-style execution asset",
             context={
                 "parent_intent_id": intent.intent_id,
                 "symbol": intent.symbol,
@@ -1450,6 +1545,8 @@ class PaperTradingDayRunner:
                 "policy_id": result.policy_context.get("validated_execution_policy_id"),
                 "policy_sha256": result.policy_sha256,
                 "asset_version": result.asset_metadata.get("asset_version"),
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_evidence": runtime_evidence,
             },
         )
         orders: list[Any] = []
@@ -1574,6 +1671,8 @@ class PaperTradingDayRunner:
                 "submitted_child_count": result.submitted_child_count,
                 "policy_id": result.policy_context.get("validated_execution_policy_id"),
                 "policy_sha256": result.policy_sha256,
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_evidence": runtime_evidence,
                 "diagnostic": result.diagnostic,
             },
         )
@@ -2149,10 +2248,17 @@ class PaperTradingDayRunner:
         audit_after: dict[str, Any] | None,
     ) -> dict[str, Any]:
         native = dict(audit_after.get("native") or {}) if isinstance(audit_after, dict) else {}
+        runtime_evidence = (
+            exc.context.get("runtime_evidence")
+            if isinstance(exc.context, dict) and isinstance(exc.context.get("runtime_evidence"), dict)
+            else None
+        )
         return {
             "schema_version": "miniqmt_order_diagnostic_v1",
             "broker_backend": "minqmt_sim",
             "authority_source": "MINIQMT_SUBMIT_ERROR",
+            "runtime_owner": "MiniQMTExecutionRuntime" if runtime_evidence is not None else None,
+            "runtime_evidence": runtime_evidence,
             "intent_id": intent.intent_id,
             "symbol": intent.symbol,
             "side": intent.side.value,

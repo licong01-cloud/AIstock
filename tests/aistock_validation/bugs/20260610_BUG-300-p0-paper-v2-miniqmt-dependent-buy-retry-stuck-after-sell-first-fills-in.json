@@ -1,0 +1,91 @@
+{
+  "actual": "run simrun_88f7b9859dae7b6b status=FAILED_RETRYABLE, qmt_batch_id=qmtbatch_57762fd5eb58e18e089580e3, qmt_batch_status=PARTIAL, broker_called=true, submitted_intents=9, failed_intents=7；qmt batch metadata dependent_buy_deferred=true/dependent_buy_count=7；/api/v1/qmt/orders cancelable_only=true=[] 且 qmt_strategy.virtual_account cash 已从卖出成交同步到 447106.86，但后续 scheduler tick 未重试 L2 deferred BUY。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "tests/aistock_validation/bugs/20260610_BUG-300-p0-paper-v2-miniqmt-dependent-buy-retry-stuck-after-sell-first-fills-in.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-300",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-10T03:36:36.677240Z",
+  "description": "run simrun_88f7b9859dae7b6b status=FAILED_RETRYABLE, qmt_batch_id=qmtbatch_57762fd5eb58e18e089580e3, qmt_batch_status=PARTIAL, broker_called=true, submitted_intents=9, failed_intents=7；qmt batch metadata dependent_buy_deferred=true/dependent_buy_count=7；/api/v1/qmt/orders cancelable_only=true=[] 且 qmt_strategy.virtual_account cash 已从卖出成交同步到 447106.86，但后续 scheduler tick 未重试 L2 deferred BUY。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260610-f4a8f0db1030",
+      "timestamp": "2026-06-10T03:36:36.677236Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add simulation runtime lifecycle regression test file for BUG-300 dependent BUY retry coverage.",
+      "timestamp": "2026-06-10T03:45:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "db://paper_v2.simulation_daily_run/simrun_88f7b9859dae7b6b",
+    "db://qmt_strategy.order_batch/qmtbatch_57762fd5eb58e18e089580e3",
+    "runtime-api://2026-06-10/qmt/orders-and-trades/9-orders-27-trades-l2"
+  ],
+  "expected": "MiniQMT SELL-first 调仓在卖单成交并同步 cash/lot 后，统一 simulation-runtime 下一次 tick 必须只重试未提交的 dependent BUY，不得重复已接受 SELL/BUY；若卖单未成交、部分成交、资金仍不足或规则拒绝，必须给出显式 residual/terminal 状态，不能假成功也不能永久卡住。",
+  "first_seen_at": "2026-06-10T03:36:36.677240Z",
+  "fix_branch": null,
+  "fix_commit": "1eb9fc92de2e81f07b0f7663e099de96bc2788c5",
+  "fixed_at": "2026-06-10T04:10:06.867381Z",
+  "github_issue_number": 895,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/895",
+  "last_seen_at": "2026-06-10T03:36:36.677240Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/898",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "During trading window with MiniQMT SIM connected, run POST /api/v1/simulation-runtime/scheduler/tick for a SELL-first rebalance where BUY needs same-batch proceeds; then query paper_v2.simulation_daily_run and qmt_strategy.order_batch for PARTIAL+dependent_buy_deferred after SELL fills reconcile.",
+  "required_verification": [
+    "l0",
+    "simulation_runtime_lifecycle_targeted"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][Paper v2][MiniQMT] dependent BUY retry stuck after SELL-first fills in simulation runtime",
+  "trigger_condition": {
+    "fingerprint": "f4a8f0db1030ad5d523ae7c6",
+    "source_event_id": "FE-20260610-f4a8f0db1030"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py -q -> 46 passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/qmt_strategy_ledger/order_service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/simulation_runtime backend/services/qmt_strategy_ledger backend/tests/simulation_runtime -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

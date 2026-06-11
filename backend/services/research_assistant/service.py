@@ -24,6 +24,7 @@ from typing import Any
 import jsonschema
 
 from backend.mcp.tool_manifest import TOOL_MANIFEST, TOOL_MANIFEST_BY_NAME
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL, resolve_deepseek_config
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
@@ -649,7 +650,7 @@ DEFAULT_MODEL_PROFILES: list[dict[str, Any]] = [
     {
         "model_profile_id": "model_deepseek_v4_pro_primary",
         "provider": "deepseek",
-        "model_name": os.getenv("ASSISTANT_DEEPSEEK_MODEL", "deepseek-chat"),
+        "model_name": os.getenv("ASSISTANT_DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
         "role": "primary_reasoner",
         "status": "enabled",
         "capabilities_json": {"long_context": True, "reasoning": True, "language": ["zh", "en"]},
@@ -914,11 +915,12 @@ class ResearchAssistantLlmClient:
         model_name = str(model_profile.get("model_name") or "").strip()
         if not provider or not model_name:
             raise RuntimeError("assistant LLM model profile is incomplete")
+        completion_kwargs: dict[str, Any] = {}
         if provider == "deepseek":
-            env_key = "DEEPSEEK_API_KEY"
-            if not os.getenv(env_key):
-                raise RuntimeError("DEEPSEEK_API_KEY is not configured for Research Assistant LLM calls")
-            model_id = model_name if "/" in model_name else f"deepseek/{model_name}"
+            resolved = resolve_deepseek_config(model=model_name)
+            model_id = resolved.model if "/" in resolved.model else f"deepseek/{resolved.model}"
+            completion_kwargs["api_key"] = resolved.api_key
+            completion_kwargs["api_base"] = resolved.base_url
         else:
             env_key = f"{provider.upper()}_API_KEY"
             if not os.getenv(env_key):
@@ -934,6 +936,7 @@ class ResearchAssistantLlmClient:
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **completion_kwargs,
         )
         duration_ms = int((perf_counter() - start) * 1000)
         content = str(response.choices[0].message.content or "").strip()

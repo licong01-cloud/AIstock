@@ -401,7 +401,7 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     assert compact["summary_first"] is True
     assert compact["detail_available"] is True
     assert compact["items"]
-    assert compact["total"] == 210
+    assert compact["total"] == 212
     assert "input_schema_json" not in compact["items"][0]
     assert "output_schema_json" not in compact["items"][0]
     assert "preflight_schema_json" not in compact["items"][0]

@@ -205,7 +205,37 @@ def test_submit_batch_aggregates_cash_before_broker_call() -> None:
     assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
 
 
-def test_submit_batch_uses_same_batch_sell_proceeds_for_rebalance_buy_cash() -> None:
+def test_submit_batch_uses_available_cash_for_independent_buys_before_dependent_buy() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("10100")))
+    _add_sellable_lot(repo, 1000)
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002, 1082167003])
+
+    result = _service(repo, broker).submit_batch(
+        [
+            _sell_request("remark_rebalance_sell"),
+            _buy_request("remark_cash_funded_buy"),
+            _buy_request("remark_dependent_buy"),
+        ]
+    )
+
+    assert result.success is False
+    assert result.batch_status == OrderBatchStatus.PARTIAL.value
+    assert result.succeeded == 2
+    assert result.failed == 1
+    assert result.compensation_required is False
+    assert [payload["order_remark"] for payload in broker.place_order_payloads] == [
+        "remark_rebalance_sell",
+        "remark_cash_funded_buy",
+    ]
+    assert [item.success for item in result.results] == [True, True, False]
+    assert result.results[2].broker_called is False
+    assert result.results[2].preflight.primary_error.code == "SELL_PROCEEDS_REQUIRED"
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_dependent_buy") is None
+
+
+def test_submit_batch_defers_dependent_buy_until_sell_proceeds_reconciled() -> None:
     repo = _repo()
     account = repo.get_virtual_account("strat_a")
     repo.update_virtual_account(replace(account, cash=Decimal("100")))
@@ -216,14 +246,142 @@ def test_submit_batch_uses_same_batch_sell_proceeds_for_rebalance_buy_cash() -> 
         [_buy_request("remark_rebalance_buy"), _sell_request("remark_rebalance_sell")]
     )
 
-    assert result.success is True
-    assert result.batch_status == OrderBatchStatus.SUCCEEDED.value
-    assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE, BUY_ORDER_TYPE]
-    assert {
-        error.code
-        for item in result.results
-        for error in item.preflight.errors
-    } == set()
+    assert result.success is False
+    assert result.batch_status == OrderBatchStatus.PARTIAL.value
+    assert result.preflight_passed is False
+    assert result.succeeded == 1
+    assert result.failed == 1
+    assert result.compensation_required is False
+    assert result.compensation_actions == ()
+    assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
+    sell_result, buy_result = result.results
+    assert sell_result.success is True
+    assert buy_result.success is False
+    assert buy_result.broker_called is False
+    assert buy_result.broker_message == "dependent buy deferred until same-batch sell proceeds are reconciled"
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_rebalance_sell").submit_status == IntentSubmitStatus.ACCEPTED
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_rebalance_buy") is None
+    [error] = buy_result.preflight.errors
+    assert error.code == "SELL_PROCEEDS_REQUIRED"
+    assert error.context["available_cash"] == 100.0
+    assert error.context["same_batch_estimated_sell_proceeds"] == 10000.0
+    assert error.context["batch_required_cash"] == 10000.0
+    assert error.context["dependent_sell_orders"] == [
+        {
+            "strategy_name": "poc_strategy_a",
+            "symbol": "300604.SZ",
+            "quantity": 1000,
+            "price": "10",
+            "estimated_proceeds": "10000",
+            "order_remark": "remark_rebalance_sell",
+        }
+    ]
+    batch = repo.get_order_batch(result.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.PARTIAL
+    assert batch.metadata["dependent_buy_deferred"] is True
+    assert batch.metadata["preflight_passed"] is False
+
+
+def test_submit_batch_dependent_buy_retry_submits_after_sell_proceeds_reconciled() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100")))
+    _add_sellable_lot(repo, 1000)
+    first_broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+    requests = [_buy_request("remark_rebalance_buy"), _sell_request("remark_rebalance_sell")]
+
+    first = _service(repo, first_broker).submit_batch(requests)
+    account_after_sell_fill = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account_after_sell_fill, cash=Decimal("10100")))
+    second_broker = FakeManagedBroker(order_ids=[1082167999])
+    second = _service(repo, second_broker).submit_batch(requests)
+
+    assert first.batch_status == OrderBatchStatus.PARTIAL.value
+    assert second.success is True
+    assert second.batch_status == OrderBatchStatus.SUCCEEDED.value
+    assert second.preflight_passed is True
+    assert second.retry_of_batch_id == first.batch_id
+    assert [payload["order_remark"] for payload in first_broker.place_order_payloads] == ["remark_rebalance_sell"]
+    assert [payload["order_remark"] for payload in second_broker.place_order_payloads] == ["remark_rebalance_buy"]
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_rebalance_buy").submit_status == IntentSubmitStatus.ACCEPTED
+    batch = repo.get_order_batch(second.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.SUCCEEDED
+    assert batch.metadata["dependent_buy_deferred"] is False
+    assert batch.metadata["dependent_buy_retry"] is True
+
+
+def test_submit_batch_dependent_buy_retry_matches_logical_batch_when_runtime_ids_change() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100")))
+    _add_sellable_lot(repo, 1000)
+    first_broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+    first_requests = [
+        replace(
+            _buy_request("remark_runtime_rebalance_buy"),
+            metadata={
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_id": "mqrt_same_runtime",
+                "runtime_algo_instance_id": "mqalgo_buy_first",
+                "runtime_child_order_id": "mqchild_buy_first",
+                "runtime_parent_intent_id": "parent_buy_first",
+                "execution_plan_id": "plan_same",
+                "execution_plan_intent_id": "intent_buy_same",
+            },
+        ),
+        replace(
+            _sell_request("remark_runtime_rebalance_sell"),
+            metadata={
+                "runtime_owner": "MiniQMTExecutionRuntime",
+                "runtime_id": "mqrt_same_runtime",
+                "runtime_algo_instance_id": "mqalgo_sell_first",
+                "runtime_child_order_id": "mqchild_sell_first",
+                "runtime_parent_intent_id": "parent_sell_first",
+                "execution_plan_id": "plan_same",
+                "execution_plan_intent_id": "intent_sell_same",
+            },
+        ),
+    ]
+
+    first = _service(repo, first_broker).submit_batch(first_requests)
+    account_after_sell_fill = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account_after_sell_fill, cash=Decimal("10100")))
+    second_broker = FakeManagedBroker(order_ids=[1082167999])
+    second_requests = [
+        replace(
+            first_requests[0],
+            metadata={
+                **first_requests[0].metadata,
+                "runtime_algo_instance_id": "mqalgo_buy_retry",
+                "runtime_child_order_id": "mqchild_buy_retry",
+                "runtime_parent_intent_id": "parent_buy_retry",
+            },
+        ),
+        replace(
+            first_requests[1],
+            metadata={
+                **first_requests[1].metadata,
+                "runtime_algo_instance_id": "mqalgo_sell_retry",
+                "runtime_child_order_id": "mqchild_sell_retry",
+                "runtime_parent_intent_id": "parent_sell_retry",
+            },
+        ),
+    ]
+    second = _service(repo, second_broker).submit_batch(second_requests)
+
+    assert first.batch_status == OrderBatchStatus.PARTIAL.value
+    assert second.success is True
+    assert second.batch_id == first.batch_id
+    assert second.retry_of_batch_id == first.batch_id
+    assert [payload["order_remark"] for payload in first_broker.place_order_payloads] == ["remark_runtime_rebalance_sell"]
+    assert [payload["order_remark"] for payload in second_broker.place_order_payloads] == ["remark_runtime_rebalance_buy"]
+    batch = repo.get_order_batch(first.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.SUCCEEDED
+    assert batch.metadata["dependent_buy_deferred"] is False
+    assert batch.metadata["dependent_buy_retry"] is True
 
 
 def test_submit_batch_aggregates_same_symbol_sell_and_broker_can_sell() -> None:

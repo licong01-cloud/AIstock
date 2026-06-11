@@ -32,6 +32,7 @@ jobs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
       workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
+      prompt_evaluation_required: ${{ steps.classify.outputs.prompt_evaluation_required }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
       - uses: actions/checkout@v4
@@ -219,11 +220,68 @@ jobs:
             backend/tests/scripts/test_aistock_issue_workflow.py \
             backend/tests/scripts/test_ci_failure_issue_summary.py \
             backend/tests/scripts/test_code_intelligence_adapter.py \
+            backend/tests/scripts/test_llm_provider_adapter.py \
+            backend/tests/scripts/test_nightly_adaptive_scheduler.py \
             -q -p no:cacheprovider
+
+  prompt-evaluation:
+    name: Validation LLM prompt evaluation
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.prompt_evaluation_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install prompt evaluation deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest requests
+
+      - name: Build changed-file list
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/llm_prompt_evaluation
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/llm_prompt_evaluation/changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/llm_prompt_evaluation/changed_files.txt
+          fi
+
+      - name: Run prompt evaluation policy gate
+        run: |
+          changed_args=()
+          while IFS= read -r path; do
+            if [ -n "${path}" ]; then
+              changed_args+=(--changed-file "${path}")
+            fi
+          done < tmp/validation/llm_prompt_evaluation/changed_files.txt
+          python scripts/llm_provider_adapter.py --json prompt-evaluation \
+            --provider github_models \
+            "${changed_args[@]}" \
+            --output tmp/validation/llm_prompt_evaluation/prompt-evaluation.json
+
+      - name: Upload prompt evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-prompt-evaluation
+          path: tmp/validation/llm_prompt_evaluation/
+          if-no-files-found: error
 
   failure-bug-register:
     name: Auto-register CI failures as BUGs
-    needs: [backend-tests, workflow-validation-tests]
+    needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
     # Keep this job green/no-op when backend tests pass or are intentionally
     # skipped, so PR check summaries do not report a skipped registrar as
     # another failure. The failure path below still comments when backend
@@ -237,17 +295,18 @@ jobs:
       issues: write
     steps:
       - name: No backend failure to register
-        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' }}
+        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' && needs.prompt-evaluation.result != 'failure' }}
         run: |
           echo "backend-tests result: ${{ needs.backend-tests.result }}"
           echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
+          echo "prompt-evaluation result: ${{ needs.prompt-evaluation.result }}"
           echo "No CI failure BUG registration required."
 
       - uses: actions/checkout@v4
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
 
       - name: Build CI failure issue context
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -270,7 +329,7 @@ jobs:
             --github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json
 
       - name: Upload CI failure issue context
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' }}
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: pr-ci-failure-issue-context
@@ -279,7 +338,7 @@ jobs:
           retention-days: 14
 
       - name: Create or update CI failure issue
-        if: ${{ (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure') && hashFiles('tmp/validation/ci_failure_issue/github-issue-payload.json') != '' }}
+        if: ${{ (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') && hashFiles('tmp/validation/ci_failure_issue/github-issue-payload.json') != '' }}
         uses: actions/github-script@v7
         with:
           script: |

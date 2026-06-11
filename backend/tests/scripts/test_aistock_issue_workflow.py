@@ -21,6 +21,17 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
         "fallback_used": True,
         "affected_tests_count": 0,
         "affected_quality": "codegraph_fallback",
+        "latest_freshness": "fresh",
+        "latest_freshness_ref": "tmp/validation/code-intelligence/codegraph-freshness.json",
+        "consume_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
+        "verify_command": "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-199",
+        "stale_metadata_warning": False,
+        "context": {
+            "context_quality": {
+                "quality": "scoped",
+                "noisy_context_warning": False,
+            }
+        },
         "affected_tests": {"suggested_tests": []},
         "understand_anything": {"status": "not_required_missing"},
         "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
@@ -435,6 +446,14 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["supported_clients"] == ["Codex", "Claude Code", "Cursor", "CLI"]
     assert task_card["artifact_refs"]["context_pack_md"].endswith("context-pack.md")
     assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert task_card["code_intelligence"]["latest_freshness"] == "fresh"
+    assert task_card["code_intelligence"]["consume_command"].endswith("latest-freshness --refresh-if-stale")
+    assert task_card["code_intelligence"]["verify_command"].startswith(
+        "python scripts/code_intelligence_adapter.py verify-clients"
+    )
+    assert task_card["code_intelligence"]["context_quality"] == "scoped"
+    assert task_card["code_intelligence"]["stale_metadata_warning"] is False
+    assert task_card["code_intelligence"]["noisy_context_warning"] is False
     assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
@@ -842,6 +861,13 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
+    assert payload["client_manifest"]["codex_skill_status"] in {
+        "current",
+        "missing_repo_skill",
+        "missing_global",
+        "stale",
+    }
+    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "ready_for_pr"
@@ -860,6 +886,8 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert payload["schema_version"] == "aistock_nightly_intake_smoke_v1"
     assert payload["workflow_gate"] == "passed"
     assert payload["github_writes"] is False
+    assert payload["failure_kind"] == "synthetic_smoke"
+    assert payload["synthetic"] is True
     assert payload["unexpected_dirty_paths"] == []
     assert payload["candidate_history_path"].startswith("tmp/validation/nightly_failure_issue/smoke/")
     assert "tests/aistock_validation/history" not in payload["candidate_history_path"]
@@ -872,6 +900,13 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert payload["closed_loop_checks"]["agent_handoff_section"] is True
     assert payload["closed_loop_checks"]["promotion_requires_registry_worktree"] is True
     assert payload["closed_loop_checks"]["candidate_history_tmp_only"] is True
+    assert payload["closed_loop_checks"]["synthetic_marker_recorded"] is True
+    context_pack = json.loads((isolated_workflow_root / payload["artifacts"]["context"]).read_text(encoding="utf-8"))
+    issue_payload = json.loads((isolated_workflow_root / payload["artifacts"]["github_issue_payload"]).read_text(encoding="utf-8"))
+    assert context_pack["llm_triage_advice"]["workflow_gate"] in {"ready", "warning"}
+    assert context_pack["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
+    assert issue_payload["synthetic"] is True
+    assert issue_payload["failure_kind"] == "synthetic_smoke"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
@@ -1267,6 +1302,92 @@ def test_run_plan_existing_clean_active_worktree_returns_resume(
     assert payload["workflow_gate"] == "resume"
     assert payload["active_decision"]["decision"] == "resume_existing"
     assert "resume --bug-id BUG-199" in payload["next_command"]
+
+
+def test_run_plan_missing_local_bug_json_reports_github_adopt_command(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-302",
+                    "number": 302,
+                    "kind": "github_issue",
+                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                    "github_issue_number": 897,
+                    "github_state": "OPEN",
+                    "title": "BUG-302 P1: missing registry record",
+                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+                }
+            ],
+            [],
+        ),
+    )
+
+    with pytest.raises(workflow.WorkflowPayloadError) as excinfo:
+        workflow.build_run_plan(
+            bug_id="BUG-302",
+            mode="plan",
+            issue_json=None,
+            changed_files=[],
+            create_worktree=True,
+            dry_run=False,
+            validation_evidence=[],
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+            base="origin/main",
+            head="HEAD",
+        )
+
+    payload = excinfo.value.payload
+    assert payload["schema_version"] == "aistock_issue_workflow_missing_bug_record_v1"
+    assert payload["workflow_gate"] == "missing_bug_record"
+    assert payload["github_issue"]["number"] == 897
+    assert payload["inferred_module"] == "paper_v2"
+    assert payload["inferred_severity"] == "P1"
+    assert "--bug-id BUG-302" in payload["next_command"]
+    assert "--github-issue-number 897" in payload["next_command"]
+    assert "--module paper_v2 --severity P1" in payload["next_command"]
+    assert "--create-fix-worktree --apply" in payload["next_command"]
+
+
+def test_run_cli_missing_local_bug_json_emits_compact_recovery_payload(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-302",
+                    "number": 302,
+                    "kind": "github_issue",
+                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                    "github_issue_number": 897,
+                    "github_state": "OPEN",
+                    "title": "BUG-302 P1: missing registry record",
+                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+                }
+            ],
+            [],
+        ),
+    )
+
+    assert workflow.main(["run", "--bug-id", "BUG-302", "--mode", "plan", "--create-worktree"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflow_gate"] == "missing_bug_record"
+    assert payload["github_issue"]["number"] == 897
+    assert payload["inferred_module"] == "paper_v2"
+    assert payload["next_command"].startswith("python scripts/aistock_issue_workflow.py submit-bug")
+    assert "BUG record not found" not in payload["next_command"]
 
 
 def test_run_plan_registry_intake_creates_separate_fix_worktree(
@@ -2166,6 +2287,16 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
                 "context_pack_md": {"estimated_tokens": 12},
                 "fix_ready_json": {"estimated_tokens": 8},
             },
+            "code_intelligence": {
+                "status": "ready",
+                "context_ref": "tmp/issue_workflow/BUG-199/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/BUG-199/affected-tests.json",
+                "understand_anything_summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
+                "fallback_used": False,
+                "affected_tests_count": 2,
+                "affected_tests": {"suggested_tests": ["backend/tests/scripts/test_issue_flow.py"]},
+                "understand_anything": {"status": "ready", "graph_exists": True},
+            },
             "production_gates": {"production_ddl_gate": "noop"},
         },
     )
@@ -2218,6 +2349,10 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
     assert payload["phase_cost_table"]
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
+    assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is True
+    assert payload["code_intelligence_efficiency"]["estimated_broad_scan_tokens_avoided"] == 8000
+    assert payload["code_intelligence_efficiency"]["full_graph_payload_included"] is False
+    assert payload["flow_overhead_estimate"]["code_intelligence_broad_scan_avoided"] is True
     assert payload["duplicate_active_count"] == 1
     postmortem_md = isolated_workflow_root / payload["postmortem_md_path"]
     assert (isolated_workflow_root / payload["postmortem_json_path"]).exists()
@@ -2225,6 +2360,7 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     md_text = postmortem_md.read_text(encoding="utf-8")
     assert "## H6 Cost Summary" in md_text
     assert "## H7 Code Intelligence" in md_text
+    assert "broad_scan_avoided" in md_text
 
 
 def test_postmortem_defaults_to_compact_success_without_artifacts(
@@ -2262,6 +2398,9 @@ def test_postmortem_defaults_to_compact_success_without_artifacts(
     payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
 
     assert payload["artifact_policy"] == "compact_success_no_artifact"
+    assert payload["h6_summary"]["token_usage_status"] == "unknown"
+    assert payload["h6_summary"]["total_estimated_tokens"] is None
+    assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is False
     assert "postmortem_json_path" not in payload
     assert "postmortem_md_path" not in payload
     assert not (workflow_root / "postmortem.json").exists()
@@ -3282,6 +3421,8 @@ def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree
     assert payload["source_cleanup_deferred"] is True
     assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
     assert payload["cleanup"]["reason"] == "source_worktree_contains_invoking_cwd"
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"]["sync_root"] is True
     assert "cleanup-after-merge" in payload["cleanup"]["next_command"]
     assert payload["next_commands"] == [payload["cleanup"]["next_command"]]
     assert cleanup_cwds == [isolated_workflow_root]
@@ -4594,6 +4735,37 @@ def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
     assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
 
 
+def test_orphan_worktree_profile_and_refusal_message_stay_compact(
+    isolated_workflow_root: Path,
+) -> None:
+    orphan = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    for index in range(60):
+        path = orphan / "frontend" / "node_modules" / "pkg" / f"file-{index}.js"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    deep_tail = orphan / "tests" / "aistock_validation" / "history" / "very-deep-tail.json"
+    deep_tail.parent.mkdir(parents=True, exist_ok=True)
+    deep_tail.write_text("{}", encoding="utf-8")
+
+    profile = workflow._orphan_worktree_dir_profile(orphan)
+
+    assert profile["regular_entry_count"] == 61
+    assert len(profile["regular_entries"]) <= profile["sample_limit"]
+    assert profile["regular_entries_truncated"] is True
+    assert profile["top_regular_dirs"]["frontend"] == 60
+    assert profile["safe_reparse_or_empty_only"] is False
+    assert "very-deep-tail.json" not in json.dumps(profile, ensure_ascii=False)
+
+    with pytest.raises(workflow.WorkflowError) as excinfo:
+        workflow._remove_reparse_or_empty_tree(orphan)
+
+    message = str(excinfo.value)
+    assert "count=61" in message
+    assert "top_dirs=" in message
+    assert "full file list intentionally omitted" in message
+    assert "very-deep-tail.json" not in message
+
+
 def test_cleanup_after_merge_removes_orphan_reparse_only_worktree_dir(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5186,6 +5358,70 @@ def test_triage_ci_issue_preserves_issue_locator_and_marks_superseded_main_succe
     assert payload["failure_event"]["candidate_status"] == "superseded_by_later_main_success"
 
 
+def test_triage_ci_issue_marks_superseded_same_branch_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 853,
+        "title": "P1 Nightly failed: runner=success dr=success/success l3=success live=failure code=success",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/853",
+        "body": "<!-- aistock-issue-on-test-fail:27185588632 -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock Nightly L3 + DR",
+        "run_id": "27185588632",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/27185588632",
+        "branch": "feat/github-models-deepseek-r1-20260609",
+        "commit": "030771c80f19e331093971a453949db9b742f3c0",
+        "failed_jobs": [
+            {
+                "job_name": "AIstock Nightly status",
+                "nox_session": "paper_v2_live",
+                "failed_tests": [],
+                "error_signature": "Nightly failed: paper_v2_live=failure",
+                "key_log_excerpt": ["paper_v2_live: failure"],
+                "suspected_module": "paper_v2",
+                "suspected_files": [],
+            }
+        ],
+        "suspected_modules": ["paper_v2"],
+        "suspected_files": [],
+        "fingerprint": "ci-07b8e8ccdbb3d76a",
+        "reproduce_command": "python -m nox -s paper_v2_live",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(
+        workflow,
+        "_find_superseding_main_success",
+        lambda summary: {
+            "run_id": "27188538840",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/27188538840",
+            "head_sha": "760cd2d26b445e2cbf2afe63380aa1d89b7dccef",
+            "created_at": "2026-06-09T06:37:28Z",
+            "branch": "feat/github-models-deepseek-r1-20260609",
+            "supersede_scope": "same_branch",
+        },
+    )
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=853)
+
+    assert payload["classification_recommendation"] == "superseded_by_later_branch_success"
+    assert payload["needs_bug_json"] is False
+    assert payload["superseded_action"]["workflow_gate"] == "superseded_by_latest_branch_success"
+    assert "same branch feat/github-models-deepseek-r1-20260609" in payload["next_command"]
+    assert payload["failure_event"]["candidate_status"] == "superseded_by_later_branch_success"
+    assert "promote" not in payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]
+
+
 def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> None:
     summary = {
         "diagnostic_status": "complete",
@@ -5207,6 +5443,28 @@ def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> Non
 - [ ] infra_flaky
 - [ ] real_regression
 """,
+    }
+
+    assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
+
+
+def test_triage_ci_issue_classification_ignores_nightly_runner_success_status() -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [
+            {
+                "error_signature": "Nightly failed: nightly_l3=failure",
+                "key_log_excerpt": [
+                    "runner_preflight: success",
+                    "nightly_l3: failure",
+                    "paper_v2_live: skipped",
+                ],
+            }
+        ],
+    }
+    issue = {
+        "title": "P1 Nightly failed: runner=success dr=success/success l3=failure live=skipped code=success",
+        "body": "Diagnostic status: `complete`",
     }
 
     assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
@@ -5242,6 +5500,7 @@ def test_ci_issue_janitor_dry_run_does_not_close_superseded_issue(monkeypatch: p
 
 def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int | str] = []
+    label_synced: list[int | str] = []
 
     def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
         issue = int(issue_number)
@@ -5281,6 +5540,11 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
 
     monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
     monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+    monkeypatch.setattr(
+        workflow,
+        "_sync_closed_auto_filed_issue_labels",
+        lambda issue_number: label_synced.append(issue_number) or {"ok": True, "returncode": 0},
+    )
 
     payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[642, 559, 548], apply=True)
 
@@ -5289,6 +5553,89 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
     assert payload["closed_issues"] == [642]
     assert payload["skipped_count"] == 2
     assert closed == [642]
+    assert label_synced == []
+
+
+def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "state": "CLOSED",
+                        "labels": [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
+                    }
+                ),
+            }
+        if args[:3] == ["gh", "issue", "edit"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    result = workflow._sync_closed_auto_filed_issue_labels(853)
+
+    assert result["ok"] is True
+    assert any(command[:3] == ["gh", "issue", "edit"] and "--remove-label" in command for command in commands)
+
+
+def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    edit_called = False
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edit_called
+        if args[:3] == ["gh", "issue", "view"]:
+            return {"ok": True, "stdout": json.dumps({"state": "OPEN", "labels": [{"name": "auto-filed"}]})}
+        if args[:3] == ["gh", "issue", "edit"]:
+            edit_called = True
+        return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    result = workflow._sync_closed_auto_filed_issue_labels(853)
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert edit_called is False
+
+
+def test_ci_issue_janitor_closes_superseded_same_branch_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "classification_recommendation": "superseded_by_later_branch_success",
+            "linked_bug": None,
+            "github_issue": {"number": int(issue_number), "state": "OPEN"},
+            "summary": {"workflow": "AIstock Nightly L3 + DR"},
+            "superseded_action": {
+                "workflow_gate": "superseded_by_latest_branch_success",
+                "superseding_run": {
+                    "run_id": "27188538840",
+                    "run_url": "https://github.example/runs/27188538840",
+                    "branch": "feat/github-models-deepseek-r1-20260609",
+                    "supersede_scope": "same_branch",
+                },
+            },
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[853], apply=True)
+
+    assert payload["workflow_gate"] == "closed"
+    assert payload["superseded_count"] == 1
+    assert payload["closed_issues"] == [853]
+    assert closed == [853]
 
 
 def test_ci_issue_janitor_dry_run_marks_infra_issue_without_closing(monkeypatch: pytest.MonkeyPatch) -> None:

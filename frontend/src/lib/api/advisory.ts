@@ -1,11 +1,19 @@
 import { apiFetch, type JsonObject } from "./selectionCenter";
 
+export type AdvisoryPackageMode =
+  | "single_package"
+  | "fusion_pool"
+  | "weighted_rank_fusion"
+  | "union"
+  | "intersection"
+  | "sleeve_mode_future";
+
 export type AdvisoryProgram = {
   program_id: string;
   program_name: string;
   status: string;
   target_count: number;
-  package_mode: "single_package" | "fusion_pool" | "sleeve_mode_future";
+  package_mode: AdvisoryPackageMode;
   package_ids: string[];
   package_weights: Record<string, number>;
   fusion_method?: string | null;
@@ -19,6 +27,13 @@ export type AdvisoryProgram = {
   enabled_since?: string | null;
   last_review_status?: string | null;
   latest_review_trade_date?: string | null;
+  latest_recommendation_list_version_id?: string | null;
+  latest_recommendation_trade_date?: string | null;
+  latest_recommendation_target_trade_date?: string | null;
+  latest_recommendation_selection_as_of_trade_date?: string | null;
+  latest_recommendation_generated_at?: string | null;
+  latest_recommendation_version_status?: string | null;
+  published_recommendation_target_trade_dates?: string[];
 };
 
 export type AdvisoryLeaderboardRow = AdvisoryProgram & {
@@ -31,12 +46,19 @@ export type AdvisoryLeaderboardRow = AdvisoryProgram & {
   median_return_bps?: number | null;
   max_drawdown_bps?: number | null;
   avg_holding_days?: number | null;
+  metric_status?: string | null;
+  metric_evaluable_count?: number | null;
+  open_mark_count?: number | null;
+  missing_open_mark_count?: number | null;
+  metric_mark_trade_date?: string | null;
 };
 
 export type AdvisoryEpisode = {
   episode_id: string;
   program_id: string;
   symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
   status: string;
   signal_date: string;
   effective_entry_date: string;
@@ -62,15 +84,92 @@ export type AdvisoryEpisode = {
 
 export type AdvisoryReviewDecision = {
   symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
   action: string;
   reason_code: string;
   review_status: string;
   trade_date: string;
+  binding_version_id?: string | null;
+  review_run_id?: string | null;
+  list_version_id?: string | null;
   episode_id?: string | null;
   rank?: number | null;
   score?: number | null;
   return_bps?: number | null;
   evidence_json?: JsonObject;
+  operation_advice_json?: JsonObject;
+};
+
+export type AdvisoryStrategyBindingVersion = {
+  binding_version_id: string;
+  program_id: string;
+  program_version: number;
+  package_mode: AdvisoryPackageMode;
+  package_ids: string[];
+  package_weights: Record<string, number>;
+  fusion_method?: string | null;
+  package_set_hash: string;
+  fusion_policy_sha256?: string | null;
+  runtime_config_json?: JsonObject;
+  effective_from_trade_date?: string | null;
+  effective_to_trade_date?: string | null;
+  activation_status: "DRAFT" | "ACTIVE" | "RETIRED" | string;
+  activation_reason?: string | null;
+  source_replay_run_id?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  activated_at?: string | null;
+};
+
+export type AdvisoryRecommendationListVersion = {
+  list_version_id: string;
+  program_id: string;
+  binding_version_id: string;
+  review_run_id: string;
+  trade_date: string;
+  previous_list_version_id?: string | null;
+  version_status: "PREVIEW" | "PUBLISHED" | "REPLAY" | string;
+  target_count: number;
+  active_count: number;
+  entered_count: number;
+  held_count: number;
+  exited_count: number;
+  waiting_count: number;
+  changed_count: number;
+  turnover_rate?: number | null;
+  overlap_rate?: number | null;
+  summary_json?: JsonObject;
+  target_trade_date?: string | null;
+  selection_as_of_trade_date?: string | null;
+  created_at?: string | null;
+};
+
+export type AdvisoryRecommendationListItem = {
+  list_item_id: string;
+  list_version_id: string;
+  program_id: string;
+  binding_version_id: string;
+  episode_id?: string | null;
+  symbol: string;
+  stock_name?: string | null;
+  symbol_name?: string | null;
+  item_state: string;
+  action: string;
+  previous_action?: string | null;
+  rank?: number | null;
+  score?: number | null;
+  previous_rank?: number | null;
+  previous_score?: number | null;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  price_basis?: string | null;
+  effective_trade_date?: string | null;
+  reason_code: string;
+  operation_advice_json: JsonObject;
+  component_scores_json?: JsonObject;
+  evidence_json?: JsonObject;
+  created_at?: string | null;
 };
 
 export type AdvisoryReviewResult = {
@@ -81,6 +180,11 @@ export type AdvisoryReviewResult = {
   active_pool: AdvisoryEpisode[];
   metrics: JsonObject;
   preview: boolean;
+  binding_version_id?: string | null;
+  review_run_id?: string | null;
+  list_version_id?: string | null;
+  change_summary?: JsonObject;
+  list_items?: AdvisoryRecommendationListItem[];
 };
 
 export type AdvisoryQualityReport = {
@@ -93,14 +197,19 @@ export type AdvisoryQualityReport = {
 };
 
 export type AdvisoryTradingDayDefaults = {
+  as_of_date?: string;
   latest_trading_day: string;
   next_trading_day?: string | null;
+  data_ready_latest_date?: string | null;
+  trading_days?: string[];
+  replay_start_date?: string;
+  replay_end_date?: string;
   trading_day_status?: JsonObject;
 };
 
 export type CreateAdvisoryProgramPayload = {
   program_name: string;
-  package_mode: "single_package" | "fusion_pool";
+  package_mode: AdvisoryPackageMode;
   package_ids: string[];
   target_count?: number;
   package_weights?: Record<string, number>;
@@ -114,6 +223,8 @@ export type CreateAdvisoryProgramPayload = {
 
 export type AdvisoryReviewPayload = {
   trade_date: string;
+  target_trade_date?: string;
+  selection_as_of_trade_date?: string;
   data_source?: string;
   runtime_config?: JsonObject;
   candidates?: JsonObject[];
@@ -127,6 +238,24 @@ export type AdvisoryReviewPreviewPayload = {
   trade_date: string;
   exit_guard_policy: JsonObject;
   fusion_policy: JsonObject;
+};
+
+export type AdvisoryListVersionDetail = {
+  list_version: AdvisoryRecommendationListVersion;
+  items: AdvisoryRecommendationListItem[];
+};
+
+export type WatchlistCategory = {
+  id: number;
+  name: string;
+  description?: string | null;
+};
+
+export type WatchlistBulkAddResponse = {
+  added?: number;
+  inserted?: number;
+  skipped?: number;
+  moved?: number;
 };
 
 function body(payload: unknown, method = "POST"): RequestInit {
@@ -176,6 +305,14 @@ export const advisoryApi = {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);
     return data.active_pool || [];
   },
+  async bindings(programId: string): Promise<AdvisoryStrategyBindingVersion[]> {
+    const data = await apiFetch<{ bindings: AdvisoryStrategyBindingVersion[] }>(`/advisory/programs/${encodeURIComponent(programId)}/bindings`);
+    return data.bindings || [];
+  },
+  async activeBinding(programId: string): Promise<AdvisoryStrategyBindingVersion> {
+    const data = await apiFetch<{ binding: AdvisoryStrategyBindingVersion }>(`/advisory/programs/${encodeURIComponent(programId)}/bindings/active`);
+    return data.binding;
+  },
   async reviews(programId: string, limit = 20, offset = 0): Promise<{ reviews: AdvisoryReviewDecision[]; total_count: number; limit: number; offset: number }> {
     const data = await apiFetch<{ reviews: AdvisoryReviewDecision[]; total_count?: number; limit?: number; offset?: number }>(
       `/advisory/programs/${encodeURIComponent(programId)}/reviews?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
@@ -190,6 +327,15 @@ export const advisoryApi = {
   },
   async returns(programId: string): Promise<{ returns: AdvisoryEpisode[]; metrics: JsonObject }> {
     return apiFetch<{ returns: AdvisoryEpisode[]; metrics: JsonObject }>(`/advisory/programs/${encodeURIComponent(programId)}/returns`);
+  },
+  async listVersions(programId: string, limit = 20, offset = 0): Promise<AdvisoryRecommendationListVersion[]> {
+    const data = await apiFetch<{ list_versions: AdvisoryRecommendationListVersion[] }>(
+      `/advisory/programs/${encodeURIComponent(programId)}/list-versions?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+    );
+    return data.list_versions || [];
+  },
+  async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
+    return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
   },
   async previewReview(programId: string, payload: AdvisoryReviewPayload): Promise<AdvisoryReviewResult> {
     const data = await apiFetch<{ review: AdvisoryReviewResult }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews/preview`, body(payload));
@@ -213,5 +359,18 @@ export const advisoryApi = {
       body(payload),
     );
     return data.records || [];
+  },
+  async watchlistCategories(): Promise<WatchlistCategory[]> {
+    return apiFetch<WatchlistCategory[]>("/watchlist/categories");
+  },
+  async createWatchlistCategory(name: string, description?: string | null): Promise<WatchlistCategory> {
+    const data = await apiFetch<{ id: number }>("/watchlist/categories", body({ name, description: description ?? null }));
+    return { id: data.id, name, description: description ?? null };
+  },
+  async addWatchlistItems(codes: string[], categoryId: number): Promise<WatchlistBulkAddResponse> {
+    return apiFetch<WatchlistBulkAddResponse>(
+      "/watchlist/items/bulk-add",
+      body({ codes, category_id: categoryId, on_conflict: "ignore" }),
+    );
   },
 };

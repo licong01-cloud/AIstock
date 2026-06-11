@@ -69,7 +69,12 @@ def _release_and_binding(*, backend: SimulationBrokerBackend = SimulationBrokerB
     return release, binding
 
 
-def _release_binding_repo(*, backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM):
+def _release_binding_repo(
+    *,
+    backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM,
+    execution_policy_version_id: str = "exec_policy_v25_1_small_cap",
+    execution_policy_sha256: str = "exec_policy_hash_v25_1_small_cap",
+):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
     release = service.create_release(
@@ -79,8 +84,8 @@ def _release_binding_repo(*, backend: SimulationBrokerBackend = SimulationBroker
         runtime_profile_version_id="runtime_profile_shared_v1",
         runtime_profile_sha256="runtime_profile_hash_shared",
         daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-        execution_policy_version_id="exec_policy_v25_1_small_cap",
-        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        execution_policy_version_id=execution_policy_version_id,
+        execution_policy_sha256=execution_policy_sha256,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
         created_by="unit-test",
@@ -471,8 +476,18 @@ class FakeManagedOrderBroker:
         return True, f"cancelled {order_id}"
 
 
-def _compiled_plan_for_bridge(*, backend: SimulationBrokerBackend):
-    release, binding, runtime_repo = _release_binding_repo(backend=backend)
+def _compiled_plan_for_bridge(
+    *,
+    backend: SimulationBrokerBackend,
+    execution_policy_payload: dict | None = None,
+    execution_policy_version_id: str = "exec_policy_v25_1_small_cap",
+    execution_policy_sha256: str = "exec_policy_hash_v25_1_small_cap",
+):
+    release, binding, runtime_repo = _release_binding_repo(
+        backend=backend,
+        execution_policy_version_id=execution_policy_version_id,
+        execution_policy_sha256=execution_policy_sha256,
+    )
     evidence = _evidence(release)
     runtime_repo.save_daily_selection_evidence(evidence)
     targets = TargetPositionService().build_target_positions(
@@ -497,7 +512,8 @@ def _compiled_plan_for_bridge(*, backend: SimulationBrokerBackend):
         order_intents=rebalance.order_intents,
         trading_rule_decisions=rebalance.trading_rule_decisions,
         portfolio_id="portfolio_shared",
-        execution_policy_payload={"algo_code": "V25_1_SMALL_CAP", "schedule_window": {"mode": "open_to_close"}},
+        execution_policy_payload=execution_policy_payload
+        or {"algo_code": "V25_1_SMALL_CAP", "schedule_window": {"mode": "open_to_close"}},
         tail_policy_payload={"policy": "cancel_unfilled_at_close"},
     )
     return release, binding, runtime_repo.save_execution_plan(plan)
@@ -515,7 +531,16 @@ def test_localsim_execution_bridge_consumes_shared_execution_plan() -> None:
 
 
 def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution() -> None:
-    _, binding, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    _, binding, plan = _compiled_plan_for_bridge(
+        backend=SimulationBrokerBackend.MINIQMT_SIM,
+        execution_policy_payload={
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {},
+            "schedule_window": {"mode": "open_to_close"},
+        },
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256="exec_policy_hash_sniper_miniqmt",
+    )
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
         VirtualAccount(
@@ -555,13 +580,19 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
         )
     )
 
-    preview = bridge.preview_plan(plan=plan, binding=binding)
-    submitted = bridge.submit_plan(plan=plan, binding=binding)
+    prices = {"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")}
+    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol=prices)
+    submitted = bridge.submit_plan(plan=plan, binding=binding, price_by_symbol=prices)
 
     assert all(item.allowed for item in preview.preflights)
     assert submitted.success is True
     assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
-    assert preview.requests[0].metadata["source"] == "shared_execution_plan"
+    assert preview.requests[0].metadata["source"] == "runtime_owned_vnpy_algo"
+    assert preview.requests[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert preview.requests[0].metadata["runtime_child_order_id"]
+    assert preview.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
+    assert submitted.runtime_evidence is not None
+    assert submitted.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
     assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
 
 

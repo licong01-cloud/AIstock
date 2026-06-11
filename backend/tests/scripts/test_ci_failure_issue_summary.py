@@ -148,6 +148,9 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     file_payload = json.loads(output_path.read_text(encoding="utf-8"))
     context_payload = json.loads(context_path.read_text(encoding="utf-8"))
     assert stdout_payload["diagnostic_status"] == "complete"
+    assert stdout_payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
+    assert file_payload["llm_guarded_rollout_gate"]["workflow_gate"] == "warning"
+    assert context_payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
     assert file_payload["failed_jobs"][0]["nox_session"] == "paper_v2_backend"
     assert "Failed Tests" in markdown_path.read_text(encoding="utf-8")
     assert context_payload["schema_version"] == "aistock_ci_failure_context_pack_v1"
@@ -180,6 +183,11 @@ def test_github_issue_payload_contains_dedupe_marker_and_labels() -> None:
     assert "P1" in issue_payload["labels"]
     assert "module:paper_v2" in issue_payload["labels"]
     assert "Latest run" in issue_payload["recurrence_comment"]
+    assert payload["llm_guarded_rollout_gate"]["workflow_gate"] == "warning"
+    assert payload["llm_guarded_rollout_gate"]["fallback"] == "deterministic_issue_workflow"
+    assert issue_payload["llm_enhancement"]["allowed"] is False
+    assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
+    assert "## LLM Guarded Rollout" in issue_payload["body"]
 
 
 def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -208,6 +216,85 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_payload["dedupe"]["fingerprint"].startswith("ci-")
     assert "aistock-ci-failure-fingerprint" in issue_payload["body"]
+
+
+def test_cli_llm_kill_switch_still_writes_deterministic_issue_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log_path = tmp_path / "job.log"
+    issue_payload_path = tmp_path / "issue-payload.json"
+    log_path.write_text(CI_LOG, encoding="utf-8")
+
+    assert summary.main(
+        [
+            "--log-file",
+            str(log_path),
+            "--job-name",
+            "Backend tests (paper_v2_backend)",
+            "--source-name",
+            "AIstock CI",
+            "--run-id",
+            "26378872481",
+            "--branch",
+            "main",
+            "--commit",
+            "62dc1b12",
+            "--llm-triage-mode",
+            "off",
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "off"
+    assert stdout_payload["artifacts"]["github_issue_payload"] == str(issue_payload_path)
+    assert issue_payload["llm_enhancement"]["allowed"] is False
+    assert issue_payload["llm_enhancement"]["fallback"] == "deterministic_issue_workflow"
+    assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
+    assert "## Failure Summary" in issue_payload["body"]
+
+
+def test_cli_opt_in_rollout_allows_llm_issue_enhancement(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log_path = tmp_path / "job.log"
+    issue_payload_path = tmp_path / "issue-payload.json"
+    log_path.write_text(CI_LOG, encoding="utf-8")
+
+    assert summary.main(
+        [
+            "--log-file",
+            str(log_path),
+            "--job-name",
+            "Backend tests (paper_v2_backend)",
+            "--source-name",
+            "AIstock CI",
+            "--run-id",
+            "26378872481",
+            "--branch",
+            "main",
+            "--commit",
+            "62dc1b12",
+            "--llm-triage-mode",
+            "opt_in_auto_file",
+            "--llm-auto-file-opt-in",
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "ready"
+    assert stdout_payload["llm_guarded_rollout"]["auto_file_allowed"] is True
+    assert issue_payload["llm_enhancement"]["allowed"] is True
+    assert issue_payload["llm_enhancement"]["mode"] == "opt_in_auto_file"
 
 
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -290,7 +377,7 @@ def test_cli_persists_tmp_failure_candidate_history(
     assert "tests/aistock_validation/history" not in history_path.as_posix()
     assert history_payload["schema_version"] == "aistock_ci_failure_candidate_history_v1"
     assert history_payload["candidate"]["fingerprint"] == stdout_payload["fingerprint"]
-    assert history_payload["candidate"]["module"] == "validation"
+    assert history_payload["candidate"]["module"] == "paper_v2"
     assert history_payload["run_count"] == 1
     assert history_payload["observed_run_ids"] == ["9001"]
     assert history_payload["log_policy"]["full_log_embedded"] is False
@@ -709,13 +796,54 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert payload["nightly_failed_stages"] == ["nightly_l3"]
     assert payload["issue_title"].startswith("P1 Nightly failed:")
     assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
+    assert "paper_v2" in payload["suspected_modules"]
+    assert "noxfile.py" in payload["suspected_files"]
+    assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
+    assert payload["llm_triage_advice"]["workflow_gate"] in {"ready", "warning"}
+    assert payload["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
+    if not payload["llm_triage_advice"].get("fallback_used"):
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["workflow_gate"] == "ready"
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["shell_commands_allowed"] is False
+        assert payload["llm_triage_advice"]["test_plan_advice_gate"]["llm_invoked"] is False
     assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped-success -->" in issue_payload["body"]
+    assert "<!-- aistock-failure-kind:real_github_actions -->" in issue_payload["body"]
+    assert issue_payload["failure_kind"] == "real_github_actions"
+    assert issue_payload["synthetic"] is False
     assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
     assert "source:nightly" in issue_payload["labels"]
     assert "module:validation.runner" in issue_payload["labels"]
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
+    assert context_pack["failure_event"]["failure_kind"] == "real_github_actions"
+    assert context_pack["llm_triage_advice"]["provider"] == "github_models"
     assert context_pack["token_budget"]["full_logs_included"] is False
+
+
+def test_nightly_smoke_payload_is_explicitly_synthetic() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "failure",
+                "paperV2Live": "skipped",
+                "codeIntelligence": "success",
+            },
+            "run_id": "999999999",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+    context_pack = summary.build_context_pack(payload, github_issue_number=519)
+
+    assert issue_payload["failure_kind"] == "synthetic_smoke"
+    assert issue_payload["synthetic"] is True
+    assert "<!-- aistock-failure-kind:synthetic_smoke -->" in issue_payload["body"]
+    assert "Failure kind: `synthetic_smoke`" in issue_payload["body"]
+    assert context_pack["failure_event"]["failure_kind"] == "synthetic_smoke"
 
 
 def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
@@ -831,6 +959,10 @@ def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None
     build_step = workflow["jobs"]["file-p0-p1-issue"]["steps"][1]["run"]
 
     assert "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json" in build_step
+    assert "INPUT_LLM_TRIAGE_MODE" in build_step
+    assert "INPUT_LLM_AUTO_FILE_OPT_IN" in build_step
+    assert 'LLM_ARGS=(--llm-triage-mode "${INPUT_LLM_TRIAGE_MODE}")' in build_step
+    assert '"${LLM_ARGS[@]}"' in build_step
     assert "--wait-for-completion" in build_step
     assert "--wait-attempts 2" in build_step
     assert "--log-attempts 3" in build_step
@@ -852,3 +984,50 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "No actionable Nightly issue created." in script
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+
+
+def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+
+    # PyYAML 1.1 treats the GitHub Actions key "on" as boolean True.
+    triggers = workflow.get("on") or workflow.get(True)
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["run_dr"]["default"] is False
+    assert dispatch_inputs["run_nightly_l3"]["default"] is True
+    assert dispatch_inputs["run_paper_v2_live"]["default"] is False
+    assert dispatch_inputs["run_code_intelligence"]["default"] is True
+    assert dispatch_inputs["llm_triage_mode"]["default"] == "warning_only"
+    assert dispatch_inputs["llm_auto_file_opt_in"]["default"] is False
+    assert "inputs.run_dr" in workflow["jobs"]["dr-snapshot"]["if"]
+    assert "inputs.run_dr" in workflow["jobs"]["dr-validate"]["if"]
+    assert "inputs.run_nightly_l3" in workflow["jobs"]["nightly-l3"]["if"]
+    assert "github.event_name == 'workflow_dispatch' && !inputs.run_dr" in workflow["jobs"]["nightly-l3"]["if"]
+    assert "inputs.run_nightly_l3 && inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    assert "inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])
+    assert "triage-quality-smoke" in code_steps
+    assert "llm-triage-quality.json" in code_steps
+    assert "test-plan-advice" in code_steps
+    assert "llm-test-plan-advice.json" in code_steps
+    assert "nightly-scheduler-advice" in code_steps
+    assert "llm-nightly-scheduler-advice.json" in code_steps
+    assert "prompt-evaluation" in code_steps
+    assert "llm-prompt-evaluation.json" in code_steps
+    assert "guarded-rollout-gate" in code_steps
+    assert "llm-guarded-rollout-gate.json" in code_steps
+    summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
+    assert "run_dr_requested" in summary_run
+    assert "run_nightly_l3_requested" in summary_run
+    failure_run = workflow["jobs"]["full-summary"]["steps"][2]["run"]
+    assert "LLM_TRIAGE_MODE" in workflow["jobs"]["full-summary"]["steps"][2]["env"]
+    assert 'LLM_ARGS=(--llm-triage-mode "${LLM_TRIAGE_MODE}")' in failure_run
+    assert '"${LLM_ARGS[@]}"' in failure_run
+
+
+def test_nightly_workflow_success_manifests_are_compact() -> None:
+    text = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+    assert "manifest=omitted_on_success" in text
+    assert "Select-Object -First 100 -ExpandProperty FullName" not in text
