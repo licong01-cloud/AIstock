@@ -28,8 +28,8 @@
   "expected": "run-p0 should accept the documented --source and --mode options without breaking the current default behavior. For now source may be normalized to local/both where supported and mode=plan should be accepted as the planning behavior.",
   "first_seen_at": "2026-06-11T15:42:24.000099Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "66f2bcdcc69a91af6432c461de4c2776595b56a9",
+  "fixed_at": "2026-06-11T16:01:11.702295Z",
   "github_issue_number": 983,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/983",
   "last_seen_at": "2026-06-11T15:42:24.000099Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/984",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,16 @@
     "fingerprint": "787f526b54d99af568824499",
     "source_event_id": "FE-20260611-787f526b54d9"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 150 passed",
+    "python scripts/aistock_issue_workflow.py run-p0 --module validation --source both --mode plan --output-format summary -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 424 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation --output-format summary -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
