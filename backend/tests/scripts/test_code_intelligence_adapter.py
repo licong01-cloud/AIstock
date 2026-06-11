@@ -850,6 +850,87 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
     assert "Understand Anything Summary" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
 
 
+def test_ua_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": "validation.workflow", "label": "validation workflow"},
+                    {"id": "validation.runner", "label": "validation runner"},
+                ],
+                "edges": [{"source": "validation.workflow", "target": "validation.runner", "type": "calls"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS ua-summary ")
+    assert "summary_ref=" in stdout
+    assert "artifact_path=" in stdout
+    assert "selected_nodes" not in stdout
+    assert "selected_edges" not in stdout
+
+
+def test_ua_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps({"nodes": [{"id": "validation.workflow", "label": "validation workflow"}], "edges": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path), "--output-format", "full-json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["schema_version"] == "aistock_understand_anything_summary_v1"
+    assert payload["selected_nodes"][0]["id"] == "validation.workflow"
+
+
+def test_ua_summary_all_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "build_understand_anything_summary",
+        lambda **kwargs: {
+            "module": kwargs["module"],
+            "status": "ok",
+            "freshness": "fresh",
+            "summary_ref": f"tmp/validation/code-intelligence/ua-{kwargs['module']}-summary.md",
+            "artifact_path": f"tmp/validation/code-intelligence/ua-{kwargs['module']}-summary.json",
+        },
+    )
+
+    result = adapter.main(["ua-summary-all", "--module", "validation", "--root", str(tmp_path)])
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("PASS ua-summary-all ")
+    assert "modules=1" in stdout
+    assert "artifact_path=" in stdout
+    assert "summary_refs" not in stdout
+
+
 def test_understand_anything_summary_marks_ancestor_graph_as_base_current(tmp_path: Path, monkeypatch) -> None:
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
