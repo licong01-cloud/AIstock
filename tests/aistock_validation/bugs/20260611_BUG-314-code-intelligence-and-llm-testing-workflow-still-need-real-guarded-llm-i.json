@@ -7,7 +7,11 @@
     "scripts/aistock_issue_workflow.py",
     ".github/workflows/nightly.yml",
     "tests/aistock_validation/bugs/20260611_BUG-314-code-intelligence-and-llm-testing-workflow-still-need-real-guarded-llm-i.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-314",
@@ -25,6 +29,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260611-4bdcf75a35e2",
       "timestamp": "2026-06-11T03:46:03.308164Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Add workflow unit tests to allowed_write_scope so BUG-314 can validate LLM, CodeGraph, UA, and issue workflow behavior without broad scope.",
+      "timestamp": "2026-06-11T03:50:00Z"
     }
   ],
   "evidence_uris": [],

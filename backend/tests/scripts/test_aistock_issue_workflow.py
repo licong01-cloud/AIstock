@@ -40,6 +40,9 @@ def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
             "graph_exists": False,
             "nodes_used": 0,
             "summary_ref": "tmp/issue_workflow/BUG-199/ua-validation-summary.md",
+            "freshness": "base_current",
+            "graph_commit": "base123",
+            "current_git_commit": "head456",
         },
     }
     payload.update(overrides)
@@ -455,6 +458,10 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["code_intelligence"]["stale_metadata_warning"] is False
     assert task_card["code_intelligence"]["noisy_context_warning"] is False
     assert task_card["code_intelligence"]["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert task_card["code_intelligence"]["understand_anything_freshness"] == "base_current"
+    assert task_card["code_intelligence"]["graph_first_required"] is True
+    assert task_card["code_intelligence"]["graph_first_refs_ready"] is True
+    assert task_card["code_intelligence"]["broad_scan_requires_scoped_miss_reason"] is True
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
     assert task_card["token_budget"]["large_graph_payload_inlined"] is False

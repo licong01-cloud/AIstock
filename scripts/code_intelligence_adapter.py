@@ -1041,6 +1041,18 @@ def understand_anything_status(
     if freshness == "base_current":
         notes.append("Understand Anything graph matches an ancestor of the current worktree; use it for base-code context plus targeted reads of changed files.")
     latest_manifest = _latest_understand_anything_summary_manifest(root)
+    summary_manifest_freshness = None
+    if latest_manifest and isinstance(latest_manifest, dict):
+        refs = latest_manifest.get("summary_refs") or []
+        ref_freshness = {
+            str(item.get("freshness"))
+            for item in refs
+            if isinstance(item, dict) and item.get("freshness")
+        }
+        if ref_freshness == {"fresh"}:
+            summary_manifest_freshness = "fresh"
+        elif ref_freshness:
+            summary_manifest_freshness = ",".join(sorted(ref_freshness))
     if graph_path.exists() and graph:
         manifest = {
             "node_count": len(graph.get("nodes") or []),
@@ -1105,6 +1117,7 @@ def understand_anything_status(
         "blocking_for_issue_workflow": False,
         "manifest": manifest,
         "latest_summary_manifest": latest_manifest,
+        "latest_summary_manifest_freshness": summary_manifest_freshness,
         "install_commands": install_commands,
         "configure_command": "python scripts/code_intelligence_adapter.py ua-configure --language zh",
         "generate_graph_command": _understand_generate_command(root),
@@ -1233,6 +1246,10 @@ def build_understand_anything_summary_manifest(
             }
             for item in summaries
         ],
+        "fresh_summary_count": len([item for item in summaries if item.get("freshness") == "fresh"]),
+        "base_current_summary_count": len([item for item in summaries if item.get("freshness") == "base_current"]),
+        "stale_summary_count": len([item for item in summaries if item.get("freshness") == "stale"]),
+        "missing_summary_count": len([item for item in summaries if item.get("freshness") in {"missing", "unknown"}]),
         "blocking_for_issue_workflow": False,
         "approval_required_for_long_term_memory": True,
     }

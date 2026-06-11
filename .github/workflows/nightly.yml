@@ -359,10 +359,21 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
             --provider github_models `
+            --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
             --module validation.runner `
             --output "$outDir/llm-test-plan-advice.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM test-plan advisor failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
+              --provider deterministic `
+              --changed-file scripts/llm_provider_adapter.py `
+              --changed-file scripts/ci_failure_issue_summary.py `
+              --module validation.runner `
+              --output "$outDir/llm-test-plan-advice.json"
+          }
 
       - name: Build LLM nightly scheduler advice smoke
         run: |
@@ -370,11 +381,23 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
             --provider github_models `
+            --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
             --codegraph-freshness fresh `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM nightly scheduler advisor failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
+              --provider deterministic `
+              --changed-file scripts/llm_provider_adapter.py `
+              --recent-failure-module validation.runner `
+              --codegraph-freshness fresh `
+              --resource-budget-seconds 900 `
+              --output "$outDir/llm-nightly-scheduler-advice.json"
+          }
 
       - name: Build Nightly adaptive scheduler warning report
         run: |
@@ -394,11 +417,23 @@ jobs:
           $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
             --provider github_models `
+            --invoke-llm `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-adaptive-scheduler.json" `
             --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM adaptive scheduler failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+              --provider deterministic `
+              --changed-files-file $changedFile `
+              --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+              --resource-budget-seconds 900 `
+              --output "$outDir/llm-nightly-adaptive-scheduler.json" `
+              --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+          }
           if (Test-Path -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md") {
             Get-Content -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md"
           }

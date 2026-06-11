@@ -284,6 +284,116 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert output.exists()
 
 
+
+def test_invoke_provider_json_posts_github_models_chat_request(monkeypatch):
+    config = adapter.load_config()
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "id": "resp-1",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "summary": "use focused validation",
+                                        "suggested_plan_keys": ["l0"],
+                                        "confidence": 0.8,
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=45):
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-test-token")
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    payload = adapter.invoke_provider_json(
+        "github_models",
+        config,
+        purpose="test_plan_advice",
+        messages=[{"role": "user", "content": "{}"}],
+    )
+
+    assert captured["url"].endswith("/inference/chat/completions")
+    assert captured["headers"]["Authorization"] == "Bearer gh-test-token"
+    assert captured["body"]["model"] == "deepseek/deepseek-r1"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert payload["payload"]["suggested_plan_keys"] == ["l0"]
+    assert payload["credential_source"] == "GITHUB_TOKEN"
+
+
+def test_test_plan_advice_can_invoke_llm_but_keeps_deterministic_gate(monkeypatch):
+    def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
+        return {
+            "provider": provider,
+            "model": "deepseek/deepseek-r1",
+            "purpose": purpose,
+            "payload": {
+                "summary": "extra check",
+                "rationale": "changed workflow script",
+                "risk": "medium",
+                "suggested_plan_keys": ["validation_catalog_integrity", "unknown"],
+                "confidence": 0.7,
+            },
+            "credential_source": "GITHUB_TOKEN",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+        }
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+
+    payload = adapter.build_test_plan_advice(
+        "github_models",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        module="validation.runner",
+        invoke_llm=True,
+    )
+
+    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["llm_invocation_evidence"]["usage"]["total_tokens"] == 140
+    assert payload["llm_advice"]["suggested_plan_keys"] == ["validation_catalog_integrity"]
+    assert payload["llm_advice"]["ignored_plan_key_count"] == 1
+
+
+def test_test_plan_advice_live_llm_error_falls_back_without_blocking(monkeypatch):
+    def fake_invoke(*args, **kwargs):
+        raise adapter.ProviderAdapterError("status=429 retry_after=10 token=ghp_secret")
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+
+    payload = adapter.build_test_plan_advice(
+        "github_models",
+        adapter.load_config(),
+        plan_keys=["l0"],
+        invoke_llm=True,
+    )
+
+    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert payload["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
+    assert "ghp_secret" not in payload["llm_invocation_evidence"]["error"]
+
+
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
 

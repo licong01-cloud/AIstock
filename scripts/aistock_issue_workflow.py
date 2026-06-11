@@ -3622,12 +3622,16 @@ def _build_code_intelligence_summary(
 def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str, Any]) -> dict[str, Any]:
     ua = code_intelligence_summary.get("understand_anything")
     ua_summary = code_intelligence_summary.get("understand_anything_summary")
+    context_ref = code_intelligence_summary.get("context_ref")
+    affected_tests_ref = code_intelligence_summary.get("affected_tests_ref")
+    ua_summary_ref = code_intelligence_summary.get("understand_anything_summary_ref")
+    graph_first_required_refs = [context_ref, affected_tests_ref, ua_summary_ref]
     return {
         "provider": code_intelligence_summary.get("provider"),
         "status": code_intelligence_summary.get("status"),
-        "context_ref": code_intelligence_summary.get("context_ref"),
+        "context_ref": context_ref,
         "manifest_ref": code_intelligence_summary.get("manifest_ref"),
-        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "affected_tests_ref": affected_tests_ref,
         "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
         "affected_quality": code_intelligence_summary.get("affected_quality"),
         "latest_freshness": code_intelligence_summary.get("latest_freshness"),
@@ -3648,10 +3652,16 @@ def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str
         "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
         "fallback_reason": code_intelligence_summary.get("fallback_reason"),
         "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
-        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "understand_anything_summary_ref": ua_summary_ref,
         "understand_anything_nodes_used": (ua_summary or {}).get("nodes_used") if isinstance(ua_summary, dict) else None,
         "understand_anything_graph_exists": (ua_summary or {}).get("graph_exists") if isinstance(ua_summary, dict) else None,
+        "understand_anything_freshness": (ua_summary or {}).get("freshness") if isinstance(ua_summary, dict) else None,
+        "understand_anything_graph_commit": (ua_summary or {}).get("graph_commit") if isinstance(ua_summary, dict) else None,
+        "understand_anything_current_commit": (ua_summary or {}).get("current_git_commit") if isinstance(ua_summary, dict) else None,
         "understand_anything_generate_graph_command": (ua or {}).get("generate_graph_command") if isinstance(ua, dict) else None,
+        "graph_first_required": True,
+        "graph_first_refs_ready": all(bool(item) for item in graph_first_required_refs),
+        "broad_scan_requires_scoped_miss_reason": True,
         "blocking_for_issue_workflow": False,
     }
 
@@ -3722,7 +3732,7 @@ def build_task_card(
         "next_client_steps": [
             "switch_to_worktree_if_created",
             "read task-card.md first, then context-pack.md only when needed",
-            "read Code Intelligence refs before rg; broad scans require a scoped miss reason",
+            "read Code Intelligence refs before rg; record a scoped miss reason before broad scans",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -3780,8 +3790,14 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- noisy_context_warning: `{str(bool(code_intel.get('noisy_context_warning'))).lower()}`",
         f"- understand_anything_summary_ref: `{code_intel.get('understand_anything_summary_ref') or 'not_generated'}`",
         f"- understand_anything_status: `{code_intel.get('understand_anything_status') or 'unknown'}`",
+        f"- understand_anything_freshness: `{code_intel.get('understand_anything_freshness') or 'unknown'}`",
+        f"- understand_anything_graph_commit: `{code_intel.get('understand_anything_graph_commit') or 'unknown'}`",
+        f"- understand_anything_current_commit: `{code_intel.get('understand_anything_current_commit') or 'unknown'}`",
         f"- understand_anything_graph_exists: `{str(bool(code_intel.get('understand_anything_graph_exists'))).lower()}`",
         f"- understand_anything_nodes_used: `{code_intel.get('understand_anything_nodes_used', 0)}`",
+        f"- graph_first_required: `{str(bool(code_intel.get('graph_first_required'))).lower()}`",
+        f"- graph_first_refs_ready: `{str(bool(code_intel.get('graph_first_refs_ready'))).lower()}`",
+        f"- broad_scan_requires_scoped_miss_reason: `{str(bool(code_intel.get('broad_scan_requires_scoped_miss_reason'))).lower()}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- blocking_for_issue_workflow: `{str(bool(code_intel.get('blocking_for_issue_workflow'))).lower()}`",
         f"- ua_generate_graph_command: `{code_intel.get('understand_anything_generate_graph_command') or 'not_required'}`",

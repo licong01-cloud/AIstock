@@ -165,6 +165,8 @@ def build_report(
     codegraph: dict[str, Any],
     resource_budget_seconds: int,
     workspace_path: str | None = None,
+    invoke_llm: bool = False,
+    fallback_on_llm_error: bool = True,
 ) -> dict[str, Any]:
     config = llm_provider_adapter.load_config(config_path)
     recent_failure_modules = recent_failure_modules_from_statuses(statuses)
@@ -176,6 +178,8 @@ def build_report(
         codegraph_freshness=str(codegraph["freshness"]),
         resource_budget_seconds=resource_budget_seconds,
         workspace_path=workspace_path,
+        invoke_llm=invoke_llm,
+        fallback_on_llm_error=fallback_on_llm_error,
     )
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
@@ -296,6 +300,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codegraph-freshness")
     parser.add_argument("--resource-budget-seconds", type=int, default=900)
     parser.add_argument("--workspace-path")
+    parser.add_argument(
+        "--invoke-llm",
+        action="store_true",
+        help="Call the configured provider for advisory JSON. Deterministic queue gates remain authoritative.",
+    )
+    parser.add_argument(
+        "--fail-on-llm-error",
+        action="store_true",
+        help="Fail instead of falling back to deterministic advice if live LLM invocation errors.",
+    )
     parser.add_argument("--output")
     parser.add_argument("--markdown-output")
     parser.add_argument("--json", action="store_true", help="Emit compact JSON stdout.")
@@ -332,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
             codegraph=codegraph,
             resource_budget_seconds=args.resource_budget_seconds,
             workspace_path=args.workspace_path,
+            invoke_llm=args.invoke_llm,
+            fallback_on_llm_error=not args.fail_on_llm_error,
         )
     except Exception as exc:
         report = {
