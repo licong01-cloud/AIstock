@@ -11,6 +11,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
@@ -212,15 +213,51 @@ def _canonical_repo_root(root: Path) -> Path:
 
 
 def _same_repo_remote(left: Path, right: Path) -> bool:
-    left_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=left).get("stdout") or "").strip().lower()
-    right_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=right).get("stdout") or "").strip().lower()
+    left_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=left).get("stdout") or "").strip()
+    right_remote = str(_git(["config", "--get", "remote.origin.url"], cwd=right).get("stdout") or "").strip()
     if not left_remote or not right_remote:
         return True
 
     def normalize(value: str) -> str:
-        return value.replace("\\", "/").removesuffix(".git")
+        normalized = value.strip().lower().replace("\\", "/").removesuffix(".git")
+        normalized = normalized.removeprefix("https://").removeprefix("http://")
+        normalized = normalized.removeprefix("ssh://")
+        if normalized.startswith("git@github.com:"):
+            normalized = "github.com/" + normalized.removeprefix("git@github.com:")
+        return normalized
+
+    def remote_path(value: str) -> Path | None:
+        raw = value.strip().strip('"').strip("'")
+        if raw.startswith("file:"):
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path)
+        path = Path(raw).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        return resolved if resolved.exists() else None
+
+    left_path = remote_path(left_remote)
+    right_path = remote_path(right_remote)
+    try:
+        if left_path and left_path == right.resolve():
+            return True
+        if right_path and right_path == left.resolve():
+            return True
+        if left_path and right_path and left_path == right_path:
+            return True
+    except OSError:
+        pass
 
     return normalize(left_remote) == normalize(right_remote)
+
+
+def _is_git_checkout(path: Path) -> bool:
+    if (path / ".git").exists():
+        return True
+    result = _git(["rev-parse", "--is-inside-work-tree"], cwd=path)
+    return bool(result.get("ok") and str(result.get("stdout") or "").strip().lower() == "true")
 
 
 def _configured_graph_source_root(requested_root: Path) -> tuple[Path | None, str | None, list[str]]:
@@ -234,7 +271,7 @@ def _configured_graph_source_root(requested_root: Path) -> tuple[Path | None, st
         return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} could not be resolved: {exc}"]
     if not source.exists():
         return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} does not exist: {source}"]
-    if not (source / ".git").exists():
+    if not _is_git_checkout(source):
         return None, None, [f"{GRAPH_SOURCE_ROOT_ENV} is not a git checkout: {source}"]
     if source == requested_root:
         return source, "configured_env", warnings
@@ -245,7 +282,7 @@ def _configured_graph_source_root(requested_root: Path) -> tuple[Path | None, st
 
 def _graph_source_root(root: Path) -> tuple[Path, str, list[str]]:
     configured, source, warnings = _configured_graph_source_root(root)
-    if configured is not None and _codegraph_index_path(configured).exists():
+    if configured is not None:
         return configured, source or "configured_env", warnings
     if _codegraph_index_path(root).exists():
         return root, "current_worktree", warnings
