@@ -41,8 +41,8 @@
   "expected": "Issue workflow, Nightly, Codex and Claude Code should use fresh CodeGraph/UA evidence where available, expose graph-first refs in task cards, validate client readiness, and allow controlled GitHub Models/DeepSeek advice calls behind schema gates without shell or production actions.",
   "first_seen_at": "2026-06-11T03:46:03.308168Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f0a6e3d41422f1cbf509931bf4ebf1bbdc55b512",
+  "fixed_at": "2026-06-11T06:34:01.945296Z",
   "github_issue_number": 939,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/939",
   "last_seen_at": "2026-06-11T03:46:03.308168Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/941",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -71,6 +72,9 @@
     "fingerprint": "4bdcf75a35e22bcc75a3f91c",
     "source_event_id": "FE-20260611-4bdcf75a35e2"
   },
+  "validation_evidence": [
+    "targeted pytest 223 passed; focused pytest 41 passed; ruff passed; nox validation_module_registry_l0 passed; nox l0 passed; nox validation_center_backend 420 passed; guardrail_changed_files passed; PR CI 12 passed 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
