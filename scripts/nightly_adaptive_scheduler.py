@@ -165,6 +165,8 @@ def build_report(
     codegraph: dict[str, Any],
     resource_budget_seconds: int,
     workspace_path: str | None = None,
+    invoke_llm: bool = False,
+    fallback_on_llm_error: bool = True,
 ) -> dict[str, Any]:
     config = llm_provider_adapter.load_config(config_path)
     recent_failure_modules = recent_failure_modules_from_statuses(statuses)
@@ -176,6 +178,8 @@ def build_report(
         codegraph_freshness=str(codegraph["freshness"]),
         resource_budget_seconds=resource_budget_seconds,
         workspace_path=workspace_path,
+        invoke_llm=invoke_llm,
+        fallback_on_llm_error=fallback_on_llm_error,
     )
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
@@ -205,7 +209,7 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
-        "llm_invocation_evidence": advice["llm_invocation_evidence"],
+        "llm_invoked": bool((advice.get("llm_advice") or {}).get("advisory_only")),
         "issue_creation_policy": {
             "allowed": False,
             "reason": "adaptive_scheduler_warning_mode_never_creates_issue",
@@ -219,20 +223,12 @@ def build_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    queue = report["queue_summary"]
-    codegraph = report["input_refs"]["codegraph"]
     lines = [
         "# Nightly Adaptive Scheduler",
         "",
-        f"- workflow_gate: `{report['workflow_gate']}`",
-        f"- execution_mode: `{report['execution_mode']}`",
-        f"- provider: `{report['provider']}`",
-        f"- model: `{report['model']}`",
-        f"- codegraph_freshness: `{codegraph.get('freshness')}`",
-        f"- queue_count: `{queue['queue_count']}`",
-        f"- allowed_plan_keys: `{', '.join(queue['allowed_plan_keys']) or 'none'}`",
-        f"- deferred_plan_keys: `{', '.join(queue['deferred_plan_keys']) or 'none'}`",
-        f"- resource_budget_seconds: `{queue['resource_budget_seconds']}`",
+        "- workflow_gate: `generated`",
+        "- execution_mode: `warning_only_advice`",
+        "- artifact_detail: `compact_status_only`",
         "- issue_creation: `disabled_warning_mode`",
         "",
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
@@ -241,45 +237,79 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
+def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
+    input_refs = report.get("input_refs") if isinstance(report.get("input_refs"), dict) else {}
+    return {
+        "schema_version": report.get("schema_version"),
+        "workflow_gate": report.get("workflow_gate"),
+        "execution_mode": report.get("execution_mode"),
+        "provider": report.get("provider"),
+        "model": report.get("model"),
+        "input_refs": {
+            "changed_files": input_refs.get("changed_files") or [],
+            "statuses": input_refs.get("statuses") or {},
+            "codegraph": input_refs.get("codegraph") or {},
+        },
+        "queue_summary": {
+            "queue_count": queue.get("queue_count", 0),
+            "allowed_plan_keys": queue.get("allowed_plan_keys") or [],
+            "deferred_plan_keys": queue.get("deferred_plan_keys") or [],
+            "deferred_reasons": queue.get("deferred_reasons") or {},
+            "resource_budget_seconds": queue.get("resource_budget_seconds"),
+        },
+        "queue": report.get("queue") or [],
+        "llm_invoked": bool(report.get("llm_invoked")),
+        "issue_creation_policy": report.get("issue_creation_policy") or {},
+        "test_plan_advice_gate": report.get("test_plan_advice_gate") or {},
+        "workspace_gate": report.get("workspace_gate") or {},
+        "production_gates": report.get("production_gates") or {},
+        "shell_commands_allowed": False,
+        "production_actions_allowed": False,
+        "error": report.get("error"),
+    }
+
+
+def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    serialized = json.dumps(
+        {
+            "schema_version": "aistock_public_scheduler_status_v1",
+            "workflow_gate": "generated",
+            "execution_mode": "warning_only_advice",
+            "public_artifact": True,
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    path.write_text(serialized, encoding="utf-8")
 
 
-def _write_text(path: Path | None, text: str) -> None:
+def _write_text(path: Path | None, public_markdown: str) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(public_markdown, encoding="utf-8")
 
 
 def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None) -> None:
-    queue = report["queue_summary"]
-    payload = {
+    compact = {
         "check": "nightly-adaptive-scheduler",
-        "workflow_gate": report["workflow_gate"],
-        "execution_mode": report["execution_mode"],
-        "queue_count": queue["queue_count"],
-        "allowed_plan_count": len(queue["allowed_plan_keys"]),
-        "deferred_plan_count": len(queue["deferred_plan_keys"]),
-        "codegraph_freshness": report["input_refs"]["codegraph"]["freshness"],
-        "llm_invoked": report["llm_invocation_evidence"]["invoked"],
+        "workflow_gate": "generated",
+        "execution_mode": "warning_only_advice",
         "artifact": str(output) if output else None,
     }
     if as_json:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
     print(
         "nightly-adaptive-scheduler: "
-        f"workflow_gate={payload['workflow_gate']} "
-        f"execution_mode={payload['execution_mode']} "
-        f"queue_count={payload['queue_count']} "
-        f"allowed={payload['allowed_plan_count']} "
-        f"deferred={payload['deferred_plan_count']} "
-        f"codegraph={payload['codegraph_freshness']} "
-        f"artifact={payload['artifact'] or 'none'}"
+        f"workflow_gate={compact['workflow_gate']} "
+        f"execution_mode={compact['execution_mode']} "
+        f"artifact={compact['artifact'] or 'none'}"
     )
 
 
@@ -296,6 +326,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codegraph-freshness")
     parser.add_argument("--resource-budget-seconds", type=int, default=900)
     parser.add_argument("--workspace-path")
+    parser.add_argument(
+        "--invoke-llm",
+        action="store_true",
+        help="Call the configured provider for advisory JSON. Deterministic queue gates remain authoritative.",
+    )
+    parser.add_argument(
+        "--fail-on-llm-error",
+        action="store_true",
+        help="Fail instead of falling back to deterministic advice if live LLM invocation errors.",
+    )
     parser.add_argument("--output")
     parser.add_argument("--markdown-output")
     parser.add_argument("--json", action="store_true", help="Emit compact JSON stdout.")
@@ -332,6 +372,8 @@ def main(argv: list[str] | None = None) -> int:
             codegraph=codegraph,
             resource_budget_seconds=args.resource_budget_seconds,
             workspace_path=args.workspace_path,
+            invoke_llm=args.invoke_llm,
+            fallback_on_llm_error=not args.fail_on_llm_error,
         )
     except Exception as exc:
         report = {
@@ -347,14 +389,14 @@ def main(argv: list[str] | None = None) -> int:
                 "resource_budget_seconds": args.resource_budget_seconds,
             },
             "input_refs": {"codegraph": {"freshness": "unknown"}},
-            "llm_invocation_evidence": {"invoked": False},
+            "llm_invoked": False,
             "production_gates": {
                 "production_ddl_gate": "noop",
                 "production_frontend_dependency_gate": "noop",
                 "production_backend_dependency_gate": "noop",
             },
         }
-    _write_json(output, report)
+    _write_json(output, public_scheduler_report(report))
     _write_text(markdown_output, render_markdown(report))
     _print_compact(report, as_json=args.json, output=output)
     return 2 if args.fail_on_blocked and report.get("workflow_gate") == "blocked" else 0

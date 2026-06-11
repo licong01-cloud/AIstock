@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -277,6 +278,93 @@ def fetch_github_models_catalog(config: dict[str, Any], *, token: str | None = N
         raise ProviderAdapterError(f"GitHub Models catalog request failed status={exc.code}{suffix}") from exc
     except urllib.error.URLError as exc:
         raise ProviderAdapterError(f"GitHub Models catalog request failed: {exc.reason}") from exc
+
+
+def _provider_chat_endpoint(config: dict[str, Any], provider: str) -> tuple[str, str, str, str]:
+    """Resolve a safe OpenAI-compatible chat endpoint for a configured provider."""
+
+    if provider == "github_models":
+        github_models = config["providers"]["github_models"]
+        base_url = str(github_models.get("base_url") or "").rstrip("/")
+        selector = github_models["model_selector"]
+        model = str((selector.get("preferred_models") or [GITHUB_MODELS_DEEPSEEK_MODEL_ID])[0])
+        auth_token, credential_source = _resolve_github_models_token(config)
+        if not auth_token:
+            raise ProviderAdapterError(
+                f"{credential_source} or gh auth token is required for GitHub Models inference"
+            )
+        return f"{base_url}/inference/chat/completions", model, auth_token, credential_source
+    if provider == "deepseek_api":
+        resolved = resolve_deepseek_config(model=DEFAULT_DEEPSEEK_MODEL, require_api_key=True)
+        return (
+            f"{resolved.base_url.rstrip('/')}/chat/completions",
+            resolved.model,
+            resolved.api_key,
+            resolved.credential_source,
+        )
+    raise ProviderAdapterError(f"provider does not support live LLM invocation: {provider}")
+
+
+def invoke_provider_json(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    purpose: str,
+    messages: list[dict[str, str]],
+    max_tokens: int = 900,
+    timeout_seconds: int = 45,
+) -> dict[str, Any]:
+    """Invoke a configured provider and parse a strict JSON-object response.
+
+    The caller decides whether the parsed content can influence deterministic
+    gates. This helper never logs or returns secrets.
+    """
+
+    endpoint, model, auth_token, credential_source = _provider_chat_endpoint(config, provider)
+    body = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {auth_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+            raw_response = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        retry_after = exc.headers.get("retry-after") or exc.headers.get("Retry-After")
+        suffix = f" retry_after={retry_after}" if retry_after else ""
+        raise ProviderAdapterError(
+            f"{provider} inference request failed status={exc.code}{suffix}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise ProviderAdapterError(f"{provider} inference request failed: {exc.reason}") from exc
+
+    choices = raw_response.get("choices") if isinstance(raw_response, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise ProviderAdapterError("provider output JSON schema invalid: choices missing")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = (message or {}).get("content") if isinstance(message, dict) else choices[0].get("text")
+    payload = parse_json_response(content or "")
+    return {
+        "provider": provider,
+        "model": model,
+        "purpose": purpose,
+        "payload": payload,
+        "credential_source": credential_source,
+        "usage": raw_response.get("usage") if isinstance(raw_response, dict) else None,
+        "response_id": raw_response.get("id") if isinstance(raw_response, dict) else None,
+    }
 
 
 def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool) -> dict[str, Any]:
@@ -574,6 +662,142 @@ def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, 
     }
 
 
+def _llm_evidence(
+    *,
+    provider_summary: dict[str, Any],
+    invoked: bool,
+    reason: str,
+    input_policy: str,
+    usage: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    evidence = {
+        "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
+        "provider": provider_summary["provider"],
+        "model": provider_summary["model"],
+        "invoked": invoked,
+        "reason": reason,
+        "input_policy": input_policy,
+        "redaction_applied": True,
+    }
+    if usage:
+        evidence["usage_summary"] = {
+            "prompt_units": usage.get("prompt_tokens"),
+            "completion_units": usage.get("completion_tokens"),
+            "total_units": usage.get("total_tokens"),
+        }
+    if error:
+        redacted_error = redact_secret_text(error)
+        redacted_error = re.sub(
+            r"(?i)(\btoken\s*[:=]\s*)['\"]?[^'\"\s,;]+",
+            r"\1<redacted>",
+            redacted_error,
+        )
+        evidence["error"] = redacted_error
+    return evidence
+
+
+def _compact_llm_messages(*, kind: str, payload: dict[str, Any]) -> list[dict[str, str]]:
+    system = (
+        "You are an AIstock validation advisor. Return one strict JSON object only. "
+        "Suggest plan_key intent, rationale, risk, and confidence. Do not include shell "
+        "commands, source code patches, secrets, production actions, or issue closure decisions."
+    )
+    user_payload = {
+        "kind": kind,
+        "schema": {
+            "summary": "short string",
+            "rationale": "short string",
+            "risk": "low|medium|high",
+            "suggested_plan_keys": ["plan_key"],
+            "confidence": 0.0,
+        },
+        "input": payload,
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def _safe_llm_advice(raw: dict[str, Any], *, allowed_plan_keys: set[str]) -> dict[str, Any]:
+    if not _no_shell_commands(raw):
+        raise ProviderAdapterError("provider advice must not contain shell command fields")
+    suggested = raw.get("suggested_plan_keys") or raw.get("plan_keys") or []
+    if not isinstance(suggested, list):
+        suggested = []
+    filtered_plan_keys = [
+        str(item)
+        for item in suggested
+        if str(item) in allowed_plan_keys
+    ][:8]
+    confidence = raw.get("confidence")
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = None
+    return {
+        "summary": str(raw.get("summary") or raw.get("reason") or "")[:500],
+        "rationale": str(raw.get("rationale") or "")[:1000],
+        "risk": str(raw.get("risk") or "unknown")[:50],
+        "suggested_plan_keys": filtered_plan_keys,
+        "ignored_plan_key_count": max(0, len(suggested) - len(filtered_plan_keys)),
+        "confidence": confidence_value,
+        "advisory_only": True,
+    }
+
+
+def _maybe_invoke_advisory_llm(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    provider_summary: dict[str, Any],
+    kind: str,
+    prompt_payload: dict[str, Any],
+    allowed_plan_keys: set[str],
+    invoke_llm: bool,
+    fallback_on_error: bool,
+    input_policy: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    if not invoke_llm or provider == "deterministic":
+        reason = f"{kind}_dry_run_no_network"
+        return None, _llm_evidence(
+            provider_summary=provider_summary,
+            invoked=False,
+            reason=reason,
+            input_policy=input_policy,
+        )
+    try:
+        result = invoke_provider_json(
+            provider,
+            config,
+            purpose=kind,
+            messages=_compact_llm_messages(kind=kind, payload=prompt_payload),
+        )
+        advice = _safe_llm_advice(result["payload"], allowed_plan_keys=allowed_plan_keys)
+        return advice, _llm_evidence(
+            provider_summary={
+                **provider_summary,
+                "model": result.get("model") or provider_summary["model"],
+                "credential_source": result.get("credential_source") or provider_summary["credential_source"],
+            },
+            invoked=True,
+            reason=f"{kind}_live_provider_json",
+            input_policy=input_policy,
+            usage=result.get("usage") if isinstance(result.get("usage"), dict) else None,
+        )
+    except ProviderAdapterError as exc:
+        if not fallback_on_error:
+            raise
+        return None, _llm_evidence(
+            provider_summary=provider_summary,
+            invoked=False,
+            reason=f"{kind}_live_provider_failed_fallback",
+            input_policy=input_policy,
+            error=str(exc),
+        )
+
+
 def build_test_plan_advice(
     provider: str,
     config: dict[str, Any],
@@ -585,6 +809,8 @@ def build_test_plan_advice(
     root: Path = ROOT,
     catalog_path: Path | None = None,
     allowed_command_keys: dict[str, str] | None = None,
+    invoke_llm: bool = False,
+    fallback_on_llm_error: bool = True,
 ) -> dict[str, Any]:
     """Build schema-checked test-plan advice without allowing shell commands."""
 
@@ -601,6 +827,26 @@ def build_test_plan_advice(
     all_plans_allowed = all(item["allowed"] for item in plan_results)
     catalog_compatible = not selected_by_catalog or set(advised_keys).issubset(selected_by_catalog)
     workflow_gate = "ready" if all_plans_allowed and workspace["allowed"] and catalog_compatible else "blocked"
+    llm_advice, llm_evidence = _maybe_invoke_advisory_llm(
+        provider,
+        config,
+        provider_summary=provider_summary,
+        kind="test_plan_advice",
+        prompt_payload={
+            "changed_files": changed_files,
+            "module": module,
+            "deterministic_plan_keys": advised_keys,
+            "validation_select": {
+                "required_plans": (selection or {}).get("required_plans") or [],
+                "recommended_plans": (selection or {}).get("recommended_plans") or [],
+            },
+            "workspace_path_allowed": workspace["allowed"],
+        },
+        allowed_plan_keys=set(plans_by_key),
+        invoke_llm=invoke_llm,
+        fallback_on_error=fallback_on_llm_error,
+        input_policy="plan_key_intent_plus_catalog_context_only",
+    )
     advice = {
         "schema_version": TEST_PLAN_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
@@ -614,16 +860,8 @@ def build_test_plan_advice(
             "compatible": catalog_compatible,
         },
         "workspace_gate": workspace,
-        "llm_invocation_evidence": {
-            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
-            "provider": provider_summary["provider"],
-            "model": provider_summary["model"],
-            "invoked": False,
-            "reason": "test_plan_advice_dry_run_no_network",
-            "credential_source": provider_summary["credential_source"],
-            "input_policy": "plan_key_intent_plus_catalog_context_only",
-            "redaction_applied": True,
-        },
+        "llm_advice": llm_advice,
+        "llm_invocation_evidence": llm_evidence,
         "deterministic_gate": {
             "workflow_gate": workflow_gate,
             "schema_valid": True,
@@ -673,6 +911,8 @@ def build_nightly_scheduler_advice(
     root: Path = ROOT,
     catalog_path: Path | None = None,
     allowed_command_keys: dict[str, str] | None = None,
+    invoke_llm: bool = False,
+    fallback_on_llm_error: bool = True,
 ) -> dict[str, Any]:
     """Build a deterministic nightly queue without scheduling production actions."""
 
@@ -702,6 +942,7 @@ def build_nightly_scheduler_advice(
         root=root,
         catalog_path=catalog_path,
         allowed_command_keys=allowed_command_keys,
+        invoke_llm=False,
     )
     advice_by_key = {item["plan_key"]: item for item in test_plan_advice["test_plan_advice"]}
     queue: list[dict[str, Any]] = []
@@ -733,6 +974,32 @@ def build_nightly_scheduler_advice(
     blocked_by_gate = any(_nightly_deferred_is_hard_block(item) for item in queue)
     warning_by_gate = any(_nightly_deferred_is_warning(item) for item in queue)
     workflow_gate = "blocked" if blocked_by_gate or not workspace["allowed"] else ("warning" if codegraph_warning or warning_by_gate else "ready")
+    llm_advice, llm_evidence = _maybe_invoke_advisory_llm(
+        provider,
+        config,
+        provider_summary=provider_summary,
+        kind="nightly_scheduler_advice",
+        prompt_payload={
+            "changed_files": changed_files[:20],
+            "recent_failure_modules": recent_failure_modules[:20],
+            "recent_failure_plan_keys": recent_failure_plan_keys[:20],
+            "codegraph_freshness": freshness,
+            "resource_budget_seconds": budget,
+            "deterministic_queue": [
+                {
+                    "plan_key": item["plan_key"],
+                    "priority": item["priority"],
+                    "allowed": item["allowed"],
+                    "deferred_reason": item.get("deferred_reason"),
+                }
+                for item in queue
+            ],
+        },
+        allowed_plan_keys=set(plans_by_key),
+        invoke_llm=invoke_llm,
+        fallback_on_error=fallback_on_llm_error,
+        input_policy="changed_files_recent_failures_codegraph_freshness_catalog_only",
+    )
     advice = {
         "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
@@ -755,16 +1022,8 @@ def build_nightly_scheduler_advice(
             "llm_invoked": test_plan_advice["llm_invocation_evidence"]["invoked"],
         },
         "workspace_gate": workspace,
-        "llm_invocation_evidence": {
-            "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
-            "provider": provider_summary["provider"],
-            "model": provider_summary["model"],
-            "invoked": False,
-            "reason": "nightly_scheduler_dry_run_no_network",
-            "credential_source": provider_summary["credential_source"],
-            "input_policy": "changed_files_recent_failures_codegraph_freshness_catalog_only",
-            "redaction_applied": True,
-        },
+        "llm_advice": llm_advice,
+        "llm_invocation_evidence": llm_evidence,
         "deterministic_gate": {
             "workflow_gate": workflow_gate,
             "schema_valid": True,
@@ -1208,7 +1467,6 @@ def build_triage_quality_smoke(provider: str, config: dict[str, Any]) -> dict[st
             "model": provider_summary["model"],
             "invoked": False,
             "reason": "schema_quality_smoke_no_network",
-            "credential_source": provider_summary["credential_source"],
             "input_policy": "compact_failure_event_plus_code_intelligence_refs_only",
             "redaction_applied": True,
         },
@@ -1254,6 +1512,127 @@ def _print_success(label: str, payload: dict[str, Any], *, as_json: bool) -> Non
     print(f"gate=passed check={label} {details}".strip())
 
 
+def llm_invocation_public_summary(record: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the small non-secret LLM status summary allowed in artifacts."""
+
+    source = record if isinstance(record, dict) else {}
+    summary: dict[str, Any] = {
+        "schema_version": source.get("schema_version"),
+        "provider": source.get("provider"),
+        "model": source.get("model"),
+        "invoked": bool(source.get("invoked")),
+        "reason": source.get("reason"),
+        "input_policy": source.get("input_policy"),
+        "redaction_applied": bool(source.get("redaction_applied", True)),
+    }
+    units = source.get("usage_summary")
+    if isinstance(units, dict):
+        summary["usage_units"] = {
+            "prompt": units.get("prompt_units"),
+            "completion": units.get("completion_units"),
+            "total": units.get("total_units"),
+        }
+    if source.get("error"):
+        summary["error"] = redact_secret_text(str(source.get("error")))
+    return json.loads(redact_secret_text(json.dumps(summary, ensure_ascii=False)))
+
+
+def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
+
+    if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
+        gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "module": payload.get("module"),
+            "changed_files": payload.get("changed_files") or [],
+            "test_plan_advice": payload.get("test_plan_advice") or [],
+            "validation_select": payload.get("validation_select") or {},
+            "workspace_gate": payload.get("workspace_gate") or {},
+            "llm_advice": payload.get("llm_advice"),
+            "llm_invoked": bool(payload.get("llm_advice")),
+            "deterministic_gate": gate,
+        }
+    if payload.get("schema_version") == NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "changed_files": payload.get("changed_files") or [],
+            "recent_failures": payload.get("recent_failures") or {},
+            "codegraph": payload.get("codegraph") or {},
+            "resource_budget_seconds": payload.get("resource_budget_seconds"),
+            "queue": payload.get("queue") or [],
+            "test_plan_advice_gate": payload.get("test_plan_advice_gate") or {},
+            "workspace_gate": payload.get("workspace_gate") or {},
+            "llm_advice": payload.get("llm_advice"),
+            "llm_invoked": bool(payload.get("llm_advice")),
+            "deterministic_gate": payload.get("deterministic_gate") or {},
+        }
+    if payload.get("schema_version") == PROMPT_EVALUATION_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "prompt_pack_versions": payload.get("prompt_pack_versions") or {},
+            "cases_path": payload.get("cases_path"),
+            "changed_files": payload.get("changed_files") or [],
+            "metrics": payload.get("metrics") or {},
+            "policy_gate": payload.get("policy_gate") or {},
+            "llm_invoked": False,
+            "rows": payload.get("rows") or [],
+        }
+    if payload.get("schema_version") == GUARDED_ROLLOUT_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "mode": payload.get("mode"),
+            "opt_in": payload.get("opt_in"),
+            "module": payload.get("module"),
+            "module_allowlist": payload.get("module_allowlist") or [],
+            "module_allowlisted": payload.get("module_allowlisted"),
+            "deterministic_issue_allowed": payload.get("deterministic_issue_allowed"),
+            "llm_workflow_gate": payload.get("llm_workflow_gate"),
+            "issue_sections_present": payload.get("issue_sections_present") or [],
+            "missing_required_issue_sections": payload.get("missing_required_issue_sections") or [],
+            "false_positive_auto_file_rate": payload.get("false_positive_auto_file_rate"),
+            "false_positive_threshold": payload.get("false_positive_threshold"),
+            "auto_file_allowed": payload.get("auto_file_allowed"),
+            "llm_can_enhance_issue": payload.get("llm_can_enhance_issue"),
+            "llm_enhancement_allowed": payload.get("llm_enhancement_allowed"),
+            "deterministic_issue_creation_unaffected": payload.get("deterministic_issue_creation_unaffected"),
+            "workflow_gate": payload.get("workflow_gate"),
+            "rejection_reasons": payload.get("rejection_reasons") or [],
+            "fallback": payload.get("fallback"),
+            "production_gates": payload.get("production_gates") or {},
+            "llm_invoked": False,
+        }
+    return {
+        "schema_version": payload.get("schema_version"),
+        "provider": payload.get("provider"),
+        "model": payload.get("model"),
+        "llm_invoked": False,
+    }
+
+
+def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> None:
+    if not path:
+        return
+    artifact_path = Path(path)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        "schema_version": "aistock_public_advisory_status_v1",
+        "workflow_gate": "passed",
+        "llm_invoked": False,
+        "public_artifact": True,
+    }
+    serialized = json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    artifact_path.write_text(serialized, encoding="utf-8")
+
+
 def cmd_validate_config(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     validate_config(config)
@@ -1294,8 +1673,7 @@ def cmd_triage_quality_smoke(args: argparse.Namespace) -> int:
     provider = args.provider or str(config.get("default_provider") or "deterministic")
     advice = build_triage_quality_smoke(provider, config)
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     compact = {
         "provider": advice["provider"],
         "model": advice["model"],
@@ -1328,10 +1706,11 @@ def cmd_test_plan_advice(args: argparse.Namespace) -> int:
         changed_files=_split_csv(args.changed_file),
         module=args.module,
         workspace_path=args.workspace_path,
+        invoke_llm=args.invoke_llm,
+        fallback_on_llm_error=not args.fail_on_llm_error,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     gate = advice["deterministic_gate"]
     compact = {
         "provider": advice["provider"],
@@ -1361,10 +1740,11 @@ def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
         codegraph_freshness=args.codegraph_freshness,
         resource_budget_seconds=args.resource_budget_seconds,
         workspace_path=args.workspace_path,
+        invoke_llm=args.invoke_llm,
+        fallback_on_llm_error=not args.fail_on_llm_error,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(advice, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, advice)
     gate = advice["deterministic_gate"]
     compact = {
         "provider": advice["provider"],
@@ -1394,8 +1774,7 @@ def cmd_prompt_evaluation(args: argparse.Namespace) -> int:
         false_positive_threshold=args.false_positive_threshold,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(evaluation, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, evaluation)
     metrics = evaluation["metrics"]
     compact = {
         "provider": evaluation["provider"],
@@ -1433,8 +1812,7 @@ def cmd_guarded_rollout_gate(args: argparse.Namespace) -> int:
         false_positive_threshold=args.false_positive_threshold,
     )
     if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_public_json_artifact(args.output, gate)
     compact = {
         "provider": gate["provider"],
         "model": gate["model"],
@@ -1488,6 +1866,16 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
     plan.add_argument("--module", default=None)
     plan.add_argument("--workspace-path", default=None)
+    plan.add_argument(
+        "--invoke-llm",
+        action="store_true",
+        help="Call the configured provider for advisory JSON. Deterministic gates remain authoritative.",
+    )
+    plan.add_argument(
+        "--fail-on-llm-error",
+        action="store_true",
+        help="Fail instead of falling back to deterministic advice if live LLM invocation errors.",
+    )
     plan.add_argument("--output", default=None, help="Optional ignored artifact path for full test-plan advice JSON.")
     plan.set_defaults(func=cmd_test_plan_advice)
 
@@ -1510,6 +1898,16 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler.add_argument("--codegraph-freshness", choices=sorted(CODEGRAPH_FRESHNESS_VALUES), default="unknown")
     scheduler.add_argument("--resource-budget-seconds", type=int, default=900)
     scheduler.add_argument("--workspace-path", default=None)
+    scheduler.add_argument(
+        "--invoke-llm",
+        action="store_true",
+        help="Call the configured provider for advisory JSON. Deterministic queue gates remain authoritative.",
+    )
+    scheduler.add_argument(
+        "--fail-on-llm-error",
+        action="store_true",
+        help="Fail instead of falling back to deterministic advice if live LLM invocation errors.",
+    )
     scheduler.add_argument("--output", default=None, help="Optional ignored artifact path for full scheduler advice JSON.")
     scheduler.set_defaults(func=cmd_nightly_scheduler_advice)
 

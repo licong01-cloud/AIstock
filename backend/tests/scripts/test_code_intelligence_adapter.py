@@ -1164,3 +1164,30 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     assert "Code Intelligence Client Verification" in markdown
     assert len(markdown) < 3000
 
+
+
+
+def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, monkeypatch) -> None:
+    def fake_summary(*, module, root=None, output_dir=None, max_nodes=None):
+        return {
+            "module": module,
+            "status": "ok",
+            "freshness": "fresh" if module == "validation" else "base_current",
+            "graph_commit": "abc123",
+            "current_git_commit": "abc123" if module == "validation" else "def456",
+            "summary_ref": f"tmp/validation/code-intelligence/ua-{module}-summary.md",
+            "artifact_path": f"tmp/validation/code-intelligence/ua-{module}-summary.json",
+        }
+
+    monkeypatch.setattr(adapter, "build_understand_anything_summary", fake_summary)
+
+    payload = adapter.build_understand_anything_summary_manifest(
+        modules=["validation", "qe"],
+        root=tmp_path,
+        output_dir=tmp_path / "tmp" / "validation" / "code-intelligence",
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["fresh_summary_count"] == 1
+    assert payload["base_current_summary_count"] == 1
+    assert payload["stale_summary_count"] == 0

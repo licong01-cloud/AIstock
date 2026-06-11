@@ -26,11 +26,10 @@ def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_pat
 
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == scheduler.REPORT_SCHEMA_VERSION
-    assert payload["workflow_gate"] == "ready"
+    assert payload["schema_version"] == "aistock_public_scheduler_status_v1"
+    assert payload["workflow_gate"] == "generated"
     assert payload["execution_mode"] == "warning_only_advice"
-    assert payload["queue_summary"]["allowed_plan_keys"] == ["l0"]
-    assert payload["issue_creation_policy"]["allowed"] is False
+    assert payload["public_artifact"] is True
     assert "does not create GitHub Issues" in markdown.read_text(encoding="utf-8")
 
 
@@ -136,9 +135,45 @@ def test_nightly_adaptive_scheduler_compact_stdout(capsys, tmp_path: Path) -> No
 
     assert exit_code == 0
     assert "nightly-adaptive-scheduler:" in captured.out
-    assert "queue_count=" in captured.out
+    assert "warning_only_advice" in captured.out
     assert "schema_version" not in captured.out
     assert output.exists()
+
+
+
+def test_nightly_adaptive_scheduler_can_invoke_llm_advice(monkeypatch, tmp_path: Path) -> None:
+    original_build = scheduler.llm_provider_adapter.build_nightly_scheduler_advice
+
+    def fake_build(provider, config, **kwargs):
+        payload = original_build(
+            "deterministic",
+            config,
+            changed_files=kwargs.get("changed_files"),
+            recent_failure_modules=kwargs.get("recent_failure_modules"),
+            codegraph_freshness=kwargs.get("codegraph_freshness", "fresh"),
+            resource_budget_seconds=kwargs.get("resource_budget_seconds"),
+        )
+        payload["provider"] = provider
+        payload["model"] = "deepseek/deepseek-r1"
+        payload["llm_invocation_evidence"]["invoked"] = True
+        payload["llm_invocation_evidence"]["reason"] = "nightly_scheduler_advice_live_provider_json"
+        payload["llm_advice"] = {"suggested_plan_keys": ["l0"], "advisory_only": True}
+        return payload
+
+    monkeypatch.setattr(scheduler.llm_provider_adapter, "build_nightly_scheduler_advice", fake_build)
+
+    report = scheduler.build_report(
+        provider="github_models",
+        config_path=scheduler.llm_provider_adapter.DEFAULT_CONFIG_PATH,
+        changed_files=["scripts/llm_provider_adapter.py"],
+        statuses={},
+        codegraph={"freshness": "fresh", "source": "test"},
+        resource_budget_seconds=900,
+        invoke_llm=True,
+    )
+
+    assert report["provider"] == "github_models"
+    assert report["llm_invoked"] is True
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
@@ -147,4 +182,5 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "--codegraph-freshness-json" in workflow
+    assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
