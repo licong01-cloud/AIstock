@@ -29,18 +29,18 @@
       "timestamp": "2026-06-10T17:16:43.392821Z"
     },
     {
-      "timestamp": "2026-06-10T17:27:05.601618+00:00",
-      "actor": "codex",
       "action": "scope_expansion_after_root_cause",
-      "note": "Root cause is HMMTrainingService rejecting precomputed-only metadata signal_presets before selection-time auto-generation can materialize a daily coefficient cache; added HMM service/runtime tests and validation history to allowed_write_scope."
+      "actor": "codex",
+      "note": "Root cause is HMMTrainingService rejecting precomputed-only metadata signal_presets before selection-time auto-generation can materialize a daily coefficient cache; added HMM service/runtime tests and validation history to allowed_write_scope.",
+      "timestamp": "2026-06-10T17:27:05.601618+00:00"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-10T17:16:43.392825Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8dbfb3963cee1efb851c5a7445e98a55c72ccc0d",
+  "fixed_at": "2026-06-11T02:11:00.150885Z",
   "github_issue_number": 928,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/928",
   "last_seen_at": "2026-06-10T17:16:43.392825Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/932",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -70,6 +71,15 @@
     "fingerprint": "aab7ce1205eb2605fc7a5885",
     "source_event_id": "FE-20260611-aab7ce1205eb"
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/test_hmm_daily_coefficients.py backend/tests/selection_center/test_hmm_runtime.py backend/tests/selection_center/test_runtime_selection.py -p no:cacheprovider -> 74 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 613 passed, 1 skipped, 2 xfailed",
+    "python -m ruff check backend/services/hmm_training_service.py backend/services/selection_center/hmm_runtime.py backend/tests/test_hmm_daily_coefficients.py backend/tests/selection_center/test_hmm_runtime.py -> passed",
+    "python -m compileall -q backend/services/hmm_training_service.py backend/services/selection_center/hmm_runtime.py backend/tests/test_hmm_daily_coefficients.py backend/tests/selection_center/test_hmm_runtime.py -> passed",
+    "git diff --check -> passed",
+    "preview_daily_coefficients(snapshot_id=ecee7c40-6764-49ad-bc0f-1c6c6b390504, preset_A, as_of=2026-06-10, effective=2026-06-11) -> preset_coeffs trending=1.0 neutral=1.0 fading=0.955, output coefficients_preset_A_2026-06-11_2026-06-11.json, existing_artifact=false"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
