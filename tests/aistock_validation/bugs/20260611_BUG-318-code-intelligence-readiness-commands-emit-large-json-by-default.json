@@ -28,8 +28,8 @@
   "expected": "Successful code intelligence readiness commands default to compact status/ref stdout. Full JSON remains available through --output-format full-json or --output artifacts.",
   "first_seen_at": "2026-06-11T08:09:09.518446Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3d9900e0ccfb47b557eba19837eeb42ca4dea9ea",
+  "fixed_at": "2026-06-11T08:24:13.584015Z",
   "github_issue_number": 953,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/953",
   "last_seen_at": "2026-06-11T08:09:09.518446Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/954",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,12 @@
     "fingerprint": "902b227d49e4792201d999bd",
     "source_event_id": "FE-20260611-902b227d49e4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -p no:cacheprovider -> 44 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id VERIFY-BUG-318 --module validation -> compact PASS output",
+    "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale -> compact PASS output",
+    "python -m nox -s validation_center_backend -> 420 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
