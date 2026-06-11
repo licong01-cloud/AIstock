@@ -1512,61 +1512,110 @@ def _print_success(label: str, payload: dict[str, Any], *, as_json: bool) -> Non
     print(f"gate=passed check={label} {details}".strip())
 
 
-def public_artifact_payload(payload: Any) -> Any:
-    """Return a public-safe artifact payload without credential or raw usage fields."""
+def llm_invocation_public_summary(record: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the small non-secret LLM status summary allowed in artifacts."""
 
-    if isinstance(payload, list):
-        return [public_artifact_payload(item) for item in payload]
-    if not isinstance(payload, dict):
-        return payload
-
-    result: dict[str, Any] = {}
-    for key, value in payload.items():
-        if key == "credential_source":
-            continue
-        if key == "usage":
-            if isinstance(value, dict):
-                result["usage_summary"] = {
-                    "prompt_units": value.get("prompt_tokens"),
-                    "completion_units": value.get("completion_tokens"),
-                    "total_units": value.get("total_tokens"),
-                }
-            continue
-        if key == "llm_invocation_evidence":
-            evidence = value if isinstance(value, dict) else {}
-            summary: dict[str, Any] = {
-                "schema_version": evidence.get("schema_version"),
-                "provider": evidence.get("provider"),
-                "model": evidence.get("model"),
-                "invoked": bool(evidence.get("invoked")),
-                "reason": evidence.get("reason"),
-                "input_policy": evidence.get("input_policy"),
-                "redaction_applied": evidence.get("redaction_applied"),
-            }
-            usage = evidence.get("usage")
-            if isinstance(usage, dict):
-                summary["usage_summary"] = {
-                    "prompt_units": usage.get("prompt_tokens"),
-                    "completion_units": usage.get("completion_tokens"),
-                    "total_units": usage.get("total_tokens"),
-                }
-            if isinstance(evidence.get("usage_summary"), dict):
-                summary["usage_summary"] = public_artifact_payload(evidence["usage_summary"])
-            if evidence.get("error"):
-                summary["error"] = redact_secret_text(str(evidence.get("error")))
-            result["llm_invocation_summary"] = summary
-            continue
-        if key.endswith("_tokens"):
-            result[f"{key[:-7]}_units"] = value
-            continue
-        result[key] = public_artifact_payload(value)
-    return json.loads(redact_secret_text(json.dumps(result, ensure_ascii=False)))
+    source = record if isinstance(record, dict) else {}
+    summary: dict[str, Any] = {
+        "schema_version": source.get("schema_version"),
+        "provider": source.get("provider"),
+        "model": source.get("model"),
+        "invoked": bool(source.get("invoked")),
+        "reason": source.get("reason"),
+        "input_policy": source.get("input_policy"),
+        "redaction_applied": bool(source.get("redaction_applied", True)),
+    }
+    units = source.get("usage_summary")
+    if isinstance(units, dict):
+        summary["usage_units"] = {
+            "prompt": units.get("prompt_units"),
+            "completion": units.get("completion_units"),
+            "total": units.get("total_units"),
+        }
+    if source.get("error"):
+        summary["error"] = redact_secret_text(str(source.get("error")))
+    return json.loads(redact_secret_text(json.dumps(summary, ensure_ascii=False)))
 
 
-def llm_invocation_public_summary(evidence: dict[str, Any] | None) -> dict[str, Any]:
-    public_payload = public_artifact_payload({"llm_invocation_evidence": evidence or {}})
-    summary = public_payload.get("llm_invocation_summary") if isinstance(public_payload, dict) else None
-    return summary if isinstance(summary, dict) else {"invoked": False}
+def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
+
+    if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
+        gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "module": payload.get("module"),
+            "changed_files": payload.get("changed_files") or [],
+            "test_plan_advice": payload.get("test_plan_advice") or [],
+            "validation_select": payload.get("validation_select") or {},
+            "workspace_gate": payload.get("workspace_gate") or {},
+            "llm_advice": payload.get("llm_advice"),
+            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "deterministic_gate": gate,
+        }
+    if payload.get("schema_version") == NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "changed_files": payload.get("changed_files") or [],
+            "recent_failures": payload.get("recent_failures") or {},
+            "codegraph": payload.get("codegraph") or {},
+            "resource_budget_seconds": payload.get("resource_budget_seconds"),
+            "queue": payload.get("queue") or [],
+            "test_plan_advice_gate": payload.get("test_plan_advice_gate") or {},
+            "workspace_gate": payload.get("workspace_gate") or {},
+            "llm_advice": payload.get("llm_advice"),
+            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "deterministic_gate": payload.get("deterministic_gate") or {},
+        }
+    if payload.get("schema_version") == PROMPT_EVALUATION_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "prompt_pack_versions": payload.get("prompt_pack_versions") or {},
+            "cases_path": payload.get("cases_path"),
+            "changed_files": payload.get("changed_files") or [],
+            "metrics": payload.get("metrics") or {},
+            "policy_gate": payload.get("policy_gate") or {},
+            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+            "rows": payload.get("rows") or [],
+        }
+    if payload.get("schema_version") == GUARDED_ROLLOUT_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "mode": payload.get("mode"),
+            "opt_in": payload.get("opt_in"),
+            "module": payload.get("module"),
+            "module_allowlist": payload.get("module_allowlist") or [],
+            "module_allowlisted": payload.get("module_allowlisted"),
+            "deterministic_issue_allowed": payload.get("deterministic_issue_allowed"),
+            "llm_workflow_gate": payload.get("llm_workflow_gate"),
+            "issue_sections_present": payload.get("issue_sections_present") or [],
+            "missing_required_issue_sections": payload.get("missing_required_issue_sections") or [],
+            "false_positive_auto_file_rate": payload.get("false_positive_auto_file_rate"),
+            "false_positive_threshold": payload.get("false_positive_threshold"),
+            "auto_file_allowed": payload.get("auto_file_allowed"),
+            "llm_can_enhance_issue": payload.get("llm_can_enhance_issue"),
+            "llm_enhancement_allowed": payload.get("llm_enhancement_allowed"),
+            "deterministic_issue_creation_unaffected": payload.get("deterministic_issue_creation_unaffected"),
+            "workflow_gate": payload.get("workflow_gate"),
+            "rejection_reasons": payload.get("rejection_reasons") or [],
+            "fallback": payload.get("fallback"),
+            "production_gates": payload.get("production_gates") or {},
+            "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+        }
+    return {
+        "schema_version": payload.get("schema_version"),
+        "provider": payload.get("provider"),
+        "model": payload.get("model"),
+        "llm_invocation_summary": llm_invocation_public_summary(payload.get("llm_invocation_evidence")),
+    }
 
 
 def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> None:
@@ -1574,8 +1623,9 @@ def _write_public_json_artifact(path: str | None, payload: dict[str, Any]) -> No
         return
     artifact_path = Path(path)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact = public_advisory_artifact(payload)
     artifact_path.write_text(
-        json.dumps(public_artifact_payload(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
