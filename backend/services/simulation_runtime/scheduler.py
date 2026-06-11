@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -54,6 +55,7 @@ from .models import (
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
+from .service import StrategyRuntimeReleaseService
 from .performance import StrategyPerformanceProjectionService
 from .tail import TailHandlingPolicyService
 
@@ -80,6 +82,8 @@ _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES = frozenset(
         "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
     }
 )
+
+_LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
 
 
 @dataclass(frozen=True)
@@ -1419,6 +1423,15 @@ class SimulationLifecycleScheduler:
             active_on=trade_date,
             limit=limit,
         )
+        bindings = self._with_localsim_roll_forward_bindings(
+            bindings=bindings,
+            trade_date=trade_date,
+            limit=limit,
+            broker_backend=broker_backend,
+            strategy_id=strategy_id,
+            release_id=release_id,
+            approval_states=approval_states,
+        )
         results: list[SimulationSchedulerBindingResult] = []
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] = {}
         shared_selection_keys = self._shared_selection_cache_keys(
@@ -1470,6 +1483,226 @@ class SimulationLifecycleScheduler:
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
+
+    def _with_localsim_roll_forward_bindings(
+        self,
+        *,
+        bindings: list[SimulationReleaseBinding],
+        trade_date: date,
+        limit: int,
+        broker_backend: SimulationBrokerBackend | str | None,
+        strategy_id: str | None,
+        release_id: str | None,
+        approval_states: tuple[SimulationBindingApprovalState, ...] | None,
+    ) -> list[SimulationReleaseBinding]:
+        if release_id is not None:
+            return bindings
+        if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.LOCAL_SIM:
+            return bindings
+
+        remaining_slots = limit - len(bindings)
+        if remaining_slots <= 0:
+            return bindings
+        existing_keys = {(item.strategy_id, item.broker_backend) for item in bindings}
+        source_candidates = self.repository.list_latest_simulation_release_bindings(
+            strategy_id=strategy_id,
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            approval_states=approval_states,
+            effective_from_on_or_before=trade_date,
+            limit=limit + remaining_slots,
+        )
+        roll_forwarded: list[SimulationReleaseBinding] = []
+        for source in source_candidates:
+            if (source.strategy_id, source.broker_backend) in existing_keys:
+                continue
+            if not self._localsim_binding_can_roll_forward(source=source, trade_date=trade_date):
+                continue
+            roll_forwarded.append(self._roll_forward_localsim_binding(source=source, trade_date=trade_date))
+            existing_keys.add((source.strategy_id, source.broker_backend))
+            if len(roll_forwarded) >= remaining_slots:
+                break
+
+        if not roll_forwarded:
+            return bindings
+        combined = [*bindings, *roll_forwarded]
+        combined.sort(key=lambda item: (item.created_at, item.binding_id), reverse=True)
+        return combined[:limit]
+
+    @staticmethod
+    def _normalized_backend(value: SimulationBrokerBackend | str) -> SimulationBrokerBackend:
+        return value if isinstance(value, SimulationBrokerBackend) else SimulationBrokerBackend(str(value))
+
+    @staticmethod
+    def _localsim_binding_can_roll_forward(*, source: SimulationReleaseBinding, trade_date: date) -> bool:
+        if source.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return False
+        if source.effective_from is not None and source.effective_from > trade_date:
+            return False
+        if source.effective_to is None or source.effective_to >= trade_date:
+            return False
+        config = source.binding_config_json or {}
+        metadata = config.get("metadata") if isinstance(config, dict) else None
+        if isinstance(metadata, dict) and metadata.get("disable_unattended_roll_forward") is True:
+            return False
+        return True
+
+    def _roll_forward_localsim_binding(
+        self,
+        *,
+        source: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> SimulationReleaseBinding:
+        source_release = self.repository.get_strategy_runtime_release(source.release_id)
+        release_service = StrategyRuntimeReleaseService(repository=self.repository)
+        release_metadata = self._roll_forward_release_metadata(
+            source_release=source_release,
+            source_binding=source,
+            trade_date=trade_date,
+        )
+        validation_evidence = self._roll_forward_validation_evidence(
+            source_release=source_release,
+            source_binding=source,
+            trade_date=trade_date,
+        )
+        new_release = release_service.create_release(
+            package_id=source_release.package_id,
+            manifest_sha256=source_release.manifest_sha256,
+            runtime_profile_id=source_release.runtime_profile_id,
+            runtime_profile_version_id=source_release.runtime_profile_version_id,
+            runtime_profile_sha256=source_release.runtime_profile_sha256,
+            daily_strategy_profile_version_id=source_release.daily_strategy_profile_version_id,
+            execution_policy_version_id=source_release.execution_policy_version_id,
+            execution_policy_sha256=source_release.execution_policy_sha256,
+            tail_policy_version_id=source_release.tail_policy_version_id,
+            tail_policy_sha256=source_release.tail_policy_sha256,
+            execution_policy_json=self._release_execution_policy_json(source_release),
+            base_release_id=source_release.release_id,
+            validation_state=source_release.validation_state,
+            validation_evidence=validation_evidence,
+            release_metadata=release_metadata,
+            effective_from=trade_date,
+            effective_to=trade_date,
+            created_by=_LOCALSIM_ROLL_FORWARD_CREATED_BY,
+            created_reason=(
+                "Auto roll-forward LocalSim runtime release for unattended daily simulation "
+                f"on {trade_date.isoformat()}."
+            ),
+        )
+        binding_metadata = self._roll_forward_binding_metadata(
+            source_release=source_release,
+            source_binding=source,
+            new_release=new_release,
+            trade_date=trade_date,
+        )
+        return release_service.create_binding(
+            strategy_id=source.strategy_id,
+            release=new_release,
+            broker_backend=source.broker_backend,
+            capital_allocation=float(source.capital_allocation),
+            broker_account_id=source.broker_account_id,
+            account_group_id=source.account_group_id,
+            strategy_slot_id=source.strategy_slot_id,
+            strategy_name=self._localsim_strategy_name_for_trade_date(source.strategy_name, trade_date),
+            order_remark_prefix=source.order_remark_prefix,
+            approval_state=source.approval_state,
+            binding_metadata=binding_metadata,
+            effective_from=trade_date,
+            effective_to=trade_date,
+            created_by=_LOCALSIM_ROLL_FORWARD_CREATED_BY,
+            created_reason=(
+                "Auto roll-forward LocalSim binding for unattended daily simulation "
+                f"on {trade_date.isoformat()}."
+            ),
+        )
+
+    @staticmethod
+    def _release_execution_policy_json(release: StrategyRuntimeRelease) -> dict[str, Any] | None:
+        config = release.release_config_json or {}
+        execution_policy = config.get("execution_policy") if isinstance(config, dict) else None
+        policy_json = execution_policy.get("policy_json") if isinstance(execution_policy, dict) else None
+        return deepcopy(policy_json) if isinstance(policy_json, dict) and policy_json else None
+
+    @staticmethod
+    def _roll_forward_release_metadata(
+        *,
+        source_release: StrategyRuntimeRelease,
+        source_binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> dict[str, Any]:
+        config = source_release.release_config_json or {}
+        metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        metadata.update(
+            {
+                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
+                "purpose": "localsim_unattended_daily_roll_forward",
+                "target_trade_date": trade_date.isoformat(),
+                "extends_release_id": source_release.release_id,
+                "extends_binding_id": source_binding.binding_id,
+                "roll_forward_policy": {
+                    "schema_version": "localsim_roll_forward_policy_v1",
+                    "immutable_daily_release": True,
+                    "no_manual_db_write_required": True,
+                },
+            }
+        )
+        return metadata
+
+    @staticmethod
+    def _roll_forward_validation_evidence(
+        *,
+        source_release: StrategyRuntimeRelease,
+        source_binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> dict[str, Any]:
+        evidence = deepcopy(source_release.validation_evidence or {})
+        evidence.update(
+            {
+                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
+                "purpose": "localsim unattended daily roll-forward",
+                "target_trade_date": trade_date.isoformat(),
+                "extends_release_id": source_release.release_id,
+                "extends_binding_id": source_binding.binding_id,
+            }
+        )
+        return evidence
+
+    @staticmethod
+    def _roll_forward_binding_metadata(
+        *,
+        source_release: StrategyRuntimeRelease,
+        source_binding: SimulationReleaseBinding,
+        new_release: StrategyRuntimeRelease,
+        trade_date: date,
+    ) -> dict[str, Any]:
+        config = source_binding.binding_config_json or {}
+        metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        metadata.update(
+            {
+                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
+                "purpose": "localsim_unattended_daily_roll_forward",
+                "target_trade_date": trade_date.isoformat(),
+                "extends_release_id": source_release.release_id,
+                "extends_binding_id": source_binding.binding_id,
+                "new_release_id": new_release.release_id,
+                "roll_forward_policy": {
+                    "schema_version": "localsim_roll_forward_policy_v1",
+                    "immutable_daily_binding": True,
+                    "new_strategy_package_supported": True,
+                },
+            }
+        )
+        return metadata
+
+    @staticmethod
+    def _localsim_strategy_name_for_trade_date(strategy_name: str | None, trade_date: date) -> str | None:
+        if not strategy_name:
+            return strategy_name
+        import re
+
+        target = trade_date.isoformat()
+        if re.search(r"\d{4}-\d{2}-\d{2}", strategy_name):
+            return re.sub(r"\d{4}-\d{2}-\d{2}", target, strategy_name)
+        return strategy_name
 
     def _run_binding(
         self,

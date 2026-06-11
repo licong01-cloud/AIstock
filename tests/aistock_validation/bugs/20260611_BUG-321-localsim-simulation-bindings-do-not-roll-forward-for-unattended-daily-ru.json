@@ -1,0 +1,76 @@
+{
+  "actual": "2026-06-12 LocalSim bindings exist only because they were manually prepared, but 2026-06-15 has zero active local_sim bindings; without another manual DB write the scheduler will not launch LocalSim unattended.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/service.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260611_BUG-321-localsim-simulation-bindings-do-not-roll-forward-for-unattended-daily-ru.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-321",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-11T09:44:27.799135Z",
+  "description": "2026-06-12 LocalSim bindings exist only because they were manually prepared, but 2026-06-15 has zero active local_sim bindings; without another manual DB write the scheduler will not launch LocalSim unattended.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260611-f6119d7bf567",
+      "timestamp": "2026-06-11T09:44:27.799130Z"
+    }
+  ],
+  "evidence_uris": [
+    "Current runtime validation on 2026-06-11: local_sim active bindings exist for 2026-06-12 but none for 2026-06-15; 2026-06-10/11 LocalSim runs succeeded, so failure is daily unattended rollover not execution."
+  ],
+  "expected": "LocalSim bindings for approved simulation strategies should support unattended daily operation across trading days. Existing and newly created LocalSim strategy packages should continue to generate one daily run/plan per trading day without manual per-day binding creation, while preserving immutable run/release/evidence audit semantics.",
+  "first_seen_at": "2026-06-11T09:44:27.799135Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 961,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/961",
+  "last_seen_at": "2026-06-11T09:44:27.799135Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "DB/API check: query paper_v2.simulation_release_binding active_on 2026-06-15 for broker_backend='local_sim' returns zero rows; /api/v1/simulation-runtime/runs?trade_date=2026-06-12 currently has zero until scheduler window.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "LocalSim simulation bindings do not roll forward for unattended daily runs",
+  "trigger_condition": {
+    "fingerprint": "f6119d7bf5677132e3798a23",
+    "source_event_id": "FE-20260611-f6119d7bf567"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
