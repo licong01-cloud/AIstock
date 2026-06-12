@@ -5,7 +5,8 @@
     "tests/aistock_validation/bugs/20260612_BUG-342-qe-custom-evo-retry-bypasses-loop-node-parallelism-limits.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "backend/tests/unified_engine/test_qe_config_truth.py",
-    "tests/aistock_validation/history/qe/20260612_182617_l3_qe-read-only-workspace-access-regression.md"
+    "tests/aistock_validation/history/qe/20260612_182617_l3_qe-read-only-workspace-access-regression.md",
+    "tests/aistock_validation/history/qe/20260612_184807_l3_qe-read-only-workspace-access-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-342",
