@@ -1,0 +1,76 @@
+{
+  "actual": "GET /api/v1/simulation-runtime/runs/simrun_3e17943064d83c6e reports status=FAILED_RETRYABLE, submitted_intents=8, failed_intents=0, broker_called=true, qmt_batch_status=SUCCEEDED, reconciliation_status=WARNING, reconciliation_issue_count=43, all POSITION_MISMATCH from merged MiniQMT positions across unrelated strategy slots.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "tests/aistock_validation/bugs/20260612_BUG-334-bug-334-p0-miniqmt-submitted-simulation-run-is-marked-failed-retryable-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-334",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T03:38:09.175084Z",
+  "description": "GET /api/v1/simulation-runtime/runs/simrun_3e17943064d83c6e reports status=FAILED_RETRYABLE, submitted_intents=8, failed_intents=0, broker_called=true, qmt_batch_status=SUCCEEDED, reconciliation_status=WARNING, reconciliation_issue_count=43, all POSITION_MISMATCH from merged MiniQMT positions across unrelated strategy slots.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-6883f8f6d225",
+      "timestamp": "2026-06-12T03:38:09.175080Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-12 11:36 Asia/Shanghai read-only API check: simrun_3e17943064d83c6e qmt_batch_status=SUCCEEDED broker_called=true reconciliation_issue_count=43 POSITION_MISMATCH; no agent-triggered submit."
+  ],
+  "expected": "MiniQMT reconciliation after submit must be scoped to the current account_group_id/strategy_slot_id or otherwise ignore stale unrelated strategy lots; a run with successful broker submit must not be failed by cross-slot ledger mismatches outside the current binding. Any true current-slot mismatch should remain visible and actionable.",
+  "first_seen_at": "2026-06-12T03:38:09.175084Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1001,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1001",
+  "last_seen_at": "2026-06-12T03:38:09.175084Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_3e17943064d83c6e after 2026-06-12 backend restart",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "BUG-334 P0: MiniQMT submitted simulation run is marked FAILED_RETRYABLE by cross-slot reconciliation mismatches",
+  "trigger_condition": {
+    "fingerprint": "6883f8f6d22526d572644d0d",
+    "source_event_id": "FE-20260612-6883f8f6d225"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1408,6 +1408,23 @@ def _broker_position_totals(positions: list[dict[str, Any]] | tuple[dict[str, An
     return dict(sorted(totals.items()))
 
 
+def _miniqmt_reconciliation_diagnostic_adjustment_symbols(diagnostics: Any) -> set[str]:
+    if not isinstance(diagnostics, dict):
+        return set()
+    symbols: set[str] = set()
+    for key in ("dropped_positions", "capped_positions"):
+        rows = diagnostics.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or "").strip()
+            if symbol:
+                symbols.add(symbol)
+    return symbols
+
+
 def _safe_non_negative_int(value: Any) -> int:
     try:
         return max(int(value or 0), 0)
@@ -3071,9 +3088,23 @@ class SimulationLifecycleScheduler:
             sync_summary=sync_after_submit[1] if sync_after_submit is not None else None,
         )
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
-        report_status = str(payload.get("run", {}).get("status") or "").upper()
+        strategy_scope = self._miniqmt_reconciliation_strategy_scope(
+            report=report,
+            payload=payload,
+            binding=binding,
+        )
+        run_status_gate = self._miniqmt_reconciliation_run_status_gate(
+            payload=payload,
+            strategy_scope=strategy_scope,
+            context=context,
+        )
+        payload = {
+            **payload,
+            "strategy_scope": strategy_scope,
+            "run_status_gate": run_status_gate,
+        }
         batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
-        if report_status == "SUCCEEDED" and batch_succeeded:
+        if run_status_gate["status"] == "SUCCEEDED" and batch_succeeded:
             next_status = SimulationDailyRunStatus.SUCCEEDED
         else:
             next_status = SimulationDailyRunStatus.FAILED_RETRYABLE
@@ -3098,6 +3129,73 @@ class SimulationLifecycleScheduler:
             payload_unset=("submit_failure",) if next_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return payload
+
+    @staticmethod
+    def _miniqmt_reconciliation_strategy_scope(
+        *,
+        report: Any,
+        payload: dict[str, Any],
+        binding: SimulationReleaseBinding,
+    ) -> dict[str, Any]:
+        strategy_scope = getattr(report, "strategy_scope", None)
+        if callable(strategy_scope):
+            return strategy_scope(strategy_id=binding.strategy_id, strategy_name=binding.strategy_name)
+        quantities = payload.get("strategy_lot_quantities") if isinstance(payload.get("strategy_lot_quantities"), dict) else {}
+        strategy_name = str(binding.strategy_name or "").strip()
+        matched = bool(strategy_name and strategy_name in quantities)
+        scoped_quantities = quantities.get(strategy_name, {}) if matched else {}
+        return {
+            "schema_version": "miniqmt_reconciliation_strategy_scope_v1",
+            "strategy_id": binding.strategy_id,
+            "strategy_name": binding.strategy_name,
+            "matched": matched,
+            "status": str(payload.get("run", {}).get("status") or "WARNING") if matched else "WARNING",
+            "issue_count": int(payload.get("run", {}).get("summary_json", {}).get("issue_count") or 0),
+            "issue_types": [],
+            "issue_symbols": sorted(scoped_quantities) if isinstance(scoped_quantities, dict) else [],
+            "account_level_issue_count": 0,
+            "position_count": len(scoped_quantities) if isinstance(scoped_quantities, dict) else 0,
+            "symbols": sorted(scoped_quantities) if isinstance(scoped_quantities, dict) else [],
+            "strategy_lot_quantities": scoped_quantities if isinstance(scoped_quantities, dict) else {},
+        }
+
+    @staticmethod
+    def _miniqmt_reconciliation_run_status_gate(
+        *,
+        payload: dict[str, Any],
+        strategy_scope: dict[str, Any],
+        context: SimulationRunContext,
+    ) -> dict[str, Any]:
+        current_issue_count = int(strategy_scope.get("issue_count") or 0)
+        diagnostics = context.context_diagnostics.get("miniqmt_broker_position_reconciliation")
+        diagnostic_adjustment = _miniqmt_reconciliation_diagnostic_adjustment_symbols(diagnostics)
+        issue_symbols = {
+            str(symbol)
+            for symbol in strategy_scope.get("issue_symbols", [])
+            if str(symbol).strip()
+        }
+        matched = bool(strategy_scope.get("matched"))
+        if not matched:
+            status = "WARNING"
+            reason = "strategy_scope_not_matched"
+        elif current_issue_count <= 0:
+            status = "SUCCEEDED"
+            reason = "strategy_scope_has_no_blocking_issues"
+        elif issue_symbols and issue_symbols <= diagnostic_adjustment:
+            status = "SUCCEEDED"
+            reason = "strategy_scope_issues_already_reconciled_by_context_provider"
+        else:
+            status = "WARNING"
+            reason = "strategy_scope_has_blocking_issues"
+        return {
+            "schema_version": "miniqmt_reconciliation_run_status_gate_v1",
+            "status": status,
+            "reason": reason,
+            "strategy_scope_issue_count": current_issue_count,
+            "account_level_issue_count": int(strategy_scope.get("account_level_issue_count") or 0),
+            "context_reconciled_symbol_count": len(diagnostic_adjustment),
+            "strategy_scope_matched": matched,
+        }
 
     def _validate_fresh_selection_evidence(
         self,
@@ -3362,9 +3460,15 @@ class SimulationLifecycleScheduler:
             return "TAIL_HANDLED" if tail_result.get("success") else "TAIL_HANDLING_FAILED"
         if reconciliation is not None:
             run = reconciliation.get("run") if isinstance(reconciliation.get("run"), dict) else {}
+            run_status_gate = (
+                reconciliation.get("run_status_gate")
+                if isinstance(reconciliation.get("run_status_gate"), dict)
+                else {}
+            )
+            status = run_status_gate.get("status") or run.get("status")
             if execution_status not in {"SUBMITTED", "RECOVERED"}:
-                return "BROKER_SUBMIT_FAILED_RECONCILED" if run.get("status") == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
-            return "RECONCILED" if run.get("status") == "SUCCEEDED" else "RECONCILIATION_WARNING"
+                return "BROKER_SUBMIT_FAILED_RECONCILED" if status == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
+            return "RECONCILED" if status == "SUCCEEDED" else "RECONCILIATION_WARNING"
         return execution_status
 
     @staticmethod

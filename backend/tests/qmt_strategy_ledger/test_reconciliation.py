@@ -4,7 +4,10 @@ from datetime import date
 from decimal import Decimal
 
 from backend.services.qmt_strategy_ledger.models import (
+    MiniQmtAccountGroup,
+    MiniQmtStrategySlot,
     PositionLotRecord,
+    UnattributedOrderRecord,
     UnattributedTradeRecord,
     VirtualAccount,
     VirtualAccountStatus,
@@ -112,3 +115,191 @@ def test_reconciliation_reports_position_mismatch_and_unattributed_trade() -> No
     mismatch = report.issues[0]
     assert mismatch.context == {"strategy_quantity": 14200, "broker_quantity": 13200}
     assert report.unattributed_trades == 1
+
+
+def test_reconciliation_strategy_scope_keeps_cross_slot_mismatch_account_level() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_account_group_slots(
+        MiniQmtAccountGroup(
+            account_group_id="ag_test",
+            broker_account_id=ACCOUNT_ID,
+            slots=(
+                MiniQmtStrategySlot(
+                    account_group_id="ag_test",
+                    strategy_slot_id="slot_current",
+                    strategy_id="strat_current",
+                    strategy_name="StrategyCurrent",
+                    display_name="Strategy Current",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("100000"),
+                    order_remark_prefix="cur",
+                ),
+                MiniQmtStrategySlot(
+                    account_group_id="ag_test",
+                    strategy_slot_id="slot_stale",
+                    strategy_id="strat_stale",
+                    strategy_name="StrategyStale",
+                    display_name="Strategy Stale",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("100000"),
+                    order_remark_prefix="stale",
+                ),
+            ),
+        )
+    )
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_current_ok",
+            strategy_id="strat_current",
+            symbol="000001.SZ",
+            open_trade_id="trade_current_ok",
+            open_date=TRADE_DATE,
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("1000.00"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_stale_missing",
+            strategy_id="strat_stale",
+            symbol="000002.SZ",
+            open_trade_id="trade_stale_missing",
+            open_date=TRADE_DATE,
+            quantity=200,
+            available_quantity=200,
+            remaining_quantity=200,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("2000.00"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+
+    report = QmtStrategyLedgerReconciliationService(repository=repo).reconcile_snapshot(
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        broker_positions=[{"stock_code": "000001.SZ", "quantity": 100}],
+    )
+    scope = report.strategy_scope(strategy_id="strat_current", strategy_name="StrategyCurrent")
+
+    assert report.run.status == "WARNING"
+    assert report.run.summary_json["issue_count"] == 1
+    assert scope["matched"] is True
+    assert scope["status"] == "SUCCEEDED"
+    assert scope["issue_count"] == 0
+    assert scope["account_level_issue_count"] == 1
+    assert scope["order_remark_prefix"] == "cur"
+
+    missing_scope = report.strategy_scope(strategy_id="strat_missing", strategy_name="StrategyMissing")
+    assert missing_scope["matched"] is False
+    assert missing_scope["status"] == "WARNING"
+
+
+def test_reconciliation_strategy_scope_keeps_unknown_unattributed_order_account_level() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_account_group_slots(
+        MiniQmtAccountGroup(
+            account_group_id="ag_unattributed",
+            broker_account_id=ACCOUNT_ID,
+            slots=(
+                MiniQmtStrategySlot(
+                    account_group_id="ag_unattributed",
+                    strategy_slot_id="slot_current",
+                    strategy_id="strat_current",
+                    strategy_name="StrategyCurrent",
+                    display_name="Strategy Current",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("100000"),
+                    order_remark_prefix="cur",
+                ),
+            ),
+        )
+    )
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_current_ok",
+            strategy_id="strat_current",
+            symbol="000001.SZ",
+            open_trade_id="trade_current_ok",
+            open_date=TRADE_DATE,
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("1000.00"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+    repo.upsert_unattributed_order(
+        UnattributedOrderRecord(
+            unattributed_id="uo_manual",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            qmt_order_id="manual_order",
+            symbol="000999.SZ",
+            reason="UNKNOWN_ORDER_INTENT",
+            order_remark="manual_order",
+        )
+    )
+
+    report = QmtStrategyLedgerReconciliationService(repository=repo).reconcile_snapshot(
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        broker_positions=[{"stock_code": "000001.SZ", "quantity": 100}],
+    )
+    scope = report.strategy_scope(strategy_id="strat_current", strategy_name="StrategyCurrent")
+
+    assert report.run.status == "WARNING"
+    assert scope["matched"] is True
+    assert scope["status"] == "SUCCEEDED"
+    assert scope["issue_count"] == 0
+    assert scope["account_level_issue_count"] == 1
+    assert scope["account_level_issue_types"] == ["UNATTRIBUTED_ORDER"]
+
+
+def test_reconciliation_strategy_scope_blocks_prefixed_unattributed_order() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_account_group_slots(
+        MiniQmtAccountGroup(
+            account_group_id="ag_unattributed",
+            broker_account_id=ACCOUNT_ID,
+            slots=(
+                MiniQmtStrategySlot(
+                    account_group_id="ag_unattributed",
+                    strategy_slot_id="slot_current",
+                    strategy_id="strat_current",
+                    strategy_name="StrategyCurrent",
+                    display_name="Strategy Current",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("100000"),
+                    order_remark_prefix="cur",
+                ),
+            ),
+        )
+    )
+    repo.upsert_unattributed_order(
+        UnattributedOrderRecord(
+            unattributed_id="uo_current",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            qmt_order_id="current_order",
+            symbol="000999.SZ",
+            reason="UNKNOWN_ORDER_INTENT",
+            order_remark="cur-20260612-001",
+        )
+    )
+
+    report = QmtStrategyLedgerReconciliationService(repository=repo).reconcile_snapshot(
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        broker_positions=[],
+    )
+    scope = report.strategy_scope(strategy_id="strat_current", strategy_name="StrategyCurrent")
+
+    assert scope["matched"] is True
+    assert scope["status"] == "WARNING"
+    assert scope["issue_count"] == 1
+    assert scope["issue_types"] == ["UNATTRIBUTED_ORDER"]
