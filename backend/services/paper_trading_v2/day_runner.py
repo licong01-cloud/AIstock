@@ -98,18 +98,32 @@ def _in_memory_package_repository_from_portfolios(repository: Any | None) -> Any
 
 
 def miniqmt_account_slot_context(repository: Any, portfolio: Any) -> dict[str, str]:
-    if hasattr(repository, "list_active_broker_account_bindings"):
-        bindings = repository.list_active_broker_account_bindings(portfolio.portfolio_id)
-    else:  # pragma: no cover - legacy dry-run repository shims do not model bindings.
-        bindings = []
+    if not hasattr(repository, "list_active_broker_account_bindings"):
+        raise ExecutionPathNotCanonicalError(
+            "Paper v2 MiniQMT execution requires an account_group_slots broker binding",
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "required_allocation_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+                "missing_repository_method": "list_active_broker_account_bindings",
+                "required_runtime_owner": "MiniQMTExecutionRuntime",
+            },
+        )
+    bindings = repository.list_active_broker_account_bindings(portfolio.portfolio_id)
     binding = next(
         (item for item in bindings if item.allocation_mode == MINIQMT_ACCOUNT_GROUP_BINDING_MODE),
         None,
     )
     if binding is None:
-        return {
-            "strategy_slot_id": str(portfolio.portfolio_id),
-        }
+        raise ExecutionPathNotCanonicalError(
+            "Paper v2 MiniQMT execution requires an active account_group_slots broker binding",
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "active_binding_count": len(bindings),
+                "active_allocation_modes": sorted({str(item.allocation_mode) for item in bindings}),
+                "required_allocation_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+                "required_runtime_owner": "MiniQMTExecutionRuntime",
+            },
+        )
     account_id = str(binding.broker_account_id or ((portfolio.auto_run_config or {}).get("broker") or {}).get("account_id") or "")
     account_group_id = binding.account_group_id or miniqmt_account_group_id(account_id)
     strategy_slot_id = binding.strategy_slot_id or miniqmt_strategy_slot_id(portfolio.portfolio_id)

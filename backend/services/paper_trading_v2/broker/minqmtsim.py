@@ -103,10 +103,9 @@ class _OrderAttribution:
 class MiniQMTSimBackend(BrokerBackend):
     """BrokerBackend implementation for one MiniQMT simulation account.
 
-    Legacy ``exclusive_account`` keeps one strategy package per backend. The
-    unified account-group modes submit broker orders only after the intent
-    carries explicit slot attribution, so MiniQMT remains the broker authority
-    while AIstock can reconcile strategy-level virtual lots.
+    Product MiniQMT Paper v2 execution uses account-group strategy slots. The
+    legacy ``exclusive_account`` mode remains available only for read-only
+    diagnostics and must not be used as a product execution fallback.
     """
 
     backend_id: BackendId = _BACKEND_ID
@@ -627,7 +626,8 @@ class MiniQMTSimBackend(BrokerBackend):
             backend_id=self.backend_id,
             max_concurrent_packages=1,
             rejection_reason_if_exceeded=(
-                "MiniQMTSim exclusive_account binds one strategy package to one MiniQMT account"
+                "MiniQMTSim exclusive_account is legacy diagnostics-only; Paper v2 product execution "
+                "requires account_group_slots and MiniQMTExecutionRuntime"
             ),
         )
 
@@ -649,6 +649,7 @@ class MiniQMTSimBackend(BrokerBackend):
             self.ensure_connected()
         if not self._is_legacy_account_mode:
             return self._account_group_attribution(intent)
+        _reject_legacy_product_order_intent(intent, portfolio_id=self._portfolio_id, package_id=self._package_id)
         if intent.portfolio_id != self._portfolio_id:
             raise BrokerSubmitError(
                 "OrderIntent.portfolio_id does not match MiniQMTSim binding",
@@ -988,6 +989,26 @@ def _enforce_runtime_owned_account_group_intent(intent: OrderIntent) -> None:
                 "runtime_algo_instance_id",
                 "runtime_child_order_id",
             ],
+        },
+    )
+
+
+def _reject_legacy_product_order_intent(intent: OrderIntent, *, portfolio_id: str, package_id: str) -> None:
+    metadata = intent.metadata or {}
+    if metadata.get("legacy_minqmt_diagnostic_order") is True:
+        return
+    raise BrokerSubmitError(
+        "MiniQMTSim exclusive_account order submission is not a canonical Paper v2 MiniQMT product path",
+        context={
+            "intent_id": intent.intent_id,
+            "intent_portfolio_id": intent.portfolio_id,
+            "backend_portfolio_id": portfolio_id,
+            "intent_package_id": intent.package_id,
+            "backend_package_id": package_id,
+            "account_mode": _EXCLUSIVE_ACCOUNT,
+            "required_account_mode": _ACCOUNT_GROUP_SLOTS,
+            "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
+            "error_code": "EXECUTION_PATH_NOT_CANONICAL",
         },
     )
 
