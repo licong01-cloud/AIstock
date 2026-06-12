@@ -45,9 +45,9 @@ def _verify_trade_password(password: str | None) -> None:
 RAW_ORDER_DIAGNOSTIC_ENV = "AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS"
 RAW_ORDER_DIAGNOSTIC_WARNING = (
     "raw MiniQMT order APIs are administrator/POC diagnostics only; normal "
-    "multi-strategy execution must use /api/v1/qmt/virtual-strategies/orders "
-    "so AIstock can create order_intent, cash, lot, and attribution records "
-    "before broker submission"
+    "multi-strategy execution must enter MiniQMTExecutionRuntime; operator "
+    "cancel/flatten/reset actions must use /api/v1/simulation-runtime/miniqmt/operator-commands "
+    "so AIstock can preserve runtime, OMS, slot-ledger, and attribution records"
 )
 
 
@@ -221,7 +221,8 @@ def get_trades() -> List[Dict[str, Any]]:
 def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Raw administrator/POC order endpoint.
 
-    Normal multi-strategy execution must use `/qmt/virtual-strategies/orders`.
+    Normal multi-strategy execution must enter MiniQMTExecutionRuntime; this
+    route is diagnostics-only and is disabled by default.
     This route is disabled by default and only opens when
     AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
     
@@ -362,6 +363,7 @@ def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         _verify_trade_password(payload.get("trade_password"))
+        _require_raw_order_diagnostics_enabled()
 
         order_id = payload.get("order_id")
         market = payload.get("market")
@@ -381,7 +383,10 @@ def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
             "success": success,
             "message": message,
             "diagnostic": diagnostic,
+            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
         }
+    except HTTPException:
+        raise
     except QMTNotAvailableError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -392,7 +397,8 @@ def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
 def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Raw administrator/POC batch order endpoint.
 
-    Normal multi-strategy execution must use `/qmt/virtual-strategies/orders/batch`.
+    Normal multi-strategy execution must enter MiniQMTExecutionRuntime; this
+    route is diagnostics-only and is disabled by default.
     This route is disabled by default and only opens when
     AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
     

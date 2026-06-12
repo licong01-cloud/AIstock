@@ -1,4 +1,4 @@
-﻿"""Runtime client facades for MiniQMT product entry points."""
+"""Runtime client facades for MiniQMT product entry points."""
 
 from __future__ import annotations
 
@@ -168,102 +168,6 @@ class MiniQMTExecutionRuntimeClient:
     def __init__(self, *, repository: MiniQMTExecutionRuntimeRepository | None = None) -> None:
         self.repository = repository or InMemoryMiniQMTExecutionRuntimeRepository()
 
-    def preview_managed_order_requests(
-        self,
-        *,
-        managed_order_service: QmtManagedOrderService,
-        requests: list[ManagedOrderRequest],
-        account_group_id: str,
-        trade_date: date,
-        runtime_config_hash: str,
-        runtime_id: str | None = None,
-        source: str = "simulation_runtime_preview",
-    ) -> MiniQMTPlanPreviewResult:
-        runtime = self._runtime(
-            account_group_id=account_group_id,
-            trade_date=trade_date,
-            runtime_config_hash=runtime_config_hash,
-            runtime_id=runtime_id,
-            gateway=_PreviewOnlyRuntimeGateway(),
-        )
-        runtime.start()
-        runtime.record_operator_command(
-            command_id=f"opcmd_preview_{_short_hash([runtime.config.runtime_id, len(requests)])}",
-            command_type="AUDIT_RUNTIME_STATE",
-            reason="miniqmt_runtime_preview_preflight",
-            payload={"request_count": len(requests), "source": source},
-        )
-        preflights = tuple(managed_order_service.preview_order(request) for request in requests)
-        return MiniQMTPlanPreviewResult(
-            requests=tuple(requests),
-            preflights=preflights,
-            runtime_evidence=self._evidence(runtime, source=source),
-        )
-
-    def submit_managed_order_requests(
-        self,
-        *,
-        managed_order_service: QmtManagedOrderService,
-        requests: list[ManagedOrderRequest],
-        account_group_id: str,
-        trade_date: date,
-        runtime_config_hash: str,
-        runtime_id: str | None = None,
-        source: str = "simulation_runtime_submit",
-        algo_code: str = "MINIQMT_MANAGED_ORDER",
-    ) -> MiniQMTRuntimeManagedBatchSubmitResult:
-        if not requests:
-            raise BrokerSubmitError("MiniQMTExecutionRuntime requires at least one managed order request")
-        runtime = self._runtime(
-            account_group_id=account_group_id,
-            trade_date=trade_date,
-            runtime_config_hash=runtime_config_hash,
-            runtime_id=runtime_id,
-            gateway=_PreviewOnlyRuntimeGateway(),
-        )
-        runtime.start()
-        algo_by_remark: dict[str, str] = {}
-        for request in requests:
-            parent_intent_id = str(request.metadata.get("execution_plan_intent_id") or request.order_remark)
-            instance = runtime.create_algo_instance(
-                parent_intent_id=parent_intent_id,
-                strategy_slot_id=str(request.metadata.get("strategy_slot_id") or request.strategy_name),
-                symbol=request.symbol,
-                side=OrderSide.BUY if request.side == "BUY" else OrderSide.SELL,
-                target_quantity=int(request.quantity),
-                algo_code=algo_code,
-                metadata={
-                    "source": source,
-                    "managed_order_request": _managed_request_signature(request),
-                    "execution_plan_id": request.metadata.get("execution_plan_id"),
-                    "execution_plan_intent_id": request.metadata.get("execution_plan_intent_id"),
-                },
-            )
-            algo_by_remark[request.order_remark] = instance.algo_instance_id
-
-        managed_result = managed_order_service.submit_batch(requests)
-        for request, item in zip(requests, managed_result.results, strict=True):
-            status = MiniQMTChildOrderStatus.SUBMITTED if item.success else MiniQMTChildOrderStatus.REJECTED
-            runtime.record_external_child_order(
-                algo_instance_id=algo_by_remark[request.order_remark],
-                quantity=int(request.quantity),
-                price=float(request.price),
-                price_type=int(request.price_type),
-                status=status,
-                broker_order_id=item.qmt_order_id,
-                metadata={
-                    "source": source,
-                    "managed_order_result": item.to_dict(),
-                    "managed_batch_id": managed_result.batch_id,
-                    "managed_batch_status": managed_result.batch_status,
-                    "order_remark": request.order_remark,
-                },
-            )
-        return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
-            managed_result,
-            runtime_evidence=self._evidence(runtime, source=source),
-        )
-
     def build_managed_vnpy_order_requests(
         self,
         *,
@@ -397,8 +301,9 @@ class MiniQMTExecutionRuntimeClient:
         )
         if not build.requests:
             raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py path generated no managed order requests")
-        managed_result = managed_order_service.submit_batch(list(build.requests))
-        for request, item in zip(build.requests, managed_result.results, strict=True):
+        requests = list(build.requests)
+        managed_result = managed_order_service.submit_batch(requests)
+        for request, item in zip(requests, managed_result.results, strict=True):
             child_order_id = build.child_order_id_by_order_remark.get(request.order_remark)
             if child_order_id:
                 self._sync_managed_child_result(
@@ -410,55 +315,6 @@ class MiniQMTExecutionRuntimeClient:
         return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
             managed_result,
             runtime_evidence=self.evidence_for_runtime(build.runtime_evidence.runtime_id, source=source),
-        )
-
-    def submit_paper_order_intents(
-        self,
-        *,
-        portfolio: Any,
-        run: Any,
-        trade_date: date,
-        intents: list[OrderIntent],
-        broker: BrokerBackend,
-        runtime_config_hash: str,
-        account_group_id: str,
-        strategy_slot_id: str,
-        source: str = "paper_v2_direct_miniqmt",
-    ) -> PaperMiniQMTRuntimeSubmitResult:
-        gateway = PaperV2MiniQMTRuntimeGateway(broker=broker)
-        runtime = self._runtime(
-            account_group_id=account_group_id,
-            trade_date=trade_date,
-            runtime_config_hash=runtime_config_hash,
-            runtime_id=_paper_runtime_id(run),
-            gateway=gateway,
-            metadata={"portfolio_id": portfolio.portfolio_id, "run_id": run.run_id, "source": source},
-        )
-        runtime.start()
-        child_results: list[PaperMiniQMTRuntimeChildResult] = []
-        for intent in intents:
-            instance = runtime.create_algo_instance(
-                parent_intent_id=intent.intent_id,
-                strategy_slot_id=strategy_slot_id,
-                symbol=intent.symbol,
-                side=intent.side,
-                target_quantity=int(intent.quantity),
-                algo_code="PAPER_V2_DIRECT_MINIQMT",
-                metadata={"source": source, "paper_parent_intent_id": intent.intent_id},
-            )
-            child = runtime.submit_child_order(
-                algo_instance_id=instance.algo_instance_id,
-                quantity=int(intent.quantity),
-                price=float(intent.limit_price or 0.0),
-                price_type=11 if intent.order_type == OrderType.LIMIT else 5,
-                metadata=_paper_child_metadata(intent=intent, trade_date=trade_date, source=source),
-            )
-            child_result = gateway.require_result(child.child_order_id)
-            updated_child = self._sync_paper_child_status(runtime, child, child_result)
-            child_results.append(replace(child_result, child_order=updated_child))
-        return PaperMiniQMTRuntimeSubmitResult(
-            runtime_evidence=self._evidence(runtime, source=source),
-            child_results=tuple(child_results),
         )
 
     def execute_paper_vnpy_intent(
@@ -521,9 +377,14 @@ class MiniQMTExecutionRuntimeClient:
         child_by_id = {result.child_order.child_order_id: result for result in child_results}
         for child in self.repository.list_child_orders(runtime.config.runtime_id, active_only=False):
             result = child_by_id.get(child.child_order_id)
-            if result is None or result.status is None:
+            if result is None:
                 continue
-            updated_child = self._sync_paper_child_status(runtime, child, result)
+            updated_child = self._sync_paper_child_status(
+                runtime,
+                child,
+                result,
+                preserve_gateway_rejection=result.submit_error is not None,
+            )
             child_by_id[child.child_order_id] = replace(result, child_order=updated_child)
         child_results = tuple(child_by_id[child_id] for child_id in child_by_id)
         children = [
@@ -658,14 +519,25 @@ class MiniQMTExecutionRuntimeClient:
         runtime: MiniQMTExecutionRuntime,
         child: MiniQMTChildOrder,
         result: PaperMiniQMTRuntimeChildResult,
+        *,
+        preserve_gateway_rejection: bool = False,
     ) -> MiniQMTChildOrder:
         status = _runtime_status_from_paper_result(result)
+        metadata = dict(child.metadata)
+        if preserve_gateway_rejection and result.submit_error:
+            metadata.update(
+                {
+                    "gateway_rejection_raw": result.submit_error,
+                    "gateway_message": _submit_error_message(result.submit_error),
+                }
+            )
         updated_child = child.model_copy(
             update={
                 "status": status,
                 "broker_order_id": result.native_context.get("miniqmt_order_id")
                 or result.native_context.get("qmt_order_id")
                 or child.broker_order_id,
+                "metadata": metadata,
             }
         )
         return self.repository.upsert_child_order(updated_child)
@@ -862,7 +734,7 @@ class _ManagedOrderRequestRuntimeGateway:
             raw={
                 "gateway": "managed_order_request_runtime_gateway",
                 "broker_called": False,
-                "managed_order_request": _managed_request_signature(request),
+                "order_remark": request.order_remark,
             },
         )
 
@@ -965,6 +837,16 @@ def _native_from_exception(exc: TradingCoreError, *, child_intent: OrderIntent) 
     if context.get("message") is not None:
         native["broker_submit_message"] = context.get("message")
     return native
+
+
+def _submit_error_message(error: dict[str, Any]) -> str:
+    context = error.get("context") if isinstance(error, dict) else None
+    if isinstance(context, dict):
+        for key in ("message", "reason"):
+            value = context.get(key)
+            if value:
+                return str(value)
+    return str(error.get("message") or "MiniQMT child order submit failed")
 
 
 def _rejected_status_from_exception(exc: TradingCoreError, *, child_order_id: str) -> OrderHandleStatus:
@@ -1190,24 +1072,6 @@ def _runtime_child_payload(result: PaperMiniQMTRuntimeChildResult) -> dict[str, 
         "submit_error": result.submit_error,
         "runtime_child_order_id": result.child_order.child_order_id,
         "runtime_algo_instance_id": result.child_order.algo_instance_id,
-    }
-
-
-def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
-    return {
-        "account_id": request.account_id,
-        "strategy_name": request.strategy_name,
-        "symbol": request.symbol,
-        "side": request.side,
-        "order_type": request.order_type,
-        "quantity": request.quantity,
-        "price_type": request.price_type,
-        "price": str(request.price),
-        "order_remark": request.order_remark,
-        "trade_date": request.trade_date.isoformat(),
-        "mode": request.mode,
-        "package_id": request.package_id,
-        "metadata": dict(request.metadata),
     }
 
 
