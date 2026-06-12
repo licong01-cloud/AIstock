@@ -4,7 +4,8 @@
     "backend/services/research_assistant",
     "frontend/src/lib/research-assistant/api.ts",
     "tests/aistock_validation/bugs/20260612_BUG-340-research-assistant-deepseek-chat-turn-500-due-missing-tool-call-id.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_react_tool_loop.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-340",
@@ -100,5 +101,13 @@
       "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "scope_expansion_notes": [
+    {
+      "reason": "BUG-340 regression test asserts internal ReAct tool observations and legacy tool messages are DeepSeek/LiteLLM compatible without provider-native tool_call_id.",
+      "added_scope": [
+        "backend/tests/research_assistant/test_react_tool_loop.py"
+      ]
+    }
+  ]
 }

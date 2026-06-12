@@ -897,6 +897,53 @@ class LlmCallResult:
     usage: dict[str, Any]
 
 
+def _litellm_message_content(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _litellm_compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize internal assistant context before sending it to chat providers.
+
+    Research Assistant's ReAct loop uses JSON observations, not provider-native
+    tool calls. DeepSeek rejects `role=tool` messages unless they are paired
+    with a native `tool_call_id`, so legacy/internal tool observations are
+    converted to ordinary context messages.
+    """
+    normalized: list[dict[str, Any]] = []
+    for raw in messages:
+        if not isinstance(raw, dict):
+            continue
+        message = dict(raw)
+        role = str(message.get("role") or "user")
+        if role == "tool" and not message.get("tool_call_id"):
+            normalized.append(
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "type": "INTERNAL_TOOL_OBSERVATION",
+                            "instruction": "Use this as audited context. It is not a provider-native tool response.",
+                            "content": _litellm_message_content(message.get("content")),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                }
+            )
+            continue
+        message["role"] = role
+        if message.get("content") is None:
+            message["content"] = ""
+        elif not isinstance(message.get("content"), (str, list)):
+            message["content"] = _litellm_message_content(message.get("content"))
+        normalized.append(message)
+    return normalized
+
+
 
 
 def _default_workflow_capabilities() -> list[dict[str, Any]]:
@@ -931,9 +978,10 @@ class ResearchAssistantLlmClient:
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("litellm is not installed; Research Assistant cannot call LLM") from exc
         start = perf_counter()
+        provider_messages = _litellm_compatible_messages(messages)
         response = litellm.completion(
             model=model_id,
-            messages=messages,
+            messages=provider_messages,
             temperature=temperature,
             max_tokens=max_tokens,
             **completion_kwargs,

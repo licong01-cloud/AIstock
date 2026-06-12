@@ -5,7 +5,8 @@ from typing import Any
 
 from backend.services.research_assistant.models import ChatTurnRequest
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService
+from backend.services.research_assistant.react_grounding import McpToolResult, tool_result_message
+from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService, _litellm_compatible_messages
 
 
 class DeterministicToolLoopLlm:
@@ -81,3 +82,37 @@ def test_chat_turn_reacts_tool_result_back_into_messages_before_final_answer() -
     assert result["cards"]["react_grounding"]["tool_result_count"] >= 1
     assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
+
+
+def test_react_tool_observations_are_not_provider_native_tool_messages() -> None:
+    message = tool_result_message(
+        McpToolResult(
+            server_key="aistock-factor-library",
+            tool_name="factor_library_list",
+            status="succeeded",
+            summary="factor list",
+            source_refs=["test://factor-library"],
+            as_of="2026-06-01",
+            stable_call_id="call_factor_list",
+        )
+    )
+
+    assert message["role"] == "user"
+    assert "TOOL_RESULT" in str(message["content"])
+    assert "tool_call_id" not in message
+
+
+def test_litellm_compatible_messages_wrap_legacy_tool_messages() -> None:
+    messages = _litellm_compatible_messages(
+        [
+            {"role": "system", "content": "system"},
+            {"role": "tool", "content": {"type": "TOOL_RESULT", "summary": "legacy observation"}},
+            {"role": "user", "content": "continue"},
+        ]
+    )
+
+    assert [item["role"] for item in messages] == ["system", "user", "user"]
+    wrapped = json.loads(str(messages[1]["content"]))
+    assert wrapped["type"] == "INTERNAL_TOOL_OBSERVATION"
+    assert "legacy observation" in wrapped["content"]
+    assert all(item["role"] != "tool" or item.get("tool_call_id") for item in messages)
