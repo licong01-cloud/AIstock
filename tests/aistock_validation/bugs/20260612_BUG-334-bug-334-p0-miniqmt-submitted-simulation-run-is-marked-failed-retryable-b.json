@@ -32,8 +32,8 @@
   "expected": "MiniQMT reconciliation after submit must be scoped to the current account_group_id/strategy_slot_id or otherwise ignore stale unrelated strategy lots; a run with successful broker submit must not be failed by cross-slot ledger mismatches outside the current binding. Any true current-slot mismatch should remain visible and actionable.",
   "first_seen_at": "2026-06-12T03:38:09.175084Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe3475810c800590a7b14817e7ce0edc5feb6902",
+  "fixed_at": "2026-06-12T04:37:25.475753Z",
   "github_issue_number": 1001,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1001",
   "last_seen_at": "2026-06-12T03:38:09.175084Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1002",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,12 @@
     "fingerprint": "6883f8f6d22526d572644d0d",
     "source_event_id": "FE-20260612-6883f8f6d225"
   },
+  "validation_evidence": [
+    "PR #1002 CI -> CLEAN/all required checks success",
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 49 passed",
+    "python -m nox -s paper_v2_backend -> 613 passed, 1 skipped, 2 xfailed",
+    "='1'; python -m nox -s paper_v2_l3 -> only pre-existing local DB traceability gate failed; l0/paper_v2_backend/data_quality_deep passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
