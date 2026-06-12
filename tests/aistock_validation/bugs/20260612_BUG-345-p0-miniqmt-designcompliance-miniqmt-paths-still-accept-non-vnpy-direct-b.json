@@ -1,0 +1,78 @@
+{
+  "actual": "Paper v2 _run_minqmt_sim_orders uses _miniqmt_uses_vnpy_style_execution() and falls back to submit_paper_order_intents() with algo_code=PAPER_V2_DIRECT_MINIQMT. simulation_runtime MiniQMTExecutionBridge falls back to submit_managed_order_requests() with algo_code=MINIQMT_MANAGED_ORDER when the plan does not include a vnpy-style policy. These are direct broker execution semantics that do not comply with the approved design.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+    "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+    "tests/aistock_validation/bugs/20260612_BUG-345-p0-miniqmt-designcompliance-miniqmt-paths-still-accept-non-vnpy-direct-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-345",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T11:07:21.443817Z",
+  "description": "Paper v2 _run_minqmt_sim_orders uses _miniqmt_uses_vnpy_style_execution() and falls back to submit_paper_order_intents() with algo_code=PAPER_V2_DIRECT_MINIQMT. simulation_runtime MiniQMTExecutionBridge falls back to submit_managed_order_requests() with algo_code=MINIQMT_MANAGED_ORDER when the plan does not include a vnpy-style policy. These are direct broker execution semantics that do not comply with the approved design.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-5a778fe1c494",
+      "timestamp": "2026-06-12T11:07:21.443813Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608:151-157,631-632,871-880"
+  ],
+  "expected": "Paper v2 MiniQMT and simulation_runtime MiniQMT reject V25_* and any non-vnpy/non-approved MiniQMT broker execution policy with MINIQMT_UNSUPPORTED_EXECUTION_ALGO or EXECUTION_PATH_NOT_CANONICAL before broker submit; only approved vn.py-style MiniQMT assets can create runtime child orders for product strategy execution.",
+  "first_seen_at": "2026-06-12T11:07:21.443817Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1027,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1027",
+  "last_seen_at": "2026-06-12T11:07:21.443817Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'PAPER_V2_DIRECT_MINIQMT|submit_paper_order_intents|MINIQMT_MANAGED_ORDER|_miniqmt_uses_vnpy_style_execution|submit_managed_order_requests' backend/services/paper_trading_v2/day_runner.py backend/services/miniqmt_execution_runtime/client.py backend/services/simulation_runtime/bridges.py backend/tests",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] MiniQMT paths still accept non-vnpy direct broker execution",
+  "trigger_condition": {
+    "fingerprint": "5a778fe1c494234c59a8baaa",
+    "source_event_id": "FE-20260612-5a778fe1c494"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
