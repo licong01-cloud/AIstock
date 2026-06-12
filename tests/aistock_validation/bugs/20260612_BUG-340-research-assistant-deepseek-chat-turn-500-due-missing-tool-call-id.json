@@ -1,0 +1,113 @@
+{
+  "actual": "Frontend shows ResearchAssistantApiError at src/lib/research-assistant/api.ts:709; backend logs LiteLLM completion model=deepseek-chat provider=deepseek then BadRequestError: Failed to deserialize JSON body into target type: messages[3]: missing field tool_call_id.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant",
+    "frontend/src/lib/research-assistant/api.ts",
+    "tests/aistock_validation/bugs/20260612_BUG-340-research-assistant-deepseek-chat-turn-500-due-missing-tool-call-id.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_react_tool_loop.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-340",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T08:39:30.281453Z",
+  "description": "Frontend shows ResearchAssistantApiError at src/lib/research-assistant/api.ts:709; backend logs LiteLLM completion model=deepseek-chat provider=deepseek then BadRequestError: Failed to deserialize JSON body into target type: messages[3]: missing field tool_call_id.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-33370e03d66c",
+      "timestamp": "2026-06-12T08:39:30.281449Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant should send DeepSeek-compatible tool call/tool result messages and return a normal chat response or structured blocker instead of HTTP 500.",
+  "first_seen_at": "2026-06-12T08:39:30.281453Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1011,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1011",
+  "last_seen_at": "2026-06-12T08:39:30.281453Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open Research Assistant frontend, ask the smart assistant any question that triggers tool use; observe POST /api/v1/research-assistant/chat/turn returns 500.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant DeepSeek chat turn 500 due missing tool_call_id",
+  "trigger_condition": {
+    "fingerprint": "33370e03d66c071de670e79c",
+    "source_event_id": "FE-20260612-33370e03d66c"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/research_assistant",
+      "frontend/src/lib/research-assistant/api.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/services/research_assistant",
+    "ui_routes": [
+      "/services/research_assistant"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "scope_expansion_notes": [
+    {
+      "reason": "BUG-340 regression test asserts internal ReAct tool observations and legacy tool messages are DeepSeek/LiteLLM compatible without provider-native tool_call_id.",
+      "added_scope": [
+        "backend/tests/research_assistant/test_react_tool_loop.py"
+      ]
+    }
+  ]
+}

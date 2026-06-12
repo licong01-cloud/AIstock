@@ -261,7 +261,10 @@ def tool_result_message(result: McpToolResult) -> dict[str, Any]:
         content["preflight"] = _compact_payload(result.preflight, max_chars=900)
     if result.error_json:
         content["error"] = _compact_payload(result.error_json, max_chars=500)
-    return {"role": "tool", "content": json.dumps(content, ensure_ascii=False, sort_keys=True)}
+    # This ReAct loop uses JSON tool choices, not provider-native tool calls.
+    # Provider-native `role=tool` messages require a matching `tool_call_id`;
+    # send observations as ordinary user-visible context instead.
+    return {"role": "user", "content": json.dumps(content, ensure_ascii=False, sort_keys=True)}
 
 
 def _contains_placeholder(text: str, patterns: tuple[str, ...]) -> str | None:
