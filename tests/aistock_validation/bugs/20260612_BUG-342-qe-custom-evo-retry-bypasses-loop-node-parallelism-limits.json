@@ -36,8 +36,8 @@
   "expected": "custom_evo retry, rerun, append, resume and normal start all obey the same per-node node_parallelism limit; when active loops on the target node already reach the limit, additional loops stay pending/queued and automatically transition to running when capacity frees instead of raising an admission error or silently failing.",
   "first_seen_at": "2026-06-12T08:56:23.221191Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8a20fb6bf008131f01d83ebfe0b4eb6a1525daf",
+  "fixed_at": "2026-06-12T13:44:22.741430Z",
   "github_issue_number": 1014,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1014",
   "last_seen_at": "2026-06-12T08:56:23.221191Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1025",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "d4e371ef3bb34840865cc347",
     "source_event_id": "FE-20260612-d4e371ef3bb3"
   },
+  "validation_evidence": [
+    "PR #1025 CI green; gh pr checks 1025 -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
