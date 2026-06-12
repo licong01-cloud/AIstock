@@ -29,8 +29,8 @@
   "expected": "Research Assistant should allow the enabled read-only local_data_get_preset_daily_status tool and return a grouped daily sync status summary.",
   "first_seen_at": "2026-06-12T14:45:13.327162Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "29a4aaba45ecbda03c40f7c9fa515ce0d1b3ddc6",
+  "fixed_at": "2026-06-12T18:55:12.496732Z",
   "github_issue_number": 1038,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1038",
   "last_seen_at": "2026-06-12T14:45:13.327162Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1041",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "2272bb1abfca4e47b49150cc",
     "source_event_id": "FE-20260612-2272bb1abfca"
   },
+  "validation_evidence": [
+    "PR #1041 CI green: 18 passed, 0 failed, 0 pending; local targeted pytest/ruff/compile/diff-check passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
