@@ -25,23 +25,23 @@
       "timestamp": "2026-06-12T19:22:25.211459Z"
     },
     {
-      "timestamp": "2026-06-13T03:23:30+08:00",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
+      "actor": "codex",
       "note": "Runtime validation localized BUG-353 to spec-driven MCP path construction and the focused gateway call regression test.",
       "paths": [
         "backend/mcp/modules/_gateway_specs.py",
         "backend/mcp/modules/strategy_packages.py",
         "tests/mcp/test_mcp_gateway_calls.py"
-      ]
+      ],
+      "timestamp": "2026-06-13T03:23:30+08:00"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-12T19:22:25.211464Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "282948a8126e727b1cc010b3a686930de7a56b49",
+  "fixed_at": "2026-06-12T19:41:15.036187Z",
   "github_issue_number": 1044,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1044",
   "last_seen_at": "2026-06-12T19:22:25.211464Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1045",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "mcp.gateway"
   ],
@@ -94,6 +95,16 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest tests/mcp/test_mcp_gateway_calls.py -q -p no:cacheprovider -> 6 passed",
+    "python -m compileall backend/mcp scripts/aistock_mcp_gateway.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python debug_tools/mcp/list_tools_smoke.py --server aistock-paper-v2-stable -> passed, tool_count=128, production_8001_touched=false",
+    "python debug_tools/mcp/list_tools_smoke.py --server aistock-paper-v2-monitor -> passed, tool_count=42, production_8001_touched=false",
+    "MCP ClientSession call_tool strategy_packages_list payload limit=1 -> HTTP 200, is_error=false, path=/api/v1/strategy-packages?limit=1"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
