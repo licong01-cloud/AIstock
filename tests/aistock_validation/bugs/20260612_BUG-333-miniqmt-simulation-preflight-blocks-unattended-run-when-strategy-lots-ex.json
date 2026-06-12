@@ -32,8 +32,8 @@
   "expected": "MiniQMT unattended simulation should reconcile strategy-slot lots against broker-authoritative positions/can_sell before preflight, avoid selling non-broker-held lots, and proceed with a valid SELL-first/cash-aware order batch or fail-fast with a non-retryable actionable reconciliation blocker that can be repaired automatically before retry.",
   "first_seen_at": "2026-06-12T01:35:47.365473Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5f874c74410162ae56bd030da0ed0a484c08c910",
+  "fixed_at": "2026-06-12T03:17:56.438488Z",
   "github_issue_number": 998,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/998",
   "last_seen_at": "2026-06-12T01:35:47.365473Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/999",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -62,6 +63,16 @@
     "fingerprint": "1528320e1bef35b022c9711d",
     "source_event_id": "FE-20260612-1528320e1bef"
   },
+  "validation_evidence": [
+    "python -m py_compile backend/services/simulation_runtime/scheduler.py -> passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 43 passed",
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 17 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 613 passed, 1 skipped, 2 xfailed",
+    "$env:PAPER_V2_L3_SKIP_UI=1; python -m nox -s paper_v2_l3 -> failed only in paper_v2_data_quality live/pre-existing traceability gate: missing_success_event=2 and ledger WARN=4; paper_v2_l3 record/l0/paper_v2_backend/data_quality_deep sessions passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
