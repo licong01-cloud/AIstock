@@ -602,6 +602,8 @@ DEFAULT_SKILLS: list[dict[str, Any]] = [
         "required_mcp_tools": [
             "aistock-local-data/local_data_health_overview",
             "aistock-local-data/local_data_get_dataset_status",
+            "aistock-local-data/local_data_get_preset_daily_status",
+            "aistock-local-data/local_data_list_jobs",
             "aistock-local-data/local_data_list_sync_targets",
             "aistock-local-data/local_data_plan_repair",
             "aistock-local-data/local_data_apply_repair_confirmed",
@@ -726,7 +728,13 @@ DEFAULT_MEMORY_SEEDS: list[dict[str, Any]] = [
             "capability_key": "local_data_management",
             "mcp_server": "aistock-local-data",
             "prompt_branch": "prompt.local_data_management",
-            "read_only_tools": ["local_data_health_overview", "local_data_get_dataset_status", "local_data_list_sync_targets"],
+            "read_only_tools": [
+                "local_data_health_overview",
+                "local_data_get_dataset_status",
+                "local_data_get_preset_daily_status",
+                "local_data_list_jobs",
+                "local_data_list_sync_targets",
+            ],
             "confirmed_tools": ["local_data_apply_repair_confirmed"],
         },
         "source_type": "design_seed",
@@ -897,6 +905,53 @@ class LlmCallResult:
     usage: dict[str, Any]
 
 
+def _litellm_message_content(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _litellm_compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize internal assistant context before sending it to chat providers.
+
+    Research Assistant's ReAct loop uses JSON observations, not provider-native
+    tool calls. DeepSeek rejects `role=tool` messages unless they are paired
+    with a native `tool_call_id`, so legacy/internal tool observations are
+    converted to ordinary context messages.
+    """
+    normalized: list[dict[str, Any]] = []
+    for raw in messages:
+        if not isinstance(raw, dict):
+            continue
+        message = dict(raw)
+        role = str(message.get("role") or "user")
+        if role == "tool" and not message.get("tool_call_id"):
+            normalized.append(
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "type": "INTERNAL_TOOL_OBSERVATION",
+                            "instruction": "Use this as audited context. It is not a provider-native tool response.",
+                            "content": _litellm_message_content(message.get("content")),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                }
+            )
+            continue
+        message["role"] = role
+        if message.get("content") is None:
+            message["content"] = ""
+        elif not isinstance(message.get("content"), (str, list)):
+            message["content"] = _litellm_message_content(message.get("content"))
+        normalized.append(message)
+    return normalized
+
+
 
 
 def _default_workflow_capabilities() -> list[dict[str, Any]]:
@@ -931,9 +986,10 @@ class ResearchAssistantLlmClient:
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("litellm is not installed; Research Assistant cannot call LLM") from exc
         start = perf_counter()
+        provider_messages = _litellm_compatible_messages(messages)
         response = litellm.completion(
             model=model_id,
-            messages=messages,
+            messages=provider_messages,
             temperature=temperature,
             max_tokens=max_tokens,
             **completion_kwargs,
@@ -3368,6 +3424,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "mcp_tools": [
                         "local_data_health_overview",
                         "local_data_get_dataset_status",
+                        "local_data_get_preset_daily_status",
+                        "local_data_list_jobs",
                         "local_data_list_sync_targets",
                         "local_data_plan_repair",
                         "local_data_apply_repair_confirmed",
@@ -3862,6 +3920,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
+            return ResearchAssistantService._render_local_data_daily_status_reply(execution, summary)
         route = str(execution.get("route") or "unknown/unknown")
         items = summary.get("items") if isinstance(summary.get("items"), list) else []
         lines = [
@@ -3886,6 +3946,63 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             lines.append(f"大对象已收敛为 artifact_ref：{len(artifact_refs)} 个。")
         if omitted:
             lines.append(f"已按 payload budget 省略：{', '.join(str(item) for item in omitted[:6])}。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_local_data_daily_status_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        groups = summary.get("status_groups") if isinstance(summary.get("status_groups"), dict) else {}
+        counts = summary.get("group_counts") if isinstance(summary.get("group_counts"), dict) else {}
+        evidence_sources = summary.get("evidence_sources") if isinstance(summary.get("evidence_sources"), list) else []
+        trade_date = str(summary.get("trade_date") or utc_now().date().isoformat())
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        labels = {
+            "success": "已同步成功",
+            "failed": "同步失败",
+            "not_synced": "未同步/未运行",
+            "running": "运行中/排队中",
+            "blocked": "告警/阻断/需要处理",
+        }
+        order = ("success", "failed", "not_synced", "running", "blocked")
+        lines = [
+            "已按本地数据只读证据汇总今天的数据同步情况。",
+            f"查询日期：{trade_date}；as_of={as_of}。",
+            f"证据来源：{', '.join(str(item) for item in evidence_sources) if evidence_sources else 'local-data facade'}。",
+        ]
+        if not any(int(counts.get(key) or 0) for key in order):
+            lines.append("今天暂无可用的 preset/job/target 同步记录；这通常表示尚未运行，或本地数据 facade 没有返回当天记录。")
+        for key in order:
+            items = groups.get(key) if isinstance(groups.get(key), list) else []
+            lines.append(f"{labels[key]}（{len(items)}）")
+            if not items:
+                lines.append("- 无")
+                continue
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                dataset = str(item.get("dataset") or "unknown")
+                status = str(item.get("status") or "unknown")
+                created_at = str(item.get("created_at") or "")
+                finished_at = str(item.get("finished_at") or "")
+                last_error = str(item.get("last_error") or "")
+                time_bits = []
+                if created_at:
+                    time_bits.append(f"开始={created_at}")
+                if finished_at:
+                    time_bits.append(f"结束={finished_at}")
+                suffix = f"；{'；'.join(time_bits)}" if time_bits else ""
+                if last_error:
+                    suffix += f"；错误={last_error}"
+                lines.append(f"- {dataset}：{status}{suffix}")
+            if len(items) > 20:
+                lines.append(f"- 另有 {len(items) - 20} 项已省略，可继续要求展开指定分组。")
+        partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+        if partial_errors:
+            rendered_errors = "; ".join(
+                f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+            )
+            lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+        lines.append("本轮未执行任何同步、修复、刷新或写库操作。")
         return "\n".join(lines)
 
     @staticmethod
