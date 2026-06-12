@@ -351,7 +351,11 @@ class FakeLocalSimBroker:
 class FakeManagedOrderBroker:
     def __init__(self, order_ids: list[int] | None = None, positions: list[dict[str, Any]] | None = None) -> None:
         self.order_ids = list(order_ids or [])
-        self.positions = list(positions or [{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}])
+        self.positions = (
+            list(positions)
+            if positions is not None
+            else [{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
+        )
         self.place_order_payloads = []
 
     def get_positions(self):
@@ -1097,7 +1101,10 @@ def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() 
     assert submitted.results[0].sync_result["positions_seen"] == 1
     latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
     assert latest_run.run_payload_json["strategy_performance"]["broker_backend"] == "minqmt_sim"
-    assert latest_run.run_payload_json["strategy_performance"]["positions"][0]["symbol"] == "000003.SZ"
+    assert {
+        position["symbol"]
+        for position in latest_run.run_payload_json["strategy_performance"]["positions"]
+    } >= {"000003.SZ"}
     assert submitted.results[0].run.run_payload_json["qmt_batch_status"] == "SUCCEEDED"
     assert [call["strategy_name"] for call in broker.place_order_payloads] == [
         qmt_binding.strategy_name,
@@ -1298,6 +1305,122 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     assert recovered_run.run_payload_json["qmt_batch_status"] == "SUCCEEDED"
     assert recovered_run.run_payload_json["broker_called"] is True
     assert len(broker.place_order_payloads) == 2
+
+
+def test_scheduler_rebuilds_side_effect_free_miniqmt_failed_plan_with_fresh_context() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_scheduler_qmt_stale_000003_rebuild",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_scheduler_qmt_stale_000003_rebuild",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker(positions=[])
+    calendar = StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE])
+    manifest = _score_weighted_manifest(release)
+
+    def context_with_positions(positions: dict[str, PositionLot]) -> SimulationRunContext:
+        return SimulationRunContext(
+            portfolio_id="portfolio_qmt",
+            current_positions=positions,
+            current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+            manifest=manifest,
+            managed_order_service=QmtManagedOrderService(
+                repository=qmt_repo,
+                broker=broker,  # type: ignore[arg-type]
+                calendar_provider=calendar,
+            ),
+            qmt_ledger_repository=qmt_repo,
+            qmt_sync_service=QmtStrategyLedgerSyncService(
+                repository=qmt_repo,
+                qmt_client=FakeQmtSnapshotClient(positions=[]),
+                account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+                trade_date=TRADE_DATE,
+                calendar_provider=calendar,
+            ),
+            qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+            broker_positions=[],
+            cash=100000.0,
+        )
+
+    contexts = [
+        context_with_positions(
+            {
+                "000003.SZ": PositionLot(
+                    portfolio_id="portfolio_qmt",
+                    symbol="000003.SZ",
+                    quantity=77,
+                    available_quantity=77,
+                    avg_cost=8.0,
+                    trade_date=date(2026, 5, 20),
+                )
+            }
+        ),
+        context_with_positions({}),
+    ]
+
+    class RotatingContextProvider:
+        def load_context(self, *, runtime_release, binding, trade_date):
+            return contexts.pop(0) if contexts else context_with_positions({})
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=RotatingContextProvider(),
+    )
+
+    failed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    failed_run = repo.get_simulation_daily_run(failed.results[0].run.run_id)
+    failed_plan = repo.get_execution_plan(failed_run.execution_plan_id)
+
+    assert failed.results[0].status == "BROKER_PRECHECK_FAILED"
+    assert failed_run.run_payload_json["qmt_batch_status"] == "PREFLIGHT_FAILED"
+    assert failed_run.run_payload_json["broker_called"] is False
+    assert {intent.symbol for intent in failed_plan.intents if intent.side == OrderSide.SELL} == {"000003.SZ"}
+
+    retried = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    retried_run = repo.get_simulation_daily_run(failed_run.run_id)
+    retried_plan = repo.get_execution_plan(retried_run.execution_plan_id)
+
+    assert retried.results[0].execution_plan.plan_id == retried_plan.plan_id
+    assert retried_plan.plan_id != failed_plan.plan_id
+    assert retried_run.run_payload_json["rebuilt_after_side_effect_free_failure"] is True
+    assert retried_run.run_payload_json["rebuilt_from_execution_plan_id"] == failed_plan.plan_id
+    assert {intent.symbol for intent in retried_plan.intents if intent.side == OrderSide.SELL} == set()
+    assert "BATCH_INSUFFICIENT_BROKER_CAN_SELL" not in str(retried_run.run_payload_json["qmt_batch_result"])
+    assert broker.place_order_payloads
 
 
 def test_scheduler_retries_deferred_miniqmt_dependent_buys_without_duplicate_sells() -> None:
@@ -2236,6 +2359,122 @@ def test_production_context_provider_loads_miniqmt_positions_from_virtual_ledger
     assert ctx.qmt_sync_service is not None
     assert ctx.qmt_reconciliation_service is not None
     assert getattr(ctx.managed_order_service, "_broker") is qmt_client
+
+
+def test_production_context_provider_drops_miniqmt_stale_lots_missing_from_broker():
+    """MiniQMT current_positions must not emit impossible sells for lots absent from broker can_sell."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_stale_not_in_broker",
+            strategy_id="strat1",
+            symbol="000636.SZ",
+            open_trade_id="trade_stale_not_in_broker",
+            open_date=date(2026, 5, 20),
+            quantity=900,
+            available_quantity=900,
+            remaining_quantity=900,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("9000"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    seen_price_symbols: list[tuple[str, ...]] = []
+
+    def price_loader(symbols, trade_date):
+        seen_price_symbols.append(tuple(symbols))
+        return {symbol: 10.5 for symbol in symbols}
+
+    broker = FakeManagedOrderBroker(positions=[])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=price_loader,
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    assert ctx.current_positions == {}
+    assert ctx.broker_positions == []
+    assert seen_price_symbols == [()]
+    diagnostics = ctx.context_diagnostics["miniqmt_broker_position_reconciliation"]
+    assert diagnostics["dropped_position_count"] == 1
+    assert diagnostics["dropped_positions"][0]["symbol"] == "000636.SZ"
+
+
+def test_production_context_provider_caps_miniqmt_lots_to_broker_quantity_and_can_sell():
+    """Strategy-lot context is capped by broker-authoritative quantity/can_sell before planning."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_cap_to_broker",
+            strategy_id="strat1",
+            symbol="000001.SZ",
+            open_trade_id="trade_cap_to_broker",
+            open_date=date(2026, 5, 20),
+            quantity=1000,
+            available_quantity=1000,
+            remaining_quantity=1000,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("10000"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker(positions=[{"stock_code": "000001.SZ", "quantity": 500, "can_sell": 300}])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    position = ctx.current_positions["000001.SZ"]
+    assert position.quantity == 500
+    assert position.available_quantity == 300
+    assert ctx.broker_positions == [{"stock_code": "000001.SZ", "quantity": 500, "can_sell": 300}]
+    diagnostics = ctx.context_diagnostics["miniqmt_broker_position_reconciliation"]
+    assert diagnostics["capped_position_count"] == 1
+    assert diagnostics["capped_positions"][0]["reconciled_quantity"] == 500
+    assert diagnostics["capped_positions"][0]["reconciled_available_quantity"] == 300
 
 
 def test_production_context_provider_miniqmt_preview_checks_broker_can_sell_without_submit():
