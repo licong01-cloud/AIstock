@@ -3,7 +3,16 @@
   "allowed_write_scope": [
     "backend/mcp/modules/qe_experiment.py",
     "tests/aistock_validation/bugs/20260612_BUG-341-qe-mcp-lacks-raw-experiment-config-validation-before-creation.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "tests/mcp/test_mcp_gateway_cli.py",
+    "tests/mcp/test_gateway_profiles.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+    "backend/tests/research_assistant/test_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-341",
@@ -24,7 +33,8 @@
     }
   ],
   "evidence_uris": [
-    "analysis: F:\\Dev\\AIstock\\backend\\mcp\\modules\\qe_experiment.py and backend\\routers\\quantevolver_evolution.py"
+    "analysis: F:\\Dev\\AIstock\\backend\\mcp\\modules\\qe_experiment.py and backend\\routers\\quantevolver_evolution.py",
+    "MCP raw config validation tool and manifest/catalog count tests are in scope because the gateway must expose the dry-run validator to Codex and Claude Code."
   ],
   "expected": "MCP and API provide read-only config validation before experiment creation; invalid custom_evo/single configs fail fast without creating tasks; creation paths reuse the same validation contract.",
   "first_seen_at": "2026-06-12T08:55:42.415841Z",
@@ -43,7 +53,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Inspect qe_experiment MCP tools and custom_evo create path; no qe_*_validate_config raw-config tool exists.",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

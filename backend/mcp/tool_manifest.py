@@ -171,6 +171,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'catalog': ('mcp_gateway_health
                    'qe_experiment_get_logs_tail',
                    'qe_experiment_get_enhanced_metrics',
                    'qe_experiment_get_trade_stats',
+                   'qe_experiment_validate_config',
                    'qe_single_experiment_create_pending',
                    'qe_single_experiment_get_config',
                    'qe_single_experiment_update_config_confirmed',

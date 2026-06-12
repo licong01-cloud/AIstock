@@ -21,10 +21,10 @@ def test_gateway_cli_list_tools_profiles() -> None:
     validation = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=validation")
     qe = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qe")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 211
-    assert full["tool_count"] == 217
+    assert full["legacy_tool_count"] == 212
+    assert full["tool_count"] == 218
     assert validation["tool_count"] == 20
-    assert qe["tool_count"] == 70
+    assert qe["tool_count"] == 71
 
 
 def test_gateway_cli_startup_summary_is_structured() -> None:

@@ -220,7 +220,44 @@ def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
             "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
         }
     ]
-    assert qe_experiment.TOOL_COUNT == 33
+    assert qe_experiment.TOOL_COUNT == 34
+
+
+def test_qe_experiment_validate_config_is_read_only() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+
+    valid = mcp.tools["qe_experiment_validate_config"](
+        "single_experiment",
+        {
+            "factor_names": ["Alpha001"],
+            "model_id": "model_lgbm_v1",
+            "custom_params": {"random_seed": 42, "label_horizon": 5},
+        },
+        include_normalized=True,
+    )
+    assert valid["valid"] is True
+    assert valid["ok"] is True
+    assert valid["writes"] is False
+    assert valid["validation_mode"] == "mcp_dry_run"
+    assert valid["normalized_config"]["custom_params"]["random_seed"] == 42
+
+    invalid = mcp.tools["qe_experiment_validate_config"](
+        "custom_evo",
+        {
+            "loops": [
+                {
+                    "factor_keys": ["Alpha001||alpha158"],
+                    "model_id": "model_lgbm_v1",
+                    "node_id": "node-1",
+                    "runtime_flags": {"random_seed": 42},
+                }
+            ],
+            "node_parallelism": {"node-1": 5},
+        },
+    )
+    assert invalid["valid"] is False
+    assert any("node_parallelism['node-1']" in item for item in invalid["errors"])
+    assert calls == []
 
 
 def test_qe_experiment_template_create_and_run_tool_confirms_before_http() -> None:
@@ -317,6 +354,34 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
     assert calls[3]["body"]["auto_start"] is False
     assert calls[3]["body"]["node_id"] == "node-1"
 
+
+def test_qe_runtime_first_create_paths_validate_before_http() -> None:
+    _registry, mcp, calls = _registry_with_capture(qe_experiment)
+
+    with pytest.raises(ValueError, match="random_seed is required"):
+        mcp.tools["qe_single_experiment_create_pending"](
+            {
+                "factor_names": ["Alpha001"],
+                "model_id": "model_lgbm_v1",
+                "custom_params": {},
+            }
+        )
+    assert calls == []
+
+    with pytest.raises(ValueError, match="node_parallelism"):
+        mcp.tools["qe_custom_evo_create_pending"](
+            "pending custom",
+            [
+                {
+                    "factor_keys": ["Alpha001||alpha158"],
+                    "model_id": "model_lgbm_v1",
+                    "node_id": "node-1",
+                    "runtime_flags": {"random_seed": 42},
+                }
+            ],
+            node_parallelism={"node-1": 5},
+        )
+    assert calls == []
 
 
 @pytest.mark.parametrize("module", [factor_library, factor_metrics, factor_correlation, model_registry, strategy_governance, execution_policy, external_research])
