@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeClient
+from backend.services.miniqmt_execution_runtime import (
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionEventType,
+    MiniQMTExecutionRuntimeClient,
+)
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
     OrderHandle,
@@ -236,6 +240,18 @@ def test_paper_v2_n1_and_simulation_runtime_n_many_share_runtime_owner_evidence(
     assert len(simulation_evidence["algo_instance_ids"]) == 2
     assert len(simulation_evidence["child_order_ids"]) == 2
     assert len(managed_broker.calls) == 2
+    simulation_events = runtime_client.repository.list_events(simulation_evidence["runtime_id"])
+    managed_sync_events = [
+        event for event in simulation_events if event.payload.get("managed_gateway_sync") is True
+    ]
+    assert {event.event_type for event in managed_sync_events} == {MiniQMTExecutionEventType.ORDER_EVENT}
+    assert all(event.source == "gateway" and event.payload["broker_called"] is True for event in managed_sync_events)
+    assert len(managed_sync_events) == len(managed_broker.calls)
+    simulation_children = runtime_client.repository.list_child_orders(
+        simulation_evidence["runtime_id"], active_only=False
+    )
+    assert {child.status for child in simulation_children} == {MiniQMTChildOrderStatus.SUBMITTED}
+    assert all(child.broker_order_id for child in simulation_children)
 
 
 def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls() -> None:
@@ -265,7 +281,16 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
         assert "MiniQMTExecutionRuntimeClient" in text or "MiniQMTExecutionBridge" in text
 
     runtime_client = (root / "backend/services/miniqmt_execution_runtime/client.py").read_text(encoding="utf-8")
-    assert "managed_order_service.submit_batch(requests)" in runtime_client
+    direct_submit_batch_hits = [
+        (index, line.strip())
+        for index, line in enumerate(runtime_client.splitlines(), start=1)
+        if ".submit_batch(" in line
+    ]
+    assert [line for _, line in direct_submit_batch_hits] == [
+        "return order_service.submit_batch(list(self.requests))"
+    ], direct_submit_batch_hits
+    assert "gateway.submit_managed_batch(" in runtime_client
+    assert "managed_order_service.submit_batch(" not in runtime_client
     assert "self.broker.submit_order_intent(child_intent)" in runtime_client
 
 

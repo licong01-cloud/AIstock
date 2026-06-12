@@ -31,6 +31,8 @@ from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrde
 from .models import (
     MiniQMTChildOrder,
     MiniQMTChildOrderStatus,
+    MiniQMTExecutionEvent,
+    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeConfig,
     MiniQMTOperatorCommandResult,
 )
@@ -214,16 +216,19 @@ class MiniQMTExecutionRuntimeClient:
     ) -> MiniQMTRuntimeManagedBatchSubmitResult:
         if not requests:
             raise BrokerSubmitError("MiniQMTExecutionRuntime requires at least one managed order request")
+        materialized_requests = tuple(requests)
+        gateway = _ManagedOrderRequestRuntimeGateway(
+            managed_request_factory=lambda _child, index: materialized_requests[index - 1]
+        )
         runtime = self._runtime(
             account_group_id=account_group_id,
             trade_date=trade_date,
             runtime_config_hash=runtime_config_hash,
             runtime_id=runtime_id,
-            gateway=_PreviewOnlyRuntimeGateway(),
+            gateway=gateway,
         )
         runtime.start()
-        algo_by_remark: dict[str, str] = {}
-        for request in requests:
+        for request in materialized_requests:
             parent_intent_id = str(request.metadata.get("execution_plan_intent_id") or request.order_remark)
             instance = runtime.create_algo_instance(
                 parent_intent_id=parent_intent_id,
@@ -239,26 +244,28 @@ class MiniQMTExecutionRuntimeClient:
                     "execution_plan_intent_id": request.metadata.get("execution_plan_intent_id"),
                 },
             )
-            algo_by_remark[request.order_remark] = instance.algo_instance_id
-
-        managed_result = managed_order_service.submit_batch(requests)
-        for request, item in zip(requests, managed_result.results, strict=True):
-            status = MiniQMTChildOrderStatus.SUBMITTED if item.success else MiniQMTChildOrderStatus.REJECTED
-            runtime.record_external_child_order(
-                algo_instance_id=algo_by_remark[request.order_remark],
+            runtime.submit_child_order(
+                algo_instance_id=instance.algo_instance_id,
                 quantity=int(request.quantity),
                 price=float(request.price),
                 price_type=int(request.price_type),
-                status=status,
-                broker_order_id=item.qmt_order_id,
                 metadata={
                     "source": source,
-                    "managed_order_result": item.to_dict(),
-                    "managed_batch_id": managed_result.batch_id,
-                    "managed_batch_status": managed_result.batch_status,
                     "order_remark": request.order_remark,
+                    "managed_order_request": _managed_request_signature(request),
                 },
             )
+
+        managed_result = gateway.submit_managed_batch(order_service=managed_order_service)
+        for request, item in zip(materialized_requests, managed_result.results, strict=True):
+            child_order_id = gateway.child_order_id_by_order_remark.get(request.order_remark)
+            if child_order_id:
+                self._sync_managed_child_result(
+                    runtime_id=runtime.config.runtime_id,
+                    child_order_id=child_order_id,
+                    managed_result=item,
+                    source=source,
+                )
         return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
             managed_result,
             runtime_evidence=self._evidence(runtime, source=source),
@@ -397,7 +404,9 @@ class MiniQMTExecutionRuntimeClient:
         )
         if not build.requests:
             raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py path generated no managed order requests")
-        managed_result = managed_order_service.submit_batch(list(build.requests))
+        managed_result = _ManagedOrderRequestRuntimeGateway.from_requests(build.requests).submit_managed_batch(
+            order_service=managed_order_service
+        )
         for request, item in zip(build.requests, managed_result.results, strict=True):
             child_order_id = build.child_order_id_by_order_remark.get(request.order_remark)
             if child_order_id:
@@ -695,7 +704,44 @@ class MiniQMTExecutionRuntimeClient:
                 },
             }
         )
-        return self.repository.upsert_child_order(updated_child)
+        stored = self.repository.upsert_child_order(updated_child)
+        self._append_managed_gateway_sync_event(
+            runtime_id=runtime_id,
+            child_order_id=child_order_id,
+            managed_result=managed_result,
+            source=source,
+        )
+        return stored
+
+    def _append_managed_gateway_sync_event(
+        self,
+        *,
+        runtime_id: str,
+        child_order_id: str,
+        managed_result: ManagedOrderSubmitResult,
+        source: str,
+    ) -> MiniQMTExecutionEvent:
+        return self.repository.append_event(
+            MiniQMTExecutionEvent(
+                runtime_id=runtime_id,
+                sequence=self.repository.next_event_sequence(runtime_id),
+                event_type=(
+                    MiniQMTExecutionEventType.ORDER_EVENT
+                    if managed_result.success
+                    else MiniQMTExecutionEventType.CHILD_ORDER_REJECTED
+                ),
+                source="gateway",
+                payload={
+                    "child_order_id": child_order_id,
+                    "broker_order_id": managed_result.qmt_order_id,
+                    "accepted": managed_result.success,
+                    "message": managed_result.broker_message,
+                    "broker_called": managed_result.broker_called,
+                    "managed_gateway_sync": True,
+                    "source": source,
+                },
+            )
+        )
 
 
 class PaperV2MiniQMTRuntimeGateway:
@@ -826,18 +872,23 @@ class _PreviewOnlyRuntimeGateway:
 
 
 class _ManagedOrderRequestRuntimeGateway:
-    """Runtime gateway that converts child orders into qmt_strategy requests.
-
-    The broker call still happens later through QmtManagedOrderService, but the
-    vn.py algo instance, child-order identity, and event order are owned by the
-    canonical MiniQMTExecutionRuntime before that boundary is reached.
-    """
+    """Runtime gateway that owns the legacy managed-order adapter boundary."""
 
     def __init__(self, *, managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest]) -> None:
         self.managed_request_factory = managed_request_factory
         self.connected_runtime_ids: list[str] = []
         self.requests: list[ManagedOrderRequest] = []
         self.child_order_id_by_order_remark: dict[str, str] = {}
+
+    @classmethod
+    def from_requests(
+        cls,
+        requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    ) -> "_ManagedOrderRequestRuntimeGateway":
+        materialized = tuple(requests)
+        gateway = cls(managed_request_factory=lambda _child, index: materialized[index - 1])
+        gateway.requests.extend(materialized)
+        return gateway
 
     def connect(self, *, runtime_id: str) -> None:
         self.connected_runtime_ids.append(runtime_id)
@@ -865,6 +916,9 @@ class _ManagedOrderRequestRuntimeGateway:
                 "managed_order_request": _managed_request_signature(request),
             },
         )
+
+    def submit_managed_batch(self, *, order_service: QmtManagedOrderService) -> ManagedBatchSubmitResult:
+        return order_service.submit_batch(list(self.requests))
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:  # noqa: ARG002
         return MiniQMTGatewayCancelAck(
