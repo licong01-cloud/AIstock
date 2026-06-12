@@ -71,7 +71,9 @@ def register_spec_tools(
                     if value is not None and key in current.limit_caps:
                         value = _bounded_value(key, value, current.limit_caps[key])
                     params[key] = value
-                path = current.path.format(**path_values)
+                # httpx turns an empty relative path into "/", which can trigger
+                # FastAPI trailing-slash redirects for prefix-root routes.
+                path = current.path.format(**path_values) or "."
                 body = data.pop("body", data)
                 if not isinstance(body, dict):
                     raise ValueError("payload body must be a JSON object when provided")

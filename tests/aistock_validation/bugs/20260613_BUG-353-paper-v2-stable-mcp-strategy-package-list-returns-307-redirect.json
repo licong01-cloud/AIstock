@@ -2,7 +2,10 @@
   "actual": "Post-merge MCP protocol validation found aistock-paper-v2-stable can list tools, but calling strategy_packages_list through the unified gateway requests /api/v1/strategy-packages/?limit=1 and receives HTTP 307 non-JSON. The wrapper should call the canonical /strategy-packages route without a trailing slash and should not fail on redirect for normal read tools.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260613_BUG-353-paper-v2-stable-mcp-strategy-package-list-returns-307-redirect.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/mcp/modules/_gateway_specs.py",
+    "backend/mcp/modules/strategy_packages.py",
+    "tests/mcp/test_mcp_gateway_calls.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-353",
@@ -20,6 +23,17 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260613-035fda91d8d1",
       "timestamp": "2026-06-12T19:22:25.211459Z"
+    },
+    {
+      "timestamp": "2026-06-13T03:23:30+08:00",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Runtime validation localized BUG-353 to spec-driven MCP path construction and the focused gateway call regression test.",
+      "paths": [
+        "backend/mcp/modules/_gateway_specs.py",
+        "backend/mcp/modules/strategy_packages.py",
+        "tests/mcp/test_mcp_gateway_calls.py"
+      ]
     }
   ],
   "evidence_uris": [],
