@@ -261,6 +261,19 @@ class FakeQMTClient:
     def get_positions(self):
         return list(self.positions)
 
+    def get_full_tick(self, symbols):
+        return {
+            symbol: {
+                "bidPrice": [10.0],
+                "askPrice": [10.0],
+                "bidVol": [1_000_000],
+                "askVol": [1_000_000],
+                "lastPrice": 10.0,
+                "time": "20240102093105",
+            }
+            for symbol in symbols
+        }
+
     def cancel_order(self, order_id: str):
         self.cancel_calls.append(str(order_id))
         return True, "cancel accepted"
@@ -351,6 +364,23 @@ def _intent(
         target_trade_date=TRADE_DATE,
         metadata=metadata or {},
     )
+
+
+def _vnpy_execution_policy_context(
+    algo_code: str = "SNIPER_MINIQMT",
+    algo_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    policy_json = {"algo_code": algo_code, "algo_config": dict(algo_config or {})}
+    return {
+        "validated_execution_policy_id": f"execpol_{algo_code.lower()}_unit",
+        "policy_sha256": f"sha_{algo_code.lower()}_unit",
+        "policy_name": f"{algo_code} unit policy",
+        "algo_code": algo_code,
+        "policy_json": policy_json,
+        "source_backtest_id": "bt_vnpy_unit",
+        "source_backtest_status": "BACKTEST_VALIDATED",
+        "validation_status": "BACKTEST_VALIDATED",
+    }
 
 
 def test_minqmtsim_init_requires_miniqmt_realtime_source() -> None:
@@ -611,6 +641,7 @@ def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:
             trade_date=TRADE_DATE,
             intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
             broker=broker,
+            execution_policy_context=_vnpy_execution_policy_context(),
         )
 
     final_order = repository.orders[0]
@@ -667,6 +698,7 @@ def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
             trade_date=TRADE_DATE,
             intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
             broker=broker,
+            execution_policy_context=_vnpy_execution_policy_context(),
         )
 
     final_order = repository.orders[0]
@@ -840,6 +872,17 @@ class _RecordingMiniQMTBroker:
     def query_account(self) -> BrokerAccountSnapshot:
         return self._account
 
+    def query_quote(self, symbol: str) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "bid_price_1": 10.0,
+            "bid_volume_1": 1_000_000,
+            "ask_price_1": 10.0,
+            "ask_volume_1": 1_000_000,
+            "last_price": 10.0,
+            "time": "20240102093105",
+        }
+
     def query_position_marks(self):
         return self._positions, self._prices
 
@@ -989,7 +1032,8 @@ def test_day_runner_dispatches_minqmt_before_minute_execution_path() -> None:
     assert dispatch in source
     assert source.index(dispatch) < source.index(minute_ledger)
     assert "_run_minqmt_sim_orders" in source
-    assert "MINIQMT_ORDER_SUBMITTED" in source
+    assert "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED" in source
+    assert "_require_miniqmt_vnpy_style_execution" in source
 
 
 def test_router_exposes_order_diagnostic_metadata_as_top_level_fields() -> None:
@@ -1127,6 +1171,7 @@ def test_day_runner_minqmt_no_intents_reconciles_broker_snapshot_without_fills()
         trade_date=TRADE_DATE,
         intents=[],
         broker=_backend(),
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
 
     assert result.run.status == RunStatus.SUCCEEDED
@@ -1173,6 +1218,7 @@ def test_day_runner_minqmt_submits_sell_intents_before_buy_intents() -> None:
         trade_date=TRADE_DATE,
         intents=[buy, sell],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
 
     assert [intent.side for intent in broker.submitted] == [OrderSide.SELL, OrderSide.BUY]
@@ -1210,6 +1256,7 @@ def test_day_runner_minqmt_persists_rejected_order_diagnostic_and_audit() -> Non
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
 
     final_order = result.orders[0]
@@ -1229,9 +1276,10 @@ def test_day_runner_minqmt_persists_rejected_order_diagnostic_and_audit() -> Non
     assert repository.order_events[-1].metadata["broker_rejection_reason"] == "[COUNTER][260200] insufficient buying power"
     assert repository.execution_states[0].algo_state["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
     assert repository.events[-1]["event_type"] == "RUN_SUCCEEDED"
-    submit_event = next(event for event in repository.events if event["event_type"] == "MINIQMT_ORDER_SUBMITTED")
-    assert submit_event["context"]["broker_raw_status"] == 57
-    assert submit_event["context"]["broker_diagnostic"]["broker_audit"]["schema_version"] == "miniqmt_broker_audit_v1"
+    submit_event = next(event for event in repository.events if event["event_type"] == "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED")
+    child_diagnostic = submit_event["context"]["diagnostic"]["child_orders"][0]["status"]
+    assert child_diagnostic["raw_status"] == 57
+    assert final_order.metadata["broker_diagnostic"]["broker_audit"]["schema_version"] == "miniqmt_broker_audit_v1"
 
 
 def test_day_runner_minqmt_persists_native_trade_fills_and_order_events() -> None:
@@ -1283,6 +1331,7 @@ def test_day_runner_minqmt_persists_native_trade_fills_and_order_events() -> Non
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
 
     assert len(result.fills) == 1
@@ -1327,6 +1376,7 @@ def test_reconcile_minqmt_native_run_updates_existing_order_metadata_with_reject
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
     original = repository.orders[0]
     assert original.status.value == "SUBMITTED"
@@ -1405,6 +1455,7 @@ def test_reconcile_minqmt_native_run_repairs_prefixed_rejected_order_with_stale_
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
     original = repository.orders[0]
     handle_id = original.metadata["broker_handle_id"]
@@ -1492,6 +1543,7 @@ def test_reconcile_minqmt_native_run_marks_truncated_or_mojibake_status_msg_gap(
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
     handle_id = repository.orders[0].metadata["broker_handle_id"]
     broker._statuses[handle_id] = OrderHandleStatus(
@@ -1571,6 +1623,7 @@ def test_day_runner_minqmt_reconciles_native_fills_after_initial_pending_submit(
         trade_date=TRADE_DATE,
         intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
         broker=broker,  # type: ignore[arg-type]
+        execution_policy_context=_vnpy_execution_policy_context(),
     )
     assert result.fills == []
     assert repository.orders[0].filled_quantity == 0
@@ -1761,13 +1814,13 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
     }
     package_repo, paper_repo, manifest, portfolio = _miniqmt_portfolio_fixture(custom_params=custom_params)
     policy_json = manifest.minute_execution_policy.model_dump(mode="json")
-    policy_json["algo_code"] = "CLOSE_PRICE"
+    policy_json["algo_code"] = "SNIPER_MINIQMT"
     policy_json["algo_config"] = {}
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(
         package_id=manifest.package_id,
-        policy_name="close price miniqmt activation",
+        policy_name="sniper miniqmt activation",
         policy_json=policy_json,
-        source_backtest_id="bt_close",
+        source_backtest_id="bt_sniper",
         source_backtest_status="COMPLETED",
         paper_enabled=True,
     )
@@ -1779,7 +1832,7 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
         trade_date=TRADE_DATE,
         policy_id=policy.policy_id,
         activated_by="unit_test",
-        reason="MiniQMT uses versioned policy",
+        reason="MiniQMT uses versioned vn.py-style policy",
     )
     runtime_config = {
         "runtime_profile": {
@@ -1840,7 +1893,7 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
     assert result.run.runtime_config["runtime_profile_activation"]["activation_id"] == runtime_activation.activation_id
     assert context["activation_id"] == activation.activation_id
     assert context["activation_source"] == "trade_date_activation"
-    assert context["algo_code"] == "CLOSE_PRICE"
+    assert context["algo_code"] == "SNIPER_MINIQMT"
     assert result.run.runtime_config["runtime_profile"]["hmm"]["model_snapshot_id"] == "platform_hmm_snapshot_new"
     assert result.run.runtime_config["qe_backtest_runtime_contract"]["runtime_features"]["hmm"]["package_bound"] is False
     assert client.place_calls, "MiniQMT should receive broker-authoritative order submit"

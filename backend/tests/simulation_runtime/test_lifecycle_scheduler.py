@@ -858,6 +858,11 @@ def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resub
     assert payload["local_sim_persistence"]["fill_count"] == len(paper_repo.list_fills_for_run(run_id))
     assert payload["strategy_performance"]["cash"] < 100_000
     assert payload["strategy_performance"]["positions"]
+    run_events = paper_repo.list_run_events("portfolio_shared", run_id=run_id)
+    success_event = next(event for event in run_events if event["event_type"] == "RUN_SUCCEEDED")
+    assert success_event["context"]["source"] == "simulation_runtime_local_sim"
+    assert success_event["context"]["simulation_run_id"] == run_id
+    assert success_event["context"]["fill_count"] == len(paper_repo.list_fills_for_run(run_id))
 
     restarted = scheduler.run_once(
         trade_date=TRADE_DATE,

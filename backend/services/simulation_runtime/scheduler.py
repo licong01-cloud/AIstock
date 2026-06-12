@@ -2658,6 +2658,21 @@ class SimulationLifecycleScheduler:
                     "position_count": len(positions),
                 },
             )
+            paper_repository.save_run_event(
+                run_id=run.run_id,
+                event_type="RUN_SUCCEEDED",
+                message="simulation runtime LocalSim execution persisted to Paper v2",
+                context={
+                    "source": "simulation_runtime_local_sim",
+                    "simulation_run_id": run.run_id,
+                    "execution_plan_id": execution.execution_plan.plan_id,
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "cash_ledger_count": len(cash_entries),
+                    "position_count": len(positions),
+                    "snapshot_time": snapshot_time.isoformat(),
+                },
+            )
             paper_repository.update_run_status(paper_repository.get_run(run.run_id), RunStatus.SUCCEEDED)
             self.repository.update_simulation_daily_run(
                 run.run_id,
