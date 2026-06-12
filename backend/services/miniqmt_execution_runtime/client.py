@@ -34,7 +34,7 @@ from .models import (
     MiniQMTExecutionRuntimeConfig,
     MiniQMTOperatorCommandResult,
 )
-from .repository import InMemoryMiniQMTExecutionRuntimeRepository, MiniQMTExecutionRuntimeRepository
+from .repository import MiniQMTExecutionRuntimeRepository, default_miniqmt_execution_runtime_repository
 from .runtime import MiniQMTExecutionRuntime
 
 RUNTIME_OWNER = "MiniQMTExecutionRuntime"
@@ -166,7 +166,7 @@ class MiniQMTExecutionRuntimeClient:
     """Facade used by product paths to enter the canonical runtime owner."""
 
     def __init__(self, *, repository: MiniQMTExecutionRuntimeRepository | None = None) -> None:
-        self.repository = repository or InMemoryMiniQMTExecutionRuntimeRepository()
+        self.repository = repository or default_miniqmt_execution_runtime_repository()
 
     def preview_managed_order_requests(
         self,
