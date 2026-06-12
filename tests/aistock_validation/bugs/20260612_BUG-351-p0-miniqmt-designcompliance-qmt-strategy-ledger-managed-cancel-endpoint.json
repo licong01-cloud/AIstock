@@ -1,0 +1,74 @@
+{
+  "actual": "Static scan shows backend/routers/qmt_strategy_ledger.py /orders/cancel calls QmtManagedOrderService(...).cancel_order(request) after the env gate; existing service tests cover direct cancel at service level, but the public router path remains non-runtime-owned.",
+  "allowed_write_scope": [
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "tests/aistock_validation/bugs/20260612_BUG-351-p0-miniqmt-designcompliance-qmt-strategy-ledger-managed-cancel-endpoint.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-351",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T14:16:21.236782Z",
+  "description": "Static scan shows backend/routers/qmt_strategy_ledger.py /orders/cancel calls QmtManagedOrderService(...).cancel_order(request) after the env gate; existing service tests cover direct cancel at service level, but the public router path remains non-runtime-owned.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-555a8c87a973",
+      "timestamp": "2026-06-12T14:16:21.236777Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:23-27,104-110,457-458,574-587,627-634,871-884"
+  ],
+  "expected": "MiniQMT cancel actions exposed to product/manual flows must use MiniQMTExecutionRuntime operator commands; qmt_strategy_ledger managed cancel must not directly call QmtManagedOrderService.cancel_order as a public product path.",
+  "first_seen_at": "2026-06-12T14:16:21.236782Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1037,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1037",
+  "last_seen_at": "2026-06-12T14:16:21.236782Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'QmtManagedOrderService\\(repository=repository, broker=_client_factory\\(\\)\\)\\.cancel_order' backend/routers/qmt_strategy_ledger.py",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] qmt_strategy_ledger managed cancel endpoint bypasses operator runtime",
+  "trigger_condition": {
+    "fingerprint": "555a8c87a9732dca1ef90dd4",
+    "source_event_id": "FE-20260612-555a8c87a973"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
