@@ -1,0 +1,81 @@
+{
+  "actual": "retry_loop allows retry while the task is running and submits directly without reading strategy_evo_config.node_parallelism or checking active loop count on the target node.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "tests/aistock_validation/bugs/20260612_BUG-342-qe-custom-evo-retry-bypasses-loop-node-parallelism-limits.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/history/qe/20260612_210707_bug-342-custom-evo-node-parallelism-queue.md",
+    "tests/aistock_validation/history/qe/20260612_182617_l3_qe-read-only-workspace-access-regression.md",
+    "tests/aistock_validation/history/qe/20260612_184807_l3_qe-read-only-workspace-access-regression.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-342",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T08:56:23.221191Z",
+  "description": "retry_loop allows retry while the task is running and submits directly without reading strategy_evo_config.node_parallelism or checking active loop count on the target node.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-d4e371ef3bb3",
+      "timestamp": "2026-06-12T08:56:23.221187Z"
+    }
+  ],
+  "evidence_uris": [
+    "analysis: retry_loop at backend/services/quantevolver/qe_evolution_service.py:3205 and custom_evo semaphore path at :6043/:6115",
+    "Unit regression added for custom_evo retry/rerun/start admission control because node_parallelism enforcement must be test-covered before PR.",
+    "implementation: custom_evo retry/start now uses a shared node_parallelism queue helper that leaves over-limit loops pending and only marks them running immediately before executor submit.",
+    "validation_history: tests/aistock_validation/history/qe/20260612_210707_bug-342-custom-evo-node-parallelism-queue.md"
+  ],
+  "expected": "custom_evo retry, rerun, append, resume and normal start all obey the same per-node node_parallelism limit; when active loops on the target node already reach the limit, additional loops stay pending/queued and automatically transition to running when capacity frees instead of raising an admission error or silently failing.",
+  "first_seen_at": "2026-06-12T08:56:23.221191Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1014,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1014",
+  "last_seen_at": "2026-06-12T08:56:23.221191Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect backend/services/quantevolver/qe_evolution_service.py retry_loop and submit_custom_evo_all_loops paths; retry_loop does not use node_parallelism Semaphore/admission control.",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom_evo retry bypasses loop node_parallelism limits",
+  "trigger_condition": {
+    "fingerprint": "d4e371ef3bb34840865cc347",
+    "source_event_id": "FE-20260612-d4e371ef3bb3"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

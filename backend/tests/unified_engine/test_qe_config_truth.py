@@ -21,6 +21,7 @@ from backend.routers.quantevolver_evolution import (
     _merge_strategy_runtime_flags,
     _reject_nested_runtime_flags,
 )
+from backend.services.quantevolver import qe_evolution_service as qes
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -976,6 +977,227 @@ def test_backtest_retry_isolation_gate_precedes_auto_fallback_try():
     payload_idx = source.index("retry_model_source, retry_extra_experiment_files", fallback_try_idx)
 
     assert require_idx < fallback_try_idx < payload_idx
+
+
+class _CustomEvoParallelismCursor:
+    def __init__(self, active_count: int):
+        self.active_count = active_count
+        self.sql: list[str] = []
+        self.params: list[object] = []
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(str(sql).split()))
+        self.params.append(params)
+
+    def fetchone(self):
+        if "COUNT(*) AS active_count" in self.sql[-1]:
+            return {"active_count": self.active_count}
+        return None
+
+
+class _CustomEvoQueueCursor:
+    def __init__(self, state: dict):
+        self.state = state
+        self.sql = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql = " ".join(str(sql).split())
+        self.state["sql"].append(self.sql)
+        self.state["params"].append(params)
+
+    def fetchone(self):
+        if "RETURNING status" in self.sql and self.state.get("transitioned", True):
+            return ("running",)
+        return None
+
+
+class _CustomEvoQueueConn:
+    def __init__(self, state: dict):
+        self.state = state
+
+    def __enter__(self):
+        self.state["enters"] += 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.state["exits"] += 1
+        return False
+
+    def cursor(self, *args, **kwargs):
+        return _CustomEvoQueueCursor(self.state)
+
+    def commit(self):
+        self.state["commits"] += 1
+
+
+def _custom_evo_task_for_parallelism(limit: int = 1):
+    return {
+        "task_id": "qe_parallel_task",
+        "task_type": "custom_evo",
+        "node_id": "node-a",
+        "strategy_evo_config": {
+            "loops": [
+                {"loop_index": 1, "node_id": "node-a", "factor_keys": ["Alpha001"], "model_id": "model_a"},
+                {"loop_index": 2, "node_id": "node-a", "factor_keys": ["Alpha002"], "model_id": "model_a"},
+            ],
+            "node_parallelism": {"node-a": limit},
+            "engine_mode": "unified",
+        },
+    }
+
+
+def test_custom_evo_parallelism_slot_queues_active_retry_on_same_node():
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    cursor = _CustomEvoParallelismCursor(active_count=1)
+
+    slot = scheduler._enforce_custom_evo_node_parallelism_slot(
+        cursor,
+        task=_custom_evo_task_for_parallelism(limit=1),
+        loop_index=2,
+        target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2",
+    )
+
+    assert slot is not None
+    assert slot["available"] is False
+    assert slot["active_count"] == 1
+    assert slot["limit"] == 1
+    assert any("pg_advisory_xact_lock" in sql for sql in cursor.sql)
+    assert any("COUNT(*) AS active_count" in sql for sql in cursor.sql)
+
+
+def test_custom_evo_parallelism_slot_allows_when_node_has_capacity():
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    cursor = _CustomEvoParallelismCursor(active_count=1)
+
+    slot = scheduler._enforce_custom_evo_node_parallelism_slot(
+        cursor,
+        task=_custom_evo_task_for_parallelism(limit=2),
+        loop_index=2,
+        target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2",
+    )
+
+    assert slot is not None
+    assert slot["node_id"] == "node-a"
+    assert slot["limit"] == 2
+    assert slot["active_count"] == 1
+    assert slot["available"] is True
+
+
+def test_retry_loop_queues_until_custom_evo_parallelism_before_executor_submit():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+    queue_idx = source.index("self._mark_custom_evo_loop_running_when_slot_available")
+    submit_idx = source.index("result = await executor.submit")
+
+    assert queue_idx < submit_idx
+
+
+def test_custom_evo_parallelism_queue_helper_marks_pending_then_running():
+    source = inspect.getsource(AutoEvolutionScheduler._mark_custom_evo_loop_running_when_slot_available)
+
+    assert "ELSE 'pending'" in source
+    assert "status = 'running'" in source
+    assert "await asyncio.sleep(poll_seconds)" in source
+
+
+def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    monkeypatch.setattr(scheduler, "_get_task_status", lambda task_id: "running")
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0, "sleeps": []}
+    slots = [
+        {
+            "task_id": "qe_parallel_task",
+            "loop_index": 2,
+            "node_id": "node-a",
+            "limit": 1,
+            "active_count": 1,
+            "available": False,
+        },
+        {
+            "task_id": "qe_parallel_task",
+            "loop_index": 2,
+            "node_id": "node-a",
+            "limit": 1,
+            "active_count": 0,
+            "available": True,
+        },
+    ]
+
+    def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
+        return slots.pop(0)
+
+    async def fake_sleep(seconds):
+        state["sleeps"].append(seconds)
+
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(qes.asyncio, "sleep", fake_sleep)
+
+    slot = asyncio.run(
+        scheduler._mark_custom_evo_loop_running_when_slot_available(
+            task=_custom_evo_task_for_parallelism(limit=1),
+            loop_index=2,
+            target_node_id="node-a",
+            loop_db_id="qe_parallel_task_Loop2",
+            action_type="retry",
+            insert_if_missing=True,
+            poll_seconds=15,
+        )
+    )
+
+    assert slot is not None
+    assert slot["available"] is True
+    assert state["sleeps"] == [15]
+    assert state["enters"] == state["exits"] == 2
+    assert any("VALUES (%s, %s, %s, 'pending', %s, %s)" in sql for sql in state["sql"])
+    assert any("VALUES (%s, %s, %s, 'running', %s, %s)" in sql for sql in state["sql"])
+
+
+def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    monkeypatch.setattr(scheduler, "_get_task_status", lambda task_id: "running")
+    state = {
+        "sql": [],
+        "params": [],
+        "commits": 0,
+        "enters": 0,
+        "exits": 0,
+        "transitioned": False,
+    }
+
+    def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
+        return {
+            "task_id": "qe_parallel_task",
+            "loop_index": 2,
+            "node_id": "node-a",
+            "limit": 1,
+            "active_count": 0,
+            "available": True,
+        }
+
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+
+    slot = asyncio.run(
+        scheduler._mark_custom_evo_loop_running_when_slot_available(
+            task=_custom_evo_task_for_parallelism(limit=1),
+            loop_index=2,
+            target_node_id="node-a",
+            loop_db_id="qe_parallel_task_Loop2",
+            action_type="retry",
+        )
+    )
+
+    assert slot is None
+    assert any("RETURNING status" in sql for sql in state["sql"])
+    assert not any("UPDATE qe_evolution_tasks SET status = 'running'" in sql for sql in state["sql"])
 
 
 def test_suspend_filter_wraps_topk_strategy():
