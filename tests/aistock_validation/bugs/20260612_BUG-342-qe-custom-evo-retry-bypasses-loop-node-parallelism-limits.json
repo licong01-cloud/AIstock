@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/qe_evolution_service.py",
     "tests/aistock_validation/bugs/20260612_BUG-342-qe-custom-evo-retry-bypasses-loop-node-parallelism-limits.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/history/qe/20260612_182617_l3_qe-read-only-workspace-access-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-342",
@@ -24,7 +26,8 @@
     }
   ],
   "evidence_uris": [
-    "analysis: retry_loop at backend/services/quantevolver/qe_evolution_service.py:3205 and custom_evo semaphore path at :6043/:6115"
+    "analysis: retry_loop at backend/services/quantevolver/qe_evolution_service.py:3205 and custom_evo semaphore path at :6043/:6115",
+    "Unit regression added for custom_evo retry/rerun/start admission control because node_parallelism enforcement must be test-covered before PR."
   ],
   "expected": "custom_evo retry, rerun, append, resume and normal start all obey the same per-node node_parallelism limit, including overlap with already running loops on the target node.",
   "first_seen_at": "2026-06-12T08:56:23.221191Z",
@@ -44,7 +47,8 @@
   "reproduce_command": "Inspect backend/services/quantevolver/qe_evolution_service.py retry_loop and submit_custom_evo_all_loops paths; retry_loop does not use node_parallelism Semaphore/admission control.",
   "required_verification": [
     "l0",
-    "qe_read_l3"
+    "qe_read_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

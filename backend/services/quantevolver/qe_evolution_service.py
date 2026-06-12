@@ -96,6 +96,7 @@ CUSTOM_EVO_STARTED_LOOP_STATUSES = {
     "timeout",
     "stopped",
 }
+CUSTOM_EVO_ACTIVE_LOOP_STATUSES = ("running", "processing")
 
 
 def normalize_qe_loop_retry_mode(mode: Optional[str]) -> str:
@@ -3252,15 +3253,30 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
-        effective_node_id = loop_row.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
-        if not loop_row.get("node_id"):
-            with get_conn() as conn:
-                with conn.cursor() as cur:
+        if task.get("task_type") == "custom_evo":
+            retry_slot = self._resolve_custom_evo_parallelism_slot(
+                dict(task),
+                loop_index,
+                loop_row.get("node_id"),
+            )
+            effective_node_id = retry_slot["node_id"] if retry_slot else resolve_default_qe_node_id()
+        else:
+            effective_node_id = loop_row.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if not loop_row.get("node_id"):
                     cur.execute(
                         "UPDATE qe_evolution_loops SET node_id = %s, updated_at = NOW() WHERE loop_id = %s",
                         (effective_node_id, evolution_loop_db_id),
                     )
-                conn.commit()
+                self._enforce_custom_evo_node_parallelism_slot(
+                    cur,
+                    task=dict(task),
+                    loop_index=loop_index,
+                    target_node_id=effective_node_id,
+                    loop_db_id=evolution_loop_db_id,
+                )
+            conn.commit()
         await preflight_qe_node(effective_node_id)
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
@@ -3325,6 +3341,13 @@ class AutoEvolutionScheduler:
         # 4. 更新 loop 状态为 running
         with get_conn() as conn:
             with conn.cursor() as cur:
+                self._enforce_custom_evo_node_parallelism_slot(
+                    cur,
+                    task=dict(task),
+                    loop_index=loop_index,
+                    target_node_id=effective_node_id,
+                    loop_db_id=evolution_loop_db_id,
+                )
                 cur.execute(
                     "UPDATE qe_evolution_loops SET status = 'running', agent_analysis = NULL, updated_at = NOW() WHERE loop_id = %s",
                     (evolution_loop_db_id,),
@@ -5380,6 +5403,109 @@ class AutoEvolutionScheduler:
         node_parallelism = normalize_node_parallelism(selected_node_ids, raw_node_parallelism)
         return loops_config, loop1_node_id, node_parallelism
 
+    def _resolve_custom_evo_parallelism_slot(
+        self,
+        task: Dict[str, Any],
+        loop_index: int,
+        target_node_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve the per-node concurrency slot for a custom_evo loop."""
+
+        if task.get("task_type") != "custom_evo":
+            return None
+
+        task_id = str(task.get("task_id") or "")
+        strategy_config = self._parse_custom_evo_strategy_config(
+            task.get("strategy_evo_config"),
+            task_id=task_id,
+        )
+        loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+            [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
+            task.get("node_id"),
+        )
+        node_parallelism = normalize_node_parallelism(
+            selected_node_ids,
+            strategy_config.get("node_parallelism"),
+        )
+        selected_loop = next(
+            (
+                loop_cfg
+                for loop_cfg in loops_config
+                if int(loop_cfg.get("loop_index") or 0) == int(loop_index)
+            ),
+            None,
+        )
+        if not selected_loop:
+            raise ValueError(f"Loop configuration missing for custom_evo Loop{loop_index} in task {task_id}")
+
+        effective_node_id = (
+            str(target_node_id or selected_loop.get("node_id") or loop1_node_id or "").strip()
+            or resolve_default_qe_node_id()
+        )
+        if effective_node_id not in node_parallelism:
+            raise ValueError(
+                "QE_CUSTOM_EVO_NODE_PARALLELISM_NODE_MISMATCH: "
+                f"Loop{loop_index} targets node {effective_node_id!r}, "
+                f"but node_parallelism only covers {sorted(node_parallelism)}"
+            )
+        return {
+            "task_id": task_id,
+            "loop_index": int(loop_index),
+            "node_id": effective_node_id,
+            "limit": int(node_parallelism[effective_node_id]),
+            "node_parallelism": node_parallelism,
+        }
+
+    def _enforce_custom_evo_node_parallelism_slot(
+        self,
+        cur,
+        *,
+        task: Dict[str, Any],
+        loop_index: int,
+        target_node_id: Optional[str],
+        loop_db_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fail fast when a retry/rerun/start would exceed node_parallelism."""
+
+        slot = self._resolve_custom_evo_parallelism_slot(task, loop_index, target_node_id)
+        if slot is None:
+            return None
+
+        lock_key = f"qe_custom_evo_parallelism:{slot['task_id']}"
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+        cur.execute(
+            """
+            SELECT COUNT(*) AS active_count
+            FROM qe_evolution_loops
+            WHERE task_id = %s
+              AND loop_id <> %s
+              AND node_id = %s
+              AND status = ANY(%s)
+            """,
+            (
+                slot["task_id"],
+                loop_db_id,
+                slot["node_id"],
+                list(CUSTOM_EVO_ACTIVE_LOOP_STATUSES),
+            ),
+        )
+        row = cur.fetchone()
+        if isinstance(row, dict):
+            active_count = int(row.get("active_count") or 0)
+        elif row:
+            active_count = int(row[0] or 0)
+        else:
+            active_count = 0
+        slot["active_count"] = active_count
+        if active_count >= slot["limit"]:
+            raise ValueError(
+                "QE_CUSTOM_EVO_NODE_PARALLELISM_LIMIT: "
+                f"task {slot['task_id']} node {slot['node_id']} already has "
+                f"{active_count}/{slot['limit']} active loops; wait for an active loop "
+                "to finish before retrying, rerunning, appending, or resuming loops."
+            )
+        return slot
+
     async def rerun_custom_evo_loop(
         self,
         task_id: str,
@@ -5788,6 +5914,13 @@ class AutoEvolutionScheduler:
                         f"Loop {evolution_loop_db_id} is locked to node {existing_node_id}; "
                         f"refusing to submit on {effective_node_id}"
                     )
+                self._enforce_custom_evo_node_parallelism_slot(
+                    cur,
+                    task=dict(task),
+                    loop_index=loop_index,
+                    target_node_id=effective_node_id,
+                    loop_db_id=evolution_loop_db_id,
+                )
                 cur.execute("""
                     INSERT INTO qe_evolution_loops
                     (loop_id, task_id, loop_index, status, action_type, node_id)

@@ -978,6 +978,81 @@ def test_backtest_retry_isolation_gate_precedes_auto_fallback_try():
     assert require_idx < fallback_try_idx < payload_idx
 
 
+class _CustomEvoParallelismCursor:
+    def __init__(self, active_count: int):
+        self.active_count = active_count
+        self.sql: list[str] = []
+        self.params: list[object] = []
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(str(sql).split()))
+        self.params.append(params)
+
+    def fetchone(self):
+        if "COUNT(*) AS active_count" in self.sql[-1]:
+            return {"active_count": self.active_count}
+        return None
+
+
+def _custom_evo_task_for_parallelism(limit: int = 1):
+    return {
+        "task_id": "qe_parallel_task",
+        "task_type": "custom_evo",
+        "node_id": "node-a",
+        "strategy_evo_config": {
+            "loops": [
+                {"loop_index": 1, "node_id": "node-a", "factor_keys": ["Alpha001"], "model_id": "model_a"},
+                {"loop_index": 2, "node_id": "node-a", "factor_keys": ["Alpha002"], "model_id": "model_a"},
+            ],
+            "node_parallelism": {"node-a": limit},
+            "engine_mode": "unified",
+        },
+    }
+
+
+def test_custom_evo_parallelism_slot_rejects_active_retry_on_same_node():
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    cursor = _CustomEvoParallelismCursor(active_count=1)
+
+    with pytest.raises(ValueError, match="QE_CUSTOM_EVO_NODE_PARALLELISM_LIMIT"):
+        scheduler._enforce_custom_evo_node_parallelism_slot(
+            cursor,
+            task=_custom_evo_task_for_parallelism(limit=1),
+            loop_index=2,
+            target_node_id="node-a",
+            loop_db_id="qe_parallel_task_Loop2",
+        )
+
+    assert any("pg_advisory_xact_lock" in sql for sql in cursor.sql)
+    assert any("COUNT(*) AS active_count" in sql for sql in cursor.sql)
+
+
+def test_custom_evo_parallelism_slot_allows_when_node_has_capacity():
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    cursor = _CustomEvoParallelismCursor(active_count=1)
+
+    slot = scheduler._enforce_custom_evo_node_parallelism_slot(
+        cursor,
+        task=_custom_evo_task_for_parallelism(limit=2),
+        loop_index=2,
+        target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2",
+    )
+
+    assert slot is not None
+    assert slot["node_id"] == "node-a"
+    assert slot["limit"] == 2
+    assert slot["active_count"] == 1
+
+
+def test_retry_loop_checks_custom_evo_parallelism_before_running_status_update():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+    enforce_idx = source.index("self._enforce_custom_evo_node_parallelism_slot")
+    running_update_idx = source.index("UPDATE qe_evolution_loops SET status = 'running'")
+
+    assert enforce_idx < running_update_idx
+
+
 def test_suspend_filter_wraps_topk_strategy():
     yaml_text = _base_yaml(
         custom_params={
