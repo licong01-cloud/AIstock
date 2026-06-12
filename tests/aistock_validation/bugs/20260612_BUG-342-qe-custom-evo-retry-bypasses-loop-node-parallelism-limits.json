@@ -5,6 +5,7 @@
     "tests/aistock_validation/bugs/20260612_BUG-342-qe-custom-evo-retry-bypasses-loop-node-parallelism-limits.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/history/qe/20260612_210707_bug-342-custom-evo-node-parallelism-queue.md",
     "tests/aistock_validation/history/qe/20260612_182617_l3_qe-read-only-workspace-access-regression.md",
     "tests/aistock_validation/history/qe/20260612_184807_l3_qe-read-only-workspace-access-regression.md"
   ],
@@ -28,9 +29,11 @@
   ],
   "evidence_uris": [
     "analysis: retry_loop at backend/services/quantevolver/qe_evolution_service.py:3205 and custom_evo semaphore path at :6043/:6115",
-    "Unit regression added for custom_evo retry/rerun/start admission control because node_parallelism enforcement must be test-covered before PR."
+    "Unit regression added for custom_evo retry/rerun/start admission control because node_parallelism enforcement must be test-covered before PR.",
+    "implementation: custom_evo retry/start now uses a shared node_parallelism queue helper that leaves over-limit loops pending and only marks them running immediately before executor submit.",
+    "validation_history: tests/aistock_validation/history/qe/20260612_210707_bug-342-custom-evo-node-parallelism-queue.md"
   ],
-  "expected": "custom_evo retry, rerun, append, resume and normal start all obey the same per-node node_parallelism limit, including overlap with already running loops on the target node.",
+  "expected": "custom_evo retry, rerun, append, resume and normal start all obey the same per-node node_parallelism limit; when active loops on the target node already reach the limit, additional loops stay pending/queued and automatically transition to running when capacity frees instead of raising an admission error or silently failing.",
   "first_seen_at": "2026-06-12T08:56:23.221191Z",
   "fix_branch": null,
   "fix_commit": null,
