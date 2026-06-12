@@ -46,9 +46,9 @@ class ConfigManager:
                 "required": False,
                 "type": "text",
             },
-            "TDX_BLOCK_DIR": {
+            "TDX_CLIENT_PATH": {
                 "value": "",
-                "description": "通达信板块文件目录路径（如 C:\\zd_gjzq\\T0002\\blocknew），启用通达信板块管理功能",
+                "description": "通达信客户端安装目录（如 C:\\new_tdx64），启用通达信板块管理功能（通过 TdxQuant API）",
                 "required": False,
                 "type": "text",
             },
@@ -374,7 +374,7 @@ class ConfigManager:
                 f'TDX_API_BASE="{config.get("TDX_API_BASE", "http://localhost:8080")}"'
             )
             lines.append(
-                f'TDX_BLOCK_DIR="{config.get("TDX_BLOCK_DIR", "")}"'
+                f'TDX_CLIENT_PATH="{config.get("TDX_CLIENT_PATH", "")}"'
             )
             lines.append("")
 
