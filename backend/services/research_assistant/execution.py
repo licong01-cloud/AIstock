@@ -731,6 +731,8 @@ class ResearchAssistantExecutionMixin:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         args = self._summary_adapter_args(payload)
+        if server_key == "aistock-local-data" and tool_name == "local_data_get_preset_daily_status":
+            return self._execute_local_data_daily_status_read(tool, payload, args)
         server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
         health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
         domain = str(health.get("domain") or server_key)
@@ -794,6 +796,300 @@ class ResearchAssistantExecutionMixin:
             "error_json": {},
             "retry_count": 0,
             "transport": "research_assistant_catalog_summary_adapter",
+        }
+
+    def _local_data_facade_service(self) -> Any:
+        factory = getattr(self, "local_data_service_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.local_data_management import LocalDataManagementService
+
+        return LocalDataManagementService()
+
+    def _execute_local_data_daily_status_read(
+        self,
+        tool: dict[str, Any],
+        payload: dict[str, Any],
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-local-data")
+        tool_name = str(tool.get("tool_name") or "local_data_get_preset_daily_status")
+        service = self._local_data_facade_service()
+        try:
+            daily = service.get_preset_daily_status()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "status": "failed",
+                "result_json": {},
+                "result_cards": [{"title": f"{server_key}/{tool_name}", "summary": f"local-data read failed: {exc}"}],
+                "artifact_refs": [],
+                "error_json": {"code": "local_data_daily_status_read_failed", "human_reason": str(exc), "retryable": True},
+                "retry_count": 0,
+                "transport": "local_data_facade_read_adapter",
+            }
+
+        partial_errors: list[dict[str, str]] = []
+
+        def optional_call(name: str, func: Any) -> dict[str, Any]:
+            try:
+                result = func()
+                return result if isinstance(result, dict) else {}
+            except Exception as exc:  # noqa: BLE001
+                partial_errors.append({"source": name, "error": str(exc)})
+                return {}
+
+        preset_stats = optional_call("local_data_get_preset_stats", service.get_preset_stats)
+        jobs = optional_call("local_data_list_jobs", lambda: service.list_jobs(limit=50, active_only=False))
+        targets = optional_call("local_data_list_sync_targets", lambda: service.list_sync_targets(limit=100))
+        status_report = self._local_data_daily_status_report(
+            daily=daily,
+            preset_stats=preset_stats,
+            jobs=jobs,
+            targets=targets,
+            partial_errors=partial_errors,
+            trade_date=str(args.get("trade_date") or payload.get("trade_date") or "").strip() or None,
+        )
+        items = status_report["items"]
+        artifact_refs = [
+            artifact_ref(
+                "local_data_daily_sync_status",
+                "research_assistant:aistock-local-data:local_data_get_preset_daily_status",
+                {
+                    "source": "local_data_facade_read_adapter",
+                    "trade_date": status_report["trade_date"],
+                    "group_counts": status_report["group_counts"],
+                },
+            )
+        ]
+        result_json = summary_envelope(
+            domain="local_data",
+            items=items,
+            total=len(items),
+            limit=int(args.get("limit") or max(20, len(items))),
+            offset=int(args.get("offset") or 0),
+            omitted_sections=["raw_payload", "full_logs", "database_rows"],
+            detail_tool=f"{server_key}/{tool_name}",
+            detail_args_hint={"trade_date": status_report["trade_date"]},
+            artifact_refs=artifact_refs,
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "local_data_daily_sync_status",
+                "source": "local_data_facade_read_adapter",
+                "live_backend_called": True,
+                "local_data_daily_status": True,
+                "trade_date": status_report["trade_date"],
+                "as_of": status_report["as_of"],
+                "group_counts": status_report["group_counts"],
+                "status_groups": status_report["status_groups"],
+                "evidence_sources": status_report["evidence_sources"],
+                "partial_errors": partial_errors,
+                "next_step": "Review failed, blocked, or not-run groups; use repair planning only after explicit operator request.",
+            },
+        )
+        assert_summary_payload(result_json)
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [
+                {
+                    "title": f"{server_key}/{tool_name}",
+                    "summary": "Prepared today's local-data sync status groups from local-data read-only facade evidence.",
+                    "route": f"{server_key}/{tool_name}",
+                    "summary_first": True,
+                    "group_counts": status_report["group_counts"],
+                    "next_step": result_json["next_step"],
+                }
+            ],
+            "artifact_refs": artifact_refs,
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "local_data_facade_read_adapter",
+        }
+
+    @staticmethod
+    def _unwrap_local_data_items(response: dict[str, Any]) -> Any:
+        data = response.get("data") if isinstance(response, dict) else None
+        if isinstance(data, dict) and "items" in data:
+            return data.get("items")
+        if isinstance(response, dict):
+            return response.get("items")
+        return None
+
+    @staticmethod
+    def _local_data_dataset_from_job(job: dict[str, Any]) -> str:
+        for container_key in ("meta", "summary", "payload_json", "request_json"):
+            container = job.get(container_key)
+            if isinstance(container, dict):
+                for key in ("dataset", "data_kind"):
+                    value = container.get(key)
+                    if value:
+                        return str(value)
+        for key in ("dataset", "data_kind"):
+            value = job.get(key)
+            if value:
+                return str(value)
+        return "unknown"
+
+    @staticmethod
+    def _local_data_status_group(status: Any) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"success", "succeeded", "completed", "done", "ok"}:
+            return "success"
+        if normalized in {"failed", "error", "fail"}:
+            return "failed"
+        if normalized in {"running", "queued", "pending", "in_progress", "started"}:
+            return "running"
+        return "not_synced"
+
+    @classmethod
+    def _local_data_daily_status_report(
+        cls,
+        *,
+        daily: dict[str, Any],
+        preset_stats: dict[str, Any],
+        jobs: dict[str, Any],
+        targets: dict[str, Any],
+        partial_errors: list[dict[str, str]],
+        trade_date: str | None,
+    ) -> dict[str, Any]:
+        daily_items = cls._unwrap_local_data_items(daily)
+        daily_by_dataset = daily_items if isinstance(daily_items, dict) else {}
+        stats_items = cls._unwrap_local_data_items(preset_stats)
+        stats_list = stats_items if isinstance(stats_items, list) else []
+        job_items = cls._unwrap_local_data_items(jobs)
+        jobs_list = job_items if isinstance(job_items, list) else []
+        target_items = cls._unwrap_local_data_items(targets)
+        targets_list = target_items if isinstance(target_items, list) else []
+        active_job_statuses = {"running", "queued", "pending", "in_progress", "started"}
+        active_job_by_dataset: dict[str, dict[str, Any]] = {}
+        for job in jobs_list:
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "").lower()
+            if status not in active_job_statuses:
+                continue
+            dataset = cls._local_data_dataset_from_job(job)
+            if dataset != "unknown" and dataset not in active_job_by_dataset:
+                active_job_by_dataset[dataset] = job
+
+        expected_datasets: list[str] = []
+        for item in stats_list:
+            if not isinstance(item, dict):
+                continue
+            dataset = item.get("dataset") or item.get("data_kind") or item.get("name")
+            if dataset and str(dataset) not in expected_datasets:
+                expected_datasets.append(str(dataset))
+        for dataset in daily_by_dataset:
+            if str(dataset) not in expected_datasets:
+                expected_datasets.append(str(dataset))
+        for job in jobs_list:
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "").lower()
+            if status not in active_job_statuses:
+                continue
+            dataset = cls._local_data_dataset_from_job(job)
+            if dataset != "unknown" and dataset not in expected_datasets:
+                expected_datasets.append(dataset)
+        for target in targets_list:
+            if not isinstance(target, dict):
+                continue
+            dataset = target.get("dataset")
+            if dataset and str(dataset) not in expected_datasets:
+                expected_datasets.append(str(dataset))
+
+        target_by_dataset: dict[str, list[dict[str, Any]]] = {}
+        for target in targets_list:
+            if isinstance(target, dict) and target.get("dataset"):
+                target_by_dataset.setdefault(str(target["dataset"]), []).append(target)
+
+        groups: dict[str, list[dict[str, Any]]] = {
+            "success": [],
+            "failed": [],
+            "not_synced": [],
+            "running": [],
+            "blocked": [],
+        }
+        items: list[dict[str, Any]] = []
+        for dataset in sorted(expected_datasets):
+            status_info = daily_by_dataset.get(dataset)
+            if isinstance(status_info, dict):
+                raw_status = status_info.get("status")
+                created_at = status_info.get("created_at")
+                finished_at = status_info.get("finished_at")
+            else:
+                raw_status = status_info
+                created_at = None
+                finished_at = None
+            group = cls._local_data_status_group(raw_status)
+            active_job = active_job_by_dataset.get(dataset)
+            if active_job and group == "not_synced":
+                raw_status = active_job.get("status") or raw_status
+                created_at = created_at or active_job.get("created_at")
+                finished_at = finished_at or active_job.get("finished_at")
+                group = cls._local_data_status_group(raw_status)
+            related_targets = target_by_dataset.get(dataset, [])
+            blocked_targets = [target for target in related_targets if str(target.get("target_status") or "") == "final_blocked"]
+            retry_targets = [target for target in related_targets if str(target.get("target_status") or "") == "retry"]
+            if blocked_targets:
+                group = "blocked"
+            elif retry_targets and group == "not_synced":
+                group = "failed"
+            item = {
+                "dataset": dataset,
+                "status": str(raw_status or "not_run"),
+                "status_group": group,
+                "created_at": created_at,
+                "finished_at": finished_at,
+                "job_id": active_job.get("job_id") if active_job else None,
+                "target_statuses": sorted({str(target.get("target_status") or "unknown") for target in related_targets})[:5],
+                "last_error": next((str(target.get("last_error_message")) for target in [*blocked_targets, *retry_targets] if target.get("last_error_message")), None),
+            }
+            groups[group].append(item)
+            items.append(item)
+
+        seen_running = {str(item.get("dataset")) for item in groups["running"]}
+        for job in jobs_list:
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "").lower()
+            if status not in active_job_statuses:
+                continue
+            dataset = cls._local_data_dataset_from_job(job)
+            if dataset in seen_running:
+                continue
+            item = {
+                "dataset": dataset,
+                "status": status,
+                "status_group": "running",
+                "job_id": job.get("job_id"),
+                "created_at": job.get("created_at"),
+                "finished_at": job.get("finished_at"),
+                "target_statuses": [],
+                "last_error": None,
+            }
+            groups["running"].append(item)
+            items.append(item)
+            seen_running.add(dataset)
+
+        trace = daily.get("trace") if isinstance(daily.get("trace"), dict) else {}
+        evidence_sources = [
+            "local_data_get_preset_daily_status",
+            "local_data_get_preset_stats",
+            "local_data_list_jobs",
+            "local_data_list_sync_targets",
+        ]
+        if partial_errors:
+            evidence_sources.append("partial_read_errors")
+        return {
+            "trade_date": trade_date or utc_now().date().isoformat(),
+            "as_of": str(trace.get("generated_at") or utc_now().isoformat()),
+            "items": items,
+            "status_groups": groups,
+            "group_counts": {key: len(value) for key, value in groups.items()},
+            "evidence_sources": evidence_sources,
         }
 
     def _summary_adapter_items(self, tool: dict[str, Any], args: dict[str, Any], *, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
