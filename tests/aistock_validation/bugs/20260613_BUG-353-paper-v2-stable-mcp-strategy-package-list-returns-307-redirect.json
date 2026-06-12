@@ -1,0 +1,111 @@
+{
+  "actual": "Post-merge MCP protocol validation found aistock-paper-v2-stable can list tools, but calling strategy_packages_list through the unified gateway requests /api/v1/strategy-packages/?limit=1 and receives HTTP 307 non-JSON. The wrapper should call the canonical /strategy-packages route without a trailing slash and should not fail on redirect for normal read tools.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260613_BUG-353-paper-v2-stable-mcp-strategy-package-list-returns-307-redirect.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/mcp/modules/_gateway_specs.py",
+    "backend/mcp/modules/strategy_packages.py",
+    "tests/mcp/test_mcp_gateway_calls.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-353",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T19:22:25.211464Z",
+  "description": "Post-merge MCP protocol validation found aistock-paper-v2-stable can list tools, but calling strategy_packages_list through the unified gateway requests /api/v1/strategy-packages/?limit=1 and receives HTTP 307 non-JSON. The wrapper should call the canonical /strategy-packages route without a trailing slash and should not fail on redirect for normal read tools.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-035fda91d8d1",
+      "timestamp": "2026-06-12T19:22:25.211459Z"
+    },
+    {
+      "timestamp": "2026-06-13T03:23:30+08:00",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Runtime validation localized BUG-353 to spec-driven MCP path construction and the focused gateway call regression test.",
+      "paths": [
+        "backend/mcp/modules/_gateway_specs.py",
+        "backend/mcp/modules/strategy_packages.py",
+        "tests/mcp/test_mcp_gateway_calls.py"
+      ]
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-12T19:22:25.211464Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1044,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1044",
+  "last_seen_at": "2026-06-12T19:22:25.211464Z",
+  "module": "mcp.gateway",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python debug_tools/mcp/list_tools_smoke.py --server aistock-paper-v2-stable && python - <<'PY'  # MCP ClientSession call_tool strategy_packages_list with payload {limit:1}; observed HTTP 307 non-JSON from /api/v1/strategy-packages/?limit=1",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "mcp.gateway"
+  ],
+  "title": "Paper v2 stable MCP strategy package list returns 307 redirect",
+  "trigger_condition": {
+    "fingerprint": "035fda91d8d134202659d6e9",
+    "source_event_id": "FE-20260613-035fda91d8d1"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:mcp.gateway",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/api/v1/strategy-packages/?limit=1",
+    "ui_routes": [
+      "/api/v1/strategy-packages/?limit=1"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

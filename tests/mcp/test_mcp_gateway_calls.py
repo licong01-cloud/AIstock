@@ -139,7 +139,7 @@ def test_paper_v2_stable_profile_calls_stable_backend_facades() -> None:
 
     _run(exercise())
     assert seen == [
-        ("GET", "http://127.0.0.1:8001/api/v1/strategy-packages/?status=ACTIVE&limit=10", None),
+        ("GET", "http://127.0.0.1:8001/api/v1/strategy-packages?status=ACTIVE&limit=10", None),
         ("GET", "http://127.0.0.1:8001/api/v1/selection-center/runs?limit=5", None),
         ("GET", "http://127.0.0.1:8001/api/v1/advisory/programs?include_archived=false", None),
         (
