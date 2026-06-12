@@ -175,6 +175,17 @@ def test_bug_326_local_data_sync_check_routes_to_read_only_health_overview() -> 
         assert route["tool_name"] != "local_data_apply_repair_confirmed"
 
 
+def test_bug_343_local_data_today_sync_question_routes_to_daily_status() -> None:
+    route = route_request("\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65")
+
+    assert route["domain"] == "local_data"
+    assert route["server_key"] == "aistock-local-data"
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    assert route["side_effect"] == "read_only"
+    assert route["tool_name"] != "local_data_health_overview"
+    assert route["tool_name"] != "local_data_apply_repair_confirmed"
+
+
 def test_bug_326_local_data_repair_or_sync_execution_stays_preflight_only() -> None:
     cases = [
         "\u4fee\u590d\u672c\u5730\u6570\u636e\u7f3a\u53e3",

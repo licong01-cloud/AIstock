@@ -42,6 +42,28 @@ LOCAL_DATA_STATUS_TERMS = (
 )
 LOCAL_DATA_REPAIR_TERMS = ("repair", "gap", "fix", "修复", "缺口", "补齐", "修复计划")
 LOCAL_DATA_DATASET_TERMS = ("dataset", "trade_date", "calendar", "数据集", "交易日", "日历")
+LOCAL_DATA_DAILY_STATUS_TERMS = (
+    "today",
+    "daily",
+    "current",
+    "completed",
+    "finished",
+    "which completed",
+    "task status",
+    "job status",
+    "run status",
+    "\u4eca\u5929",
+    "\u5f53\u5929",
+    "\u5f53\u65e5",
+    "\u5f53\u524d",
+    "\u672c\u65e5",
+    "\u54ea\u4e9b",
+    "\u5df2\u5b8c\u6210",
+    "\u5b8c\u6210",
+    "\u4efb\u52a1",
+    "\u8fd0\u884c\u60c5\u51b5",
+    "\u6267\u884c\u72b6\u6001",
+)
 LOCAL_DATA_ANCHOR_TERMS = (
     "local data",
     "local_data",
@@ -211,9 +233,15 @@ def select_tool(domain: McpDomain, message: str) -> str:
     if domain == McpDomain.LOCAL_DATA:
         has_repair = _contains_any(lower, LOCAL_DATA_REPAIR_TERMS)
         has_dataset = _contains_any(lower, LOCAL_DATA_DATASET_TERMS)
+        has_daily_status = _contains_any(lower, LOCAL_DATA_DAILY_STATUS_TERMS) and _contains_any(
+            lower,
+            LOCAL_DATA_ANCHOR_TERMS + LOCAL_DATA_STATUS_TERMS + ("sync", "data sync", "\u540c\u6b65"),
+        )
         has_status_check = _contains_any(lower, LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + PLAN_TERMS)
         if has_repair:
             return "local_data_plan_repair"
+        if has_daily_status:
+            return "local_data_get_preset_daily_status"
         if has_dataset and has_status_check:
             return "local_data_get_dataset_status"
         if has_status_check:
