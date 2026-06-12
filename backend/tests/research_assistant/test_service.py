@@ -28,7 +28,10 @@ from backend.services.research_assistant.models import (
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
+    DialogueIntent,
+    DialogueMode,
     LlmCallResult,
+    ModeDecision,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
 )
@@ -940,6 +943,97 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     assert summary["group_counts"]["failed"] == 1
     assert summary["group_counts"]["running"] == 2
     assert summary["group_counts"]["blocked"] == 1
+
+
+def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
+    class LocalDataSingleShotLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            if len(self.calls) > 1:
+                raise AssertionError("terminal local-data summary should not ask the LLM to re-compose")
+            return LlmCallResult(
+                content="Unsourced placeholder answer that must not become the final reply.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = LocalDataSingleShotLlmClient()
+    svc = _chat_service(fake)
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\u5417\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65\uff0c\u7ed9\u6211\u4e00\u4e2a\u6c47\u603b\u4fe1\u606f"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "Insufficient evidence" not in text
+    assert "Unsourced placeholder" not in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert len(fake.calls) == 1
+    react = result["cards"]["react_grounding"]
+    assert react["stopped_reason"] == "evidence_summary_fallback"
+    assert react["iterations"] == 1
+    assert react["evidence_guard"]["reason"] == "ok"
+    assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
+
+
+def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -> None:
+    svc = _chat_service(FakeLlmClient())
+    summary = {
+        "local_data_daily_status": True,
+        "response_mode": "local_data_daily_sync_status",
+        "source": "local_data_facade_read_adapter",
+        "trade_date": "2026-06-12",
+        "as_of": "2026-06-12T01:06:00+00:00",
+        "evidence_sources": ["local_data_get_preset_daily_status"],
+        "group_counts": {"success": 1, "failed": 0, "not_synced": 0, "running": 0, "blocked": 0},
+        "status_groups": {
+            "success": [{"dataset": "daily_basic", "status": "success", "finished_at": "2026-06-12T09:02:00+08:00"}],
+            "failed": [],
+            "not_synced": [],
+            "running": [],
+            "blocked": [],
+        },
+    }
+    cards = {
+        "mcp_execution_result": {
+            "auto_executed": True,
+            "status": "succeeded",
+            "server_key": "aistock-local-data",
+            "tool_name": "local_data_get_preset_daily_status",
+            "route": "aistock-local-data/local_data_get_preset_daily_status",
+        },
+        "mcp_summary_result": summary,
+        "react_grounding": {"stopped_reason": "max_iterations_exhausted"},
+    }
+    mode_decision = ModeDecision(
+        mode=DialogueMode.PLANNING,
+        intent_type=DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST,
+        confidence=0.96,
+        mode_reason="explicit_task_request",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    text = svc._compose_assistant_reply(
+        "????????",
+        "Insufficient evidence: max tool iterations reached without reliable evidence.",
+        cards,
+        mode_decision,
+    )
+
+    assert "Insufficient evidence" not in text
+    assert "daily_basic" in text
+    assert "local_data_get_preset_daily_status" in text
 
 
 def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
