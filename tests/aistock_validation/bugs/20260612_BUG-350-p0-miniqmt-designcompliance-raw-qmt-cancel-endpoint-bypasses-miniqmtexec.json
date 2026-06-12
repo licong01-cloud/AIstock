@@ -1,0 +1,74 @@
+{
+  "actual": "POST /api/v1/qmt/cancel can call the fake broker with only QMT_TRADE_PASSWORD set; existing test test_raw_cancel_router_returns_broker_diagnostic passes without AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS.",
+  "allowed_write_scope": [
+    "backend/routers/qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "tests/aistock_validation/bugs/20260612_BUG-350-p0-miniqmt-designcompliance-raw-qmt-cancel-endpoint-bypasses-miniqmtexec.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-350",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T13:58:36.684649Z",
+  "description": "POST /api/v1/qmt/cancel can call the fake broker with only QMT_TRADE_PASSWORD set; existing test test_raw_cancel_router_returns_broker_diagnostic passes without AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-001391be8edc",
+      "timestamp": "2026-06-12T13:58:36.684644Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:23-27,104-110,457-458,574-587,627-634,871-884"
+  ],
+  "expected": "Raw broker cancellation must be disabled by default or constrained to explicit diagnostics/admin compatibility; normal cancellation/flatten/operator workflows must use MiniQMTExecutionRuntime operator commands and preserve runtime/OMS/slot ledger evidence.",
+  "first_seen_at": "2026-06-12T13:58:36.684649Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1036,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1036",
+  "last_seen_at": "2026-06-12T13:58:36.684649Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py::test_raw_cancel_router_returns_broker_diagnostic -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] raw QMT cancel endpoint bypasses MiniQMTExecutionRuntime operator command",
+  "trigger_condition": {
+    "fingerprint": "001391be8edcc3b629380c43",
+    "source_event_id": "FE-20260612-001391be8edc"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
