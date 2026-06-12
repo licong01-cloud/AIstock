@@ -3760,6 +3760,44 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return str(summary_result.get("as_of") or summary_result.get("trade_date") or utc_now().date().isoformat())
 
 
+    @staticmethod
+    def _capability_has_tool_ref(capability: dict[str, Any], server_key: str, tool_name: str) -> bool:
+        refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
+        return any(
+            isinstance(ref, dict)
+            and ref.get("server_key") == server_key
+            and ref.get("tool_name") == tool_name
+            for ref in refs
+        )
+
+    def _refresh_capability_cache_for_tool(
+        self,
+        *,
+        server_key: str,
+        tool_name: str,
+        capability_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        candidate_keys: list[str] = []
+        for item in self._workflow_capabilities():
+            candidate = self._canonicalize_capability_mcp_refs(dict(item))
+            key = str(candidate.get("capability_key") or "")
+            if capability_key and key != capability_key:
+                continue
+            if key and self._capability_has_tool_ref(candidate, server_key, tool_name):
+                candidate_keys.append(key)
+        if not candidate_keys:
+            return None
+        try:
+            self.sync_capabilities({"apply": True, "requested_by": "capability_tool_lookup_self_heal"})
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to refresh capability cache for %s/%s", server_key, tool_name)
+            return None
+        for key in candidate_keys:
+            capability = self.repository.find_one("capabilities", {"capability_key": key, "status": "approved"})
+            if capability and self._capability_has_tool_ref(capability, server_key, tool_name):
+                return capability
+        return None
+
     def _capability_key_for_tool(self, call: McpToolCall, route: dict[str, Any] | None = None) -> str:
         selected_tool = route.get("selected_tool") if isinstance(route, dict) and isinstance(route.get("selected_tool"), dict) else None
         if isinstance(selected_tool, dict) and selected_tool.get("domain"):
@@ -3773,22 +3811,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
             if capability and self._capability_allows_tool(capability, call):
                 return candidate
+            capability = self._refresh_capability_cache_for_tool(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                capability_key=candidate,
+            )
+            if capability and self._capability_allows_tool(capability, call):
+                return candidate
         capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
         for capability in capabilities:
-            refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
-            if any(isinstance(ref, dict) and ref.get("server_key") == call.server_key and ref.get("tool_name") == call.tool_name for ref in refs):
+            if self._capability_allows_tool(capability, call):
                 return str(capability["capability_key"])
+        capability = self._refresh_capability_cache_for_tool(server_key=call.server_key, tool_name=call.tool_name)
+        if capability:
+            return str(capability["capability_key"])
         raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
 
     @staticmethod
     def _capability_allows_tool(capability: dict[str, Any], call: McpToolCall) -> bool:
-        refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
-        return any(
-            isinstance(ref, dict)
-            and ref.get("server_key") == call.server_key
-            and ref.get("tool_name") == call.tool_name
-            for ref in refs
-        )
+        return ResearchAssistantService._capability_has_tool_ref(capability, call.server_key, call.tool_name)
 
     def _populate_cards_from_tool_execution(self, cards: dict[str, Any], proposal: dict[str, Any], executed: dict[str, Any], result: McpToolResult) -> None:
         tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}

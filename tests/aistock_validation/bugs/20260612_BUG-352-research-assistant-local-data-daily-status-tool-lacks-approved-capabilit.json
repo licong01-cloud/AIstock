@@ -1,0 +1,75 @@
+{
+  "actual": "POST /api/v1/research-assistant/chat/turn returns 404: approved capability not found for tool: aistock-local-data/local_data_get_preset_daily_status.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260612_BUG-352-research-assistant-local-data-daily-status-tool-lacks-approved-capabilit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-352",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T14:45:13.327162Z",
+  "description": "POST /api/v1/research-assistant/chat/turn returns 404: approved capability not found for tool: aistock-local-data/local_data_get_preset_daily_status.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-2272bb1abfca",
+      "timestamp": "2026-06-12T14:45:13.327159Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant should allow the enabled read-only local_data_get_preset_daily_status tool and return a grouped daily sync status summary.",
+  "first_seen_at": "2026-06-12T14:45:13.327162Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1038,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1038",
+  "last_seen_at": "2026-06-12T14:45:13.327162Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/research-assistant/chat/turn with message: check today's local data sync status summary",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant local data daily status tool lacks approved capability mapping",
+  "trigger_condition": {
+    "fingerprint": "2272bb1abfca4e47b49150cc",
+    "source_event_id": "FE-20260612-2272bb1abfca"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
