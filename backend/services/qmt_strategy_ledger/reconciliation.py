@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
-from .models import ReconciliationIssueRecord, ReconciliationRunRecord, new_id
+from .models import MiniQmtStrategySlot, ReconciliationIssueRecord, ReconciliationRunRecord, new_id
 from .repository import InMemoryQmtStrategyLedgerRepository
 from .sync_service import SyncSummary
 
@@ -51,6 +51,57 @@ class ReconciliationReport:
             "overlap_symbols": list(self.overlap_symbols),
         }
 
+    def strategy_scope(self, strategy_id: str | None = None, strategy_name: str | None = None) -> dict[str, Any]:
+        """Project the account-level report to one simulation binding's virtual strategy."""
+
+        scope = _resolve_strategy_scope(
+            strategy_lot_quantities=self.strategy_lot_quantities,
+            strategy_ids_by_name=dict(self.run.summary_json.get("strategy_ids_by_name") or {}),
+            strategy_remark_prefixes_by_name=dict(self.run.summary_json.get("strategy_remark_prefixes_by_name") or {}),
+            strategy_id=strategy_id,
+            strategy_name=strategy_name,
+        )
+        scoped_strategy_name = scope.get("strategy_name")
+        scoped_strategy_id = scope.get("strategy_id")
+        scoped_remark_prefix = scope.get("order_remark_prefix")
+        matched = bool(scoped_strategy_name and scoped_strategy_name in self.strategy_lot_quantities)
+        scoped_quantities = (
+            dict(self.strategy_lot_quantities.get(scoped_strategy_name, {})) if matched else {}
+        )
+        current_issues: list[ReconciliationIssueRecord] = []
+        account_level_issues: list[ReconciliationIssueRecord] = []
+        for issue in self.issues:
+            if _issue_belongs_to_strategy_scope(
+                issue=issue,
+                scoped_strategy_id=scoped_strategy_id,
+                scoped_strategy_name=scoped_strategy_name,
+                scoped_remark_prefix=scoped_remark_prefix,
+                scoped_quantities=scoped_quantities,
+                broker_quantities=self.broker_quantities,
+            ):
+                current_issues.append(issue)
+            else:
+                account_level_issues.append(issue)
+        issue_symbols = sorted({issue.symbol for issue in current_issues if issue.symbol})
+        issue_types = sorted({issue.issue_type for issue in current_issues if issue.issue_type})
+        account_level_issue_types = sorted({issue.issue_type for issue in account_level_issues if issue.issue_type})
+        return {
+            "schema_version": "miniqmt_reconciliation_strategy_scope_v1",
+            "strategy_id": scoped_strategy_id or strategy_id,
+            "strategy_name": scoped_strategy_name or strategy_name,
+            "order_remark_prefix": scoped_remark_prefix,
+            "matched": matched,
+            "status": "SUCCEEDED" if matched and not current_issues else "WARNING",
+            "issue_count": len(current_issues),
+            "issue_types": issue_types,
+            "issue_symbols": issue_symbols,
+            "account_level_issue_count": len(account_level_issues),
+            "account_level_issue_types": account_level_issue_types,
+            "position_count": len(scoped_quantities),
+            "symbols": sorted(scoped_quantities),
+            "strategy_lot_quantities": scoped_quantities,
+        }
+
 
 class QmtStrategyLedgerReconciliationService:
     def __init__(self, *, repository: InMemoryQmtStrategyLedgerRepository) -> None:
@@ -76,7 +127,11 @@ class QmtStrategyLedgerReconciliationService:
         accounts = self._repository.list_virtual_accounts(account_id=account_id)
         strategy_lot_quantities: dict[str, dict[str, int]] = {}
         strategy_ids_by_name = {account.strategy_name: account.strategy_id for account in accounts}
+        strategy_remark_prefixes_by_name: dict[str, str] = {}
         for account in accounts:
+            slot = MiniQmtStrategySlot.from_virtual_account(account)
+            if slot is not None:
+                strategy_remark_prefixes_by_name[account.strategy_name] = slot.order_remark_prefix
             lots = self._repository.list_position_lots(account.strategy_id)
             by_symbol: dict[str, int] = {}
             for lot in lots:
@@ -144,6 +199,7 @@ class QmtStrategyLedgerReconciliationService:
             "issue_count": len(issues),
             "overlap_symbols": list(overlap_symbols),
             "strategy_ids_by_name": strategy_ids_by_name,
+            "strategy_remark_prefixes_by_name": strategy_remark_prefixes_by_name,
         }
         if sync_summary is not None:
             summary_json["sync_summary"] = sync_summary.to_dict()
@@ -212,3 +268,57 @@ def _strategy_totals(strategy_lot_quantities: dict[str, dict[str, int]]) -> dict
         for symbol, quantity in quantities.items():
             totals[symbol] = totals.get(symbol, 0) + quantity
     return dict(sorted(totals.items()))
+
+
+def _resolve_strategy_scope(
+    *,
+    strategy_lot_quantities: dict[str, dict[str, int]],
+    strategy_ids_by_name: dict[str, str],
+    strategy_remark_prefixes_by_name: dict[str, str],
+    strategy_id: str | None,
+    strategy_name: str | None,
+) -> dict[str, str | None]:
+    wanted_id = str(strategy_id or "").strip() or None
+    wanted_name = str(strategy_name or "").strip() or None
+    if wanted_name and wanted_name in strategy_lot_quantities:
+        return {
+            "strategy_id": strategy_ids_by_name.get(wanted_name) or wanted_id,
+            "strategy_name": wanted_name,
+            "order_remark_prefix": strategy_remark_prefixes_by_name.get(wanted_name),
+        }
+    if wanted_id:
+        for name, mapped_id in strategy_ids_by_name.items():
+            if mapped_id == wanted_id:
+                return {
+                    "strategy_id": mapped_id,
+                    "strategy_name": name,
+                    "order_remark_prefix": strategy_remark_prefixes_by_name.get(name),
+                }
+    return {"strategy_id": wanted_id, "strategy_name": wanted_name, "order_remark_prefix": None}
+
+
+def _issue_belongs_to_strategy_scope(
+    *,
+    issue: ReconciliationIssueRecord,
+    scoped_strategy_id: str | None,
+    scoped_strategy_name: str | None,
+    scoped_remark_prefix: str | None,
+    scoped_quantities: dict[str, int],
+    broker_quantities: dict[str, int],
+) -> bool:
+    if scoped_strategy_id and issue.strategy_id == scoped_strategy_id:
+        return True
+    context = issue.context if isinstance(issue.context, dict) else {}
+    if scoped_strategy_id and context.get("strategy_id") == scoped_strategy_id:
+        return True
+    if scoped_strategy_name and context.get("strategy_name") == scoped_strategy_name:
+        return True
+    if scoped_remark_prefix:
+        order_remark = str(context.get("order_remark") or "").strip()
+        if order_remark.startswith(f"{scoped_remark_prefix}-"):
+            return True
+    if issue.issue_type != "POSITION_MISMATCH" or not issue.symbol:
+        return False
+    scoped_quantity = int(scoped_quantities.get(issue.symbol, 0) or 0)
+    broker_quantity = int(broker_quantities.get(issue.symbol, 0) or 0)
+    return scoped_quantity > broker_quantity
