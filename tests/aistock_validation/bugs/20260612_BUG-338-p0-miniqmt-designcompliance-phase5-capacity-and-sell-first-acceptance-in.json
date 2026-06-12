@@ -1,0 +1,77 @@
+{
+  "actual": "BUG-335 runtime proof: simrun_0f984f3584786289 for codex_final_ms_l16_20260603 is FAILED_RETRYABLE/PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, total intents=53, allowed sells=17, blocked buys=36, BATCH_INSUFFICIENT_CASH, effective_cash=700750.98, batch_required_cash=1301099.64. Current order_service adds BATCH_INSUFFICIENT_CASH when total buy freeze exceeds available cash plus estimated sells and treats it as hard full-batch failure.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260612_BUG-338-p0-miniqmt-designcompliance-phase5-capacity-and-sell-first-acceptance-in.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-338",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T07:28:17.324471Z",
+  "description": "BUG-335 runtime proof: simrun_0f984f3584786289 for codex_final_ms_l16_20260603 is FAILED_RETRYABLE/PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, total intents=53, allowed sells=17, blocked buys=36, BATCH_INSUFFICIENT_CASH, effective_cash=700750.98, batch_required_cash=1301099.64. Current order_service adds BATCH_INSUFFICIENT_CASH when total buy freeze exceeds available cash plus estimated sells and treats it as hard full-batch failure.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-b8f51af9fa31",
+      "timestamp": "2026-06-12T07:28:17.324467Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-12/simrun_0f984f3584786289; design://miniqmt_unified_vnpy_execution_runtime_design_20260608#phase5; bug://BUG-335"
+  ],
+  "expected": "MiniQMT strategy count is governed only by capital capacity and trading rules. For over-capacity rebalance, SELL orders that pass can_sell are submitted first; BUY orders are cash-fit, scaled, skipped with SKIPPED_INSUFFICIENT_CAPITAL/PARTIAL_CAPITAL_ALLOCATED/MIN_LOT_NOT_REACHED, or residual WAITING_FOR_SELL_PROCEEDS without fake success. Unfilled/partial/rejected SELL must not release proceeds prematurely. Required closure includes automated tests for docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608 Phase5 rows plus a runtime read-only proof that L16 no longer hard-fails the whole batch.",
+  "first_seen_at": "2026-06-12T07:28:17.324471Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1009,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1009",
+  "last_seen_at": "2026-06-12T07:28:17.324471Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read BUG-335 runtime evidence and docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608 Phase 5; inspect backend/services/qmt_strategy_ledger/order_service.py:408-520 and 635-790; verify full batch hard-fails instead of producing SELL-first cash-fit/residual state.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] Phase5 capacity and SELL-first acceptance incomplete after BUG-335 runtime proof",
+  "trigger_condition": {
+    "fingerprint": "b8f51af9fa310e209ae5207e",
+    "source_event_id": "FE-20260612-b8f51af9fa31"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
