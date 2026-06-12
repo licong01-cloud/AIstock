@@ -1036,6 +1036,39 @@ def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -
     assert "local_data_get_preset_daily_status" in text
 
 
+def test_bug_352_local_data_daily_status_refreshes_stale_capability_cache() -> None:
+    svc = _chat_service(FakeLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+    capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = [
+        ref
+        for ref in capability["mcp_tool_refs"]
+        if ref["tool_name"] != "local_data_get_preset_daily_status"
+    ]
+    capability["checksum"] = "stale-local-data-capability-cache"
+    svc.repository.create_record("capabilities", capability)
+
+    stale = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert stale is not None
+    assert all(ref["tool_name"] != "local_data_get_preset_daily_status" for ref in stale["mcp_tool_refs"])
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\u5417\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65\uff0c\u7ed9\u6211\u4e00\u4e2a\u6c47\u603b\u4fe1\u606f"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "approved capability not found" not in text
+    assert "Insufficient evidence" not in text
+    assert "daily_basic" in text
+    assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
+    refreshed = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert refreshed is not None
+    assert any(ref["tool_name"] == "local_data_get_preset_daily_status" for ref in refreshed["mcp_tool_refs"])
+
+
 def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
     class FactorOverviewLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
