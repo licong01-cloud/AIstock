@@ -269,13 +269,13 @@ class _ServiceReactMcpProvider:
 
     def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        capability_key = self.service._capability_key_for_tool(call, route)
         payload = dict(call.payload_json)
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
         payload.setdefault("selected_tool", {"server_key": call.server_key, "tool_name": call.tool_name})
         payload.setdefault("limit", 20)
+        capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
                 task_id=self.task["task_id"],
@@ -330,8 +330,8 @@ class _ServiceReactMcpProvider:
             tool_name=call.tool_name,
             status=str(executed.get("status") or "unknown"),
             payload_json=summary_result,
-            source_refs=[str(summary_result.get("source") or "mcp_tool_event")],
-            as_of=utc_now().date().isoformat(),
+            source_refs=self.service._mcp_result_source_refs(summary_result, tool_event),
+            as_of=self.service._mcp_result_as_of(summary_result),
             artifact_refs=list(summary_result.get("artifact_refs") or tool_event.get("artifact_refs") or []),
             summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
             tool_event_id=tool_event.get("tool_event_id"),
@@ -345,11 +345,11 @@ class _ServiceReactMcpProvider:
 
     def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        capability_key = self.service._capability_key_for_tool(call, route)
         payload = dict(call.payload_json)
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
+        capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
                 task_id=self.task["task_id"],
@@ -3744,10 +3744,34 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             },
         }
 
+    @staticmethod
+    def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
+        source = summary_result.get("source") or tool_event.get("transport") or tool_event.get("tool_event_id") or "mcp_tool_event"
+        refs = [str(source)] if source else []
+        evidence_sources = summary_result.get("evidence_sources") if isinstance(summary_result.get("evidence_sources"), list) else []
+        for item in evidence_sources:
+            ref = str(item)
+            if ref and ref not in refs:
+                refs.append(ref)
+        return refs
+
+    @staticmethod
+    def _mcp_result_as_of(summary_result: dict[str, Any]) -> str:
+        return str(summary_result.get("as_of") or summary_result.get("trade_date") or utc_now().date().isoformat())
+
+
     def _capability_key_for_tool(self, call: McpToolCall, route: dict[str, Any] | None = None) -> str:
+        selected_tool = route.get("selected_tool") if isinstance(route, dict) and isinstance(route.get("selected_tool"), dict) else None
+        if isinstance(selected_tool, dict) and selected_tool.get("domain"):
+            route = selected_tool
+        elif isinstance(route, dict):
+            selected_tool = call.payload_json.get("selected_tool") if isinstance(call.payload_json.get("selected_tool"), dict) else None
+            if isinstance(selected_tool, dict) and selected_tool.get("domain"):
+                route.update(selected_tool)
         if isinstance(route, dict) and route.get("domain"):
             candidate = f"{route['domain']}.mcp_orchestration"
-            if self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"}):
+            capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
+            if capability and self._capability_allows_tool(capability, call):
                 return candidate
         capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
         for capability in capabilities:
@@ -3755,6 +3779,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if any(isinstance(ref, dict) and ref.get("server_key") == call.server_key and ref.get("tool_name") == call.tool_name for ref in refs):
                 return str(capability["capability_key"])
         raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
+
+    @staticmethod
+    def _capability_allows_tool(capability: dict[str, Any], call: McpToolCall) -> bool:
+        refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
+        return any(
+            isinstance(ref, dict)
+            and ref.get("server_key") == call.server_key
+            and ref.get("tool_name") == call.tool_name
+            for ref in refs
+        )
 
     def _populate_cards_from_tool_execution(self, cards: dict[str, Any], proposal: dict[str, Any], executed: dict[str, Any], result: McpToolResult) -> None:
         tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
@@ -3786,6 +3820,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "human_cards": list(executed.get("human_cards") or []),
             "source_refs": list(result.source_refs),
             "as_of": result.as_of,
+            "response_mode": summary_result.get("response_mode"),
         }
         cards["status_rail"] = self._mcp_executed_status_rail()
 
@@ -3894,9 +3929,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         text = self._strip_assistant_tool_choice_markup(raw_text)
         react_active = isinstance(cards.get("react_grounding"), dict)
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
-        if isinstance(execution, dict) and execution.get("auto_executed") and not react_active:
+        if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
-            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
+            if self._should_render_auto_mcp_execution_reply(execution, summary, react_active=react_active):
+                return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
         if (
             react_active
@@ -3917,6 +3953,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _should_render_auto_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any], *, react_active: bool) -> bool:
+        del execution
+        if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
+            return True
+        return not react_active
 
     @staticmethod
     def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:

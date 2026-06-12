@@ -241,6 +241,9 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
     return compact
 
 
+TERMINAL_SUMMARY_RESPONSE_MODES = {"local_data_daily_sync_status"}
+
+
 def tool_result_message(result: McpToolResult) -> dict[str, Any]:
     content = {
         "type": "TOOL_RESULT",
@@ -321,6 +324,24 @@ def rejection_result(call: McpToolCall, decision: ToolGateDecision) -> McpToolRe
         blocked_reason=decision.reason,
         stable_call_id=call.stable_call_id,
     )
+
+
+def _evidence_summary_fallback_text(result: McpToolResult) -> str:
+    source = result.source_refs[0] if result.source_refs else "unknown"
+    return (
+        f"Tool-grounded summary for {result.server_key}/{result.tool_name}; "
+        f"source={source} as_of={result.as_of} summary-first read-only route={result.server_key}/{result.tool_name}. "
+        f"{result.summary}"
+    ).strip()
+
+
+def _is_terminal_summary_result(result: McpToolResult) -> bool:
+    if result.status not in {"succeeded", "success", "ok"} or not result.executed:
+        return False
+    if not result.source_refs or not result.as_of:
+        return False
+    payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+    return str(payload.get("response_mode") or "") in TERMINAL_SUMMARY_RESPONSE_MODES
 
 
 def _retry_directive(results: list[McpToolResult]) -> dict[str, Any]:
@@ -422,6 +443,11 @@ def run_react_grounding_loop(
         for result in iteration_results:
             collected_results.append(result)
             working_messages.append(tool_result_message(result))
+        terminal_summary = next((item for item in iteration_results if _is_terminal_summary_result(item)), None)
+        if terminal_summary is not None:
+            guard = compose_with_evidence_guard(_evidence_summary_fallback_text(terminal_summary), collected_results, config)
+            stopped_reason = "evidence_summary_fallback"
+            return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
         if any(item.status in {"failed", "rejected"} for item in iteration_results):
             working_messages.append(_retry_directive(iteration_results))
 
@@ -430,12 +456,7 @@ def run_react_grounding_loop(
     else:
         sourced = next((item for item in collected_results if item.source_refs and item.as_of), None)
         if sourced is not None:
-            fallback_text = (
-                f"Tool-grounded summary for {sourced.server_key}/{sourced.tool_name}; "
-                f"source={sourced.source_refs[0]} as_of={sourced.as_of} summary-first read-only route={sourced.server_key}/{sourced.tool_name}. "
-                f"{sourced.summary}"
-            ).strip()
-            guard = compose_with_evidence_guard(fallback_text, collected_results, config)
+            guard = compose_with_evidence_guard(_evidence_summary_fallback_text(sourced), collected_results, config)
             stopped_reason = "evidence_summary_fallback"
         else:
             guard = EvidenceGuardDecision(False, "Insufficient evidence: max tool iterations reached without reliable evidence.", "max_tool_iterations_exhausted", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
