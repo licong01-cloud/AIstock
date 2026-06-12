@@ -30,8 +30,8 @@
   "expected": "Raw broker cancellation must be disabled by default or constrained to explicit diagnostics/admin compatibility; normal cancellation/flatten/operator workflows must use MiniQMTExecutionRuntime operator commands and preserve runtime/OMS/slot ledger evidence.",
   "first_seen_at": "2026-06-12T13:58:36.684649Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:51.038643Z",
   "github_issue_number": 1036,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1036",
   "last_seen_at": "2026-06-12T13:58:36.684649Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "001391be8edcc3b629380c43",
     "source_event_id": "FE-20260612-001391be8edc"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

@@ -32,8 +32,8 @@
   "expected": "Paper v2/MiniQMT product or manual submission must be runtime-owned: public qmt_strategy_ledger submit/batch routes must reject non-runtime-owned direct payloads and only allow explicit legacy diagnostics/admin compatibility with visible non-product metadata; canonical product flow must enter MiniQMTExecutionRuntime before QmtManagedOrderService.",
   "first_seen_at": "2026-06-12T13:58:21.707464Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:38.739717Z",
   "github_issue_number": 1035,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1035",
   "last_seen_at": "2026-06-12T13:58:21.707464Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,11 @@
     "fingerprint": "c82d134671b3bc29ab25a45b",
     "source_event_id": "FE-20260612-c82d134671b3"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

@@ -32,8 +32,8 @@
   "expected": "Paper v2 MiniQMT product execution must require account_group_slots binding/runtime attribution and fail fast before broker construction or submit when missing; no minqmt_sim product path may fall back to exclusive_account or fixed max_concurrent_packages=1.",
   "first_seen_at": "2026-06-12T13:33:25.204098Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:24.280117Z",
   "github_issue_number": 1032,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1032",
   "last_seen_at": "2026-06-12T13:33:25.204098Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,11 @@
     "fingerprint": "968440236c20f596c983759f",
     "source_event_id": "FE-20260612-968440236c20"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

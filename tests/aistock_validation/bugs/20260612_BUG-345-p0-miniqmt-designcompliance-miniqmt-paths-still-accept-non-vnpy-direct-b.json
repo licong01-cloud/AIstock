@@ -30,16 +30,16 @@
       "timestamp": "2026-06-12T11:07:21.443813Z"
     },
     {
-      "timestamp": "2026-06-12T12:20:00Z",
-      "actor": "codex",
       "action": "expand_allowed_scope_for_stale_tests",
-      "note": "Confirmed stale MiniQMT backend tests still exercised no-policy/CLOSE_PRICE direct submit expectations after canonical vn.py gate; expanding scope to update those tests as BUG-345 regression coverage instead of reintroducing direct broker path."
+      "actor": "codex",
+      "note": "Confirmed stale MiniQMT backend tests still exercised no-policy/CLOSE_PRICE direct submit expectations after canonical vn.py gate; expanding scope to update those tests as BUG-345 regression coverage instead of reintroducing direct broker path.",
+      "timestamp": "2026-06-12T12:20:00Z"
     },
     {
-      "timestamp": "2026-06-12T13:03:00Z",
-      "actor": "codex",
       "action": "record_design_compliance_validation_scope",
-      "note": "Added the successful L3 validation history record to allowed scope and aligned required verification for the combined Paper v2/MiniQMT design-compliance PR."
+      "actor": "codex",
+      "note": "Added the successful L3 validation history record to allowed scope and aligned required verification for the combined Paper v2/MiniQMT design-compliance PR.",
+      "timestamp": "2026-06-12T13:03:00Z"
     }
   ],
   "evidence_uris": [
@@ -49,8 +49,8 @@
   "expected": "Paper v2 MiniQMT and simulation_runtime MiniQMT reject V25_* and any non-vnpy/non-approved MiniQMT broker execution policy with MINIQMT_UNSUPPORTED_EXECUTION_ALGO or EXECUTION_PATH_NOT_CANONICAL before broker submit; only approved vn.py-style MiniQMT assets can create runtime child orders for product strategy execution.",
   "first_seen_at": "2026-06-12T11:07:21.443817Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:08.036052Z",
   "github_issue_number": 1027,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1027",
   "last_seen_at": "2026-06-12T11:07:21.443817Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -70,7 +71,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -79,6 +80,11 @@
     "fingerprint": "5a778fe1c494234c59a8baaa",
     "source_event_id": "FE-20260612-5a778fe1c494"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
