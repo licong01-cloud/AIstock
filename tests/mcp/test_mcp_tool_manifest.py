@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 211
+    assert legacy_tool_count() == 339
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 217
-    assert len(TOOL_MANIFEST_BY_NAME) == 217
+    assert len(TOOL_MANIFEST) == 345
+    assert len(TOOL_MANIFEST_BY_NAME) == 345
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -71,6 +71,10 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "strategy_governance_plan_promotion",
         "strategy_governance_plan_retirement",
         "execution_policy_plan_binding",
+        "advisory_list_bindings",
+        "advisory_get_active_binding",
+        "paper_v2_monitoring_get_scheduler_status",
+        "paper_v2_monitoring_get_scheduler_bootstrap_status",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
         "local_data_list_sync_targets",
@@ -148,6 +152,30 @@ def test_migration_state_is_derived_and_overrideable() -> None:
     )
 
 
+def test_paper_v2_current_phase_excludes_runtime_control_tools() -> None:
+    forbidden_fragments = (
+        "paper_v2_create_portfolio",
+        "paper_v2_enable_auto_run",
+        "paper_v2_disable_auto_run",
+        "paper_v2_run_day",
+        "paper_v2_start_session",
+        "paper_v2_pause_session",
+        "paper_v2_resume_session",
+        "paper_v2_stop_session",
+        "paper_v2_scheduler_start",
+        "paper_v2_scheduler_stop",
+        "qmt_broker_place_order",
+        "qmt_broker_cancel_order",
+        "qmt_broker_bank",
+        "qmt_virtual",
+    )
+    exposed = {entry.tool_name for entry in TOOL_MANIFEST}
+    assert not [name for name in exposed if any(fragment in name for fragment in forbidden_fragments)]
+    assert TOOL_MANIFEST_BY_NAME["paper_v2_monitoring_list_positions"].risk_level == "read_only"
+    assert TOOL_MANIFEST_BY_NAME["qmt_broker_monitoring_get_snapshot"].risk_level == "read_only"
+
+
 def test_manifest_validation_rejects_invalid_migration_state() -> None:
-    bad_entry = replace(TOOL_MANIFEST[0], migration_state="unknown_state")
+    health_entry = next(entry for entry in TOOL_MANIFEST if entry.tool_name == "mcp_gateway_health")
+    bad_entry = replace(health_entry, migration_state="unknown_state")
     assert validate_manifest([bad_entry]) == ["invalid migration_state for mcp_gateway_health: unknown_state"]
