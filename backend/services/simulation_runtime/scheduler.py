@@ -82,6 +82,14 @@ _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES = frozenset(
         "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
     }
 )
+_MINIQMT_CAPACITY_RESIDUAL_RETRY_ERROR_CODES = frozenset(
+    {
+        "SKIPPED_INSUFFICIENT_CAPITAL",
+    }
+)
+_MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES = (
+    _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES | _MINIQMT_CAPACITY_RESIDUAL_RETRY_ERROR_CODES
+)
 
 _LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
 
@@ -2891,7 +2899,7 @@ class SimulationLifecycleScheduler:
             return (
                 binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
                 and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
-                and SimulationLifecycleScheduler._mini_qmt_batch_has_deferred_dependent_buy(run.run_payload_json)
+                and SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(run.run_payload_json)
             )
         statuses = {
             SimulationDailyRunStatus.CREATED,
@@ -2954,6 +2962,17 @@ class SimulationLifecycleScheduler:
 
     @staticmethod
     def _mini_qmt_batch_has_deferred_dependent_buy(payload: dict[str, Any]) -> bool:
+        return SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(
+            payload,
+            allowed_error_codes=_MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES,
+        )
+
+    @staticmethod
+    def _mini_qmt_batch_has_retryable_buy_residual(
+        payload: dict[str, Any],
+        *,
+        allowed_error_codes: frozenset[str] = _MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES,
+    ) -> bool:
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
         if status != "PARTIAL" or bool(batch.get("compensation_required")):
@@ -2961,7 +2980,7 @@ class SimulationLifecycleScheduler:
         results = batch.get("results")
         if not isinstance(results, list):
             return False
-        saw_deferred_buy = False
+        saw_retryable_residual = False
         for result in results:
             if not isinstance(result, dict) or bool(result.get("success")):
                 continue
@@ -2976,10 +2995,10 @@ class SimulationLifecycleScheduler:
                 for error in errors
                 if isinstance(error, dict) and str(error.get("code") or "").strip()
             }
-            if not error_codes or not error_codes <= _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES:
+            if not error_codes or not error_codes <= allowed_error_codes:
                 return False
-            saw_deferred_buy = True
-        return saw_deferred_buy
+            saw_retryable_residual = True
+        return saw_retryable_residual
 
     @staticmethod
     def _mini_qmt_batch_succeeded(payload: dict[str, Any]) -> bool:

@@ -200,9 +200,19 @@ def test_submit_batch_aggregates_cash_before_broker_call() -> None:
     result = _service(repo, broker).submit_batch([_buy_request("remark_cash_a"), _buy_request("remark_cash_b")])
 
     assert result.success is False
-    assert result.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
-    assert broker.place_order_payloads == []
-    assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
+    assert result.batch_status == OrderBatchStatus.PARTIAL.value
+    assert result.succeeded == 1
+    assert result.failed == 1
+    assert result.compensation_required is False
+    assert [payload["order_remark"] for payload in broker.place_order_payloads] == ["remark_cash_a"]
+    assert result.results[1].broker_called is False
+    assert result.results[1].broker_message == "buy skipped by funds-only capacity allocator"
+    assert result.results[1].preflight.primary_error.code == "SKIPPED_INSUFFICIENT_CAPITAL"
+    batch = repo.get_order_batch(result.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.PARTIAL
+    assert batch.metadata["capacity_residual_skipped"] is True
+    assert batch.metadata["capacity_residual_count"] == 1
 
 
 def test_submit_batch_shrinks_opted_in_near_cash_overshoot_before_broker_call() -> None:
@@ -288,9 +298,55 @@ def test_submit_batch_does_not_shrink_material_cash_shortfall() -> None:
     result = _service(repo, broker).submit_batch(requests)
 
     assert result.success is False
-    assert result.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
-    assert broker.place_order_payloads == []
-    assert "BATCH_INSUFFICIENT_CASH" in {error.code for item in result.results for error in item.preflight.errors}
+    assert result.batch_status == OrderBatchStatus.PARTIAL.value
+    assert [payload["order_remark"] for payload in broker.place_order_payloads] == ["remark_material_short_a"]
+    assert result.results[1].broker_called is False
+    assert result.results[1].preflight.primary_error.code == "SKIPPED_INSUFFICIENT_CAPITAL"
+
+
+def test_submit_batch_over_capacity_rebalance_submits_sell_first_and_skips_buy_residual() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("15000")))
+    _add_sellable_lot(repo, 1000)
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002, 1082167003, 1082167004])
+
+    result = _service(repo, broker).submit_batch(
+        [
+            _buy_request("remark_capacity_buy_a"),
+            _sell_request("remark_capacity_sell"),
+            _buy_request("remark_capacity_buy_b"),
+            _buy_request("remark_capacity_buy_c"),
+        ]
+    )
+
+    assert result.success is False
+    assert result.batch_status == OrderBatchStatus.PARTIAL.value
+    assert result.preflight_passed is False
+    assert result.succeeded == 2
+    assert result.failed == 2
+    assert result.compensation_required is False
+    assert [payload["order_remark"] for payload in broker.place_order_payloads] == [
+        "remark_capacity_sell",
+        "remark_capacity_buy_a",
+    ]
+    assert [item.success for item in result.results] == [True, True, False, False]
+    assert [item.broker_called for item in result.results] == [True, True, False, False]
+    assert [error.code for item in result.results[2:] for error in item.preflight.errors] == [
+        "SELL_PROCEEDS_REQUIRED",
+        "SKIPPED_INSUFFICIENT_CAPITAL",
+    ]
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_capacity_sell").submit_status == IntentSubmitStatus.ACCEPTED
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_capacity_buy_a").submit_status == IntentSubmitStatus.ACCEPTED
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_capacity_buy_b") is None
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_capacity_buy_c") is None
+    batch = repo.get_order_batch(result.batch_id)
+    assert batch is not None
+    assert batch.batch_status == OrderBatchStatus.PARTIAL
+    assert batch.metadata["dependent_buy_deferred"] is True
+    assert batch.metadata["dependent_buy_count"] == 1
+    assert batch.metadata["capacity_residual_skipped"] is True
+    assert batch.metadata["capacity_residual_count"] == 1
 
 
 def test_submit_batch_uses_available_cash_for_independent_buys_before_dependent_buy() -> None:

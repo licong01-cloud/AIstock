@@ -1282,13 +1282,14 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     )
     failed_run = repo.get_simulation_daily_run(failed.results[0].run.run_id)
 
-    assert failed.results[0].status == "BROKER_PRECHECK_FAILED"
+    assert failed.results[0].status == "BROKER_SUBMIT_FAILED_RECONCILED"
     assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
-    assert failed_run.run_payload_json["qmt_batch_status"] == "PREFLIGHT_FAILED"
-    assert failed_run.run_payload_json["broker_called"] is False
-    assert failed_run.run_payload_json["submitted_intents"] == 0
-    assert "reconcile_after_submit" not in failed_run.run_payload_json
-    assert broker.place_order_payloads == []
+    assert failed_run.run_payload_json["qmt_batch_status"] == OrderBatchStatus.PARTIAL.value
+    assert failed_run.run_payload_json["broker_called"] is True
+    assert failed_run.run_payload_json["submitted_intents"] == 1
+    assert failed_run.run_payload_json["failed_intents"] == 1
+    assert failed_run.run_payload_json["qmt_batch_result"]["results"][1]["preflight"]["primary_error_code"] == "SKIPPED_INSUFFICIENT_CAPITAL"
+    assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
 
     account = qmt_repo.get_virtual_account(qmt_binding.strategy_id)
     qmt_repo.update_virtual_account(replace(account, cash=Decimal("100000")))
@@ -1305,6 +1306,7 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     assert recovered_run.run_payload_json["qmt_batch_status"] == "SUCCEEDED"
     assert recovered_run.run_payload_json["broker_called"] is True
     assert len(broker.place_order_payloads) == 2
+    assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE, BUY_ORDER_TYPE]
 
 
 def test_scheduler_rebuilds_side_effect_free_miniqmt_failed_plan_with_fresh_context() -> None:
