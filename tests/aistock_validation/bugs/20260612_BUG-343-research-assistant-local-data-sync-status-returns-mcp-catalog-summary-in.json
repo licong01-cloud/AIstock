@@ -5,7 +5,11 @@
     "backend/services/research_assistant/service.py",
     "backend/mcp/modules/local_data.py",
     "tests/aistock_validation/bugs/20260612_BUG-343-research-assistant-local-data-sync-status-returns-mcp-catalog-summary-in.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-343",
@@ -16,7 +20,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-12T09:32:17.348266Z",
-  "description": "前端回答仅显示“已通过只读工具完成 MCP summary-first 查询”“Route decision：aistock-local-data/local_data_health_overview”“结果概要：total=1”“local data health overview: server_key=aistock-local-data, tool_name=local_data_health_overview, risk_level=low...”“Evidence: source=research_assistant_catalog_summary_adapter as_of=2026-06-12”，没有任何实际数据集同步状态。",
+  "description": "当用户询问 Research Assistant 当前本地数据同步任务运行情况、今天哪些数据完成同步时，助手将业务状态查询误路由为 MCP catalog/summary-first 诊断输出，只返回 local_data_health_overview 工具目录摘要（Route decision、total=1、tool_name、adapter evidence），没有按数据集/任务给出已同步成功、同步失败、未同步/未运行、运行中或阻断分组。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -48,7 +52,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

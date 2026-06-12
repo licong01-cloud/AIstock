@@ -109,6 +109,65 @@ def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService
     return svc
 
 
+class FakeLocalDataDailyStatusService:
+    def get_preset_daily_status(self) -> dict[str, object]:
+        return {
+            "operation": "local_data_get_preset_daily_status",
+            "risk_level": "read_only",
+            "data": {
+                "items": {
+                    "daily_basic": {"status": "success", "created_at": "2026-06-12T09:00:00+08:00", "finished_at": "2026-06-12T09:02:00+08:00"},
+                    "stock_moneyflow_ts": {"status": "failed", "created_at": "2026-06-12T09:03:00+08:00", "finished_at": "2026-06-12T09:04:00+08:00"},
+                    "kline_weekly": {"status": "running", "created_at": "2026-06-12T09:05:00+08:00"},
+                }
+            },
+            "trace": {"generated_at": "2026-06-12T01:06:00+00:00"},
+        }
+
+    def get_preset_stats(self) -> dict[str, object]:
+        return {
+            "operation": "local_data_get_preset_stats",
+            "risk_level": "read_only",
+            "data": {
+                "items": [
+                    {"dataset": "daily_basic"},
+                    {"dataset": "stock_moneyflow_ts"},
+                    {"dataset": "kline_weekly"},
+                    {"dataset": "anns_metadata"},
+                ]
+            },
+        }
+
+    def list_jobs(self, *, limit: int = 50, active_only: bool = False) -> dict[str, object]:
+        del limit, active_only
+        return {
+            "operation": "local_data_list_jobs",
+            "risk_level": "read_only",
+            "data": {"items": [{"job_id": "job-live-1", "status": "queued", "summary": {"dataset": "sector_data"}, "created_at": "2026-06-12T09:06:00+08:00"}]},
+        }
+
+    def list_sync_targets(self, *, limit: int = 100) -> dict[str, object]:
+        del limit
+        return {
+            "operation": "local_data_list_sync_targets",
+            "risk_level": "read_only",
+            "data": {
+                "items": [
+                    {
+                        "dataset": "stock_moneyflow_ts",
+                        "target_status": "retry",
+                        "last_error_message": "upstream timeout",
+                    },
+                    {
+                        "dataset": "anns_metadata",
+                        "target_status": "final_blocked",
+                        "last_error_message": "schema mismatch",
+                    },
+                ]
+            },
+        }
+
+
 def test_catalog_readiness_blocks_chat_until_seeded() -> None:
     fake = FakeLlmClient()
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
@@ -831,6 +890,56 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     walk(summary)
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
+
+
+def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
+    class LocalDataDailyLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Catalog route summary only.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataDailyLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "Route decision" not in text
+    assert "research_assistant_catalog_summary_adapter" not in text
+    assert "local_data_health_overview" not in text
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert "\u540c\u6b65\u5931\u8d25" in text
+    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
+    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
+    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "anns_metadata" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
+    assert result["cards"]["mcp_tool_event"]["transport"] == "local_data_facade_read_adapter"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["source"] == "local_data_facade_read_adapter"
+    assert summary["local_data_daily_status"] is True
+    assert summary["group_counts"]["success"] == 1
+    assert summary["group_counts"]["failed"] == 1
+    assert summary["group_counts"]["running"] == 2
+    assert summary["group_counts"]["blocked"] == 1
 
 
 def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
