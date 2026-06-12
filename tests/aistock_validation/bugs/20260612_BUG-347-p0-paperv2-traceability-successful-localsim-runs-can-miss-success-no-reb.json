@@ -27,22 +27,22 @@
       "timestamp": "2026-06-12T12:39:14.616473Z"
     },
     {
-      "timestamp": "2026-06-12T12:48:00Z",
-      "actor": "codex",
       "action": "expand_allowed_scope_for_confirmed_localsim_persistence_path",
-      "note": "Reproduced missing_success_event on LocalSim unattended runs and confirmed the durable Paper v2 SUCCEEDED transition is written from simulation_runtime.scheduler._persist_local_sim_execution_result; expanding scope before code changes."
+      "actor": "codex",
+      "note": "Reproduced missing_success_event on LocalSim unattended runs and confirmed the durable Paper v2 SUCCEEDED transition is written from simulation_runtime.scheduler._persist_local_sim_execution_result; expanding scope before code changes.",
+      "timestamp": "2026-06-12T12:48:00Z"
     },
     {
-      "timestamp": "2026-06-12T12:55:00Z",
-      "actor": "codex",
       "action": "apply_idempotent_traceability_data_repair",
-      "note": "Inserted RUN_SUCCEEDED run_events only for confirmed LocalSim SUCCEEDED runs simrun_0e2c3ab2300f03b0 and simrun_6d62e7e36a61bd51 when no success/no-rebalance event existed; inserted event_seq 15951 and 15952; no DDL/status/order/fill/cash changes."
+      "actor": "codex",
+      "note": "Inserted RUN_SUCCEEDED run_events only for confirmed LocalSim SUCCEEDED runs simrun_0e2c3ab2300f03b0 and simrun_6d62e7e36a61bd51 when no success/no-rebalance event existed; inserted event_seq 15951 and 15952; no DDL/status/order/fill/cash changes.",
+      "timestamp": "2026-06-12T12:55:00Z"
     },
     {
-      "timestamp": "2026-06-12T13:03:00Z",
-      "actor": "codex",
       "action": "record_design_compliance_validation_scope",
-      "note": "Added the successful L3 validation history record to allowed scope and aligned required verification for the combined Paper v2/MiniQMT design-compliance PR."
+      "actor": "codex",
+      "note": "Added the successful L3 validation history record to allowed scope and aligned required verification for the combined Paper v2/MiniQMT design-compliance PR.",
+      "timestamp": "2026-06-12T13:03:00Z"
     }
   ],
   "evidence_uris": [
@@ -52,8 +52,8 @@
   "expected": "Every Paper v2 run with status=SUCCEEDED must persist at least one success/no-rebalance/finalized event trace before completion, including LocalSim unattended scheduler runs, so paper_v2_run_traceability passes without historical false success.",
   "first_seen_at": "2026-06-12T12:39:14.616477Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:14.423192Z",
   "github_issue_number": 1029,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1029",
   "last_seen_at": "2026-06-12T12:39:14.616477Z",
@@ -61,6 +61,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -73,7 +74,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2",
     "simulation_runtime"
@@ -83,6 +84,11 @@
     "fingerprint": "daf899ee9690ac1884a9228c",
     "source_event_id": "FE-20260612-daf899ee9690"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

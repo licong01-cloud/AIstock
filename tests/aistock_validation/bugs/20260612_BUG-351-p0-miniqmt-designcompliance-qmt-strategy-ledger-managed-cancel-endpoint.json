@@ -30,8 +30,8 @@
   "expected": "MiniQMT cancel actions exposed to product/manual flows must use MiniQMTExecutionRuntime operator commands; qmt_strategy_ledger managed cancel must not directly call QmtManagedOrderService.cancel_order as a public product path.",
   "first_seen_at": "2026-06-12T14:16:21.236782Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:02:04.897885Z",
   "github_issue_number": 1037,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1037",
   "last_seen_at": "2026-06-12T14:16:21.236782Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "555a8c87a9732dca1ef90dd4",
     "source_event_id": "FE-20260612-555a8c87a973"
   },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
