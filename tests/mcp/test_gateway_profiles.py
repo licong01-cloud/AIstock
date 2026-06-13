@@ -27,12 +27,13 @@ def test_lite_is_low_resource_default() -> None:
 
 def test_full_profile_contains_all_migrated_and_platform_tools() -> None:
     payload = list_tools_payload(profile="full")
-    assert payload["legacy_tool_count"] == legacy_tool_count() == 339
+    assert payload["legacy_tool_count"] == legacy_tool_count() == 354
     assert payload["platform_tool_count"] == 6
-    assert payload["tool_count"] == 345
+    assert payload["tool_count"] == 360
     assert "validation" in payload["modules"]
     assert "qe_experiment" in payload["modules"]
     assert "qe_archive" in payload["modules"]
+    assert "qlib_export" in payload["modules"]
 
 
 def test_former_script_backed_modules_are_gateway_backed() -> None:
@@ -51,7 +52,20 @@ def test_gateway_registration_counts() -> None:
     assert len(_tool_names_for_profile("lite")) == 6
     assert len(_tool_names_for_profile("validation")) == 20
     assert len(_tool_names_for_profile("qe")) == 70
-    assert len(_tool_names_for_profile("full")) == 345
+    assert len(_tool_names_for_profile("qlib_data")) == 15
+    assert len(_tool_names_for_profile("data_full")) == 62
+    assert len(_tool_names_for_profile("full")) == 360
+
+
+def test_qlib_data_profiles_are_task_scoped() -> None:
+    qlib = list_tools_payload(profile="qlib_data")
+    data_full = list_tools_payload(profile="data_full")
+
+    assert qlib["modules"] == ["qlib_export"]
+    assert qlib["tool_count"] == 15
+    assert data_full["modules"] == ["local_data", "qlib_export"]
+    assert data_full["tool_count"] == 62
+    assert resolve_modules(profile="backtest_data") == ["qlib_export"]
 
 
 def test_paper_v2_profiles_are_task_scoped() -> None:

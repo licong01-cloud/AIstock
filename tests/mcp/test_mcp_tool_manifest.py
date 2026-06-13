@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 339
+    assert legacy_tool_count() == 354
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 345
-    assert len(TOOL_MANIFEST_BY_NAME) == 345
+    assert len(TOOL_MANIFEST) == 360
+    assert len(TOOL_MANIFEST_BY_NAME) == 360
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -77,6 +77,7 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "paper_v2_monitoring_get_scheduler_bootstrap_status",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
+        "qlib_export_plan_dataset_update",
         "local_data_list_sync_targets",
         "local_data_get_sync_target",
         "local_data_list_sync_attempts",
@@ -119,6 +120,28 @@ def test_external_research_l25_read_only_retrieval_stays_direct() -> None:
     save_evidence = TOOL_MANIFEST_BY_NAME["external_research_save_evidence"]
     assert save_evidence.risk_level in NON_DIRECT_RISK_LEVELS
     assert save_evidence.assistant_usable == "preflight_required"
+
+
+def test_qlib_export_candidate_generation_is_confirmed_and_candidate_only() -> None:
+    for name in [
+        "qlib_export_run_h5_dataset_full_confirmed",
+        "qlib_export_run_h5_dataset_incremental_confirmed",
+        "qlib_export_run_h5_daily_aux_incremental_all_confirmed",
+        "qlib_export_build_static_factors_confirmed",
+        "qlib_export_export_field_map_confirmed",
+        "qlib_export_run_bin_unified_v2_confirmed",
+        "qlib_export_generate_backtest_candidate_confirmed",
+    ]:
+        entry = TOOL_MANIFEST_BY_NAME[name]
+        assert entry.requires_confirmation is True
+        assert entry.risk_level in NON_DIRECT_RISK_LEVELS
+        assert entry.assistant_usable == "preflight_required"
+        assert entry.backend_endpoint == "qlib/*"
+
+    plan_entry = TOOL_MANIFEST_BY_NAME["qlib_export_plan_dataset_update"]
+    assert plan_entry.risk_level == "read_only"
+    assert plan_entry.requires_confirmation is False
+    assert plan_entry.assistant_usable == "direct_or_catalog"
 
 
 def test_manifest_metadata_override_reasons_are_required() -> None:
