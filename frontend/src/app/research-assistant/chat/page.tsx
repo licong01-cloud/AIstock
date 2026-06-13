@@ -148,9 +148,10 @@ function routeDecision(cards: ChatCards): McpRouteDecision | null {
 function stripAssistantToolChoiceMarkup(text: string, route: McpRouteDecision | null): string {
   if (!text.toLowerCase().includes("<assistant_tool_choice")) return text;
   const cleaned = text.replace(/<assistant_tool_choice\b[^>]*>[\s\S]*?<\/assistant_tool_choice>/gi, "").trim();
+  const domain = route?.domain ? textValue(route.domain).replaceAll("_", " ") : "业务工具";
   const prefix = route
-    ? `我已完成 MCP route decision：${route.domain || "mcp"} -> ${route.server_key}/${route.tool_name}。确认前只展示 preflight、计划和 summary-first 结果，不直接执行写操作。`
-    : "我已识别到需要工具选择，会先展示 route decision、preflight 和确认边界，不直接执行写操作。";
+    ? `我已识别为${domain}需求。确认前只展示安全预检、计划和业务结果，不直接执行写操作。`
+    : "我已识别到需要工具选择，会先展示安全预检、计划和确认边界，不直接执行写操作。";
   return [prefix, cleaned].filter(Boolean).join("\n\n");
 }
 
@@ -194,6 +195,44 @@ function textValue(value: unknown): string {
     return items.length ? items.join(" / ") : "-";
   }
   return "-";
+}
+
+const MCP_PROCESS_MARKERS = [
+  "summary-first",
+  "summary_first",
+  "route decision",
+  "artifact_ref",
+  "payload budget",
+  "raw_payload",
+  "server_key",
+  "tool_name",
+  "detail tool",
+  "detail_tool",
+  "transport",
+  "research_assistant_catalog_summary_adapter",
+  "summary_adapter",
+  "source=",
+  "as_of=",
+  "referenced detail",
+];
+
+function containsMcpProcessMarker(value: unknown): boolean {
+  const text = textValue(value).toLowerCase();
+  if (MCP_PROCESS_MARKERS.some((marker) => text.includes(marker))) return true;
+  if (/aistock-[a-z0-9-]+\/[a-z0-9_:-]+/.test(text)) return true;
+  if (
+    /^(?:[a-z0-9-]+\/)?[a-z0-9]+(?:_[a-z0-9]+){2,}$/.test(text) &&
+    /(local_data|factor_|model_|strategy_|execution_|external_|_list|_get|_plan|_query|_confirmed)/.test(text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function safeBusinessText(value: unknown, fallback = "-"): string {
+  const text = textValue(value);
+  if (text === "-" || containsMcpProcessMarker(text)) return fallback;
+  return text;
 }
 
 function recordList(value: unknown): JsonObject[] {
@@ -293,22 +332,8 @@ function hasMcpExecutionCards(cards: ChatCards): boolean {
   return Boolean(
     asRecord(cards.mcp_execution_result) ||
       asRecord(cards.mcp_summary_result) ||
-      recordList(cards.mcp_result_cards).length ||
-      asRecord(cards.mcp_tool_event),
+      recordList(cards.mcp_result_cards).length,
   );
-}
-
-function humanOmittedSection(section: string): string {
-  const labels: Record<string, string> = {
-    raw_payload: "原始 payload",
-    full_logs: "完整日志",
-    matrix: "矩阵",
-    model_weights: "模型权重",
-    training_curves: "训练曲线",
-    factor_value_rows: "因子明细行",
-    database_rows: "数据库原始行",
-  };
-  return labels[section] || section.replaceAll("_", " ");
 }
 
 function mcpCountText(summary: JsonObject, execution: JsonObject): string {
@@ -320,15 +345,14 @@ function mcpCountText(summary: JsonObject, execution: JsonObject): string {
 }
 
 function mcpSummaryItemTitle(item: JsonObject, index: number): string {
-  return textValue(
+  return safeBusinessText(
     item.title ||
       item.name ||
       item.factor_name ||
       item.model_name ||
       item.strategy_name ||
-      item.tool_name ||
-      item.server_key ||
-      `概要条目 ${index + 1}`,
+      item.result_type ||
+      `业务条目 ${index + 1}`,
   );
 }
 
@@ -336,11 +360,10 @@ function mcpSummaryItemMeta(item: JsonObject): string {
   return [
     item.category,
     item.status,
-    item.risk_level,
-    item.server_key && item.tool_name ? `${item.server_key}/${item.tool_name}` : item.tool_name,
+    item.result_type,
   ]
     .map((value) => textValue(value))
-    .filter((value) => value && value !== "-")
+    .filter((value) => value && value !== "-" && !containsMcpProcessMarker(value))
     .join(" · ");
 }
 
@@ -448,7 +471,12 @@ function createAdapter(
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
-      const reply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
+      const rawReply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
+      const reply = containsMcpProcessMarker(rawReply)
+        ? hasMcpExecutionCards(cards)
+          ? "已完成业务查询，结果见下方业务汇总。"
+          : "已识别到业务工具需求，安全边界已展示；不会直接执行写操作。"
+        : rawReply;
       return { content: [{ type: "text", text: reply }] };
     },
   };
@@ -531,34 +559,31 @@ function ChatMessage() {
 function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
   const execution = asRecord(cards.mcp_execution_result) || {};
   const summary = asRecord(cards.mcp_summary_result) || {};
-  const toolEvent = asRecord(cards.mcp_tool_event) || {};
   const resultCards = mcpResultCards(cards);
-  if (!Object.keys(execution).length && !Object.keys(summary).length && !resultCards.length && !Object.keys(toolEvent).length) return null;
+  if (!Object.keys(execution).length && !Object.keys(summary).length && !resultCards.length) return null;
 
-  const route = textValue(
-    execution.route ||
-      (execution.server_key && execution.tool_name ? `${execution.server_key}/${execution.tool_name}` : undefined) ||
-      resultCards[0]?.route ||
-      (toolEvent.server_key && toolEvent.tool_name ? `${toolEvent.server_key}/${toolEvent.tool_name}` : undefined),
-  );
-  const status = textValue(execution.status || toolEvent.status || "succeeded");
+  const status = textValue(execution.status || "succeeded");
   const countText = mcpCountText(summary, execution);
   const responseSummary = asRecord(execution.response_summary) || {};
   const items = recordList(summary.items).slice(0, 5);
-  const omittedSections = stringList(summary.omitted_sections);
-  const artifactRefs = stringList(summary.artifact_refs || toolEvent.artifact_refs || responseSummary.artifact_refs);
-  const nextStep = textValue(summary.next_step || resultCards[0]?.next_step || responseSummary.next_step);
-  const detailTool = textValue(summary.detail_tool || responseSummary.detail_tool);
+  const nextStep = safeBusinessText(summary.next_step || resultCards[0]?.next_step || responseSummary.next_step);
+  const safeResultCards = resultCards
+    .map((card) => ({
+      title: safeBusinessText(card.title || card.summary, ""),
+      summary: safeBusinessText(card.summary, ""),
+      nextStep: safeBusinessText(card.next_step, ""),
+    }))
+    .filter((card) => card.title || card.summary || card.nextStep);
 
   return (
     <div className="ra-chat-confirm-card" data-testid="ra-mcp-summary-card">
-      <strong>已执行只读 MCP 摘要查询</strong>
-      <p>{route} · {status} · summary-first</p>
-      {resultCards.map((card, index) => (
-        <div className="ra-chat-mcp-result" key={`${card.title || card.route || "mcp-card"}-${index}`}>
-          <strong>{textValue(card.title || card.route || route)}</strong>
-          <p>{textValue(card.summary)}</p>
-          {card.next_step ? <p>下一步：{textValue(card.next_step)}</p> : null}
+      <strong>已完成只读业务查询</strong>
+      <p>状态：{status}。</p>
+      {safeResultCards.map((card, index) => (
+        <div className="ra-chat-mcp-result" key={`${card.title || card.summary || "business-card"}-${index}`}>
+          {card.title ? <strong>{card.title}</strong> : null}
+          {card.summary ? <p>{card.summary}</p> : null}
+          {card.nextStep ? <p>下一步：{card.nextStep}</p> : null}
         </div>
       ))}
       {countText ? <p>{countText}</p> : null}
@@ -572,9 +597,6 @@ function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
           ))}
         </ul>
       ) : null}
-      {omittedSections.length ? <p>已折叠：{omittedSections.map(humanOmittedSection).join(" / ")}。</p> : null}
-      {artifactRefs.length ? <p>审计引用：{artifactRefs.slice(0, 3).join(" / ")}</p> : null}
-      {detailTool !== "-" ? <p>需要详情时再调用：{detailTool}</p> : null}
       {nextStep !== "-" ? <p>下一步：{nextStep}</p> : null}
     </div>
   );
@@ -681,11 +703,9 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
       ) : null}
       {route ? (
         <div className="ra-chat-confirm-card" data-testid="ra-mcp-route-card">
-          <strong>MCP route decision</strong>
-          <p>{route.domain || "mcp"} {"->"} {route.server_key}/{route.tool_name}</p>
-          <p>{route.summary_first ? "summary-first：列表只展示概要，详情按需展开。" : "按工具返回结果展示。"}</p>
+          <strong>业务工具安全边界</strong>
+          <p>需求类型：{safeBusinessText(route.domain, "业务查询").replaceAll("_", " ")}。</p>
           <p>{route.confirmation_required ? "需要确认和审批后才可执行。" : route.preflight_required ? "先执行 preflight/计划，不直接写入。" : "只读查询，不执行写操作。"}</p>
-          {route.reason ? <p>{route.reason}</p> : null}
         </div>
       ) : null}
       <McpSummaryResultCard cards={cards} />

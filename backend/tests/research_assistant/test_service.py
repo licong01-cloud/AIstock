@@ -939,9 +939,12 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "mcp_github_issue_create" in catalog_context
 
     text = result["assistant_message"]["content_text"]
-    assert "assistant_create_issue_candidate" in text
-    assert "qe_template_create" in text
-    assert "mcp_github_issue_create" in text
+    assert "assistant create issue candidate" in text
+    assert "qe_template_create" in catalog_context
+    assert "mcp_github_issue_create" in catalog_context
+    assert "assistant_create_issue_candidate" not in text
+    assert "qe_template_create" not in text
+    assert "mcp_github_issue_create" not in text
     assert "reading files" not in text
     assert "writing files" not in text
     assert "HTTP requests" not in text
@@ -972,8 +975,9 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
 
     text = result["assistant_message"]["content_text"]
     assert "10 个已注册因子" not in text
-    assert "aistock-factor/factor_library_list" in text
-    assert "summary-first" in text
+    assert "factor library list" in text
+    assert "summary-first" not in text
+    assert "Route decision" not in text
     assert result["mode_decision"]["intent_type"] == "factor_library_request"
     assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
     assert result["cards"]["mcp_route_decision"]["summary_first"] is True
@@ -999,7 +1003,8 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     text = result["assistant_message"]["content_text"]
     assert "999 factors" not in text
-    assert "aistock-factor/factor_library_list" in text
+    assert "factor library list" in text
+    _assert_no_mcp_process_markers(text)
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["status"] == "succeeded"
@@ -1026,6 +1031,65 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
 
 
+def test_bug_359_generic_mcp_reply_renderer_hides_process_markers_across_domains() -> None:
+    class DiagnosticLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content=(
+                    "已通过只读工具完成 MCP summary-first 查询；Route decision：x/y；"
+                    "server_key=x tool_name=y source=research_assistant_catalog_summary_adapter as_of=2026-06-13"
+                ),
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    cases = [
+        ("因子库有哪些因子？只要概要列表。", "factor library list"),
+        ("模型库有什么模型？给我概要。", "model registry list"),
+        ("策略库目前有哪些策略？", "strategy governance list packages"),
+        ("执行策略库有什么 minute algo？", "execution policy list algos"),
+        ("检索 A 股多因子稳定性的论文线索。", "external evidence candidate"),
+    ]
+    for message, expected_business_text in cases:
+        svc = _chat_service(DiagnosticLlmClient())
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        text = result["assistant_message"]["content_text"]
+        _assert_no_mcp_process_markers(text)
+        assert expected_business_text in text
+        assert "已完成" in text
+        assert "本轮只进行查询" in text
+
+
+def test_bug_359_generic_preflight_reply_replaces_insufficient_evidence_for_non_readonly_tools() -> None:
+    class InsufficientEvidenceLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    cases = [
+        "repair stock_daily trade_date local data plan",
+        "把这个策略晋升到 paper v2",
+        "查看因子相关性计算能力概要",
+    ]
+    for message in cases:
+        svc = _chat_service(InsufficientEvidenceLlmClient())
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        text = result["assistant_message"]["content_text"]
+        _assert_no_mcp_process_markers(text)
+        assert "Insufficient evidence" not in text
+        assert "安全边界" in text
+        assert "本轮未执行" in text
+
+
 BUG_356_FORBIDDEN_REPLY_MARKERS = (
     "summary-first",
     "Route decision",
@@ -1040,11 +1104,16 @@ BUG_356_FORBIDDEN_REPLY_MARKERS = (
 
 BUG_357_FORBIDDEN_REPLY_MARKERS = (
     "summary-first",
+    "summary_first",
     "Route decision",
+    "route decision",
     "artifact_ref",
     "payload budget",
     "Evidence: source=",
+    "source=",
+    "as_of=",
     "research_assistant_catalog_summary_adapter",
+    "summary_adapter",
     "server_key",
     "tool_name",
     "\u6211\u53ea\u5c55\u793a\u6982\u8981",
@@ -1066,6 +1135,11 @@ def _assert_bug_357_no_diagnostic_reply(result: dict[str, object]) -> str:
     for marker in BUG_357_FORBIDDEN_REPLY_MARKERS:
         assert marker not in text
     return text
+
+
+def _assert_no_mcp_process_markers(text: str) -> None:
+    for marker in BUG_357_FORBIDDEN_REPLY_MARKERS + BUG_356_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
 
 
 def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None:
@@ -1519,9 +1593,9 @@ def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> Non
     result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
 
     text = result["assistant_message"]["content_text"]
-    assert "aistock-trading-ops/execution_policy_list_algos" in text
+    assert "execution policy list algos" in text
     assert "execution_policy_validate_for_strategy" not in text
-    assert "只读工具" in text
+    assert "Route decision" not in text
     assert result["mode_decision"]["intent_type"] == "execution_policy_request"
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "execution_policy"
@@ -1552,8 +1626,9 @@ def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None
     text = result["assistant_message"]["content_text"]
     assert "<assistant_tool_choice>" not in text
     assert "</assistant_tool_choice>" not in text
-    assert "aistock-validation/mcp_github_issue_sync_bug" in text
-    assert "确认前不会执行" in text
+    assert "aistock-validation/mcp_github_issue_sync_bug" not in text
+    assert "Route decision" not in text
+    assert "summary-first" not in text
     assert result["mode_decision"]["intent_type"] == "validation_issue_request"
     assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
     assert result["cards"]["mcp_route_decision"]["auto_execute"]["eligible"] is False

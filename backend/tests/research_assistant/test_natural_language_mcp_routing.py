@@ -198,6 +198,23 @@ def test_bug_357_qe_business_queries_route_without_diagnostic_defaults() -> None
         assert route["side_effect"] == side_effect
 
 
+def test_bug_359_specific_mcp_business_intents_route_to_expected_domains() -> None:
+    cases = {
+        "\u770b\u4e00\u4e0b QE seed \u7a33\u5b9a\u6027\uff0c\u54ea\u4e9b\u6a21\u578b\u66f4\u7a33\uff1f": ("qe_warehouse", "aistock-qe", "qe_archive_query_seed_robustness", "read_only"),
+        "\u5e2e\u6211\u68c0\u7d22\u4e00\u4e0b\u5173\u4e8e A \u80a1\u591a\u56e0\u5b50 seed \u7a33\u5b9a\u6027\u7684\u8bba\u6587\u7ebf\u7d22\uff0c\u53ea\u8981\u6982\u8981\uff0c\u4e0d\u8981\u4fdd\u5b58\u8bc1\u636e": ("external_research", "aistock-external-research", "external_research_search_papers", "read_only"),
+        "\u5217\u51fa\u6700\u8fd1\u5931\u8d25\u7684 QE run": ("qe_warehouse", "aistock-qe", "qe_archive_list_runs", "read_only"),
+        "\u628a\u8fd9\u4e2a\u7b56\u7565\u664b\u5347\u5230 paper v2": ("strategy_governance", "aistock-trading-ops", "strategy_governance_plan_promotion", "plan_or_preflight"),
+        "\u67e5\u770b\u8fd9\u4e2a\u7b56\u7565\u5305\u7684\u6267\u884c\u8d28\u91cf": ("strategy_governance", "aistock-trading-ops", "strategy_governance_list_packages", "read_only"),
+        "\u54ea\u4e9b\u7b56\u7565\u5305\u53ef\u4ee5\u8fdb\u5165 paper v2": ("strategy_governance", "aistock-trading-ops", "strategy_governance_list_packages", "read_only"),
+    }
+    for message, (domain, server, tool, side_effect) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["side_effect"] == side_effect
+
+
 def test_bug_356_local_data_sync_check_routes_to_daily_status_list() -> None:
     cases = [
         "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5",
@@ -224,6 +241,15 @@ def test_bug_356_local_data_each_dataset_sync_detail_routes_to_daily_status_list
     assert route["side_effect"] == "read_only"
     assert route["tool_name"] != "local_data_get_dataset_status"
     assert route["tool_name"] != "local_data_health_overview"
+
+
+def test_local_data_sync_target_requests_route_to_target_list() -> None:
+    route = route_request("List local data sync targets.")
+
+    assert route["domain"] == "local_data"
+    assert route["server_key"] == "aistock-local-data"
+    assert route["tool_name"] == "local_data_list_sync_targets"
+    assert route["side_effect"] == "read_only"
 
 
 def test_bug_343_local_data_today_sync_question_routes_to_daily_status() -> None:

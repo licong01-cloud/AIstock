@@ -400,11 +400,16 @@ class _ServiceReactMcpProvider:
             "preflight": preflight_payload,
             "summary_first": True,
         }
+        self.cards["mcp_preflight_result"] = preflight_payload
         return McpToolResult(
             server_key=call.server_key,
             tool_name=call.tool_name,
             status=self.cards["mcp_execution_result"]["status"],
-            payload_json={"preflight_only": True},
+            payload_json={
+                "preflight_only": True,
+                "response_mode": "mcp_safe_preflight_summary",
+                "preflight": preflight_payload,
+            },
             source_refs=["preflight"],
             as_of=utc_now().date().isoformat(),
             summary="preflight confirmation card generated; write/high-risk execution was not called",
@@ -423,6 +428,36 @@ PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/res
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
 SERVICE_MODULE_PATH = Path(__file__).resolve()
 QE_BUSINESS_RESPONSE_MODES = {"qe_experiment_status_summary", "qe_warehouse_business_summary"}
+MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS = (
+    "summary-first",
+    "summary_first",
+    "Route decision",
+    "route decision",
+    "artifact_ref",
+    "payload budget",
+    "raw_payload",
+    "omitted_sections",
+    "server_key",
+    "server_key=",
+    "tool_name",
+    "tool_name=",
+    "selected_tool",
+    "detail tool",
+    "detail_tool",
+    "transport",
+    "mcp_tool_event",
+    "mcp_summary_result",
+    "mcp_execution_result",
+    "response_mode",
+    "summary_envelope",
+    "mcp route",
+    "Evidence: source=",
+    "source=",
+    "as_of=",
+    "research_assistant_catalog_summary_adapter",
+    "summary_adapter",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+)
 
 
 def _git_output(args: list[str]) -> str | None:
@@ -4057,15 +4092,29 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if (
+            isinstance(execution, dict)
+            and execution.get("auto_executed")
+            and text
+            and self._contains_mcp_business_forbidden_marker(text)
+        ):
+            summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
+        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
+            return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
+        if self._is_insufficient_evidence_text(text):
+            if isinstance(execution, dict) and not execution.get("auto_executed"):
+                preflight = cards.get("mcp_preflight_result") if isinstance(cards.get("mcp_preflight_result"), dict) else {}
+                return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(execution, preflight), mode_decision)
+            if isinstance(route, dict) and str(route.get("side_effect") or "read_only") != "read_only":
+                return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(route, {}), mode_decision)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
-        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if (not react_active or "<assistant_tool_choice" in raw_text.lower()) and self._should_render_mcp_route_reply(route, mode_decision, raw_text):
             return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
-        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
-            return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
         if text:
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
@@ -4078,6 +4127,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return True
         if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
             return True
+        if summary.get("response_mode") == "summary":
+            return True
         return not react_active
 
     @staticmethod
@@ -4088,30 +4139,146 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return ResearchAssistantService._render_qe_experiment_status_reply(execution, summary)
         if summary.get("response_mode") == "qe_warehouse_business_summary":
             return ResearchAssistantService._render_qe_warehouse_business_reply(execution, summary)
-        route = str(execution.get("route") or "unknown/unknown")
-        items = summary.get("items") if isinstance(summary.get("items"), list) else []
-        lines = [
-            "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
-            f"Route decision：{route}。",
-            f"结果概要：total={summary.get('total', len(items))}，returned={len(items)}，limit={summary.get('limit')}，offset={summary.get('offset')}。",
-        ]
-        for item in items[:3]:
-            if not isinstance(item, dict):
+        return ResearchAssistantService._render_generic_mcp_business_reply(execution, summary)
+
+    @staticmethod
+    def _humanize_business_identifier(value: str) -> str:
+        raw = value.strip().strip("/")
+        if "/" in raw:
+            raw = raw.split("/")[-1]
+        words = [part for part in raw.replace("-", "_").split("_") if part]
+        acronyms = {"api", "bug", "ic", "mcp", "qe", "rankic", "url"}
+        rendered = [word.upper() if word.lower() in acronyms else word for word in words]
+        return " ".join(rendered) if rendered else "\u4e1a\u52a1\u67e5\u8be2"
+
+    @staticmethod
+    def _business_label_for_domain(domain: str, route: str) -> str:
+        if domain:
+            return ResearchAssistantService._humanize_business_identifier(domain)
+        return ResearchAssistantService._humanize_business_identifier(route)
+
+    @staticmethod
+    def _friendly_field_label(key: str) -> str:
+        labels = {
+            "title": "\u540d\u79f0",
+            "item_type": "\u7c7b\u578b",
+            "risk_level": "\u98ce\u9669",
+            "side_effect_level": "\u6267\u884c\u8fb9\u754c",
+            "requires_approval": "\u9700\u5ba1\u6279",
+            "status": "\u72b6\u6001",
+            "summary": "\u6982\u8981",
+            "query": "\u68c0\u7d22\u8bcd",
+            "result_type": "\u7c7b\u578b",
+            "url": "\u94fe\u63a5",
+            "safety_boundary": "\u5b89\u5168\u8fb9\u754c",
+            "requested_args": "\u6761\u4ef6",
+            "next_action": "\u4e0b\u4e00\u6b65",
+        }
+        return labels.get(key, ResearchAssistantService._humanize_business_identifier(key))
+
+    @staticmethod
+    def _render_generic_business_item(item: dict[str, Any], *, max_fields: int = 7) -> str:
+        hidden = {
+            "server_key",
+            "tool_name",
+            "item_type",
+            "risk_level",
+            "side_effect_level",
+            "requires_approval",
+            "summary_first_contract",
+            "detail_ref",
+            "detail_tool",
+            "detail_args_hint",
+            "source",
+            "provider",
+            "as_of",
+            "evidence_ref",
+            "evidence_policy",
+            "artifact_refs",
+            "omitted_sections",
+            "pagination",
+        }
+
+        def visible_value(value: Any) -> str:
+            if value in (None, "", []):
+                return ""
+            if isinstance(value, dict):
+                parts = []
+                for nested_key, nested_value in value.items():
+                    nested_key_text = str(nested_key)
+                    if nested_key_text in hidden or ResearchAssistantService._contains_mcp_business_forbidden_marker(nested_key_text):
+                        continue
+                    nested_rendered = visible_value(nested_value)
+                    if nested_rendered:
+                        parts.append(f"{ResearchAssistantService._friendly_field_label(nested_key_text)}={nested_rendered}")
+                    if len(parts) >= max_fields:
+                        break
+                return "\uff1b".join(parts)
+            if isinstance(value, list):
+                rendered_items = [visible_value(item) for item in value[:max_fields]]
+                return "\uff0c".join(item for item in rendered_items if item)
+            text = str(value)
+            return "" if ResearchAssistantService._contains_mcp_business_forbidden_marker(text) else text
+
+        title = visible_value(item.get("title") or item.get("summary") or item.get("item_type") or item.get("tool_name")) or "\u8bb0\u5f55"
+        preferred = (
+            "status",
+            "summary",
+            "result_type",
+            "query",
+            "url",
+            "requested_args",
+            "safety_boundary",
+            "next_action",
+        )
+        bits: list[str] = []
+        for key in preferred:
+            value = item.get(key)
+            if key in hidden or value in (None, "", []):
                 continue
-            title = item.get("title") or item.get("tool_name") or item.get("item_type") or item.get("server_key") or "item"
-            detail = []
-            for key in ("server_key", "tool_name", "risk_level", "side_effect_level", "status"):
-                if item.get(key) is not None:
-                    detail.append(f"{key}={item.get(key)}")
-            lines.append(f"- {title}: {', '.join(detail[:5])}")
-        if summary.get("detail_tool"):
-            lines.append(f"需要单项详情时再调用 detail tool：{summary.get('detail_tool')}。")
-        artifact_refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
-        omitted = summary.get("omitted_sections") if isinstance(summary.get("omitted_sections"), list) else []
-        if artifact_refs:
-            lines.append(f"大对象已收敛为 artifact_ref：{len(artifact_refs)} 个。")
-        if omitted:
-            lines.append(f"已按 payload budget 省略：{', '.join(str(item) for item in omitted[:6])}。")
+            rendered_value = visible_value(value)
+            if not rendered_value:
+                continue
+            bits.append(f"{ResearchAssistantService._friendly_field_label(key)}={rendered_value}")
+            if len(bits) >= max_fields:
+                break
+        if not bits:
+            for key, value in item.items():
+                key_text = str(key)
+                if key_text in hidden or ResearchAssistantService._contains_mcp_business_forbidden_marker(key_text) or value in (None, "", [], {}):
+                    continue
+                rendered_value = visible_value(value)
+                if not rendered_value:
+                    continue
+                bits.append(f"{ResearchAssistantService._friendly_field_label(key_text)}={rendered_value}")
+                if len(bits) >= max_fields:
+                    break
+        return f"{title}\uff1a" + ("\uff1b".join(bits) if bits else "\u6682\u65e0\u53ef\u5c55\u793a\u7684\u5173\u952e\u5b57\u6bb5")
+
+    @staticmethod
+    def _render_generic_mcp_business_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        route = str(execution.get("route") or "")
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        domain = str(summary.get("domain") or "")
+        label = ResearchAssistantService._business_label_for_domain(domain, route)
+        total = summary.get("total")
+        total_count = total if isinstance(total, int) else len(items)
+        lines = [
+            f"\u5df2\u5b8c\u6210{label}\u67e5\u8be2\u3002",
+            f"\u6c47\u603b\uff1a\u5171 {total_count} \u9879\uff0c\u672c\u6b21\u5c55\u793a {len(items)} \u9879\u3002",
+        ]
+        if not items:
+            lines.append("\u6682\u65e0\u53ef\u5c55\u793a\u7684\u4e1a\u52a1\u8bb0\u5f55\uff0c\u53ef\u4ee5\u6362\u68c0\u7d22\u6761\u4ef6\u6216\u6307\u5b9a\u5bf9\u8c61 ID \u7ee7\u7eed\u67e5\u770b\u3002")
+        else:
+            lines.append("\u660e\u7ec6\uff1a")
+            for item in items[:20]:
+                if isinstance(item, dict):
+                    lines.append(f"- {ResearchAssistantService._render_generic_business_item(item)}")
+        if len(items) > 20:
+            lines.append(f"\u53e6\u6709 {len(items) - 20} \u9879\u672a\u5728\u4e3b\u56de\u590d\u5c55\u5f00\uff0c\u53ef\u7ee7\u7eed\u6309\u6761\u4ef6\u7b5b\u9009\u6216\u6307\u5b9a\u5355\u9879\u67e5\u770b\u3002")
+        if domain == "external_research":
+            lines.append("\u8fd9\u4e9b\u53ea\u662f\u5916\u90e8\u7814\u7a76\u7ebf\u7d22\uff0c\u672a\u4fdd\u5b58\u4e3a\u8bc1\u636e\uff0c\u4e0d\u7b49\u540c\u4e8e\u6700\u7ec8\u7ed3\u8bba\u3002")
+        lines.append("\u672c\u8f6e\u53ea\u8fdb\u884c\u67e5\u8be2/\u6982\u8981\u6574\u7406\uff0c\u672a\u6267\u884c\u5199\u5165\u3001\u63d0\u4ea4\u3001\u8bad\u7ec3\u3001\u56de\u8865\u6216\u664b\u5347\u64cd\u4f5c\u3002")
         return "\n".join(lines)
 
     @staticmethod
@@ -4349,6 +4516,52 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "insufficient evidence" in lower or "max tool iterations reached" in lower
 
     @staticmethod
+    def _contains_mcp_business_forbidden_marker(text: str) -> bool:
+        lower = text.lower()
+        return any(marker.lower() in lower for marker in MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS)
+
+    @staticmethod
+    def _route_needs_concrete_target_hint(route: dict[str, Any]) -> bool:
+        tool_name = str(route.get("tool_name") or "").lower()
+        side_effect = str(route.get("side_effect") or "read_only")
+        if side_effect != "read_only":
+            return True
+        collection_terms = ("list", "search", "overview", "summary", "health", "catalog", "available")
+        if any(term in tool_name for term in collection_terms):
+            return False
+        object_terms = ("get", "detail", "validate", "bind", "plan", "promote", "retire", "deprecate")
+        return any(term in tool_name for term in object_terms)
+
+    @staticmethod
+    def _render_mcp_safe_preflight_reply(route_or_execution: dict[str, Any], preflight: dict[str, Any]) -> str:
+        route = str(route_or_execution.get("route") or "")
+        if not route and route_or_execution.get("server_key") and route_or_execution.get("tool_name"):
+            route = f"{route_or_execution.get('server_key')}/{route_or_execution.get('tool_name')}"
+        domain = str(route_or_execution.get("domain") or "")
+        side_effect = str(route_or_execution.get("side_effect") or route_or_execution.get("status") or "plan_or_preflight")
+        label = ResearchAssistantService._business_label_for_domain(domain, route)
+        lines = [
+            f"{label}需要先做方案/预检，本轮未执行写入、训练、回补或晋升操作。",
+        ]
+        if side_effect in {"approval_required", "preflight_required", "preflight_failed", "confirmed_action"}:
+            lines.append("安全边界：需先展示预检结果和确认口令，获得明确授权后才能进入下一步。")
+        else:
+            lines.append("安全边界：只会生成方案或预检说明，不会直接提交高风险操作。")
+        failed_checks = preflight.get("failed_checks") if isinstance(preflight.get("failed_checks"), list) else []
+        if failed_checks:
+            rendered = "; ".join(
+                str(item.get("detail") or item.get("check") or item)
+                for item in failed_checks[:3]
+                if isinstance(item, dict)
+            )
+            lines.append(f"预检阻断：{rendered}。")
+        missing = preflight.get("missing_confirmations") if isinstance(preflight.get("missing_confirmations"), list) else []
+        if missing:
+            lines.append("需要确认：" + "，".join(str(item) for item in missing[:3]) + "。")
+        lines.append("下一步：请先补充必要 ID/参数，或明确说“先给预检”、“我确认执行”等边界。")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_qe_draft_safe_reply(cards: dict[str, Any]) -> str:
         plan = cards.get("plan_card") if isinstance(cards.get("plan_card"), dict) else {}
         steps = [str(item) for item in plan.get("steps", []) if str(item)]
@@ -4376,13 +4589,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _render_react_execution_fallback_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
-        reply = ResearchAssistantService._render_mcp_execution_reply(execution, summary)
-        if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
-            return reply
-        source_refs = execution.get("source_refs") if isinstance(execution.get("source_refs"), list) else []
-        source = str(source_refs[0] if source_refs else summary.get("source") or execution.get("tool_event_id") or "mcp_tool_event")
-        as_of = str(execution.get("as_of") or utc_now().date().isoformat())
-        return f"{reply}\nEvidence: source={source} as_of={as_of}."
+        return ResearchAssistantService._render_mcp_execution_reply(execution, summary)
 
     @staticmethod
     def _strip_assistant_tool_choice_markup(text: str) -> str:
@@ -4412,72 +4619,66 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _render_mcp_route_reply(route: Any) -> str:
         if not isinstance(route, dict):
-            return "我会先做 MCP route decision 和 preflight，不会用模型猜业务数据。"
-        server_key = str(route.get("server_key") or "unknown-server")
-        tool_name = str(route.get("tool_name") or "unknown-tool")
-        domain = str(route.get("domain") or "unknown")
+            return "\u6211\u8fd8\u9700\u8981\u5148\u786e\u8ba4\u4e1a\u52a1\u57df\u548c\u76ee\u6807\uff0c\u4e0d\u4f1a\u7528\u6a21\u578b\u731c\u6d4b\u4e1a\u52a1\u6570\u636e\u3002"
+        server_key = str(route.get("server_key") or "")
+        tool_name = str(route.get("tool_name") or "")
+        domain = str(route.get("domain") or "")
         side_effect = str(route.get("side_effect") or "read_only")
-        if domain in {"qe_experiment", "qe_warehouse"}:
-            if domain == "qe_warehouse":
-                return "已识别为 QE 数仓查询，但本轮还没有拿到可展示的数仓业务结果；我不会用诊断路由信息替代健康状态、outbox、leaderboard 或分析视图数据。请重试只读查询，或指定要看的数仓项目。"
-            return "已识别为 QE 实验查询，但本轮还没有拿到可展示的实验/任务业务结果；我不会用诊断路由信息替代实验状态、custom_evo 进度或草案内容。请重试只读查询，或指定实验/任务 ID。"
-        lines = [
-            "我先把这类业务问题交给 MCP 路由处理，不会用模型猜因子数量、Issue 状态或其他业务事实。",
-            f"Route decision：{domain} -> {server_key}/{tool_name}。",
-            "返回边界：summary-first；列表/概览只返回数量、分页和关键字段，具体对象详情再用 get/detail 工具展开，矩阵、日志和原始 payload 只给 artifact_ref 或 detail 引用。",
-        ]
+        label = ResearchAssistantService._business_label_for_domain(domain, f"{server_key}/{tool_name}")
+        lines = [f"\u5df2\u8bc6\u522b\u4e3a{label}\u9700\u6c42\uff0c\u6211\u4f1a\u6309\u8be5\u4e1a\u52a1\u57df\u5904\u7406\u3002"]
         if side_effect == "read_only":
-            lines.append("当前选择的是只读工具，可以继续做真实查询；我会只展示 MCP 返回的概要数据。")
+            lines.append("\u8fd9\u662f\u53ea\u8bfb\u67e5\u8be2\uff0c\u4e0b\u4e00\u6b65\u5e94\u76f4\u63a5\u7ed9\u51fa\u4e1a\u52a1\u5217\u8868\u3001\u72b6\u6001\u6c47\u603b\u6216\u5173\u952e\u6307\u6807\u3002")
         elif side_effect == "plan_or_preflight":
-            lines.append("当前选择的是计划/预检查工具，只生成方案和校验结果，不会执行写入或长任务。")
+            lines.append("\u8fd9\u662f\u65b9\u6848/\u9884\u68c0\u7c7b\u9700\u6c42\uff0c\u53ea\u751f\u6210\u65b9\u6848\u548c\u5b89\u5168\u6821\u9a8c\uff0c\u4e0d\u4f1a\u6267\u884c\u5199\u5165\u6216\u957f\u4efb\u52a1\u3002")
         else:
-            lines.append("当前选择涉及 confirmed action；必须先展示 preflight、确认口令和审批边界，确认前不会执行。")
-        reason = str(route.get("reason") or "").strip()
-        if reason:
-            lines.append(f"选择依据：{reason}")
-        read_tools = route.get("read_tools") if isinstance(route.get("read_tools"), list) else []
-        if read_tools:
-            preview = ", ".join(str(item) for item in read_tools[:4])
-            lines.append(f"可先使用的只读工具：{preview}。")
+            lines.append("\u8fd9\u662f\u9700\u786e\u8ba4\u7684\u64cd\u4f5c\uff0c\u5fc5\u987b\u5148\u5c55\u793a\u9884\u68c0\u3001\u786e\u8ba4\u53e3\u4ee4\u548c\u5ba1\u6279\u8fb9\u754c\uff0c\u786e\u8ba4\u524d\u4e0d\u4f1a\u6267\u884c\u3002")
+        if ResearchAssistantService._route_needs_concrete_target_hint(route):
+            lines.append("\u5982\u679c\u672a\u6307\u5b9a\u5bf9\u8c61 ID \u6216\u5fc5\u8981\u53c2\u6570\uff0c\u6211\u5e94\u5148\u5217\u51fa\u5019\u9009\u5bf9\u8c61\u6216\u8bf7\u4f60\u8865\u5145\u6761\u4ef6\uff0c\u4e0d\u5bf9\u4e0d\u660e\u786e\u5bf9\u8c61\u505a\u8be6\u60c5\u5224\u65ad\u3001\u53d8\u66f4\u6216\u664b\u5347\u3002")
         return "\n".join(lines)
 
     @staticmethod
     def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
         lines = [
-            "可以，我会按你的业务目标来选择 MCP：本地数据、QE 实验、QE 数仓、Issue/验证、Research Pipeline、因子、模型、策略和执行策略都在同一套路由里。",
-            f"当前目录里有 {catalog.get('server_count', 0)} 个 MCP server、{catalog.get('tool_count', 0)} 个 MCP tool、{catalog.get('capability_count', 0)} 个已批准能力。",
-            "默认采用 summary-first：先看概要、状态、top risks 和分页列表；需要某个对象详情时再展开，矩阵、日志、parquet/raw payload 只返回 artifact_ref 或 detail 引用。",
+            "\u53ef\u4ee5\uff0c\u6211\u4f1a\u6309 AIstock \u4e1a\u52a1\u76ee\u6807\u9009\u62e9\u5bf9\u5e94\u4e1a\u52a1\u80fd\u529b\u3002",
+            f"\u5f53\u524d\u53ef\u7528\u76ee\u5f55\uff1a{catalog.get('server_count', 0)} \u4e2a\u4e1a\u52a1\u57df\uff0c{catalog.get('tool_count', 0)} \u4e2a\u53ef\u7528\u80fd\u529b\uff0c{catalog.get('capability_count', 0)} \u4e2a\u5df2\u6279\u51c6\u80fd\u529b\u3002",
+            "\u4f60\u53ef\u4ee5\u76f4\u63a5\u7528\u81ea\u7136\u8bed\u8a00\u63d0\u9700\u6c42\uff0c\u6211\u5e94\u8be5\u8fd4\u56de\u4e1a\u52a1\u7ed3\u679c\uff0c\u800c\u4e0d\u662f\u8fd0\u884c\u8fc7\u7a0b\u8bf4\u660e\u3002",
         ]
         tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
         servers_by_key = catalog.get("servers_by_key") if isinstance(catalog.get("servers_by_key"), dict) else {}
         if tools_by_server:
-            lines.append("已登记 MCP 工具概览：")
+            lines.append("\u4e1a\u52a1\u5206\u7c7b\u6982\u89c8\uff1a")
             for server_key in sorted(str(key) for key in tools_by_server):
                 tools = tools_by_server.get(server_key) or []
                 server = servers_by_key.get(server_key) if isinstance(servers_by_key.get(server_key), dict) else {}
                 health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
                 display_name = str(health.get("display_name_zh") or server.get("title") or server_key)
                 aliases = health.get("business_aliases_zh") if isinstance(health.get("business_aliases_zh"), list) else []
-                alias_text = f"（{', '.join(str(item) for item in aliases[:3])}）" if aliases else ""
-                sample = [str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict)]
-                important = [
-                    name
-                    for name in ("assistant_create_issue_candidate", "qe_template_create", "mcp_github_issue_create")
-                    if name in sample
-                ]
+                alias_text = "\uff08" + "\uff0c".join(str(item) for item in aliases[:3]) + "\uff09" if aliases else ""
+                sample = []
+                for tool in tools:
+                    if not isinstance(tool, dict):
+                        continue
+                    raw_tool_name = str(tool.get("tool_name") or "")
+                    if "artifact_ref" in raw_tool_name.lower():
+                        continue
+                    display = str(tool.get("title") or "").strip() or ResearchAssistantService._humanize_business_identifier(raw_tool_name)
+                    if ResearchAssistantService._contains_mcp_business_forbidden_marker(display):
+                        display = ResearchAssistantService._humanize_business_identifier(raw_tool_name)
+                    sample.append(display)
                 preview_names = []
-                for name in [*important, *sample]:
+                for name in sample:
                     if name and name not in preview_names:
                         preview_names.append(name)
-                    if len(preview_names) >= 12:
+                    if len(preview_names) >= 8:
                         break
-                preview = ", ".join(preview_names)
-                suffix = f" ... count {len(sample)}" if len(sample) > 12 else f"(count {len(sample)})"
-                lines.append(f"- {display_name}{alias_text} / {server_key}: {preview}{suffix}")
+                preview = "\uff0c".join(preview_names)
+                suffix = f"\uff0c\u5171 {len(sample)} \u4e2a" if len(sample) > 8 else f"\uff0c\u5171 {len(sample)} \u4e2a"
+                lines.append(f"- {display_name}{alias_text}\uff1a{preview}{suffix}")
         else:
-            lines.append("我会先刷新 MCP 目录，再给你可调用的工具概览。")
-        lines.append("你直接描述目标即可，例如补 trade_date、检查 QE 入仓、计算因子 RankIC、比较模型 seed 稳定性、判断策略能否进入 Paper v2；我会给出 route decision、工具和确认边界。")
+            lines.append("\u6682\u672a\u8bfb\u5230\u53ef\u7528\u5de5\u5177\u76ee\u5f55\uff0c\u9700\u5148\u5237\u65b0\u80fd\u529b\u76ee\u5f55\u3002")
+        lines.append("\u793a\u4f8b\uff1a\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u3001\u67e5\u770b QE \u6570\u4ed3\u5065\u5eb7\u3001\u641c\u7d22\u56e0\u5b50\u5e93\u3001\u6bd4\u8f83\u6a21\u578b\u8868\u73b0\u3001\u5224\u65ad\u7b56\u7565\u5305\u662f\u5426\u53ef\u8fdb\u5165 Paper v2\u3002")
         return "\n".join(lines)
+
 
 
 

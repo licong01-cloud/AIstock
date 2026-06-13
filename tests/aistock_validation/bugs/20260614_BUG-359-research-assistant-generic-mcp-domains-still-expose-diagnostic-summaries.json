@@ -1,8 +1,20 @@
 {
   "actual": "33 个自然语言验收场景中 18 个失败：通用 MCP 能力、因子库、模型库、执行策略等域显示诊断 summary；local_data_plan_repair、factor_corr_plan、QE create/backfill、factor register 等计划类问题返回 Insufficient evidence；QE seed 稳定性、外部论文检索、失败 QE run、策略缺 ID 等路由错误；strategy_governance readiness/promotion 返回 HTTP 404。",
   "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/mcp/modules/strategy_governance.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
     "tests/aistock_validation/bugs/20260614_BUG-359-research-assistant-generic-mcp-domains-still-expose-diagnostic-summaries.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/tests/research_assistant/test_external_research_react_consumption.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-359",
@@ -20,6 +32,42 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260614-170a68b77634",
       "timestamp": "2026-06-13T17:46:00.379532Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-06-13T17:51:23.812031Z",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260614_BUG-359-research-assistant-generic-mcp-domains-still-expose-diagnostic-summaries.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "note": "Root cause spans Research Assistant MCP routing, execution business rendering, strategy governance endpoint handling, and regression tests; expanding scope before code changes."
+    },
+    {
+      "action": "implement_generic_mcp_reply_policy",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-06-13T19:10:59Z",
+      "note": "Implemented a processing-layer generic MCP business renderer and preflight fallback so different MCP domains share the same business-facing reply policy instead of exposing diagnostic summary adapter details."
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-06-13T19:15:26Z",
+      "previous_scope_note": "Added generic frontend display sanitization for Research Assistant chat cards so public UI does not re-expose MCP route/summary diagnostics after backend reply policy sanitizes the main answer.",
+      "added_scope": [
+        "frontend/src/app/research-assistant/chat/page.tsx",
+        "frontend/tests/research-assistant/research-assistant.spec.ts"
+      ]
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-06-13T19:55:42Z",
+      "added_scope": [
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py"
+      ],
+      "note": "Research Assistant backend full-gate expectations must be updated to the unified MCP business-reply policy: external research and catalog replies must not expose source/as_of, summary-first, or server route diagnostics in user-facing text."
     }
   ],
   "evidence_uris": [
@@ -46,7 +94,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -72,5 +121,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
