@@ -46,7 +46,7 @@ python scripts/aistock_mcp_gateway_doctor.py --json
 ## 验证结果
 
 - `compileall`: PASS
-- 目标 MCP 测试：`79 passed`
+- 目标 MCP 测试：`91 passed`
 - `tests/mcp`: `38 passed`
 - `git diff --check`: PASS
 - `qlib_data` startup summary：PASS，modules=`["qlib_export"]`，tool_count=`15`
