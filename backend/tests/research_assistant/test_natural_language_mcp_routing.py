@@ -182,6 +182,22 @@ def test_bug_160_utf8_chinese_business_mcp_overviews_are_routed() -> None:
         assert route["server_key"] != "aistock-local-data"
 
 
+def test_bug_357_qe_business_queries_route_without_diagnostic_defaults() -> None:
+    cases = {
+        "\u76ee\u524d\u6700\u8fd1\u7684 QE \u5b9e\u9a8c\u6709\u54ea\u4e9b\uff1f\u7ed9\u6211\u4e00\u4e2a\u5217\u8868\u548c\u72b6\u6001\u6c47\u603b": ("qe_experiment", "qe_experiment_list", "read_only"),
+        "custom_evo \u4efb\u52a1\u6700\u65b0\u8fdb\u5ea6\u600e\u4e48\u6837\uff1f\u7ed9\u6211\u72b6\u6001\u6c47\u603b": ("qe_experiment", "qe_experiment_list", "read_only"),
+        "QE \u6570\u4ed3\u73b0\u5728\u662f\u5426\u6b63\u5e38\uff1f\u7ed9\u6211\u5065\u5eb7\u72b6\u6001\u548c\u5165\u4ed3\u6c47\u603b": ("qe_warehouse", "qe_archive_health", "read_only"),
+        "\u67e5\u770b QE run leaderboard\uff0c\u544a\u8bc9\u6211\u6700\u597d\u7684\u6a21\u578b\u548c\u5173\u952e\u6307\u6807": ("qe_warehouse", "qe_archive_query_run_leaderboard", "read_only"),
+        "\u5e2e\u6211\u8bbe\u8ba1\u4e00\u4e2a QE \u5b9e\u9a8c\u8349\u6848\uff0c\u5148\u4e0d\u8981\u6267\u884c\u3002": ("qe_experiment", "qe_template_create", "plan_or_preflight"),
+    }
+    for message, (domain, tool, side_effect) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == "aistock-qe"
+        assert route["tool_name"] == tool
+        assert route["side_effect"] == side_effect
+
+
 def test_bug_356_local_data_sync_check_routes_to_daily_status_list() -> None:
     cases = [
         "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5",

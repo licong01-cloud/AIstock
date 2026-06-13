@@ -6,6 +6,8 @@ the owner of repositories, task events, trace events, and runtime config.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import timedelta
 from time import perf_counter
 from typing import Any
@@ -753,12 +755,392 @@ class ResearchAssistantExecutionMixin:
             return True
         return any(term in request for term in collection_terms) and "\u540c\u6b65" in request
 
+    def _qe_archive_repository(self) -> Any:
+        factory = getattr(self, "qe_archive_repository_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.qe_archive.repository import QEArchiveRepository
+
+        return QEArchiveRepository()
+
+    def _qe_experiment_facade_service(self) -> Any:
+        factory = getattr(self, "qe_experiment_service_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.quantevolver.config_composer import ConfigComposer
+
+        return ConfigComposer()
+
+    def _qe_custom_evo_facade_service(self) -> Any:
+        factory = getattr(self, "qe_custom_evo_service_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
+        return AutoEvolutionScheduler()
+
+    @staticmethod
+    def _run_awaitable_sync(awaitable: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(awaitable)
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+
+        def runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(awaitable)
+            except BaseException as exc:  # pragma: no cover - defensive thread handoff.
+                error_box["error"] = exc
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error_box:
+            raise error_box["error"]
+        return result_box.get("value")
+
+    @staticmethod
+    def _maybe_await_sync(value: Any) -> Any:
+        if hasattr(value, "__await__"):
+            return ResearchAssistantExecutionMixin._run_awaitable_sync(value)
+        return value
+
+    @staticmethod
+    def _page_items_and_total(response: Any) -> tuple[list[dict[str, Any]], int]:
+        data = response.get("data") if isinstance(response, dict) else None
+        source = data if isinstance(data, dict) else response
+        if isinstance(source, dict):
+            raw_items = source.get("items")
+            if raw_items is None:
+                raw_items = source.get("rows")
+            if raw_items is None and "data" in source:
+                nested = source.get("data")
+                raw_items = nested.get("items") if isinstance(nested, dict) else nested
+            items = [dict(item) for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
+            total = int(source.get("total") or source.get("count") or len(items))
+            return items, total
+        if isinstance(source, list):
+            items = [dict(item) for item in source if isinstance(item, dict)]
+            return items, len(items)
+        return [], 0
+
+    @staticmethod
+    def _compact_qe_experiment_item(item: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "experiment_id",
+            "experiment_name",
+            "status",
+            "model_id",
+            "model_type",
+            "strategy_id",
+            "alpha_mode",
+            "qe_task_id",
+            "task_id",
+            "qe_loop_id",
+            "loop_id",
+            "loop_index",
+            "parent_experiment_id",
+            "is_evolution_loop",
+            "ic",
+            "icir",
+            "rank_ic",
+            "rank_icir",
+            "annualized_return",
+            "max_drawdown",
+            "information_ratio",
+            "archive_run_id",
+            "run_id",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
+        return {key: item.get(key) for key in keys if item.get(key) is not None}
+
+    @staticmethod
+    def _compact_qe_task_item(item: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "task_id",
+            "task_name",
+            "target_desc",
+            "status",
+            "task_type",
+            "source_type",
+            "current_loop",
+            "max_loops",
+            "base_experiment_id",
+            "node_id",
+            "label_horizon",
+            "startable",
+            "resume_allowed",
+            "start_reason",
+            "created_at",
+            "updated_at",
+        )
+        compact = {key: item.get(key) for key in keys if item.get(key) is not None}
+        loop_counts = item.get("loop_status_counts")
+        if isinstance(loop_counts, dict):
+            compact["loop_status_counts"] = {str(key): int(value) for key, value in loop_counts.items()}
+        return compact
+
+    @staticmethod
+    def _count_by_status(items: list[dict[str, Any]], key: str = "status") -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in items:
+            status = str(item.get(key) or "unknown")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    @staticmethod
+    def _request_mentions_custom_evo(payload: dict[str, Any]) -> bool:
+        route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        selected_tool = payload.get("selected_tool") if isinstance(payload.get("selected_tool"), dict) else {}
+        text = " ".join(
+            str(part or "")
+            for part in (
+                payload.get("request"),
+                route.get("tool_name"),
+                selected_tool.get("tool_name"),
+            )
+        ).lower()
+        return (
+            "custom_evo" in text
+            or "custom evo" in text
+            or ("\u4efb\u52a1" in text and ("\u8fdb\u5ea6" in text or "\u6700\u65b0" in text or "loop" in text))
+        )
+
+    def _execute_qe_summary_read_tool(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any] | None:
+        tool_name = str(tool.get("tool_name") or "")
+        if tool_name.startswith("qe_archive_"):
+            return self._execute_qe_warehouse_summary_read(tool, payload, args)
+        if tool_name in {"qe_experiment_list", "qe_custom_evo_list_tasks"} or (
+            tool_name.startswith("qe_experiment_") and tool_name.endswith("_list")
+        ):
+            return self._execute_qe_experiment_summary_read(tool, payload, args)
+        return None
+
+    def _execute_qe_experiment_summary_read(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-qe")
+        tool_name = str(tool.get("tool_name") or "qe_experiment_list")
+        limit = int(args.get("limit") or payload.get("limit") or 20)
+        offset = int(args.get("offset") or payload.get("offset") or 0)
+        as_of = utc_now().isoformat()
+        partial_errors: list[dict[str, str]] = []
+        summary_kind = "custom_evo_tasks" if tool_name == "qe_custom_evo_list_tasks" or self._request_mentions_custom_evo(payload) else "qe_experiments"
+        items: list[dict[str, Any]] = []
+        total = 0
+        try:
+            if summary_kind == "custom_evo_tasks":
+                service = self._qe_custom_evo_facade_service()
+                response = service.get_all_tasks(detail="summary", limit=limit, offset=offset)
+                raw_items, total = self._page_items_and_total(self._maybe_await_sync(response))
+                items = [self._compact_qe_task_item(item) for item in raw_items[:limit]]
+                evidence_sources = ["qe_custom_evo_list_tasks"]
+            else:
+                service = self._qe_experiment_facade_service()
+                response = service.list_experiments(limit=limit, offset=offset, include_children=False, detail="summary")
+                raw_items, total = self._page_items_and_total(response)
+                items = [self._compact_qe_experiment_item(item) for item in raw_items[:limit]]
+                evidence_sources = ["qe_experiment_list"]
+            read_status = "ok"
+        except Exception as exc:  # noqa: BLE001
+            partial_errors.append({"source": tool_name, "error": str(exc)})
+            evidence_sources = [tool_name, "partial_read_errors"]
+            read_status = "failed"
+
+        result_json = summary_envelope(
+            domain="qe_experiment",
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            omitted_sections=["raw_payload", "full_logs", "model_weights", "training_curves", "factor_value_rows", "database_rows"],
+            detail_tool=f"{server_key}/{tool_name}",
+            artifact_refs=[],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "qe_experiment_status_summary",
+                "source": "qe_experiment_read_adapter",
+                "live_backend_called": True,
+                "read_status": read_status,
+                "summary_kind": summary_kind,
+                "as_of": as_of,
+                "status_counts": self._count_by_status(items),
+                "evidence_sources": evidence_sources,
+                "partial_errors": partial_errors,
+                "next_step": "Review QE experiment/task status; request a specific experiment or task ID for detail.",
+            },
+        )
+        assert_summary_payload(result_json)
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [
+                {
+                    "title": "QE experiment status summary",
+                    "summary": "Prepared QE experiment/task business status summary from read-only backend evidence.",
+                    "summary_kind": summary_kind,
+                    "status_counts": result_json["status_counts"],
+                    "next_step": result_json["next_step"],
+                }
+            ],
+            "artifact_refs": [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "qe_experiment_read_adapter",
+        }
+
+    @staticmethod
+    def _compact_qe_warehouse_item(tool_name: str, item: dict[str, Any]) -> dict[str, Any]:
+        fields_by_tool: dict[str, tuple[str, ...]] = {
+            "qe_archive_list_outbox": ("event_id", "event_type", "source_system", "source_id", "source_sub_id", "status", "retry_count", "next_retry_at", "locked_by", "locked_at", "error_message", "created_at", "updated_at"),
+            "qe_archive_list_runs": ("run_id", "source_system", "run_type", "status", "research_valid", "invalid_reason", "logical_experiment_id", "experiment_id", "task_id", "loop_id", "loop_index", "node_id", "model_type", "factor_count", "label_horizon", "completed_at", "archived_at", "metric_count", "curve_count", "factor_count_rows", "trade_count"),
+            "qe_archive_query_analytics_view_status": ("logical_name", "view_name", "available", "row_count", "purpose", "grain"),
+            "qe_archive_query_run_leaderboard": ("run_id", "task_id", "loop_index", "experiment_id", "model_type", "factor_count", "label_horizon", "ic", "icir", "rank_ic", "rank_icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "calmar", "random_seed", "verification_status", "score_total", "completed_at"),
+            "qe_archive_query_seed_robustness": ("factor_set_hash", "model_type", "label_horizon", "run_count", "distinct_seed_count", "random_seeds", "cagr_mean", "cagr_std", "cagr_worst", "cagr_best", "sharpe_mean", "ir_mean", "ir_worst", "max_drawdown_mean", "icir_mean", "rank_icir_mean", "is_return_stable", "latest_completed_at"),
+            "qe_archive_query_factor_performance": ("factor_name", "is_alpha158", "run_count", "best_cagr", "avg_cagr", "best_sharpe", "avg_sharpe", "best_icir", "avg_icir", "latest_used_at"),
+            "qe_archive_query_model_hyperparam_seed_perf": ("model_type", "model_family", "hyperparam_hash", "label_horizon", "random_seed", "objective_name", "objective_value", "ic", "icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "run_id", "task_id", "loop_index", "completed_at"),
+            "qe_archive_query_overfit_flags": ("run_id", "task_id", "loop_index", "model_type", "label_horizon", "random_seed", "cagr", "information_ratio", "icir", "training_failed", "convergence_ratio", "overfit_ratio", "flag_return_without_signal", "flag_undertrained_highret", "flag_seed_outlier", "is_suspicious"),
+            "qe_archive_query_promotion_candidates": ("factor_set_hash", "model_type", "label_horizon", "topk", "run_count", "distinct_seed_count", "random_seeds", "cagr_mean", "cagr_std", "cagr_worst", "cagr_best", "sharpe_mean", "ir_mean", "ir_worst", "max_drawdown_mean", "icir_mean", "rank_icir_mean", "is_return_stable", "latest_completed_at", "passes_gate"),
+            "qe_archive_query_evolution_lineage": ("task_id", "loop_index", "experiment_id", "run_id", "model_type", "label_horizon", "factor_count", "ic", "icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "random_seed", "completed_at"),
+        }
+        fields = fields_by_tool.get(tool_name, tuple(item.keys()))
+        return {key: item.get(key) for key in fields if item.get(key) is not None}
+
+    def _execute_qe_warehouse_summary_read(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-qe")
+        tool_name = str(tool.get("tool_name") or "qe_archive_health")
+        limit = int(args.get("limit") or payload.get("limit") or 20)
+        as_of = utc_now().isoformat()
+        partial_errors: list[dict[str, str]] = []
+        items: list[dict[str, Any]] = []
+        total = 0
+        summary_kind = tool_name.removeprefix("qe_archive_")
+        health_summary: dict[str, Any] = {}
+        try:
+            repo = self._qe_archive_repository()
+            if tool_name == "qe_archive_health":
+                health_summary = dict(repo.get_archive_summary())
+                items = [
+                    {
+                        "item_type": "warehouse_health",
+                        "run_count": health_summary.get("run_count"),
+                        "pending_outbox_count": health_summary.get("pending_outbox_count"),
+                        "latest_archived_at": health_summary.get("latest_archived_at"),
+                        "skip_count": health_summary.get("skip_count"),
+                        "manual_only_count": health_summary.get("manual_only_count"),
+                    }
+                ]
+                total = 1
+            elif tool_name == "qe_archive_list_outbox":
+                raw = repo.list_outbox_events(status=args.get("status"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_list_runs":
+                raw = repo.list_runs(status=args.get("status"), run_type=args.get("run_type"), search=args.get("search"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_analytics_view_status":
+                raw = repo.get_analytics_view_status()
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_run_leaderboard":
+                raw = repo.query_run_leaderboard(model_type=args.get("model_type"), min_icir=args.get("min_icir"), min_ir=args.get("min_ir"), limit=limit, order_by=str(args.get("order_by") or "cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_seed_robustness":
+                raw = repo.query_seed_robustness(model_type=args.get("model_type"), min_seed_count=int(args.get("min_seed_count") or 2), stable_only=bool(args.get("stable_only") or False), limit=limit, order_by=str(args.get("order_by") or "cagr_mean"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_factor_performance":
+                raw = repo.query_factor_performance(factor_name=args.get("factor_name"), min_runs=int(args.get("min_runs") or 1), limit=limit, order_by=str(args.get("order_by") or "best_cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_model_hyperparam_seed_perf":
+                raw = repo.query_model_hyperparam_seed_perf(model_type=args.get("model_type"), hyperparam_hash=args.get("hyperparam_hash"), limit=limit, order_by=str(args.get("order_by") or "cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_overfit_flags":
+                raw = repo.query_overfit_flags(suspicious_only=bool(args.get("suspicious_only", True)), model_type=args.get("model_type"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_promotion_candidates":
+                raw = repo.query_promotion_candidates(model_type=args.get("model_type"), min_seed_count=int(args.get("min_seed_count") or 5), limit=limit, order_by=str(args.get("order_by") or "cagr_mean"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_evolution_lineage":
+                raw = repo.query_evolution_lineage(task_id=args.get("task_id"), experiment_id=args.get("experiment_id"), model_type=args.get("model_type"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            else:
+                raw = repo.list_runs(limit=limit)
+                items = [self._compact_qe_warehouse_item("qe_archive_list_runs", item) for item in raw[:limit]]
+                total = len(raw)
+                summary_kind = "runs"
+            read_status = "ok"
+        except Exception as exc:  # noqa: BLE001
+            partial_errors.append({"source": tool_name, "error": str(exc)})
+            read_status = "failed"
+
+        result_json = summary_envelope(
+            domain="qe_warehouse",
+            items=items,
+            total=total,
+            limit=limit,
+            offset=int(args.get("offset") or 0),
+            omitted_sections=["raw_payload", "full_logs", "matrix", "model_weights", "training_curves", "database_rows"],
+            detail_tool=f"{server_key}/{tool_name}",
+            artifact_refs=[],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "qe_warehouse_business_summary",
+                "source": "qe_archive_read_adapter",
+                "live_backend_called": True,
+                "read_status": read_status,
+                "summary_kind": summary_kind,
+                "as_of": as_of,
+                "status_counts": self._count_by_status(items),
+                "health_summary": health_summary,
+                "evidence_sources": [tool_name] if not partial_errors else [tool_name, "partial_read_errors"],
+                "partial_errors": partial_errors,
+                "next_step": "Review QE warehouse health, outbox, archive runs, or analytics rows; request a specific run/task for detail.",
+            },
+        )
+        assert_summary_payload(result_json)
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [
+                {
+                    "title": "QE warehouse business summary",
+                    "summary": "Prepared QE warehouse business summary from read-only repository evidence.",
+                    "summary_kind": summary_kind,
+                    "status_counts": result_json["status_counts"],
+                    "next_step": result_json["next_step"],
+                }
+            ],
+            "artifact_refs": [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "qe_archive_read_adapter",
+        }
+
     def _execute_summary_first_read_tool(self, tool: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         args = self._summary_adapter_args(payload)
         if server_key == "aistock-local-data" and self._should_use_local_data_daily_status_adapter(tool_name, args, payload):
             return self._execute_local_data_daily_status_read(tool, payload, args)
+        if server_key == "aistock-qe":
+            qe_result = self._execute_qe_summary_read_tool(tool, payload, args)
+            if qe_result is not None:
+                return qe_result
         server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
         health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
         domain = str(health.get("domain") or server_key)

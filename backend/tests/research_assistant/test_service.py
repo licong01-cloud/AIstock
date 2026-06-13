@@ -112,6 +112,137 @@ def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService
     return svc
 
 
+class FakeQeExperimentService:
+    def list_experiments(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "ok": True,
+            "total": 3,
+            "items": [
+                {
+                    "experiment_id": "exp_completed",
+                    "experiment_name": "alpha baseline",
+                    "status": "completed",
+                    "model_id": "lgbm_v1",
+                    "qe_task_id": "task-custom-1",
+                    "qe_loop_id": "loop-1",
+                    "loop_index": 1,
+                    "ic": 0.031,
+                    "rank_ic": 0.044,
+                    "information_ratio": 1.21,
+                    "updated_at": "2026-06-13T09:30:00+08:00",
+                },
+                {
+                    "experiment_id": "exp_running",
+                    "experiment_name": "alpha live loop",
+                    "status": "running",
+                    "model_id": "catboost_v2",
+                    "qe_task_id": "task-custom-2",
+                    "loop_index": 2,
+                    "rank_ic": 0.052,
+                },
+                {
+                    "experiment_id": "exp_failed",
+                    "experiment_name": "alpha failed",
+                    "status": "failed",
+                    "model_id": "xgb_v1",
+                },
+            ],
+        }
+
+
+class FakeQeCustomEvoService:
+    async def get_all_tasks(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [
+            {
+                "task_id": "task-custom-1",
+                "task_name": "custom evo alpha",
+                "status": "running",
+                "current_loop": 2,
+                "max_loops": 5,
+                "node_id": "qe-node-a",
+                "loop_status_counts": {"completed": 1, "running": 1},
+                "updated_at": "2026-06-13T10:00:00+08:00",
+            },
+            {
+                "task_id": "task-custom-2",
+                "task_name": "custom evo beta",
+                "status": "completed",
+                "current_loop": 5,
+                "max_loops": 5,
+                "loop_status_counts": {"completed": 5},
+            },
+        ]
+
+
+class FakeQeArchiveRepository:
+    def get_archive_summary(self) -> dict[str, object]:
+        return {
+            "run_count": 7,
+            "pending_outbox_count": 1,
+            "latest_archived_at": "2026-06-13T09:00:00+08:00",
+            "skip_count": 2,
+            "manual_only_count": 0,
+            "outbox_status_counts": {"pending": 1, "succeeded": 8},
+            "archive_job_status_counts": {"succeeded": 7},
+            "ingest_history_status_counts": {"archived": 7},
+            "backfill_run_status_counts": {"completed": 1},
+            "research_valid_counts": {"true": 6, "false": 1},
+        }
+
+    def list_outbox_events(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [{"event_id": "evt-1", "event_type": "run", "status": "pending", "retry_count": 0}]
+
+    def list_runs(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [{"run_id": "run-1", "status": "archived", "model_type": "LightGBM", "cagr": 0.12}]
+
+    def get_analytics_view_status(self) -> list[dict[str, object]]:
+        return [{"logical_name": "leaderboard", "view_name": "qe_run_leaderboard", "available": True, "row_count": 5}]
+
+    def query_run_leaderboard(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [
+            {
+                "run_id": "run-best",
+                "task_id": "task-custom-1",
+                "experiment_id": "exp_completed",
+                "model_type": "CatBoost",
+                "cagr": 0.22,
+                "sharpe": 1.4,
+                "information_ratio": 1.1,
+                "icir": 0.8,
+                "completed_at": "2026-06-13T09:00:00+08:00",
+            }
+        ]
+
+    def query_seed_robustness(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_factor_performance(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_model_hyperparam_seed_perf(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_overfit_flags(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_promotion_candidates(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_evolution_lineage(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+
 class FakeLocalDataDailyStatusService:
     def get_preset_daily_status(self) -> dict[str, object]:
         return {
@@ -907,6 +1038,36 @@ BUG_356_FORBIDDEN_REPLY_MARKERS = (
 )
 
 
+BUG_357_FORBIDDEN_REPLY_MARKERS = (
+    "summary-first",
+    "Route decision",
+    "artifact_ref",
+    "payload budget",
+    "Evidence: source=",
+    "research_assistant_catalog_summary_adapter",
+    "server_key",
+    "tool_name",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+    "Insufficient evidence",
+    "max tool iterations",
+)
+
+
+def _chat_service_with_qe_fakes(fake: FakeLlmClient | None = None) -> ResearchAssistantService:
+    svc = _chat_service(fake)
+    svc.qe_experiment_service_factory = FakeQeExperimentService
+    svc.qe_custom_evo_service_factory = FakeQeCustomEvoService
+    svc.qe_archive_repository_factory = FakeQeArchiveRepository
+    return svc
+
+
+def _assert_bug_357_no_diagnostic_reply(result: dict[str, object]) -> str:
+    text = result["assistant_message"]["content_text"]  # type: ignore[index]
+    for marker in BUG_357_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
+    return text
+
+
 def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None:
     text = result["assistant_message"]["content_text"]  # type: ignore[index]
     assert "\u5df2\u540c\u6b65\u6210\u529f" in text
@@ -931,6 +1092,113 @@ def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None
     assert summary["response_mode"] == "local_data_daily_sync_status"
     assert summary["source"] == "local_data_facade_read_adapter"
 
+
+
+def test_bug_357_qe_experiment_list_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u76ee\u524d\u6700\u8fd1\u7684 QE \u5b9e\u9a8c\u6709\u54ea\u4e9b\uff1f\u7ed9\u6211\u4e00\u4e2a\u5217\u8868\u548c\u72b6\u6001\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6c47\u603b QE \u5b9e\u9a8c\u72b6\u6001\u5982\u4e0b" in text
+    assert "completed=1" in text
+    assert "running=1" in text
+    assert "failed=1" in text
+    assert "exp_completed" in text
+    assert "alpha baseline" in text
+    assert "\u672c\u8f6e\u672a\u542f\u52a8\u3001\u6267\u884c\u3001\u7269\u5316\u6216\u4fee\u6539\u4efb\u4f55 QE \u5b9e\u9a8c" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_experiment"
+    assert route["tool_name"] == "qe_experiment_list"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_experiment_status_summary"
+    assert summary["source"] == "qe_experiment_read_adapter"
+    assert summary["summary_kind"] == "qe_experiments"
+    assert result["cards"]["react_grounding"]["stopped_reason"] == "business_summary_terminal"
+
+
+def test_bug_357_qe_custom_evo_progress_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="custom_evo \u4efb\u52a1\u6700\u65b0\u8fdb\u5ea6\u600e\u4e48\u6837\uff1f\u7ed9\u6211\u72b6\u6001\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6c47\u603b QE custom_evo \u4efb\u52a1\u8fdb\u5ea6\u5982\u4e0b" in text
+    assert "custom evo alpha" in text
+    assert "task-custom-1" in text
+    assert "current_loop=2" in text
+    assert "loops[completed=1" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_experiment"
+    assert route["tool_name"] == "qe_experiment_list"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_experiment_status_summary"
+    assert summary["summary_kind"] == "custom_evo_tasks"
+    assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
+
+
+def test_bug_357_qe_warehouse_health_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="QE \u6570\u4ed3\u73b0\u5728\u662f\u5426\u6b63\u5e38\uff1f\u7ed9\u6211\u5065\u5eb7\u72b6\u6001\u548c\u5165\u4ed3\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "QE \u6570\u4ed3\u5065\u5eb7\u6c47\u603b\u5982\u4e0b" in text
+    assert "run_count=7" in text
+    assert "pending_outbox=1" in text
+    assert "outbox \u72b6\u6001" in text
+    assert "research_valid" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c backfill\u3001\u91cd\u8dd1\u3001\u5199\u5e93\u6216\u4efb\u4f55\u9ad8\u98ce\u9669 QE \u64cd\u4f5c" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_health"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_warehouse_business_summary"
+    assert summary["source"] == "qe_archive_read_adapter"
+
+
+def test_bug_357_qe_warehouse_leaderboard_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u67e5\u770b QE run leaderboard\uff0c\u544a\u8bc9\u6211\u6700\u597d\u7684\u6a21\u578b\u548c\u5173\u952e\u6307\u6807"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "QE run leaderboard \u6c47\u603b\u5982\u4e0b" in text
+    assert "\u5f53\u524d\u5217\u8868\u9996\u4f4d" in text
+    assert "run-best" in text
+    assert "CatBoost" in text
+    assert "cagr=0.22" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_warehouse_business_summary"
+    assert summary["summary_kind"] == "query_run_leaderboard"
+
+
+def test_bug_357_qe_draft_does_not_auto_execute_or_surface_insufficient_evidence() -> None:
+    class InsufficientEvidenceDraftLlm(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service_with_qe_fakes(InsufficientEvidenceDraftLlm())
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u5e2e\u6211\u8bbe\u8ba1\u4e00\u4e2a QE \u5b9e\u9a8c\u8349\u6848\uff0c\u5148\u4e0d\u8981\u6267\u884c\u3002"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6536\u5230 QE \u5b9e\u9a8c\u8349\u6848\u9700\u6c42" in text
+    assert "\u672c\u8f6e\u53ea\u751f\u6210\u65b9\u6848" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "qe_template_create"
+    assert route["side_effect"] == "plan_or_preflight"
+    assert "mcp_execution_result" not in result["cards"] or result["cards"]["mcp_execution_result"].get("auto_executed") is not True
 
 
 def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
