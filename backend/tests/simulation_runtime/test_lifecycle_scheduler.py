@@ -673,6 +673,98 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
     assert len([binding for binding in local_bindings if binding.effective_from == next_trade_day]) == 1
 
 
+def test_scheduler_rolls_forward_expired_miniqmt_binding_for_unattended_daily_runs() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    qmt_binding = qmt_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    repo.bindings[qmt_binding.binding_id] = qmt_binding
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={qmt_binding.strategy_id: _position_context(portfolio_id="portfolio_miniqmt_roll_forward")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    rerun = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+
+    assert result.total_bindings == 1
+    assert result.planned_count == 1
+    rolled_run = result.results[0].run
+    assert rolled_run is not None
+    assert rolled_run.binding_id != qmt_binding.binding_id
+    assert rolled_run.account_group_id == qmt_binding.account_group_id
+    assert rolled_run.strategy_slot_id == qmt_binding.strategy_slot_id
+    new_binding = repo.get_simulation_release_binding(rolled_run.binding_id)
+    assert new_binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+    assert new_binding.account_group_id == qmt_binding.account_group_id
+    assert new_binding.strategy_slot_id == qmt_binding.strategy_slot_id
+    assert new_binding.strategy_name == qmt_binding.strategy_name
+    assert new_binding.order_remark_prefix == qmt_binding.order_remark_prefix
+    assert new_binding.effective_from == next_trade_day
+    assert new_binding.effective_to == next_trade_day
+    assert new_binding.binding_config_json["metadata"]["purpose"] == "miniqmt_unattended_daily_roll_forward"
+    assert new_binding.binding_config_json["metadata"]["extends_binding_id"] == qmt_binding.binding_id
+    new_release = repo.get_strategy_runtime_release(new_binding.release_id)
+    assert new_release.base_release_id == release.release_id
+    assert new_release.effective_from == next_trade_day
+    assert new_release.effective_to == next_trade_day
+    assert new_release.release_config_json["metadata"]["purpose"] == "miniqmt_unattended_daily_roll_forward"
+    assert rerun.reused_count == 1
+    assert rerun.results[0].run.binding_id == new_binding.binding_id
+
+
+def test_scheduler_rolls_forward_local_and_miniqmt_when_backend_filter_is_omitted() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    local_binding = local_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    qmt_binding = qmt_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    repo.bindings[local_binding.binding_id] = local_binding
+    repo.bindings[qmt_binding.binding_id] = qmt_binding
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={
+                local_binding.strategy_id: _position_context(portfolio_id="portfolio_local_roll_all"),
+                qmt_binding.strategy_id: _position_context(portfolio_id="portfolio_miniqmt_roll_all"),
+            }
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        submit=False,
+    )
+
+    assert result.total_bindings == 2
+    assert result.planned_count == 2
+    assert {item.broker_backend for item in result.results} == {
+        SimulationBrokerBackend.LOCAL_SIM,
+        SimulationBrokerBackend.MINIQMT_SIM,
+    }
+    rolled_bindings = [repo.get_simulation_release_binding(item.run.binding_id) for item in result.results]
+    assert {binding.binding_config_json["metadata"]["purpose"] for binding in rolled_bindings} == {
+        "localsim_unattended_daily_roll_forward",
+        "miniqmt_unattended_daily_roll_forward",
+    }
+
+
 def test_scheduler_rolls_forward_new_localsim_strategy_without_manual_next_day_binding() -> None:
     release, local_binding_a, _, repo = _release_and_bindings()
     assert local_binding_a is not None

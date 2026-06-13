@@ -92,6 +92,7 @@ _MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES = (
 )
 
 _LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
+_MINIQMT_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.miniqmt_roll_forward"
 
 
 @dataclass(frozen=True)
@@ -1606,7 +1607,7 @@ class SimulationLifecycleScheduler:
             active_on=trade_date,
             limit=limit,
         )
-        bindings = self._with_localsim_roll_forward_bindings(
+        bindings = self._with_unattended_roll_forward_bindings(
             bindings=bindings,
             trade_date=trade_date,
             limit=limit,
@@ -1667,7 +1668,7 @@ class SimulationLifecycleScheduler:
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
 
-    def _with_localsim_roll_forward_bindings(
+    def _with_unattended_roll_forward_bindings(
         self,
         *,
         bindings: list[SimulationReleaseBinding],
@@ -1680,30 +1681,31 @@ class SimulationLifecycleScheduler:
     ) -> list[SimulationReleaseBinding]:
         if release_id is not None:
             return bindings
-        if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.LOCAL_SIM:
-            return bindings
 
         remaining_slots = limit - len(bindings)
         if remaining_slots <= 0:
             return bindings
         existing_keys = {(item.strategy_id, item.broker_backend) for item in bindings}
-        source_candidates = self.repository.list_latest_simulation_release_bindings(
-            strategy_id=strategy_id,
-            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
-            approval_states=approval_states,
-            effective_from_on_or_before=trade_date,
-            limit=limit + remaining_slots,
-        )
         roll_forwarded: list[SimulationReleaseBinding] = []
-        for source in source_candidates:
-            if (source.strategy_id, source.broker_backend) in existing_keys:
-                continue
-            if not self._localsim_binding_can_roll_forward(source=source, trade_date=trade_date):
-                continue
-            roll_forwarded.append(self._roll_forward_localsim_binding(source=source, trade_date=trade_date))
-            existing_keys.add((source.strategy_id, source.broker_backend))
+        for backend in self._roll_forward_backends_for_filter(broker_backend):
             if len(roll_forwarded) >= remaining_slots:
                 break
+            source_candidates = self.repository.list_latest_simulation_release_bindings(
+                strategy_id=strategy_id,
+                broker_backend=backend,
+                approval_states=approval_states,
+                effective_from_on_or_before=trade_date,
+                limit=limit + remaining_slots,
+            )
+            for source in source_candidates:
+                if (source.strategy_id, source.broker_backend) in existing_keys:
+                    continue
+                if not self._binding_can_roll_forward(source=source, trade_date=trade_date):
+                    continue
+                roll_forwarded.append(self._roll_forward_unattended_binding(source=source, trade_date=trade_date))
+                existing_keys.add((source.strategy_id, source.broker_backend))
+                if len(roll_forwarded) >= remaining_slots:
+                    break
 
         if not roll_forwarded:
             return bindings
@@ -1716,8 +1718,16 @@ class SimulationLifecycleScheduler:
         return value if isinstance(value, SimulationBrokerBackend) else SimulationBrokerBackend(str(value))
 
     @staticmethod
-    def _localsim_binding_can_roll_forward(*, source: SimulationReleaseBinding, trade_date: date) -> bool:
-        if source.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+    def _roll_forward_backends_for_filter(
+        broker_backend: SimulationBrokerBackend | str | None,
+    ) -> tuple[SimulationBrokerBackend, ...]:
+        if broker_backend is not None:
+            return (SimulationLifecycleScheduler._normalized_backend(broker_backend),)
+        return (SimulationBrokerBackend.LOCAL_SIM, SimulationBrokerBackend.MINIQMT_SIM)
+
+    @staticmethod
+    def _binding_can_roll_forward(*, source: SimulationReleaseBinding, trade_date: date) -> bool:
+        if source.broker_backend not in {SimulationBrokerBackend.LOCAL_SIM, SimulationBrokerBackend.MINIQMT_SIM}:
             return False
         if source.effective_from is not None and source.effective_from > trade_date:
             return False
@@ -1729,7 +1739,7 @@ class SimulationLifecycleScheduler:
             return False
         return True
 
-    def _roll_forward_localsim_binding(
+    def _roll_forward_unattended_binding(
         self,
         *,
         source: SimulationReleaseBinding,
@@ -1737,6 +1747,7 @@ class SimulationLifecycleScheduler:
     ) -> SimulationReleaseBinding:
         source_release = self.repository.get_strategy_runtime_release(source.release_id)
         release_service = StrategyRuntimeReleaseService(repository=self.repository)
+        created_by = self._roll_forward_created_by(source.broker_backend)
         release_metadata = self._roll_forward_release_metadata(
             source_release=source_release,
             source_binding=source,
@@ -1765,9 +1776,9 @@ class SimulationLifecycleScheduler:
             release_metadata=release_metadata,
             effective_from=trade_date,
             effective_to=trade_date,
-            created_by=_LOCALSIM_ROLL_FORWARD_CREATED_BY,
+            created_by=created_by,
             created_reason=(
-                "Auto roll-forward LocalSim runtime release for unattended daily simulation "
+                f"Auto roll-forward {source.broker_backend.value} runtime release for unattended daily simulation "
                 f"on {trade_date.isoformat()}."
             ),
         )
@@ -1785,18 +1796,30 @@ class SimulationLifecycleScheduler:
             broker_account_id=source.broker_account_id,
             account_group_id=source.account_group_id,
             strategy_slot_id=source.strategy_slot_id,
-            strategy_name=self._localsim_strategy_name_for_trade_date(source.strategy_name, trade_date),
+            strategy_name=self._strategy_name_for_roll_forward(source=source, trade_date=trade_date),
             order_remark_prefix=source.order_remark_prefix,
             approval_state=source.approval_state,
             binding_metadata=binding_metadata,
             effective_from=trade_date,
             effective_to=trade_date,
-            created_by=_LOCALSIM_ROLL_FORWARD_CREATED_BY,
+            created_by=created_by,
             created_reason=(
-                "Auto roll-forward LocalSim binding for unattended daily simulation "
+                f"Auto roll-forward {source.broker_backend.value} binding for unattended daily simulation "
                 f"on {trade_date.isoformat()}."
             ),
         )
+
+    @staticmethod
+    def _roll_forward_created_by(backend: SimulationBrokerBackend) -> str:
+        if backend == SimulationBrokerBackend.MINIQMT_SIM:
+            return _MINIQMT_ROLL_FORWARD_CREATED_BY
+        return _LOCALSIM_ROLL_FORWARD_CREATED_BY
+
+    @staticmethod
+    def _roll_forward_purpose(backend: SimulationBrokerBackend) -> str:
+        if backend == SimulationBrokerBackend.MINIQMT_SIM:
+            return "miniqmt_unattended_daily_roll_forward"
+        return "localsim_unattended_daily_roll_forward"
 
     @staticmethod
     def _release_execution_policy_json(release: StrategyRuntimeRelease) -> dict[str, Any] | None:
@@ -1814,10 +1837,12 @@ class SimulationLifecycleScheduler:
     ) -> dict[str, Any]:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
+        purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(
             {
-                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
-                "purpose": "localsim_unattended_daily_roll_forward",
+                "source": created_by,
+                "purpose": purpose,
                 "target_trade_date": trade_date.isoformat(),
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
@@ -1838,10 +1863,11 @@ class SimulationLifecycleScheduler:
         trade_date: date,
     ) -> dict[str, Any]:
         evidence = deepcopy(source_release.validation_evidence or {})
+        created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
         evidence.update(
             {
-                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
-                "purpose": "localsim unattended daily roll-forward",
+                "source": created_by,
+                "purpose": f"{source_binding.broker_backend.value} unattended daily roll-forward",
                 "target_trade_date": trade_date.isoformat(),
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
@@ -1859,10 +1885,13 @@ class SimulationLifecycleScheduler:
     ) -> dict[str, Any]:
         config = source_binding.binding_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
+        purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(
             {
-                "source": _LOCALSIM_ROLL_FORWARD_CREATED_BY,
-                "purpose": "localsim_unattended_daily_roll_forward",
+                "source": created_by,
+                "purpose": purpose,
+                "broker_backend": source_binding.broker_backend.value,
                 "target_trade_date": trade_date.isoformat(),
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
@@ -1875,6 +1904,16 @@ class SimulationLifecycleScheduler:
             }
         )
         return metadata
+
+    @staticmethod
+    def _strategy_name_for_roll_forward(
+        *,
+        source: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> str | None:
+        if source.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            return SimulationLifecycleScheduler._localsim_strategy_name_for_trade_date(source.strategy_name, trade_date)
+        return source.strategy_name
 
     @staticmethod
     def _localsim_strategy_name_for_trade_date(strategy_name: str | None, trade_date: date) -> str | None:

@@ -45,7 +45,8 @@
   "reproduce_command": "Read-only DB: SELECT broker_backend, approval_state, count(*) FROM paper_v2.simulation_release_binding WHERE (effective_from IS NULL OR effective_from <= DATE '2026-06-15') AND (effective_to IS NULL OR effective_to >= DATE '2026-06-15') GROUP BY broker_backend, approval_state; plus inspect backend/services/simulation_runtime/scheduler.py roll-forward path.",
   "required_verification": [
     "l0",
-    "paper_v2_l3"
+    "paper_v2_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
