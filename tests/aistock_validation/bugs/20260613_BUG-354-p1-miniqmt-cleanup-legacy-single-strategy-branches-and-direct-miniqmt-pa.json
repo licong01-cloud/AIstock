@@ -142,8 +142,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-13T02:23:51.383342Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4f057f7e3374d79f8054268e9b1744d6ab372715",
+  "fixed_at": "2026-06-13T04:19:11.855376Z",
   "github_issue_number": 1047,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1047",
   "last_seen_at": "2026-06-13T02:42:47.648938Z",
@@ -151,6 +151,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1048",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -163,7 +164,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -172,6 +173,15 @@
     "fingerprint": "aef8e9fc2dd49fc377826f61",
     "source_event_id": "FE-20260613-aef8e9fc2dd4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 65 passed",
+    "python -m ruff check backend/services/miniqmt_execution_runtime/client.py backend/services/miniqmt_execution_runtime/repository.py backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/scheduler.py backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/miniqmt_execution_runtime backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/scheduler.py -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients ... -> workflow_gate=ready clients_ready=4/4",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; module ownership scan files=12 mapped=12",
+    "python -m nox -s l0 -> success; guardrail scan blocking=0",
+    "python -m nox -s paper_v2_l3 -> success; paper_v2_backend 617 passed 1 skipped 2 xfailed; paper_v2_ui 25 passed 1 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
