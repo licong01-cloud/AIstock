@@ -13,12 +13,30 @@ def test_llm_triage_config_defaults_are_safe():
     adapter.validate_config(config)
 
     assert config["default_provider"] == "github_models"
-    assert config["providers"]["deepseek_api"]["enabled"] is False
+    assert config["providers"]["deepseek_api"]["enabled"] is True
     assert config["providers"]["deepseek_api"]["model"] == "deepseek-v4-pro"
     selector = config["providers"]["github_models"]["model_selector"]
     assert selector["required_model_family"] == "deepseek-r1"
     assert selector["preferred_models"] == ["deepseek/deepseek-r1"]
     assert selector["allow_lower_tier_fallback"] is False
+
+
+def test_parse_json_response_extracts_fenced_or_prose_wrapped_object():
+    payload = adapter.parse_json_response('Here is the answer:\n```json\n{"summary":"ok","suggested_plan_keys":["l0"]}\n```')
+
+    assert payload["summary"] == "ok"
+    assert payload["suggested_plan_keys"] == ["l0"]
+
+
+def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
+    config = adapter.load_config()
+    config["providers"]["deepseek_api"]["enabled"] = True
+
+    adapter.validate_config(config)
+
+    config["providers"]["deepseek_api"]["model"] = "deepseek-v3"
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_config(config)
 
 
 def test_github_model_catalog_selects_deepseek_r1():
@@ -341,6 +359,46 @@ def test_invoke_provider_json_posts_github_models_chat_request(monkeypatch):
     assert payload["credential_source"] == "GITHUB_TOKEN"
 
 
+def test_invoke_provider_json_retries_schema_invalid_once(monkeypatch):
+    config = adapter.load_config()
+    calls = 0
+
+    class FakeResponse:
+        def __init__(self, content: str):
+            self.content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": self.content}}], "usage": {"total_tokens": 1}}
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=45):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeResponse("not json")
+        return FakeResponse('{"summary":"fixed","suggested_plan_keys":["l0"]}')
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-test-token")
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    payload = adapter.invoke_provider_json(
+        "github_models",
+        config,
+        purpose="test_plan_advice",
+        messages=[{"role": "user", "content": "{}"}],
+    )
+
+    assert calls == 2
+    assert payload["payload"]["summary"] == "fixed"
+
+
 def test_test_plan_advice_can_invoke_llm_but_keeps_deterministic_gate(monkeypatch):
     def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
         return {
@@ -392,6 +450,51 @@ def test_test_plan_advice_live_llm_error_falls_back_without_blocking(monkeypatch
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
     assert "ghp_secret" not in payload["llm_invocation_evidence"]["error"]
+    assert [item["provider"] for item in payload["llm_invocation_evidence"]["provider_chain"]] == [
+        "github_models",
+        "deepseek_api",
+    ]
+
+
+def test_test_plan_advice_falls_back_from_github_models_to_deepseek_api(monkeypatch):
+    calls: list[str] = []
+
+    def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
+        calls.append(provider)
+        if provider == "github_models":
+            raise adapter.ProviderAdapterError("github_models inference request failed status=429")
+        return {
+            "provider": provider,
+            "model": "deepseek-v4-pro",
+            "purpose": purpose,
+            "payload": {
+                "summary": "deepseek fallback",
+                "rationale": "github throttled",
+                "risk": "medium",
+                "suggested_plan_keys": ["l0"],
+                "confidence": 0.8,
+            },
+            "credential_source": "env:DEEPSEEK_API_KEY",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+        }
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+
+    payload = adapter.build_test_plan_advice(
+        "github_models",
+        adapter.load_config(),
+        plan_keys=["l0"],
+        invoke_llm=True,
+    )
+
+    assert calls == ["github_models", "deepseek_api"]
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["llm_invocation_evidence"]["fallback_used"] is True
+    assert payload["llm_invocation_evidence"]["provider_chain"][0]["status"] == "failed"
+    assert payload["llm_invocation_evidence"]["provider_chain"][1]["status"] == "invoked"
+    assert payload["llm_advice"]["suggested_plan_keys"] == ["l0"]
+    assert payload["advice_consumption"]["advice_consumed"] is True
 
 
 def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_path):
@@ -425,6 +528,8 @@ def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_p
     assert artifact["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
     assert "status=429" in artifact["llm_invocation_evidence"]["error"]
     assert "ghp_secret" not in json.dumps(artifact)
+    assert artifact["llm_invoked"] is False
+    assert "provider_chain" in artifact["llm_invocation_evidence"]
 
 
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
@@ -577,6 +682,8 @@ def test_nightly_scheduler_public_artifact_keeps_safe_fallback_reason(monkeypatc
     assert artifact["llm_invocation_evidence"]["reason"] == "nightly_scheduler_advice_live_provider_failed_fallback"
     assert "status=429" in artifact["llm_invocation_evidence"]["error"]
     assert "ghp_secret" not in json.dumps(artifact)
+    assert artifact["advised_plan_keys"] == []
+    assert artifact["executed_plan_keys"]
 
 
 def test_prompt_evaluation_has_20_fixtures_and_compact_metrics():

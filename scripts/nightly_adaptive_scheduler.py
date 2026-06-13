@@ -184,11 +184,14 @@ def build_report(
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
     deferred = [item for item in advice["queue"] if not item.get("allowed")]
+    llm_evidence = llm_provider_adapter.llm_invocation_public_summary(advice.get("llm_invocation_evidence"))
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "workflow_gate": gate["workflow_gate"],
         "provider": advice["provider"],
         "model": advice["model"],
+        "effective_provider": advice.get("effective_provider"),
+        "effective_model": advice.get("effective_model"),
         "execution_mode": "warning_only_advice",
         "execute": False,
         "input_refs": {
@@ -209,7 +212,12 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
-        "llm_invoked": bool((advice.get("llm_advice") or {}).get("advisory_only")),
+        "deterministic_plan_keys": advice.get("deterministic_plan_keys") or [],
+        "advised_plan_keys": advice.get("advised_plan_keys") or [],
+        "executed_plan_keys": advice.get("executed_plan_keys") or [str(item["plan_key"]) for item in allowed],
+        "advice_consumption": advice.get("advice_consumption") or {},
+        "llm_invoked": bool(llm_evidence.get("invoked")),
+        "llm_invocation_evidence": llm_evidence,
         "issue_creation_policy": {
             "allowed": False,
             "reason": "adaptive_scheduler_warning_mode_never_creates_issue",
@@ -223,12 +231,19 @@ def build_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
+    llm_evidence = report.get("llm_invocation_evidence") if isinstance(report.get("llm_invocation_evidence"), dict) else {}
+    consumption = report.get("advice_consumption") if isinstance(report.get("advice_consumption"), dict) else {}
     lines = [
         "# Nightly Adaptive Scheduler",
         "",
-        "- workflow_gate: `generated`",
+        f"- workflow_gate: `{report.get('workflow_gate') or 'unknown'}`",
         "- execution_mode: `warning_only_advice`",
-        "- artifact_detail: `compact_status_only`",
+        f"- provider: `{report.get('effective_provider') or report.get('provider') or 'unknown'}`",
+        f"- llm_invoked: `{bool(report.get('llm_invoked'))}`",
+        f"- fallback_used: `{bool(llm_evidence.get('fallback_used'))}`",
+        f"- allowed_plan_keys: `{','.join(queue.get('allowed_plan_keys') or []) or 'none'}`",
+        f"- advice_consumed: `{bool(consumption.get('advice_consumed'))}`",
         "- issue_creation: `disabled_warning_mode`",
         "",
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
@@ -246,9 +261,11 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
         "execution_mode": report.get("execution_mode"),
         "provider": report.get("provider"),
         "model": report.get("model"),
+        "effective_provider": report.get("effective_provider"),
+        "effective_model": report.get("effective_model"),
         "input_refs": {
             "changed_files": input_refs.get("changed_files") or [],
-            "statuses": input_refs.get("statuses") or {},
+            "statuses": input_refs.get("nightly_statuses") or input_refs.get("statuses") or {},
             "codegraph": input_refs.get("codegraph") or {},
         },
         "queue_summary": {
@@ -259,7 +276,12 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "resource_budget_seconds": queue.get("resource_budget_seconds"),
         },
         "queue": report.get("queue") or [],
+        "deterministic_plan_keys": report.get("deterministic_plan_keys") or [],
+        "advised_plan_keys": report.get("advised_plan_keys") or [],
+        "executed_plan_keys": report.get("executed_plan_keys") or [],
+        "advice_consumption": report.get("advice_consumption") or {},
         "llm_invoked": bool(report.get("llm_invoked")),
+        "llm_invocation_evidence": report.get("llm_invocation_evidence") or {},
         "issue_creation_policy": report.get("issue_creation_policy") or {},
         "test_plan_advice_gate": report.get("test_plan_advice_gate") or {},
         "workspace_gate": report.get("workspace_gate") or {},
@@ -274,17 +296,10 @@ def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(
-        {
-            "schema_version": "aistock_public_scheduler_status_v1",
-            "workflow_gate": "generated",
-            "execution_mode": "warning_only_advice",
-            "public_artifact": True,
-        },
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    payload = dict(public_report)
+    payload["schema_version"] = "aistock_public_scheduler_status_v1"
+    payload["public_artifact"] = True
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     path.write_text(serialized, encoding="utf-8")
 
 
@@ -296,10 +311,13 @@ def _write_text(path: Path | None, public_markdown: str) -> None:
 
 
 def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None) -> None:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
     compact = {
         "check": "nightly-adaptive-scheduler",
-        "workflow_gate": "generated",
+        "workflow_gate": report.get("workflow_gate") or "generated",
         "execution_mode": "warning_only_advice",
+        "llm_invoked": bool(report.get("llm_invoked")),
+        "allowed_plan_count": len(queue.get("allowed_plan_keys") or []),
         "artifact": str(output) if output else None,
     }
     if as_json:
