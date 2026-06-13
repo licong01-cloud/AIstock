@@ -178,14 +178,45 @@ def test_confirmed_qlib_export_tools_reject_before_http(tool_name: str, args: tu
         ("qlib_export_get_snapshot_quality", ("../qlib_test",), {}),
         ("qlib_export_validate_snapshot", ("qlib/test",), {}),
         ("qlib_export_data_preview", ("000001/SZ", "2026-05-01", "2026-05-29"), {}),
+        ("qlib_export_plan_dataset_update", ({"target_end": "2026-05-29", "snapshot_id": "../qlib_test"},), {}),
+        (
+            "qlib_export_run_h5_dataset_full_confirmed",
+            ("daily", {"snapshot_id": "../qlib_test", "start": "2026-05-01", "end": "2026-05-29"}),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_run_h5_dataset_incremental_confirmed",
+            ("minute", {"snapshot_id": "qlib/test", "end": "2026-05-29"}),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
         (
             "qlib_export_run_h5_daily_aux_incremental_all_confirmed",
             ("qlib/test", {"snapshot_id": "qlib_test", "end": "2026-05-29"}),
             {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
         ),
         (
+            "qlib_export_run_h5_daily_aux_incremental_all_confirmed",
+            ("qlib_test", {"snapshot_id": "qlib/test", "end": "2026-05-29"}),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
             "qlib_export_build_static_factors_confirmed",
             ("qlib/test",),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_export_field_map_confirmed",
+            ({"snapshot_id": "qlib/test"},),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_run_bin_unified_v2_confirmed",
+            ({"snapshot_id": "../qlib_bin", "end": "2026-05-29", "datasets": ["stock_daily"]},),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_generate_backtest_candidate_confirmed",
+            ({"snapshot_id": "qlib_test", "end": "2026-05-29", "bin_payload": {"snapshot_id": "../qlib_bin"}},),
             {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
         ),
     ],
@@ -194,6 +225,41 @@ def test_qlib_export_rejects_path_injection_before_http(tool_name: str, args: tu
     _registry, mcp, calls = _registry_with_capture()
 
     with pytest.raises(ValueError):
+        mcp.tools[tool_name](*args, **kwargs)
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "args", "kwargs"),
+    [
+        ("qlib_export_plan_dataset_update", ({"target_end": "2026-05-29", "bin_snapshot_id": "qlib_bin"},), {}),
+        (
+            "qlib_export_run_h5_dataset_full_confirmed",
+            ("daily", {"snapshot_id": "factor_data", "start": "2026-05-01", "end": "2026-05-29"}),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_run_h5_daily_aux_incremental_all_confirmed",
+            ("qlib_minute_bin", {"snapshot_id": "qlib_minute_bin", "end": "2026-05-29"}),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_run_bin_unified_v2_confirmed",
+            ({"snapshot_id": "qlib_bin", "end": "2026-05-29", "datasets": ["stock_daily"]},),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+        (
+            "qlib_export_generate_backtest_candidate_confirmed",
+            ({"snapshot_id": "qlib_test", "end": "2026-05-29", "bin_payload": {"snapshot_id": "qlib_bin"}},),
+            {"confirm": qlib_export.QLIB_EXPORT_RUN_CONFIRM},
+        ),
+    ],
+)
+def test_qlib_export_rejects_production_target_names_before_http(tool_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    _registry, mcp, calls = _registry_with_capture()
+
+    with pytest.raises(ValueError, match="candidate export"):
         mcp.tools[tool_name](*args, **kwargs)
 
     assert calls == []

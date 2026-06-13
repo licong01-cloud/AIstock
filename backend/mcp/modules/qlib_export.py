@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 
 QLIB_EXPORT_RUN_CONFIRM = "RUN_QLIB_EXPORT"
+PRODUCTION_TARGET_NAMES = frozenset({"qlib_bin", "qlib_minute_bin", "factor_data"})
 
 H5_FULL_DATASET_ENDPOINTS = {
     "daily": "/snapshots/daily",
@@ -73,8 +74,28 @@ def _fragment(registry: "ModuleRegistry", value: Any, name: str) -> str:
     return registry.sanitize(raw, name)
 
 
+def _write_fragment(registry: "ModuleRegistry", value: Any, name: str) -> str:
+    safe = _fragment(registry, value, name)
+    if safe.lower() in PRODUCTION_TARGET_NAMES:
+        raise ValueError(f"{name} must identify a candidate export, not production target {safe!r}")
+    return safe
+
+
 def _body(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return dict(payload or {})
+
+
+def _sanitize_payload_identifiers(
+    registry: "ModuleRegistry",
+    payload: dict[str, Any] | None,
+    *,
+    field_names: tuple[str, ...] = ("snapshot_id", "bin_snapshot_id"),
+) -> dict[str, Any]:
+    body = _body(payload)
+    for field_name in field_names:
+        if field_name in body and body[field_name] is not None:
+            body[field_name] = _write_fragment(registry, body[field_name], field_name)
+    return body
 
 
 def _confirmed_body(
@@ -84,7 +105,7 @@ def _confirmed_body(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     registry.confirm(confirm, QLIB_EXPORT_RUN_CONFIRM, "confirm")
-    return _body(payload)
+    return _sanitize_payload_identifiers(registry, payload)
 
 
 def _dataset_endpoint(dataset: str, mapping: dict[str, str]) -> str:
@@ -181,11 +202,15 @@ def _require_date(value: Any, name: str) -> str:
     return raw
 
 
-def _plan_dataset_update(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = _body(payload)
+def _plan_dataset_update(registry: "ModuleRegistry", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = _sanitize_payload_identifiers(registry, payload)
     target_end = _require_date(body.get("target_end"), "target_end")
-    snapshot_id = str(body.get("snapshot_id") or "qlib_test").strip()
-    bin_snapshot_id = str(body.get("bin_snapshot_id") or f"qlib_bin_st_pit_active_candidate_to_{target_end.replace('-', '')}").strip()
+    snapshot_id = _write_fragment(registry, body.get("snapshot_id") or "qlib_test", "snapshot_id")
+    bin_snapshot_id = _write_fragment(
+        registry,
+        body.get("bin_snapshot_id") or f"qlib_bin_st_pit_active_candidate_to_{target_end.replace('-', '')}",
+        "bin_snapshot_id",
+    )
     include_minute_h5 = bool(body.get("include_minute_h5", True))
     include_bin = bool(body.get("include_bin", True))
     bin_mode = str(body.get("bin_mode") or "full")
@@ -338,7 +363,7 @@ def register(registry: "ModuleRegistry") -> None:
     def qlib_export_plan_dataset_update(payload: dict[str, Any] | None = None) -> Any:
         """Build a dry-run plan for H5/Bin candidate update without writing data."""
 
-        return _plan_dataset_update(payload)
+        return _plan_dataset_update(registry, payload)
 
     @registry.mcp.tool(name="qlib_export_run_h5_dataset_full_confirmed")
     def qlib_export_run_h5_dataset_full_confirmed(
@@ -370,7 +395,7 @@ def register(registry: "ModuleRegistry") -> None:
     ) -> Any:
         """Run daily/aux H5 incremental_all; minute_1min.h5 is intentionally excluded."""
 
-        safe_snapshot_id = _fragment(registry, snapshot_id, "snapshot_id")
+        safe_snapshot_id = _write_fragment(registry, snapshot_id, "snapshot_id")
         body = _confirmed_body(registry, confirm=confirm, payload=payload)
         result = _compact(client.post(f"/snapshots/{safe_snapshot_id}/incremental_all", body))
         if isinstance(result, dict):
@@ -383,7 +408,7 @@ def register(registry: "ModuleRegistry") -> None:
         """Build static_factors.parquet for an H5 snapshot after confirmation."""
 
         registry.confirm(confirm, QLIB_EXPORT_RUN_CONFIRM, "confirm")
-        safe_snapshot_id = _fragment(registry, snapshot_id, "snapshot_id")
+        safe_snapshot_id = _write_fragment(registry, snapshot_id, "snapshot_id")
         return _compact(client.post(f"/snapshots/{safe_snapshot_id}/static_factors", {}))
 
     @registry.mcp.tool(name="qlib_export_export_field_map_confirmed")
@@ -415,8 +440,13 @@ def register(registry: "ModuleRegistry") -> None:
 
         registry.confirm(confirm, QLIB_EXPORT_RUN_CONFIRM, "confirm")
         body = _body(payload)
-        snapshot_id = _fragment(registry, body.get("snapshot_id"), "snapshot_id")
+        snapshot_id = _write_fragment(registry, body.get("snapshot_id"), "snapshot_id")
         end = _require_date(body.get("end"), "end")
+        bin_payload = body.get("bin_payload")
+        if bin_payload is not None:
+            if not isinstance(bin_payload, dict):
+                raise ValueError("bin_payload must be an object when provided")
+            bin_payload = _sanitize_payload_identifiers(registry, bin_payload)
         base_payload = {
             "snapshot_id": snapshot_id,
             "end": end,
@@ -440,10 +470,7 @@ def register(registry: "ModuleRegistry") -> None:
             field_map = _compact(client.post("/field_map/export", {"snapshot_id": snapshot_id, "write_to_h5": True}))
             steps.append({"step": "field_map", "result": field_map})
 
-        bin_payload = body.get("bin_payload")
         if bin_payload:
-            if not isinstance(bin_payload, dict):
-                raise ValueError("bin_payload must be an object when provided")
             bin_result = _compact(client.post("/bin/unified_export_v2", bin_payload))
             steps.append({"step": "bin_unified_export_v2", "result": bin_result})
 

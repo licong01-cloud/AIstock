@@ -29,6 +29,7 @@
 - confirmed 工具统一要求 `confirm="RUN_QLIB_EXPORT"`，错误确认会在 HTTP 调用前拦截。
 - `qlib_export_run_h5_daily_aux_incremental_all_confirmed` 明确返回 `minute_h5_included=false`，避免把后端 `incremental_all` 误解为包含 `minute_1min.h5`。
 - `qlib_export_generate_backtest_candidate_confirmed` 仅生成候选，返回 `production_promotion_supported=false`。
+- 写入型工具会校验 payload 内的 `snapshot_id` / `bin_snapshot_id`，拒绝路径穿越和 `qlib_bin`、`qlib_minute_bin`、`factor_data` 生产目标叶子名，保证 MCP 只做候选生成，不提供自动替换入口。
 
 ## 验证命令
 
@@ -62,6 +63,7 @@ python scripts/aistock_mcp_gateway_doctor.py --json
 - `qlib_export_plan_dataset_update(target_end="2026-05-29")`: PASS，`status=plan_only`，`candidate_only=true`，`production_promotion_supported=false`
 - `qlib_export_data_preview("000001.SZ", "2026-05-29", "2026-05-29")`: PASS，返回单股票小样本
 - 错误确认调用 `qlib_export_run_bin_unified_v2_confirmed(..., confirm="WRONG")`: PASS，HTTP 前拦截，错误包含 `RUN_QLIB_EXPORT`
+- 生产目录名拦截单元测试：PASS，`qlib_bin`、`qlib_minute_bin`、`factor_data` 在写入型工具 HTTP 前拒绝。
 
 ## 生产影响
 
@@ -72,6 +74,7 @@ python scripts/aistock_mcp_gateway_doctor.py --json
 - 未写生产 DB。
 - 未创建 H5/Bin 候选数据。
 - 未替换 `/home/lc999/data/qlib_bin`、`/home/lc999/data/qlib_minute_bin`、`/home/lc999/data/factor_data`。
+- MCP 无自动替换/promotion 工具；生产目标目录名在写入型工具中被显式拦截。
 
 ## 结论
 
