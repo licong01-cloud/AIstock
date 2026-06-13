@@ -36,38 +36,38 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex_issue_workflow",
-      "timestamp": "2026-06-13T17:51:23.812031Z",
+      "note": "Root cause spans Research Assistant MCP routing, execution business rendering, strategy governance endpoint handling, and regression tests; expanding scope before code changes.",
       "previous_scope": [
         "tests/aistock_validation/bugs/20260614_BUG-359-research-assistant-generic-mcp-domains-still-expose-diagnostic-summaries.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json"
       ],
-      "note": "Root cause spans Research Assistant MCP routing, execution business rendering, strategy governance endpoint handling, and regression tests; expanding scope before code changes."
+      "timestamp": "2026-06-13T17:51:23.812031Z"
     },
     {
       "action": "implement_generic_mcp_reply_policy",
       "actor": "codex_issue_workflow",
-      "timestamp": "2026-06-13T19:10:59Z",
-      "note": "Implemented a processing-layer generic MCP business renderer and preflight fallback so different MCP domains share the same business-facing reply policy instead of exposing diagnostic summary adapter details."
+      "note": "Implemented a processing-layer generic MCP business renderer and preflight fallback so different MCP domains share the same business-facing reply policy instead of exposing diagnostic summary adapter details.",
+      "timestamp": "2026-06-13T19:10:59Z"
     },
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex_issue_workflow",
-      "timestamp": "2026-06-13T19:15:26Z",
-      "previous_scope_note": "Added generic frontend display sanitization for Research Assistant chat cards so public UI does not re-expose MCP route/summary diagnostics after backend reply policy sanitizes the main answer.",
       "added_scope": [
         "frontend/src/app/research-assistant/chat/page.tsx",
         "frontend/tests/research-assistant/research-assistant.spec.ts"
-      ]
+      ],
+      "previous_scope_note": "Added generic frontend display sanitization for Research Assistant chat cards so public UI does not re-expose MCP route/summary diagnostics after backend reply policy sanitizes the main answer.",
+      "timestamp": "2026-06-13T19:15:26Z"
     },
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex_issue_workflow",
-      "timestamp": "2026-06-13T19:55:42Z",
       "added_scope": [
         "backend/tests/research_assistant/test_external_research_react_consumption.py",
         "backend/tests/research_assistant/test_mcp_catalog_sync.py"
       ],
-      "note": "Research Assistant backend full-gate expectations must be updated to the unified MCP business-reply policy: external research and catalog replies must not expose source/as_of, summary-first, or server route diagnostics in user-facing text."
+      "note": "Research Assistant backend full-gate expectations must be updated to the unified MCP business-reply policy: external research and catalog replies must not expose source/as_of, summary-first, or server route diagnostics in user-facing text.",
+      "timestamp": "2026-06-13T19:55:42Z"
     }
   ],
   "evidence_uris": [
@@ -77,8 +77,8 @@
   "expected": "所有已接入 MCP 的 read-only 域主回复必须业务化，不能暴露 Route decision、summary-first、artifact_ref、payload budget、server_key/tool_name/raw_payload、Evidence source 等内部过程文案；plan/preflight/confirmed 场景必须返回安全计划、预检或需确认说明；明确业务意图应路由到对应 MCP tool；strategy_governance 不应 404，缺少 ID 时应要求补充或列候选。",
   "first_seen_at": "2026-06-13T17:46:00.379536Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "02bc6901a9e5d1ca70ba5f80db85181c8eb2db71",
+  "fixed_at": "2026-06-13T20:53:55.386445Z",
   "github_issue_number": 1061,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1061",
   "last_seen_at": "2026-06-13T17:46:00.379536Z",
@@ -86,6 +86,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1070",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,7 +101,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -109,6 +110,21 @@
     "fingerprint": "170a68b776349182c03ddbc4",
     "source_event_id": "FE-20260614-170a68b77634"
   },
+  "validation_evidence": [
+    "compileall research assistant changed files passed",
+    "ruff changed research assistant files passed",
+    "targeted BUG-359 pytest suite 81 passed",
+    "research_assistant pytest excluding stale phase0 baseline anchor 206 passed 1 deselected",
+    "full research_assistant pytest blocked only by stale phase0 baseline anchor qe_evolution_service.py:149 unrelated to BUG-359",
+    "nox mcp contract and validation module registry passed",
+    "nox full required set clean except stale phase0 baseline anchor in research_assistant_backend and ra_phase7_full_accept",
+    "frontend lint passed with existing unrelated react-hooks warnings",
+    "frontend playwright research assistant chromium 8 passed",
+    "frontend build passed with existing unrelated react-hooks warnings",
+    "frontend tsc noEmit failed due existing unrelated phase5 mcp gateway ui spec null to string",
+    "git diff check passed",
+    "PR 1070 checks green and mergeStateStatus CLEAN"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
