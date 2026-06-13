@@ -153,12 +153,21 @@ class MiniQMTExecutionRuntime:
                 "sync_before_new_orders": True,
             },
         )
+        orphaned_algo_ids = self._terminalize_orphaned_active_algos(
+            runtime.runtime_id,
+            reason="process_restart_recovery",
+        )
+        latest_runtime = self.repository.get_runtime(runtime.runtime_id) or runtime
         runtime = self.repository.upsert_runtime(
-            runtime.model_copy(
+            latest_runtime.model_copy(
                 update={
                     "event_loop_state": MiniQMTExecutionRuntimeState.READY,
                     "gateway_state": MiniQMTGatewayState.CONNECTED,
                     "oms_state": MiniQMTOmsState.RECONCILED,
+                    "metadata": {
+                        **dict(latest_runtime.metadata),
+                        "last_recovery_terminalized_orphaned_algo_instance_ids": orphaned_algo_ids,
+                    },
                 }
             )
         )
@@ -529,6 +538,12 @@ class MiniQMTExecutionRuntime:
                 )
                 self._persist_vnpy_core_state(instance, core)
                 self._handle_vnpy_actions(instance, actions)
+            if child.status in _TERMINAL_CHILD_ORDER_STATUSES:
+                self._terminalize_algo_if_all_children_terminal(
+                    runtime.runtime_id,
+                    child.algo_instance_id,
+                    reason=f"broker_order_{child.status.value.lower()}",
+                )
         return event
 
     def record_trade_event(
@@ -589,6 +604,12 @@ class MiniQMTExecutionRuntime:
                 )
                 self._persist_vnpy_core_state(instance, core)
                 self._handle_vnpy_actions(instance, actions)
+            if child.status in _TERMINAL_CHILD_ORDER_STATUSES:
+                self._terminalize_algo_if_all_children_terminal(
+                    runtime.runtime_id,
+                    child.algo_instance_id,
+                    reason=f"broker_trade_{child.status.value.lower()}",
+                )
         return event
 
     def reconcile(self) -> MiniQMTRuntimeRecoverySnapshot:
@@ -699,6 +720,12 @@ class MiniQMTExecutionRuntime:
                         }
                     )
                 )
+                self._terminalize_algo_if_all_children_terminal(
+                    runtime.runtime_id,
+                    child.algo_instance_id,
+                    reason="operator_cancel_all_open_orders",
+                    command_id=command_id,
+                )
             else:
                 errors.append(
                     {
@@ -720,6 +747,66 @@ class MiniQMTExecutionRuntime:
             errors=errors,
             metadata={"active_child_count": len(active_children), "strategy_slot_id": strategy_slot_id},
         )
+
+    def _terminalize_algo_if_all_children_terminal(
+        self,
+        runtime_id: str,
+        algo_instance_id: str,
+        *,
+        reason: str,
+        command_id: str | None = None,
+    ) -> MiniQMTExecutionAlgoInstance | None:
+        instance = self._find_algo_instance(runtime_id, algo_instance_id)
+        if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
+            return None
+        children = [
+            child
+            for child in self.repository.list_child_orders(runtime_id, active_only=False)
+            if child.algo_instance_id == algo_instance_id
+        ]
+        if not children or any(child.status not in _TERMINAL_CHILD_ORDER_STATUSES for child in children):
+            return None
+        terminal_status = _algo_terminal_status_from_child_orders(children)
+        updated = self.oms.record_algo_instance(
+            instance.model_copy(
+                update={
+                    "status": terminal_status,
+                    "remaining_quantity": 0 if terminal_status == MiniQMTAlgoInstanceStatus.COMPLETED else instance.remaining_quantity,
+                    "metadata": {
+                        **dict(instance.metadata),
+                        "terminalized_by_runtime": True,
+                        "terminalized_reason": reason,
+                        "terminal_child_order_statuses": sorted({child.status.value for child in children}),
+                        **({"operator_command_id": command_id} if command_id else {}),
+                    },
+                }
+            )
+        )
+        self.events.append(
+            runtime_id=runtime_id,
+            event_type=MiniQMTExecutionEventType.ALGO_ACTION_EMITTED,
+            source="oms",
+            payload={
+                "algo_instance_id": algo_instance_id,
+                "action_type": "TERMINALIZE_ORPHANED_ALGO",
+                "reason": reason,
+                "status": updated.status.value,
+                "terminal_child_order_ids": [child.child_order_id for child in children],
+            },
+        )
+        return updated
+
+    def _terminalize_orphaned_active_algos(self, runtime_id: str, *, reason: str) -> list[str]:
+        terminalized: list[str] = []
+        for instance in list(self.repository.list_algo_instances(runtime_id, active_only=True)):
+            updated = self._terminalize_algo_if_all_children_terminal(
+                runtime_id,
+                instance.algo_instance_id,
+                reason=reason,
+            )
+            if updated is not None:
+                terminalized.append(updated.algo_instance_id)
+        return terminalized
 
     def _import_active_broker_orders_for_cancel(
         self,
@@ -958,13 +1045,18 @@ class MiniQMTExecutionRuntime:
                     }
                 ],
             )
+        affected_instances = [
+            instance.algo_instance_id
+            for instance in self.repository.list_algo_instances(runtime.runtime_id, active_only=True)
+            if instance.strategy_slot_id == strategy_slot_id
+        ]
         cancel_result = self._execute_cancel_all_open_orders(
             command_id=f"{command_id}_cancel",
             command_type="CANCEL_ALL_OPEN_ORDERS",
             reason=f"{reason}; reset pre-cancel",
             payload={"strategy_slot_id": strategy_slot_id},
         )
-        affected_instances = []
+        affected_instances.extend(cancel_result.affected_algo_instance_ids)
         for instance in self.repository.list_algo_instances(runtime.runtime_id, active_only=True):
             if instance.strategy_slot_id != strategy_slot_id:
                 continue
@@ -989,7 +1081,7 @@ class MiniQMTExecutionRuntime:
             reason=reason,
             payload=payload,
             cancelled_child_order_ids=list(cancel_result.cancelled_child_order_ids),
-            affected_algo_instance_ids=affected_instances,
+            affected_algo_instance_ids=_unique(affected_instances),
             broker_packets=list(cancel_result.broker_packets),
             errors=list(cancel_result.errors),
             metadata={"strategy_slot_id": strategy_slot_id, "settlement_snapshot_required": True},
@@ -1356,6 +1448,24 @@ class MiniQMTExecutionRuntime:
 
 def _broker_status_is_active(status: str) -> bool:
     return str(status or "").strip().upper() in {"PENDING", "SUBMITTED", "PARTIALLY_FILLED", "ACTIVE", "ACCEPTED"}
+
+
+_TERMINAL_CHILD_ORDER_STATUSES = frozenset(
+    {
+        MiniQMTChildOrderStatus.FILLED,
+        MiniQMTChildOrderStatus.CANCELLED,
+        MiniQMTChildOrderStatus.REJECTED,
+    }
+)
+
+
+def _algo_terminal_status_from_child_orders(children: list[MiniQMTChildOrder]) -> MiniQMTAlgoInstanceStatus:
+    statuses = {child.status for child in children}
+    if statuses == {MiniQMTChildOrderStatus.FILLED}:
+        return MiniQMTAlgoInstanceStatus.COMPLETED
+    if MiniQMTChildOrderStatus.REJECTED in statuses:
+        return MiniQMTAlgoInstanceStatus.FAILED
+    return MiniQMTAlgoInstanceStatus.CANCELLED
 
 
 def _child_status_from_broker_status(status: str) -> MiniQMTChildOrderStatus:
