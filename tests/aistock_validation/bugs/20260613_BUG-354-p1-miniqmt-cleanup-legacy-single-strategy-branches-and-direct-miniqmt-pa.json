@@ -1,0 +1,71 @@
+{
+  "actual": "After BUG-345~BUG-351 unified MiniQMT runtime merge, repository still has old MiniQMT single-strategy/direct broker branches, worktrees, open PRs (#1017/#1020/#1026), POC artifacts, and possible legacy single-strategy code paths. Need an audited cleanup matrix before closing/deleting anything: confirm what is covered by current main, what must be migrated, what can be closed/deleted, and whether any product path can still bypass MiniQMTExecutionRuntime. Do not restart services or trigger real MiniQMT operations.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260613_BUG-354-p1-miniqmt-cleanup-legacy-single-strategy-branches-and-direct-miniqmt-pa.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-354",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T02:23:51.383342Z",
+  "description": "After BUG-345~BUG-351 unified MiniQMT runtime merge, repository still has old MiniQMT single-strategy/direct broker branches, worktrees, open PRs (#1017/#1020/#1026), POC artifacts, and possible legacy single-strategy code paths. Need an audited cleanup matrix before closing/deleting anything: confirm what is covered by current main, what must be migrated, what can be closed/deleted, and whether any product path can still bypass MiniQMTExecutionRuntime. Do not restart services or trigger real MiniQMT operations.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-aef8e9fc2dd4",
+      "timestamp": "2026-06-13T02:23:51.383339Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-13T02:23:51.383342Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1047,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1047",
+  "last_seen_at": "2026-06-13T02:23:51.383342Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][MiniQMT][Cleanup] Legacy single-strategy branches and direct MiniQMT paths need audited cleanup",
+  "trigger_condition": {
+    "fingerprint": "aef8e9fc2dd49fc377826f61",
+    "source_event_id": "FE-20260613-aef8e9fc2dd4"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
