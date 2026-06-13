@@ -727,11 +727,37 @@ class ResearchAssistantExecutionMixin:
                 args[key] = payload[key]
         return args
 
+    @staticmethod
+    def _should_use_local_data_daily_status_adapter(tool_name: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
+        if tool_name == "local_data_get_preset_daily_status":
+            return True
+        request = str(payload.get("request") or "")
+        route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        request = " ".join([request, str(route.get("reason") or "")]).lower()
+        if tool_name == "local_data_get_dataset_status":
+            has_dataset_arg = bool(str(args.get("dataset") or payload.get("dataset") or "").strip())
+            return not has_dataset_arg
+        if tool_name != "local_data_health_overview":
+            return False
+        sync_status_terms = (
+            "sync status",
+            "sync overview",
+            "data sync",
+            "\u540c\u6b65\u60c5\u51b5",
+            "\u540c\u6b65\u72b6\u6001",
+            "\u6570\u636e\u540c\u6b65",
+        )
+        collection_terms = ("summary", "summarize", "list", "which", "\u6c47\u603b", "\u5217\u8868", "\u54ea\u4e9b")
+        explicit_health_terms = ("health", "readiness", "ready", "\u5065\u5eb7", "\u5c31\u7eea")
+        if any(term in request for term in sync_status_terms) and not any(term in request for term in explicit_health_terms):
+            return True
+        return any(term in request for term in collection_terms) and "\u540c\u6b65" in request
+
     def _execute_summary_first_read_tool(self, tool: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         args = self._summary_adapter_args(payload)
-        if server_key == "aistock-local-data" and tool_name == "local_data_get_preset_daily_status":
+        if server_key == "aistock-local-data" and self._should_use_local_data_daily_status_adapter(tool_name, args, payload):
             return self._execute_local_data_daily_status_read(tool, payload, args)
         server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
         health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}

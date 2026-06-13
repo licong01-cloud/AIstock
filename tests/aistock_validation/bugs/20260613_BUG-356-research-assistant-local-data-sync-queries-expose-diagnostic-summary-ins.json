@@ -1,0 +1,127 @@
+{
+  "actual": "Generic local data sync summary/detail questions route to local_data_health_overview or local_data_get_dataset_status and expose summary-first policy text, Route decision, artifact_ref, payload-budget diagnostics, or preflight diagnostics instead of a business list of each dataset sync status. Reproduce with: 检查本地数据同步情况，并汇总数据给我; follow-up: 给我详情介绍，每个数据集的同步情况.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "tests/aistock_validation/bugs/20260613_BUG-356-research-assistant-local-data-sync-queries-expose-diagnostic-summary-ins.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-356",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T13:05:30.252798Z",
+  "description": "Generic local data sync summary/detail questions route to local_data_health_overview or local_data_get_dataset_status and expose summary-first policy text, Route decision, artifact_ref, payload-budget diagnostics, or preflight diagnostics instead of a business list of each dataset sync status. Reproduce with: 检查本地数据同步情况，并汇总数据给我; follow-up: 给我详情介绍，每个数据集的同步情况.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-c274109f43f3",
+      "timestamp": "2026-06-13T13:05:30.252789Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex_issue_workflow",
+      "note": "Root cause is Research Assistant local-data routing/execution/rendering; expanded scope to focused service, execution, router and regression tests before code changes.",
+      "timestamp": "2026-06-13T13:18:25.542232Z",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260613_BUG-356-research-assistant-local-data-sync-queries-expose-diagnostic-summary-ins.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ]
+    },
+    {
+      "action": "fix_implemented_targeted_validation_passed_required_gate_has_unrelated_baseline_blocker",
+      "actor": "codex_issue_workflow",
+      "note": "Implemented local-data sync status business rendering and regression tests. Targeted RA tests, Ruff, compileall, l0, MCP contract, and module registry passed; full research_assistant_backend/ra_phase7 nox sessions still hit unrelated pre-existing Phase 0 baseline line-anchor mismatch outside BUG-356 scope.",
+      "timestamp": "2026-06-13T13:43:26.378640Z"
+    }
+  ],
+  "evidence_uris": [
+    "python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -> 65 passed",
+    "python -m pytest BUG-356/BUG-343/BUG-346/BUG-352 focused local-data routing/rendering tests -> 20 passed",
+    "python -m ruff check backend/services/research_assistant/execution.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed",
+    "python -m compileall -q backend/services/research_assistant/execution.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract ra_phase7_full_accept validation_module_registry_l0 --no-error-on-missing-interpreters -> l0/research_assistant_mcp_contract/validation_module_registry_l0 passed; research_assistant_backend and ra_phase7_full_accept failed only on existing baseline anchor docs/process mismatch: test_phase0_blueprint_baseline.py expected qe_evolution_service.py:149, outside BUG-356 changed files and allowed scope"
+  ],
+  "expected": "Research Assistant should answer local-data sync questions with a business-facing dataset sync status summary/list (success, failed, running, blocked, not synced/not run) and must not expose internal routing, summary-first policy, artifact_ref, payload-budget, transport, or evidence-source diagnostics in the main reply.",
+  "first_seen_at": "2026-06-13T13:05:30.252798Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1053,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1053",
+  "last_seen_at": "2026-06-13T13:05:30.252798Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant local data sync queries expose diagnostic summary instead of dataset status list",
+  "trigger_condition": {
+    "fingerprint": "c274109f43f305047a3b06b9",
+    "source_event_id": "FE-20260613-c274109f43f3"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/detail",
+    "ui_routes": [
+      "/detail"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

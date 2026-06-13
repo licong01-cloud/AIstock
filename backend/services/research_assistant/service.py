@@ -4037,7 +4037,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         del execution
         groups = summary.get("status_groups") if isinstance(summary.get("status_groups"), dict) else {}
         counts = summary.get("group_counts") if isinstance(summary.get("group_counts"), dict) else {}
-        evidence_sources = summary.get("evidence_sources") if isinstance(summary.get("evidence_sources"), list) else []
         trade_date = str(summary.get("trade_date") or utc_now().date().isoformat())
         as_of = str(summary.get("as_of") or utc_now().isoformat())
         labels = {
@@ -4049,9 +4048,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         }
         order = ("success", "failed", "not_synced", "running", "blocked")
         lines = [
-            "已按本地数据只读证据汇总今天的数据同步情况。",
-            f"查询日期：{trade_date}；as_of={as_of}。",
-            f"证据来源：{', '.join(str(item) for item in evidence_sources) if evidence_sources else 'local-data facade'}。",
+            "已汇总本地数据同步情况如下。",
+            f"数据日期：{trade_date}；汇总时间：{as_of}。",
         ]
         if not any(int(counts.get(key) or 0) for key in order):
             lines.append("今天暂无可用的 preset/job/target 同步记录；这通常表示尚未运行，或本地数据 facade 没有返回当天记录。")
