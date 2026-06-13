@@ -38,8 +38,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-13T18:52:15.678540Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0fea54431b56507f273eb1502ae1e4776e27240f",
+  "fixed_at": "2026-06-13T19:38:59.662092Z",
   "github_issue_number": 1067,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1067",
   "last_seen_at": "2026-06-13T18:52:15.678540Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1068",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -93,6 +94,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/llm_provider_adapter.py scripts/nightly_adaptive_scheduler.py backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed",
+    "python -m pytest backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -q -> 48 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_workflow_automation -> passed",
+    "python -m nox -s validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
