@@ -64,6 +64,22 @@ LOCAL_DATA_DAILY_STATUS_TERMS = (
     "\u8fd0\u884c\u60c5\u51b5",
     "\u6267\u884c\u72b6\u6001",
 )
+LOCAL_DATA_COLLECTION_STATUS_TERMS = (
+    "all",
+    "each",
+    "every",
+    "list",
+    "summary",
+    "summarize",
+    "which",
+    "\u5168\u90e8",
+    "\u6240\u6709",
+    "\u6bcf\u4e2a",
+    "\u5404\u4e2a",
+    "\u5217\u8868",
+    "\u6c47\u603b",
+    "\u54ea\u4e9b",
+)
 LOCAL_DATA_ANCHOR_TERMS = (
     "local data",
     "local_data",
@@ -233,6 +249,15 @@ def select_tool(domain: McpDomain, message: str) -> str:
     if domain == McpDomain.LOCAL_DATA:
         has_repair = _contains_any(lower, LOCAL_DATA_REPAIR_TERMS)
         has_dataset = _contains_any(lower, LOCAL_DATA_DATASET_TERMS)
+        has_collection_status = _contains_any(lower, LOCAL_DATA_COLLECTION_STATUS_TERMS) and _contains_any(
+            lower,
+            LOCAL_DATA_STATUS_TERMS + ("sync", "sync status", "data sync", "\u540c\u6b65", "\u540c\u6b65\u60c5\u51b5"),
+        )
+        has_sync_status_overview = _contains_any(lower, LOCAL_DATA_ANCHOR_TERMS + ("sync status", "sync overview", "data sync", "\u540c\u6b65\u60c5\u51b5", "\u540c\u6b65\u72b6\u6001")) and _contains_any(
+            lower,
+            LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + ("\u6c47\u603b",),
+        )
+        has_explicit_health_readiness = _contains_any(lower, ("health", "readiness", "ready", "\u5065\u5eb7", "\u5c31\u7eea"))
         has_daily_status = _contains_any(lower, LOCAL_DATA_DAILY_STATUS_TERMS) and _contains_any(
             lower,
             LOCAL_DATA_ANCHOR_TERMS + LOCAL_DATA_STATUS_TERMS + ("sync", "data sync", "\u540c\u6b65"),
@@ -240,7 +265,7 @@ def select_tool(domain: McpDomain, message: str) -> str:
         has_status_check = _contains_any(lower, LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + PLAN_TERMS)
         if has_repair:
             return "local_data_plan_repair"
-        if has_daily_status:
+        if has_daily_status or has_collection_status or (has_sync_status_overview and not has_explicit_health_readiness):
             return "local_data_get_preset_daily_status"
         if has_dataset and has_status_check:
             return "local_data_get_dataset_status"

@@ -895,6 +895,44 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
 
 
+BUG_356_FORBIDDEN_REPLY_MARKERS = (
+    "summary-first",
+    "Route decision",
+    "artifact_ref",
+    "payload budget",
+    "Evidence: source=",
+    "research_assistant_catalog_summary_adapter",
+    "local_data_health_overview",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+)
+
+
+def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None:
+    text = result["assistant_message"]["content_text"]  # type: ignore[index]
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert "\u540c\u6b65\u5931\u8d25" in text
+    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
+    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
+    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "anns_metadata" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+    for marker in BUG_356_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
+
+    cards = result["cards"]  # type: ignore[index]
+    route = cards["mcp_route_decision"]  # type: ignore[index]
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    execution = cards["mcp_execution_result"]  # type: ignore[index]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
+    summary = cards["mcp_summary_result"]  # type: ignore[index]
+    assert summary["response_mode"] == "local_data_daily_sync_status"
+    assert summary["source"] == "local_data_facade_read_adapter"
+
+
+
 def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     class LocalDataDailyLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
@@ -943,6 +981,56 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     assert summary["group_counts"]["failed"] == 1
     assert summary["group_counts"]["running"] == 2
     assert summary["group_counts"]["blocked"] == 1
+
+
+
+def test_bug_356_generic_local_data_sync_summary_returns_dataset_status_list_without_diagnostics() -> None:
+    class LocalDataSummaryLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Diagnostic route text that must not become the final reply.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataSummaryLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5\uff0c\u5e76\u6c47\u603b\u6570\u636e\u7ed9\u6211"
+        )
+    )
+
+    _assert_bug_356_business_local_data_reply(result)
+
+
+def test_bug_356_each_dataset_sync_detail_returns_all_dataset_statuses_without_diagnostics() -> None:
+    class LocalDataDetailLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Tool-grounded summary for local_data_get_dataset_status; source=preflight as_of=2026-06-13.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataDetailLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u7ed9\u6211\u8be6\u60c5\u4ecb\u7ecd\uff0c\u6bcf\u4e2a\u6570\u636e\u96c6\u7684\u540c\u6b65\u60c5\u51b5"
+        )
+    )
+
+    _assert_bug_356_business_local_data_reply(result)
+    assert "local_data_get_dataset_status" not in result["assistant_message"]["content_text"]
 
 
 def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
@@ -1033,7 +1121,7 @@ def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -
 
     assert "Insufficient evidence" not in text
     assert "daily_basic" in text
-    assert "local_data_get_preset_daily_status" in text
+    assert "local_data_get_preset_daily_status" not in text
 
 
 def test_bug_352_local_data_daily_status_refreshes_stale_capability_cache() -> None:

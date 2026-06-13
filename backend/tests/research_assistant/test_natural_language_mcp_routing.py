@@ -20,6 +20,30 @@ class _LocalDataCheckLlm:
         )
 
 
+class _FakeLocalDataDailyStatusService:
+    def get_preset_daily_status(self) -> dict[str, object]:
+        return {
+            "data": {
+                "items": {
+                    "daily_basic": {"status": "success", "finished_at": "2026-06-12T09:02:00+08:00"},
+                    "stock_moneyflow_ts": {"status": "failed", "finished_at": "2026-06-12T09:04:00+08:00"},
+                }
+            },
+            "trace": {"generated_at": "2026-06-12T01:06:00+00:00"},
+        }
+
+    def get_preset_stats(self) -> dict[str, object]:
+        return {"data": {"items": [{"dataset": "daily_basic"}, {"dataset": "stock_moneyflow_ts"}]}}
+
+    def list_jobs(self, *, limit: int = 50, active_only: bool = False) -> dict[str, object]:
+        del limit, active_only
+        return {"data": {"items": []}}
+
+    def list_sync_targets(self, *, limit: int = 100) -> dict[str, object]:
+        del limit
+        return {"data": {"items": []}}
+
+
 def test_route_examples_cover_at_least_40_natural_language_cases() -> None:
     examples = route_examples()
     assert len(examples) >= 40
@@ -158,21 +182,32 @@ def test_bug_160_utf8_chinese_business_mcp_overviews_are_routed() -> None:
         assert route["server_key"] != "aistock-local-data"
 
 
-def test_bug_326_local_data_sync_check_routes_to_read_only_health_overview() -> None:
+def test_bug_356_local_data_sync_check_routes_to_daily_status_list() -> None:
     cases = [
         "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5",
         "\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u72b6\u6001",
         "\u67e5\u770b\u672c\u5730\u6570\u636e\u540c\u6b65\u6982\u89c8",
         "check local data sync status",
-        "local data sync readiness overview",
     ]
     for message in cases:
         route = route_request(message)
         assert route["domain"] == "local_data"
         assert route["server_key"] == "aistock-local-data"
-        assert route["tool_name"] == "local_data_health_overview"
+        assert route["tool_name"] == "local_data_get_preset_daily_status"
         assert route["side_effect"] == "read_only"
+        assert route["tool_name"] != "local_data_health_overview"
         assert route["tool_name"] != "local_data_apply_repair_confirmed"
+
+
+def test_bug_356_local_data_each_dataset_sync_detail_routes_to_daily_status_list() -> None:
+    route = route_request("\u7ed9\u6211\u8be6\u60c5\u4ecb\u7ecd\uff0c\u6bcf\u4e2a\u6570\u636e\u96c6\u7684\u540c\u6b65\u60c5\u51b5")
+
+    assert route["domain"] == "local_data"
+    assert route["server_key"] == "aistock-local-data"
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    assert route["side_effect"] == "read_only"
+    assert route["tool_name"] != "local_data_get_dataset_status"
+    assert route["tool_name"] != "local_data_health_overview"
 
 
 def test_bug_343_local_data_today_sync_question_routes_to_daily_status() -> None:
@@ -208,21 +243,22 @@ def test_bug_326_chat_local_data_sync_check_uses_grounded_read_only_route() -> N
         llm_client=_LocalDataCheckLlm(),
     )
     svc.seed_catalogs()
+    svc.local_data_service_factory = _FakeLocalDataDailyStatusService
 
     result = svc.chat_turn(ChatTurnRequest(message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5"))
 
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "local_data"
     assert route["server_key"] == "aistock-local-data"
-    assert route["tool_name"] == "local_data_health_overview"
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
     assert route["side_effect"] == "read_only"
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
-    assert execution["tool_name"] == "local_data_health_overview"
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
     assert result["cards"]["react_grounding"]["evidence_guard"]["reason"] == "ok"
     assert "max tool iterations reached without reliable evidence" not in result["assistant_message"]["content_text"]
-    assert "source=" in result["assistant_message"]["content_text"]
-    assert "as_of=" in result["assistant_message"]["content_text"]
+    assert "Route decision" not in result["assistant_message"]["content_text"]
+    assert "source=" not in result["assistant_message"]["content_text"]
 
 
 def test_bug_158_chinese_business_mcp_overviews_do_not_route_to_local_data() -> None:
