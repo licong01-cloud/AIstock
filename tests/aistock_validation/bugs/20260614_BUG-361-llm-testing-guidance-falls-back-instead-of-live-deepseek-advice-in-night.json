@@ -2,7 +2,13 @@
   "actual": "Nightly/CI LLM steps are wired but recent evidence shows llm_invoked=false. GitHub Models returns 429 or schema-invalid output, deepseek_api is disabled by default, and Nightly summary does not clearly show live invocation, fallback reason, advised plan keys, executed plan keys, or advice_consumed. Fix the validation/LLM workflow so DeepSeek can reliably provide guarded advisory test-plan/scheduler guidance with deterministic fallback, strict JSON repair/retry, and explicit consumption evidence, while keeping warning-only safety boundaries and no production actions.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260614_BUG-361-llm-testing-guidance-falls-back-instead-of-live-deepseek-advice-in-night.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "configs/validation/llm_triage.yaml",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-361",
@@ -20,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260614-939de7d41530",
       "timestamp": "2026-06-13T18:52:15.678535Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "BUG-361 requires validation/LLM workflow repair; expanded scope to configured validation/LLM scripts, config, workflow, and focused tests.",
+      "timestamp": "2026-06-13T19:10:00Z"
     }
   ],
   "evidence_uris": [],
