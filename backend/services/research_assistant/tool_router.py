@@ -80,6 +80,13 @@ LOCAL_DATA_COLLECTION_STATUS_TERMS = (
     "\u6c47\u603b",
     "\u54ea\u4e9b",
 )
+LOCAL_DATA_SYNC_TARGET_TERMS = (
+    "sync target",
+    "sync targets",
+    "target list",
+    "\u540c\u6b65\u76ee\u6807",
+    "\u540c\u6b65 target",
+)
 LOCAL_DATA_ANCHOR_TERMS = (
     "local data",
     "local_data",
@@ -90,6 +97,13 @@ LOCAL_DATA_ANCHOR_TERMS = (
     "本地数据",
     "数据同步",
 )
+QE_SEED_STABILITY_TERMS = ("seed robustness", "seed stable", "seed stability", "seed", "\u79cd\u5b50\u9c81\u68d2\u6027", "\u79cd\u5b50\u7a33\u5b9a\u6027", "\u79cd\u5b50")
+QE_RUN_HISTORY_TERMS = ("failed run", "failed runs", "recent failed", "list runs", "recent runs", "run status", "failed", "\u6700\u8fd1\u5931\u8d25", "\u5931\u8d25")
+EXTERNAL_RESEARCH_INTENT_TERMS = ("paper", "papers", "academic", "literature", "research clue", "research lead", "\u8bba\u6587", "\u6587\u732e", "\u5b66\u672f", "\u7ebf\u7d22")
+EXTERNAL_RESEARCH_SEARCH_TERMS = SEARCH_TERMS + ("retrieve", "look up", "\u68c0\u7d22", "\u641c\u7d22", "\u67e5\u627e")
+STRATEGY_COLLECTION_TERMS = ("which", "list", "all", "candidate", "candidates", "available", "\u54ea\u4e9b", "\u5217\u51fa", "\u5168\u90e8", "\u5019\u9009", "\u53ef\u4ee5")
+STRATEGY_PROMOTION_TERMS = ("promote", "promotion", "\u664b\u5347", "\u63d0\u5347")
+STRATEGY_EXECUTION_QUALITY_TERMS = ("execution quality", "execution performance", "quality", "\u6267\u884c\u8d28\u91cf", "\u8d28\u91cf", "\u8868\u73b0")
 
 TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.MCP_CAPABILITY, ("tool", "server", "capability", "mcp"), "assistant_list_mcp_tools"),
@@ -160,6 +174,12 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(_term_in_text(term, text) for term in terms)
 
 
+def _has_explicit_strategy_package_id(text: str) -> bool:
+    if any(term in text for term in ("package_id", "package id", "\u7b56\u7565\u5305id", "\u7b56\u7565\u5305 id")):
+        return True
+    return re.search(r"(?<![a-z0-9_])(?:spkg|pkg|strategy_pkg)[-_][a-z0-9][a-z0-9_-]*(?![a-z0-9_])", text) is not None
+
+
 def score_domains(message: str) -> list[dict[str, Any]]:
     lower = _norm(message)
     scores: list[dict[str, Any]] = []
@@ -172,6 +192,8 @@ def score_domains(message: str) -> list[dict[str, Any]]:
                 matched.append(term)
         if spec.domain == McpDomain.QE_WAREHOUSE and _contains_any(lower, WAREHOUSE_TERMS):
             score += 8
+        if spec.domain == McpDomain.QE_WAREHOUSE and "qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS + QE_RUN_HISTORY_TERMS):
+            score += 14
         if spec.domain == McpDomain.QE_WAREHOUSE and any(
             token in lower
             for token in (
@@ -230,6 +252,20 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             )
         ):
             score += 10
+        if spec.domain == McpDomain.EXTERNAL_RESEARCH and _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS) and _contains_any(lower, EXTERNAL_RESEARCH_SEARCH_TERMS):
+            score += 16
+        if spec.domain == McpDomain.EXTERNAL_RESEARCH and (
+            "paper v2" in lower
+            or _contains_any(lower, ("strategy package", "strategy library", "strategy governance", "\u7b56\u7565\u5305", "\u7b56\u7565\u5e93", "\u7b56\u7565\u6cbb\u7406"))
+        ):
+            score -= 20
+        if spec.domain == McpDomain.FACTOR_METRICS and (
+            ("qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS))
+            or _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS)
+        ):
+            score -= 8
+        if spec.domain == McpDomain.MODEL_REGISTRY and "qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS):
+            score -= 6
         if score > 0:
             scores.append({"domain": spec.domain, "score": score, "matched_terms": matched})
     scores.sort(key=lambda item: item["score"], reverse=True)
@@ -250,6 +286,7 @@ def select_tool(domain: McpDomain, message: str) -> str:
     if domain == McpDomain.LOCAL_DATA:
         has_repair = _contains_any(lower, LOCAL_DATA_REPAIR_TERMS)
         has_dataset = _contains_any(lower, LOCAL_DATA_DATASET_TERMS)
+        has_sync_targets = _contains_any(lower, LOCAL_DATA_SYNC_TARGET_TERMS)
         has_collection_status = _contains_any(lower, LOCAL_DATA_COLLECTION_STATUS_TERMS) and _contains_any(
             lower,
             LOCAL_DATA_STATUS_TERMS + ("sync", "sync status", "data sync", "\u540c\u6b65", "\u540c\u6b65\u60c5\u51b5"),
@@ -266,6 +303,8 @@ def select_tool(domain: McpDomain, message: str) -> str:
         has_status_check = _contains_any(lower, LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + PLAN_TERMS)
         if has_repair:
             return "local_data_plan_repair"
+        if has_sync_targets:
+            return "local_data_list_sync_targets"
         if has_daily_status or has_collection_status or (has_sync_status_overview and not has_explicit_health_readiness):
             return "local_data_get_preset_daily_status"
         if has_dataset and has_status_check:
@@ -277,6 +316,24 @@ def select_tool(domain: McpDomain, message: str) -> str:
             return "qe_experiment_list"
         if _contains_any(lower, ("草案", "draft", "template", "设计", "方案")) and _contains_any(lower, ("先不要执行", "不要执行", "不执行", "draft", "草案", "设计")):
             return "qe_template_create"
+    if domain == McpDomain.QE_WAREHOUSE:
+        if "qe" in lower and _contains_any(lower, QE_RUN_HISTORY_TERMS):
+            return "qe_archive_list_runs"
+        for hint_domain, terms, tool in TOOL_HINTS:
+            if hint_domain == domain and _contains_any(lower, terms):
+                return tool
+    if domain == McpDomain.EXTERNAL_RESEARCH:
+        if _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS):
+            return "external_research_search_papers"
+    if domain == McpDomain.STRATEGY_GOVERNANCE:
+        has_package_id = _has_explicit_strategy_package_id(lower)
+        if _contains_any(lower, STRATEGY_PROMOTION_TERMS):
+            return "strategy_governance_plan_promotion"
+        if not has_package_id and (
+            _contains_any(lower, STRATEGY_COLLECTION_TERMS)
+            or _contains_any(lower, STRATEGY_EXECUTION_QUALITY_TERMS)
+        ):
+            return "strategy_governance_list_packages"
     if _contains_any(lower, summary_terms):
         for hint_domain, terms, tool in TOOL_HINTS:
             if hint_domain == domain and _contains_any(lower, terms):

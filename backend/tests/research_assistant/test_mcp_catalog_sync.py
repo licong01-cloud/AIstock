@@ -161,12 +161,13 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     reply = svc._render_mcp_tool_catalog_reply(catalog)
     for phrase in ["只能", "不具备", "未登记"]:
         assert phrase not in reply
-    assert "summary-first" in reply
-    assert "aistock-gateway-lite" in reply
-    assert "aistock-qe" in reply
-    assert "aistock-factor" in reply
+    assert "summary-first" not in reply
+    assert "aistock-gateway-lite" not in reply
+    assert "aistock-qe" not in reply
+    assert "aistock-factor" not in reply
+    assert "返回业务结果" in reply
     assert "模型库" in reply
     assert "策略库" in reply
     assert "因子独立指标" in reply
     assert "执行策略" in reply
-    assert "aistock-external-research" in reply
+    assert "External Research" in reply

@@ -73,8 +73,10 @@ def test_chat_turn_reacts_tool_result_back_into_messages_before_final_answer() -
     assert "TOOL_RESULT" in second_joined
     assert "factor_library_list" in second_joined
     text = result["assistant_message"]["content_text"]
-    assert "source=" in text
-    assert "as_of=" in text
+    assert "source=" not in text
+    assert "as_of=" not in text
+    assert "summary-first" not in text
+    assert "research_assistant_catalog_summary_adapter" not in text
     lowered = text.lower()
     assert "thought:" not in lowered
     assert "observation:" not in lowered

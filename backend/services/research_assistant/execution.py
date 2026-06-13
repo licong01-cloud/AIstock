@@ -1144,6 +1144,7 @@ class ResearchAssistantExecutionMixin:
         server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
         health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
         domain = str(health.get("domain") or server_key)
+        business_label = self._humanize_identifier(str(tool.get("module") or domain))
         limit = int(args.get("limit") or 20)
         offset = int(args.get("offset") or 0)
         items, total = self._summary_adapter_items(tool, args, limit=limit, offset=offset)
@@ -1173,6 +1174,7 @@ class ResearchAssistantExecutionMixin:
                 "response_mode": "summary",
                 "source": "research_assistant_catalog_summary_adapter",
                 "live_backend_called": False,
+                "business_label": business_label,
                 "next_step": "Use the referenced detail tool or execute the backend MCP facade when live data is required.",
                 **(
                     {
@@ -1190,10 +1192,9 @@ class ResearchAssistantExecutionMixin:
         )
         assert_summary_payload(result_json)
         card = {
-            "title": f"{server_key}/{tool_name}",
-            "summary": f"Prepared a summary-first MCP result envelope for {domain}; heavy sections are omitted or referenced.",
+            "title": self._humanize_identifier(tool_name),
+            "summary": f"已生成{self._humanize_identifier(domain)}业务概要；主回复仅展示可读结果。",
             "route": f"{server_key}/{tool_name}",
-            "summary_first": True,
             "next_step": result_json["next_step"],
         }
         return {
@@ -1533,7 +1534,7 @@ class ResearchAssistantExecutionMixin:
                 return [
                     {
                         "title": f"Extracted evidence for {url}",
-                        "summary": "Capped extract preview; full content is behind detail_ref.",
+                        "summary": "已生成受限长度的正文摘录预览，完整内容可按链接继续查看。",
                         "url": url,
                         "source": "external_research_summary_adapter",
                         "as_of": as_of,
@@ -1547,7 +1548,7 @@ class ResearchAssistantExecutionMixin:
             return [
                 {
                     "title": f"{query} external evidence candidate",
-                    "summary": f"Summary-first {result_type} evidence for {query}; use as hypothesis evidence, not a final conclusion.",
+                    "summary": f"已找到 {query} 的{result_type}研究线索；只能作为假设证据，不能直接当作最终结论。",
                     "url": f"https://example.org/external-research/{digest[:12]}",
                     "source": "external_research_summary_adapter",
                     "as_of": as_of,
@@ -1557,19 +1558,48 @@ class ResearchAssistantExecutionMixin:
                     "detail_ref": {"server": server_key, "tool": "external_research_fetch_extract", "args_hint": {"url": "<url>", "max_chars": 2000}},
                 }
             ][:limit], 1
-        return [
-            {
-                "item_type": "mcp_read_tool_summary",
-                "server_key": server_key,
-                "tool_name": tool_name,
-                "title": tool.get("title"),
-                "risk_level": tool.get("risk_level"),
-                "side_effect_level": tool.get("side_effect_level"),
-                "requires_approval": bool(tool.get("requires_approval")),
-                "status": tool.get("status"),
-                "summary_first_contract": "list/search/overview returns compact fields; detail and heavy artifacts stay behind refs.",
-            }
-        ], 1
+        return [self._summary_adapter_business_item(tool, args)], 1
+
+    @staticmethod
+    def _humanize_identifier(value: str) -> str:
+        words = [part for part in value.replace("-", "_").split("_") if part]
+        acronyms = {"api", "bug", "ic", "mcp", "qe", "rankic", "url"}
+        rendered = [word.upper() if word.lower() in acronyms else word for word in words]
+        return " ".join(rendered) if rendered else "business query"
+
+    @staticmethod
+    def _summary_adapter_business_item(tool: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        tool_name = str(tool.get("tool_name") or "")
+        title = str(tool.get("title") or ResearchAssistantExecutionMixin._humanize_identifier(tool_name))
+        query = str(args.get("query") or args.get("q") or args.get("search") or args.get("request") or "").strip()
+        input_schema = tool.get("input_schema_json") if isinstance(tool.get("input_schema_json"), dict) else {}
+        required = [str(item) for item in input_schema.get("required", []) if str(item)]
+        supplied_args = {
+            str(key): value
+            for key, value in args.items()
+            if key not in {"route", "mcp_route_decision", "selected_tool", "limit", "offset"} and value not in (None, "", [], {})
+        }
+        side_effect = str(tool.get("side_effect_level") or "read_only")
+        safety = "只读查询，不会执行写入、长任务或生产变更。" if side_effect == "read_only" else "需要预检和明确确认后才能执行。"
+        if required:
+            missing = [key for key in required if key not in supplied_args]
+            next_action = "请补充必要参数：" + "、".join(missing) + "。" if missing else "必要参数已给出，可继续查看结果或进入预检。"
+        elif supplied_args:
+            next_action = "可以继续指定筛选条件或对象 ID 获取更精确的结果。"
+        else:
+            next_action = "可以继续指定筛选条件、日期窗口或对象 ID 获取明细。"
+        item: dict[str, Any] = {
+            "title": title,
+            "status": str(tool.get("status") or "enabled"),
+            "summary": f"已准备“{title}”的业务概要入口。",
+            "safety_boundary": safety,
+            "next_action": next_action,
+        }
+        if query:
+            item["query"] = query
+        if supplied_args:
+            item["requested_args"] = supplied_args
+        return item
 
     @staticmethod
     def _summary_adapter_detail_tool(server_key: str, tool_name: str) -> str | None:
