@@ -415,6 +415,15 @@ async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
     }
     return json(route, { detail: `unexpected watchlist route: ${method} ${path}` }, 404);
   });
+  await page.route("**/api/v1/tdx-blocks/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    if (path.endsWith("/api/v1/tdx-blocks/available") && method === "GET") {
+      return json(route, { ok: true, available: false });
+    }
+    return json(route, { detail: `unexpected tdx route: ${method} ${path}` }, 404);
+  });
   return { watchlistCalls, watchlistBodies };
 }
 
@@ -426,11 +435,14 @@ async function mockAdvisoryApis(page: Page, options: {
   extraPrograms?: JsonObject[];
   extraLeaderboardRows?: JsonObject[];
   listVersionsByProgramId?: Record<string, JsonObject[]>;
+  bindingsByProgramId?: Record<string, JsonObject[]>;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
 } = {}) {
   const calls: string[] = [];
   const reviewBodies: JsonObject[] = [];
+  const replayBodies: JsonObject[] = [];
+  const applyBindingBodies: JsonObject[] = [];
   const wait = (ms = 0) => new Promise((resolve) => { setTimeout(resolve, ms); });
   let programStatus = options.initialProgramStatus ?? program.status;
   let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
@@ -481,6 +493,10 @@ async function mockAdvisoryApis(page: Page, options: {
   const listVersionsByProgramId: Record<string, JsonObject[]> = {
     [PROGRAM_ID]: currentListVersions,
     ...(options.listVersionsByProgramId || {}),
+  };
+  const bindingsByProgramId: Record<string, JsonObject[]> = {
+    [PROGRAM_ID]: [{ ...activeBinding, program_id: PROGRAM_ID }],
+    ...(options.bindingsByProgramId || {}),
   };
   const syncPrimaryVersions = () => {
     listVersionsByProgramId[PROGRAM_ID] = currentListVersions;
@@ -544,10 +560,11 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings`) && method === "GET") {
       await wait(options.detailDelayMs);
-      return json(route, { ok: true, bindings: [{ ...activeBinding, program_id: currentRouteProgramId }] });
+      return json(route, { ok: true, bindings: bindingsByProgramId[currentRouteProgramId] || [{ ...activeBinding, program_id: currentRouteProgramId }] });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/active`) && method === "GET") {
-      return json(route, { ok: true, binding: { ...activeBinding, program_id: currentRouteProgramId } });
+      const binding = (bindingsByProgramId[currentRouteProgramId] || []).find((item) => item.activation_status === "ACTIVE") || { ...activeBinding, program_id: currentRouteProgramId };
+      return json(route, { ok: true, binding });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/list-versions`) && method === "GET") {
       await wait(options.detailDelayMs);
@@ -636,8 +653,44 @@ async function mockAdvisoryApis(page: Page, options: {
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
-    if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/replay`) && method === "POST") {
-      return json(route, { ok: true, replay: { replay_run: { status: "SUCCEEDED" }, summary: { win_rate: 0.64 } } });
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/replay`) && method === "POST") {
+      replayBodies.push(request.postDataJSON() as JsonObject);
+      return json(route, {
+        ok: true,
+        replay: {
+          replay_run: { replay_run_id: `advreplay_${currentRouteProgramId}`, status: "SUCCEEDED" },
+          summary: { win_rate: 0.64, avg_return_bps: 188 },
+        },
+      });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/apply`) && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      applyBindingBodies.push(body);
+      const bindingPayload = (body.binding || {}) as JsonObject;
+      const nextBinding = {
+        ...activeBinding,
+        binding_version_id: `advb_applied_${currentRouteProgramId}`,
+        program_id: currentRouteProgramId,
+        program_version: 2,
+        package_mode: bindingPayload.package_mode,
+        package_ids: bindingPayload.package_ids,
+        package_weights: bindingPayload.package_weights || {},
+        activation_reason: body.activation_reason,
+      };
+      bindingsByProgramId[currentRouteProgramId] = [nextBinding];
+      return json(route, {
+        ok: true,
+        program: {
+          ...program,
+          ...(currentRouteProgramId === PROGRAM_ID ? currentProgram() : staticExtraPrograms.find((item) => item.program_id === currentRouteProgramId) || {}),
+          program_id: currentRouteProgramId,
+          package_mode: bindingPayload.package_mode,
+          package_ids: bindingPayload.package_ids,
+          package_weights: bindingPayload.package_weights || {},
+          version: 2,
+        },
+        binding: nextBinding,
+      });
     }
     if (path.endsWith("/api/v1/advisory/quality-report") && method === "POST") {
       return json(route, {
@@ -647,7 +700,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
-  return { calls, reviewBodies };
+  return { calls, reviewBodies, replayBodies, applyBindingBodies };
 }
 
 async function activeSymbols(page: Page) {
@@ -1181,6 +1234,131 @@ test("Advisory catch-up all runs missing target dates sequentially", async ({ pa
       },
     },
   });
+
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory strategy package management is scoped per active program", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+
+  const rowProgramId = "adv_dual_package_program";
+  const rowBinding = {
+    ...activeBinding,
+    binding_version_id: "advb_dual_active",
+    program_id: rowProgramId,
+    package_mode: "weighted_rank_fusion",
+    package_ids: ["pkg_codex_smoke", "pkg_second_candidate"],
+    package_weights: { pkg_codex_smoke: 0.7, pkg_second_candidate: 0.3 },
+  };
+  const rowVersions: JsonObject[] = [
+    { ...publishedListVersion("2026-06-10", "2026-06-09"), program_id: rowProgramId, binding_version_id: rowBinding.binding_version_id, list_version_id: "advlv_dual_20260610" },
+  ];
+  const rowProgram = {
+    ...program,
+    program_id: rowProgramId,
+    program_name: "每日 Top20 荐股任务双策略包",
+    status: "ENABLED",
+    package_mode: "weighted_rank_fusion",
+    package_ids: ["pkg_codex_smoke", "pkg_second_candidate"],
+    package_weights: { pkg_codex_smoke: 0.7, pkg_second_candidate: 0.3 },
+    latest_review_trade_date: "2026-06-10",
+    last_review_status: "SUCCEEDED",
+  };
+  const rowLeaderboard = {
+    ...rowProgram,
+    latest_recommendation_list_version_id: rowVersions[0]["list_version_id"],
+    latest_recommendation_trade_date: rowVersions[0]["trade_date"],
+    latest_recommendation_target_trade_date: rowVersions[0]["target_trade_date"],
+    latest_recommendation_selection_as_of_trade_date: rowVersions[0]["selection_as_of_trade_date"],
+    latest_recommendation_generated_at: rowVersions[0]["created_at"],
+    latest_recommendation_version_status: rowVersions[0]["version_status"],
+    published_recommendation_target_trade_dates: ["2026-06-10"],
+    entered_episode_count: 21,
+    active_count: 20,
+    take_profit_count: 1,
+    stop_loss_count: 0,
+    win_rate: 0.52,
+    avg_return_bps: 188,
+    metric_status: "READY",
+    metric_evaluable_count: 21,
+    metric_mark_trade_date: "2026-06-10",
+  };
+
+  await mockShellApis(page, {
+    as_of_date: "2026-06-10",
+    latest_trading_day: "2026-06-10",
+    data_ready_latest_date: "2026-06-10",
+    replay_start_date: "2026-06-05",
+    replay_end_date: "2026-06-10",
+    next_trading_day: "2026-06-11",
+    trading_days: ["2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10"],
+    trading_day_status: {
+      is_trading_day: true,
+      previous_trading_day: "2026-06-09",
+      next_trading_day: "2026-06-11",
+    },
+  });
+  const { calls, replayBodies, applyBindingBodies } = await mockAdvisoryApis(page, {
+    initialProgramStatus: "ENABLED",
+    initialLatestReviewTradeDate: "2026-06-09",
+    initialLastReviewStatus: "SUCCEEDED",
+    initialListVersions: [publishedListVersion("2026-06-09", "2026-06-08")],
+    extraPrograms: [rowProgram],
+    extraLeaderboardRows: [rowLeaderboard],
+    listVersionsByProgramId: { [rowProgramId]: rowVersions },
+    bindingsByProgramId: { [rowProgramId]: [rowBinding] },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId(`advisory-manage-strategy-${rowProgramId}`)).toBeVisible();
+  await page.getByTestId(`advisory-manage-strategy-${rowProgramId}`).click();
+  await expect(page.getByTestId(`advisory-strategy-manager-${rowProgramId}`)).toContainText("只作用于本荐股任务");
+  await expect(page.getByTestId(`advisory-strategy-package-${rowProgramId}-pkg-1`).locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
+  await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
+  await expect(page.getByText("选股运行 ID")).toHaveCount(0);
+
+  await page.getByTestId(`advisory-strategy-mode-${rowProgramId}`).selectOption("single_package");
+  await page.getByTestId(`advisory-strategy-package-${rowProgramId}-pkg-1`).selectOption("pkg_second_candidate");
+  await page.getByTestId(`advisory-strategy-replay-${rowProgramId}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/replay`)).length).toBe(1);
+  expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/replay`))).toHaveLength(0);
+  expect(replayBodies.at(-1)).toMatchObject({
+    start_date: "2026-06-05",
+    end_date: "2026-06-10",
+    draft_binding: {
+      package_mode: "single_package",
+      package_ids: ["pkg_second_candidate"],
+      package_weights: { pkg_second_candidate: 1 },
+      target_count: 20,
+    },
+    compare_to_binding_version_id: "advb_dual_active",
+  });
+  await expect(page.getByTestId(`advisory-strategy-replay-result-${rowProgramId}`)).toContainText("回放状态：SUCCEEDED");
+
+  await page.getByTestId(`advisory-strategy-apply-${rowProgramId}`).click();
+  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/bindings/apply`)).length).toBe(1);
+  expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/bindings/apply`))).toHaveLength(0);
+  expect(applyBindingBodies.at(-1)).toMatchObject({
+    binding: {
+      package_mode: "single_package",
+      package_ids: ["pkg_second_candidate"],
+      package_weights: { pkg_second_candidate: 1 },
+      target_count: 20,
+    },
+    source_replay_run_id: `advreplay_${rowProgramId}`,
+  });
+  await expect(page.getByTestId(`advisory-strategy-apply-result-${rowProgramId}`)).toContainText("已应用新策略绑定");
+  await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("预测目标：2026-06-09");
+  await expect(page.getByTestId(`advisory-row-latest-context-${rowProgramId}`)).toContainText("预测目标：2026-06-10");
 
   expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
