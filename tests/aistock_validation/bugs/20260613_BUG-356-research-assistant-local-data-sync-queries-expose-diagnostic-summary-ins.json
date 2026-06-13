@@ -30,11 +30,11 @@
       "action": "expand_allowed_write_scope",
       "actor": "codex_issue_workflow",
       "note": "Root cause is Research Assistant local-data routing/execution/rendering; expanded scope to focused service, execution, router and regression tests before code changes.",
-      "timestamp": "2026-06-13T13:18:25.542232Z",
       "previous_scope": [
         "tests/aistock_validation/bugs/20260613_BUG-356-research-assistant-local-data-sync-queries-expose-diagnostic-summary-ins.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json"
-      ]
+      ],
+      "timestamp": "2026-06-13T13:18:25.542232Z"
     },
     {
       "action": "fix_implemented_targeted_validation_passed_required_gate_has_unrelated_baseline_blocker",
@@ -53,8 +53,8 @@
   "expected": "Research Assistant should answer local-data sync questions with a business-facing dataset sync status summary/list (success, failed, running, blocked, not synced/not run) and must not expose internal routing, summary-first policy, artifact_ref, payload-budget, transport, or evidence-source diagnostics in the main reply.",
   "first_seen_at": "2026-06-13T13:05:30.252798Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "abf94487a4e9e82192c8410d7caa28e18214b1e2",
+  "fixed_at": "2026-06-13T13:57:25.311783Z",
   "github_issue_number": 1053,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1053",
   "last_seen_at": "2026-06-13T13:05:30.252798Z",
@@ -62,6 +62,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1054",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -75,7 +76,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -110,6 +111,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -> 65 passed",
+    "focused BUG-356/BUG-343/BUG-346/BUG-352 local-data routing/rendering pytest selection -> 20 passed",
+    "python -m ruff check backend/services/research_assistant/execution.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed",
+    "python -m compileall -q backend/services/research_assistant/execution.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed",
+    "GitHub PR #1054 status checks -> all completed successfully; mergeStateStatus=CLEAN"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
