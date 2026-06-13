@@ -67,7 +67,9 @@ from .react_grounding import (
     McpToolCall,
     McpToolResult,
     ModelTurn,
+    EvidenceGuardDecision,
     ReactGroundingConfig,
+    ReactGroundingResult,
     ToolCatalogEntry,
     ToolGateDecision,
     run_react_grounding_loop,
@@ -420,6 +422,7 @@ ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
 SERVICE_MODULE_PATH = Path(__file__).resolve()
+QE_BUSINESS_RESPONSE_MODES = {"qe_experiment_status_summary", "qe_warehouse_business_summary"}
 
 
 def _git_output(args: list[str]) -> str | None:
@@ -3628,6 +3631,57 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             cards=cards,
             user_message=user_message,
         )
+        if (
+            route_seed
+            and mode_decision.mode != DialogueMode.ANALYSIS
+            and self._should_finish_with_business_summary_tool(route_seed, cards)
+        ):
+            entry = next(
+                (
+                    item
+                    for item in self._react_tool_catalog_entries()
+                    if item.server_key == route_seed.server_key and item.tool_name == route_seed.tool_name
+                ),
+                None,
+            )
+            if entry is not None:
+                decision = ToolGateDecision(
+                    allowed=True,
+                    action="execute_read_only",
+                    reason="business_summary_terminal",
+                    catalog_entry=entry,
+                    requires_approval=False,
+                    risk_level=entry.risk_level,
+                    side_effect_level=entry.side_effect_level,
+                )
+                result = provider.execute_read_only(route_seed, decision)
+                guard = EvidenceGuardDecision(
+                    allowed=True,
+                    text=first_llm_result.content,
+                    reason="ok",
+                    source_count=1 if result.source_refs else 0,
+                    as_of_count=1 if result.as_of else 0,
+                )
+                react_result = ReactGroundingResult(
+                    final_text=first_llm_result.content,
+                    messages=[dict(item) for item in messages],
+                    tool_calls=[route_seed],
+                    tool_results=[result],
+                    trace_steps=[
+                        {
+                            "iteration": 1,
+                            "model": "business_summary_terminal",
+                            "tool_call_count": 1,
+                            "provider": "route_seed",
+                        }
+                    ],
+                    evidence_guard=guard,
+                    iterations=1,
+                    stopped_reason="business_summary_terminal",
+                    model_turns=[],
+                )
+                return first_llm_result, [dict(item) for item in messages], react_result
+
         def fallback_tool_calls() -> list[McpToolCall]:
             fallback = self._grounded_route_fallback_tool_call(cards, mode_decision)
             return [fallback] if fallback else []
@@ -3656,6 +3710,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             usage=self._merge_llm_usage([turn.usage for turn in react_result.model_turns]),
         )
         return grounded_llm_result, [dict(item) for item in react_result.messages], react_result
+
+    def _should_finish_with_business_summary_tool(self, call: McpToolCall, cards: dict[str, Any]) -> bool:
+        route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
+        domain = str(route.get("domain") or "")
+        if domain not in {"qe_experiment", "qe_warehouse"}:
+            return False
+        if domain == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
+            return False
+        return call.server_key == "aistock-qe" and str(route.get("side_effect") or "read_only") == "read_only"
 
     def _react_grounding_config(self, runtime_config: dict[str, Any]) -> ReactGroundingConfig:
         cfg = runtime_config.get("react_grounding") if isinstance(runtime_config.get("react_grounding"), dict) else {}
@@ -3870,6 +3933,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {"eligible": False, "reason": "route_missing_tool"}
         if route.get("domain") in {"general"}:
             return {"eligible": False, "reason": "general_route"}
+        if route.get("domain") == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
+            return {"eligible": False, "reason": "qe_draft_creation_uses_plan_reply"}
         if str(route.get("side_effect") or "read_only") != "read_only":
             return {"eligible": False, "reason": "route_not_read_only"}
         if mode_decision.allowed_tool_side_effect == "none":
@@ -3898,6 +3963,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "risk_level": tool.get("risk_level"),
             "side_effect_level": tool.get("side_effect_level"),
         }
+
+    @staticmethod
+    def _is_qe_draft_creation_request_text(text: str) -> bool:
+        lower = text.lower()
+        draft_terms = ("草案", "设计", "方案", "template", "draft", "proposal")
+        list_terms = ("列表", "汇总", "状态", "进度", "有哪些", "最近", "leaderboard", "outbox", "数仓")
+        return ("qe" in lower or "实验" in lower or "custom_evo" in lower) and any(term in lower for term in draft_terms) and not any(
+            term in lower for term in list_terms
+        )
 
     @staticmethod
     def _compact_mcp_summary_for_cards(summary_result: dict[str, Any]) -> dict[str, Any]:
@@ -3990,6 +4064,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if (not react_active or "<assistant_tool_choice" in raw_text.lower()) and self._should_render_mcp_route_reply(route, mode_decision, raw_text):
             return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
+        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
+            return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
         if text:
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
@@ -4000,12 +4076,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         del execution
         if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
             return True
+        if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
+            return True
         return not react_active
 
     @staticmethod
     def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
         if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
             return ResearchAssistantService._render_local_data_daily_status_reply(execution, summary)
+        if summary.get("response_mode") == "qe_experiment_status_summary":
+            return ResearchAssistantService._render_qe_experiment_status_reply(execution, summary)
+        if summary.get("response_mode") == "qe_warehouse_business_summary":
+            return ResearchAssistantService._render_qe_warehouse_business_reply(execution, summary)
         route = str(execution.get("route") or "unknown/unknown")
         items = summary.get("items") if isinstance(summary.get("items"), list) else []
         lines = [
@@ -4088,8 +4170,215 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "\n".join(lines)
 
     @staticmethod
+    def _format_metric_bits(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+        bits = []
+        for key in keys:
+            value = item.get(key)
+            if value is None or value == "":
+                continue
+            bits.append(f"{key}={value}")
+        return "，".join(bits)
+
+    @staticmethod
+    def _render_qe_experiment_status_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
+        summary_kind = str(summary.get("summary_kind") or "qe_experiments")
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        title = "已汇总 QE custom_evo 任务进度如下。" if summary_kind == "custom_evo_tasks" else "已汇总 QE 实验状态如下。"
+        lines = [title, f"汇总时间：{as_of}。"]
+        if counts:
+            status_text = "，".join(f"{status}={count}" for status, count in sorted(counts.items()))
+            lines.append(f"状态汇总：{status_text}。")
+        else:
+            lines.append("状态汇总：当前未返回可统计的实验/任务状态。")
+
+        if not items:
+            lines.append("明细列表：暂无可展示的 QE 实验/任务记录。")
+        elif summary_kind == "custom_evo_tasks":
+            lines.append("任务明细：")
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("task_name") or item.get("target_desc") or item.get("task_id") or "unknown"
+                loop = ResearchAssistantService._format_metric_bits(item, ("current_loop", "max_loops"))
+                loop_counts = item.get("loop_status_counts") if isinstance(item.get("loop_status_counts"), dict) else {}
+                loop_counts_text = "，".join(f"{key}={value}" for key, value in sorted(loop_counts.items()))
+                suffix = []
+                if loop:
+                    suffix.append(loop)
+                if loop_counts_text:
+                    suffix.append(f"loops[{loop_counts_text}]")
+                if item.get("node_id"):
+                    suffix.append(f"node={item.get('node_id')}")
+                if item.get("updated_at"):
+                    suffix.append(f"updated={item.get('updated_at')}")
+                lines.append(f"- {name}（{item.get('task_id', 'unknown')}）：{item.get('status', 'unknown')}{'；' + '；'.join(suffix) if suffix else ''}")
+        else:
+            lines.append("实验明细：")
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("experiment_name") or item.get("experiment_id") or "unknown"
+                metrics = ResearchAssistantService._format_metric_bits(
+                    item,
+                    ("ic", "icir", "rank_ic", "rank_icir", "annualized_return", "information_ratio", "max_drawdown"),
+                )
+                refs = ResearchAssistantService._format_metric_bits(item, ("qe_task_id", "task_id", "qe_loop_id", "loop_id", "loop_index", "model_id", "model_type"))
+                suffix = "；".join(part for part in (refs, metrics, f"updated={item.get('updated_at')}" if item.get("updated_at") else "") if part)
+                lines.append(f"- {name}（{item.get('experiment_id', 'unknown')}）：{item.get('status', 'unknown')}{'；' + suffix if suffix else ''}")
+        if len(items) > 20:
+            lines.append(f"另有 {len(items) - 20} 项未在主回复展开，可指定状态或 ID 继续查看。")
+        partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+        if partial_errors:
+            rendered_errors = "; ".join(
+                f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+            )
+            lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+        lines.append("本轮未启动、执行、物化或修改任何 QE 实验。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_compact_business_item(item: dict[str, Any], *, max_fields: int = 8) -> str:
+        preferred = [
+            "event_id",
+            "run_id",
+            "task_id",
+            "experiment_id",
+            "logical_name",
+            "view_name",
+            "model_type",
+            "factor_name",
+            "status",
+            "available",
+            "row_count",
+            "cagr",
+            "sharpe",
+            "information_ratio",
+            "icir",
+            "rank_icir",
+            "is_suspicious",
+            "is_return_stable",
+            "passes_gate",
+            "updated_at",
+            "completed_at",
+        ]
+        fields = []
+        for key in preferred:
+            if key in item and item.get(key) is not None:
+                fields.append(f"{key}={item.get(key)}")
+            if len(fields) >= max_fields:
+                break
+        if not fields:
+            for key, value in item.items():
+                if value is not None:
+                    fields.append(f"{key}={value}")
+                if len(fields) >= max_fields:
+                    break
+        return "，".join(fields) if fields else "无关键字段"
+
+    @staticmethod
+    def _render_qe_warehouse_business_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
+        health = summary.get("health_summary") if isinstance(summary.get("health_summary"), dict) else {}
+        summary_kind = str(summary.get("summary_kind") or "warehouse")
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        title_by_kind = {
+            "health": "QE 数仓健康汇总如下。",
+            "list_outbox": "QE 数仓 outbox / 漏入库处理项汇总如下。",
+            "query_analytics_view_status": "QE 数仓分析视图状态如下。",
+            "query_run_leaderboard": "QE run leaderboard 汇总如下。",
+            "query_seed_robustness": "QE 种子鲁棒性汇总如下。",
+            "query_overfit_flags": "QE 过拟合红旗汇总如下。",
+            "query_promotion_candidates": "QE 晋升候选汇总如下。",
+            "query_evolution_lineage": "QE 演进血缘汇总如下。",
+            "query_factor_performance": "QE 因子表现汇总如下。",
+            "query_model_hyperparam_seed_perf": "QE 模型超参与 seed 表现汇总如下。",
+        }
+        lines = [title_by_kind.get(summary_kind, "QE 数仓业务数据汇总如下。"), f"汇总时间：{as_of}。"]
+        if health:
+            lines.append(
+                "健康指标："
+                f"run_count={health.get('run_count', 0)}，"
+                f"pending_outbox={health.get('pending_outbox_count', 0)}，"
+                f"latest_archived_at={health.get('latest_archived_at') or '无'}，"
+                f"skip={health.get('skip_count', 0)}，"
+                f"manual_only={health.get('manual_only_count', 0)}。"
+            )
+            for label, key in (
+                ("outbox 状态", "outbox_status_counts"),
+                ("归档 job 状态", "archive_job_status_counts"),
+                ("入仓历史状态", "ingest_history_status_counts"),
+                ("backfill 状态", "backfill_run_status_counts"),
+                ("research_valid", "research_valid_counts"),
+            ):
+                value = health.get(key)
+                if isinstance(value, dict) and value:
+                    lines.append(f"{label}：" + "，".join(f"{k}={v}" for k, v in sorted(value.items())) + "。")
+        elif counts:
+            lines.append("状态汇总：" + "，".join(f"{status}={count}" for status, count in sorted(counts.items())) + "。")
+
+        if not items:
+            lines.append("明细列表：暂无需要展示的数仓记录或处理项。")
+        else:
+            if summary_kind == "query_run_leaderboard":
+                best = items[0] if isinstance(items[0], dict) else {}
+                if best:
+                    lines.append("当前列表首位：" + ResearchAssistantService._render_compact_business_item(best, max_fields=10) + "。")
+            lines.append("明细列表：")
+            for item in items[:20]:
+                if isinstance(item, dict):
+                    lines.append(f"- {ResearchAssistantService._render_compact_business_item(item)}")
+        if len(items) > 20:
+            lines.append(f"另有 {len(items) - 20} 项未在主回复展开，可指定 run/task/view 继续查看。")
+        partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+        if partial_errors:
+            rendered_errors = "; ".join(
+                f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+            )
+            lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+        lines.append("本轮未执行 backfill、重跑、写库或任何高风险 QE 操作。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_insufficient_evidence_text(text: str) -> bool:
+        lower = text.lower()
+        return "insufficient evidence" in lower or "max tool iterations reached" in lower
+
+    @staticmethod
+    def _render_qe_draft_safe_reply(cards: dict[str, Any]) -> str:
+        plan = cards.get("plan_card") if isinstance(cards.get("plan_card"), dict) else {}
+        steps = [str(item) for item in plan.get("steps", []) if str(item)]
+        clarification = cards.get("clarification_card") if isinstance(cards.get("clarification_card"), dict) else {}
+        questions = [str(item) for item in clarification.get("questions", []) if str(item)]
+        lines = [
+            "已收到 QE 实验草案需求；本轮只生成方案，不会执行、物化或启动训练。",
+            "草案框架：",
+        ]
+        if steps:
+            for step in steps[:5]:
+                lines.append(f"- {step}")
+        else:
+            lines.extend(
+                [
+                    "- 明确实验目标、股票池、时间窗、频率和标签口径。",
+                    "- 固定 seed、成本假设、数据版本和训练/回测边界。",
+                    "- 先形成 template draft 与校验项，确认后再进入 preflight。",
+                ]
+            )
+        if questions:
+            lines.append("需要你补充的关键参数：" + "；".join(questions[:3]) + "。")
+        lines.append("如果你确认目标和约束，我再把它整理成可校验的 QE template 草案。")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_react_execution_fallback_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
         reply = ResearchAssistantService._render_mcp_execution_reply(execution, summary)
+        if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
+            return reply
         source_refs = execution.get("source_refs") if isinstance(execution.get("source_refs"), list) else []
         source = str(source_refs[0] if source_refs else summary.get("source") or execution.get("tool_event_id") or "mcp_tool_event")
         as_of = str(execution.get("as_of") or utc_now().date().isoformat())
@@ -4128,6 +4417,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         tool_name = str(route.get("tool_name") or "unknown-tool")
         domain = str(route.get("domain") or "unknown")
         side_effect = str(route.get("side_effect") or "read_only")
+        if domain in {"qe_experiment", "qe_warehouse"}:
+            if domain == "qe_warehouse":
+                return "已识别为 QE 数仓查询，但本轮还没有拿到可展示的数仓业务结果；我不会用诊断路由信息替代健康状态、outbox、leaderboard 或分析视图数据。请重试只读查询，或指定要看的数仓项目。"
+            return "已识别为 QE 实验查询，但本轮还没有拿到可展示的实验/任务业务结果；我不会用诊断路由信息替代实验状态、custom_evo 进度或草案内容。请重试只读查询，或指定实验/任务 ID。"
         lines = [
             "我先把这类业务问题交给 MCP 路由处理，不会用模型猜因子数量、Issue 状态或其他业务事实。",
             f"Route decision：{domain} -> {server_key}/{tool_name}。",

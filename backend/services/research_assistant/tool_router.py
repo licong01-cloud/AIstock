@@ -108,7 +108,8 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("promotion candidate", "promote candidate", "晋升候选", "晋升榜"), "qe_archive_query_promotion_candidates"),
     (McpDomain.QE_WAREHOUSE, ("lineage", "evolution lineage", "演进血缘", "血缘"), "qe_archive_query_evolution_lineage"),
     (McpDomain.QE_EXPERIMENT, ("create and run", "generate and run", "direct run", "direct experiment"), "qe_template_create_and_run_confirmed"),
-    (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
+    (McpDomain.QE_EXPERIMENT, ("custom_evo", "custom evo", "task status", "task progress", "任务", "进度"), "qe_experiment_list"),
+    (McpDomain.QE_EXPERIMENT, ("template", "草案", "draft", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
     (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),
     (McpDomain.VALIDATION_ISSUE, ("agent context", "context"), "get_bug_agent_context"),
@@ -271,6 +272,11 @@ def select_tool(domain: McpDomain, message: str) -> str:
             return "local_data_get_dataset_status"
         if has_status_check:
             return "local_data_health_overview"
+    if domain == McpDomain.QE_EXPERIMENT:
+        if _contains_any(lower, ("custom_evo", "custom evo")) and _contains_any(lower, SEARCH_TERMS + ("task status", "task progress", "任务", "进度")):
+            return "qe_experiment_list"
+        if _contains_any(lower, ("草案", "draft", "template", "设计", "方案")) and _contains_any(lower, ("先不要执行", "不要执行", "不执行", "draft", "草案", "设计")):
+            return "qe_template_create"
     if _contains_any(lower, summary_terms):
         for hint_domain, terms, tool in TOOL_HINTS:
             if hint_domain == domain and _contains_any(lower, terms):

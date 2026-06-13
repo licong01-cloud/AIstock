@@ -1,0 +1,79 @@
+{
+  "actual": "QE experiment list and QE warehouse health/leaderboard/outbox/analytics questions return text starting with '已通过只读工具完成 MCP summary-first 查询' and include 'Route decision', server_key/tool_name, artifact_ref, payload budget, raw_payload/full_logs/model_weights omissions, and 'Evidence: source=research_assistant_catalog_summary_adapter'. QE experiment custom_evo progress and draft questions return 'Insufficient evidence: max tool iterations reached without reliable evidence.'",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "tests/aistock_validation/bugs/20260613_BUG-357-research-assistant-qe-queries-expose-diagnostic-summary-instead-of-busin.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-357",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T14:41:38.916059Z",
+  "description": "QE experiment list and QE warehouse health/leaderboard/outbox/analytics questions return text starting with '已通过只读工具完成 MCP summary-first 查询' and include 'Route decision', server_key/tool_name, artifact_ref, payload budget, raw_payload/full_logs/model_weights omissions, and 'Evidence: source=research_assistant_catalog_summary_adapter'. QE experiment custom_evo progress and draft questions return 'Insufficient evidence: max tool iterations reached without reliable evidence.'",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-11c34b8aae87",
+      "timestamp": "2026-06-13T14:41:38.916056Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime_validation_2026-06-13: QE route hits aistock-qe but main_reply contains summary-first diagnostics or Insufficient evidence; runtime commit b1e65471"
+  ],
+  "expected": "For QE experiment and QE warehouse read-only/planning questions, the main reply should be business-oriented: list experiment statuses, warehouse health/outbox/leaderboard/analytics summaries, or a safe draft/preflight explanation. Internal route/MCP/adapter/budget/evidence-control instructions must stay in cards/audit details and not be shown as the user-facing answer.",
+  "first_seen_at": "2026-06-13T14:41:38.916059Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1056,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1056",
+  "last_seen_at": "2026-06-13T14:41:38.916059Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST http://127.0.0.1:8001/api/v1/research-assistant/chat/turn with messages: '目前最近的 QE 实验有哪些？给我一个列表和状态汇总', 'QE 数仓现在是否正常？给我健康状态和入仓汇总', '查看 QE run leaderboard，告诉我最好的模型和关键指标', '帮我设计一个 QE 实验草案，先不要执行'",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant QE queries expose diagnostic summary instead of business answers",
+  "trigger_condition": {
+    "fingerprint": "11c34b8aae8760808f56994d",
+    "source_event_id": "FE-20260613-11c34b8aae87"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
