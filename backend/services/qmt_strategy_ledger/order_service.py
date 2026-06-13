@@ -46,6 +46,11 @@ _DEPENDENT_BUY_PROCEEDS_ERROR_CODES = frozenset(
         "ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED",
     }
 )
+_CAPACITY_RESIDUAL_ERROR_CODES = frozenset(
+    {
+        "SKIPPED_INSUFFICIENT_CAPITAL",
+    }
+)
 _CASH_SHRINK_REASON_KEY = "miniqmt_cash_preflight_shrink_reason"
 
 
@@ -421,7 +426,7 @@ class QmtManagedOrderService:
 
         preflight_results = tuple(self._batch_preflight(requests))
         hard_preflight_failed = any(
-            not preflight.allowed and not _is_dependent_buy_proceeds_deferred(request, preflight)
+            not preflight.allowed and not _is_non_compensating_batch_residual(request, preflight)
             for request, preflight in zip(requests, preflight_results, strict=True)
         )
         if hard_preflight_failed:
@@ -473,17 +478,39 @@ class QmtManagedOrderService:
                     )
                 )
                 continue
+            if not preflight.allowed and _is_capacity_residual_skipped(request, preflight):
+                results_list.append(
+                    ManagedOrderSubmitResult(
+                        False,
+                        None,
+                        None,
+                        "buy skipped by funds-only capacity allocator",
+                        preflight,
+                        False,
+                    )
+                )
+                continue
             results_list.append(self._submit_preflighted_order(request, preflight, batch_id=batch_id))
         results = tuple(results_list)
         succeeded = sum(1 for result in results if result.success)
         failed = len(results) - succeeded
         status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
+        residual_failed = sum(
+            1
+            for request, result in zip(requests, results, strict=True)
+            if not result.success and _is_non_compensating_batch_residual(request, result.preflight)
+        )
         deferred_failed = sum(
             1
             for request, result in zip(requests, results, strict=True)
             if not result.success and _is_dependent_buy_proceeds_deferred(request, result.preflight)
         )
-        compensation_required = status == OrderBatchStatus.PARTIAL and failed != deferred_failed
+        capacity_skipped = sum(
+            1
+            for request, result in zip(requests, results, strict=True)
+            if not result.success and _is_capacity_residual_skipped(request, result.preflight)
+        )
+        compensation_required = status == OrderBatchStatus.PARTIAL and failed != residual_failed
         compensation_actions = tuple(_compensation_actions(results)) if compensation_required else ()
         compensation_hint = (
             "partial broker submission: review accepted qmt_order_id values and call managed cancel for compensation if needed"
@@ -496,9 +523,11 @@ class QmtManagedOrderService:
             status=status,
             results=results,
             metadata={
-                "preflight_passed": deferred_failed == 0,
+                "preflight_passed": residual_failed == 0,
                 "dependent_buy_deferred": deferred_failed > 0,
                 "dependent_buy_count": deferred_failed,
+                "capacity_residual_skipped": capacity_skipped > 0,
+                "capacity_residual_count": capacity_skipped,
                 "compensation_required": compensation_required,
                 "compensation_actions": list(compensation_actions),
             },
@@ -508,7 +537,7 @@ class QmtManagedOrderService:
             success=failed == 0,
             batch_id=batch_id,
             batch_status=status.value,
-            preflight_passed=deferred_failed == 0,
+            preflight_passed=residual_failed == 0,
             total=len(results),
             succeeded=succeeded,
             failed=failed,
@@ -707,39 +736,42 @@ class QmtManagedOrderService:
                     cumulative_buy_freeze_by_account_strategy.get(strategy_key, Decimal("0")) + result.freeze_amount
                 )
                 cumulative_buy_freeze_by_account_strategy[strategy_key] = cumulative_freeze
-                if total_freeze <= effective_cash:
-                    if cumulative_freeze > result.available_cash:
-                        errors_by_index[index] = _without_preflight_error_codes(
-                            errors_by_index[index],
-                            {"INSUFFICIENT_CASH", "BATCH_INSUFFICIENT_CASH"},
-                        )
-                        errors_by_index[index].append(
-                            _sell_proceeds_required_error(
-                                request=request,
-                                result=result,
-                                sell_requests=sell_requests_by_account_strategy.get(strategy_key, []),
-                                same_batch_sell_proceeds=same_batch_sell_proceeds,
-                                effective_cash=effective_cash,
-                                batch_required_cash=total_freeze,
-                                cumulative_required_cash=cumulative_freeze,
-                            )
-                        )
-                    else:
-                        errors_by_index[index] = _without_preflight_error_codes(
-                            errors_by_index[index],
-                            {"INSUFFICIENT_CASH"},
-                        )
-                else:
+                if cumulative_freeze <= result.available_cash:
+                    errors_by_index[index] = _without_preflight_error_codes(
+                        errors_by_index[index],
+                        {"INSUFFICIENT_CASH", "BATCH_INSUFFICIENT_CASH"},
+                    )
+                elif cumulative_freeze <= effective_cash and same_batch_sell_proceeds > Decimal("0"):
+                    errors_by_index[index] = _without_preflight_error_codes(
+                        errors_by_index[index],
+                        {"INSUFFICIENT_CASH", "BATCH_INSUFFICIENT_CASH"},
+                    )
                     errors_by_index[index].append(
-                        OrderPreflightError(
-                            "BATCH_INSUFFICIENT_CASH",
-                            "batch aggregate buy freeze exceeds virtual strategy cash plus same-batch sell proceeds",
-                            {
-                                "available_cash": float(result.available_cash),
-                                "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
-                                "effective_cash": float(effective_cash),
-                                "batch_required_cash": float(total_freeze),
-                            },
+                        _sell_proceeds_required_error(
+                            request=request,
+                            result=result,
+                            sell_requests=sell_requests_by_account_strategy.get(strategy_key, []),
+                            same_batch_sell_proceeds=same_batch_sell_proceeds,
+                            effective_cash=effective_cash,
+                            batch_required_cash=total_freeze,
+                            cumulative_required_cash=cumulative_freeze,
+                        )
+                    )
+                else:
+                    errors_by_index[index] = _without_preflight_error_codes(
+                        errors_by_index[index],
+                        {"INSUFFICIENT_CASH", "BATCH_INSUFFICIENT_CASH"},
+                    )
+                    errors_by_index[index].append(
+                        _skipped_insufficient_capital_error(
+                            request=request,
+                            result=result,
+                            scope="strategy",
+                            available_cash=result.available_cash,
+                            same_batch_sell_proceeds=same_batch_sell_proceeds,
+                            effective_cash=effective_cash,
+                            batch_required_cash=total_freeze,
+                            cumulative_required_cash=cumulative_freeze,
                         )
                     )
                 account = self._account_by_strategy_name(request.account_id, request.strategy_name)
@@ -753,21 +785,12 @@ class QmtManagedOrderService:
                         cumulative_buy_freeze_by_account_group.get(group_key, Decimal("0")) + result.freeze_amount
                     )
                     cumulative_buy_freeze_by_account_group[group_key] = group_cumulative_freeze
-                    if group_total_freeze > group_effective_cash_limit:
-                        errors_by_index[index].append(
-                            OrderPreflightError(
-                                "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH",
-                                "batch aggregate buy freeze exceeds MiniQMT account-group cash limit plus same-batch sell proceeds",
-                                {
-                                    **context,
-                                    "account_group_cash_limit": float(cash_limit),
-                                    "same_batch_estimated_sell_proceeds": float(group_sell_proceeds),
-                                    "effective_account_group_cash_limit": float(group_effective_cash_limit),
-                                    "batch_required_cash": float(group_total_freeze),
-                                },
-                            )
+                    if group_cumulative_freeze <= cash_limit:
+                        errors_by_index[index] = _without_preflight_error_codes(
+                            errors_by_index[index],
+                            {"BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH"},
                         )
-                    elif group_cumulative_freeze > cash_limit:
+                    elif group_cumulative_freeze <= group_effective_cash_limit and group_sell_proceeds > Decimal("0"):
                         errors_by_index[index] = _without_preflight_error_codes(
                             errors_by_index[index],
                             {"BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH"},
@@ -783,6 +806,24 @@ class QmtManagedOrderService:
                                 effective_account_group_cash_limit=group_effective_cash_limit,
                                 batch_required_cash=group_total_freeze,
                                 cumulative_required_cash=group_cumulative_freeze,
+                            )
+                        )
+                    else:
+                        errors_by_index[index] = _without_preflight_error_codes(
+                            errors_by_index[index],
+                            {"BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH"},
+                        )
+                        errors_by_index[index].append(
+                            _skipped_insufficient_capital_error(
+                                request=request,
+                                result=result,
+                                scope="account_group",
+                                available_cash=cash_limit,
+                                same_batch_sell_proceeds=group_sell_proceeds,
+                                effective_cash=group_effective_cash_limit,
+                                batch_required_cash=group_total_freeze,
+                                cumulative_required_cash=group_cumulative_freeze,
+                                extra_context=context,
                             )
                         )
             if request.order_type == SELL_ORDER_TYPE and result.strategy_available_sell_quantity is not None:
@@ -921,7 +962,9 @@ class QmtManagedOrderService:
         batch = get_batch(batch_id)
         if batch is None or batch.batch_status != OrderBatchStatus.PARTIAL:
             return None
-        if not isinstance(batch.metadata, dict) or not batch.metadata.get("dependent_buy_deferred"):
+        if not isinstance(batch.metadata, dict) or not (
+            batch.metadata.get("dependent_buy_deferred") or batch.metadata.get("capacity_residual_skipped")
+        ):
             return None
         return batch
 
@@ -969,7 +1012,7 @@ class QmtManagedOrderService:
         deferred_indexes = [
             index
             for index, (request, result) in enumerate(zip(requests, stored_results, strict=True))
-            if _is_dependent_buy_retry_candidate(request, result)
+            if _is_buy_residual_retry_candidate(request, result)
         ]
         deferred_requests = [requests[index] for index in deferred_indexes]
         deferred_preflights = self._batch_preflight(deferred_requests)
@@ -993,12 +1036,17 @@ class QmtManagedOrderService:
                 )
                 continue
             pending_deferred_indexes.add(index)
+            broker_message = (
+                "dependent buy still waiting for reconciled sell proceeds"
+                if _is_dependent_buy_proceeds_deferred(request, preflight)
+                else "buy residual still waiting for sufficient capital"
+            )
             results_list[index] = ManagedOrderSubmitResult(
                 False,
                 None,
                 None,
-                "dependent buy still waiting for reconciled sell proceeds",
-                stored_results[index].preflight,
+                broker_message,
+                preflight,
                 False,
             )
 
@@ -1007,6 +1055,16 @@ class QmtManagedOrderService:
         failed = len(results) - succeeded
         status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
         still_deferred = bool(pending_deferred_indexes)
+        dependent_buy_count = sum(
+            1
+            for index in pending_deferred_indexes
+            if _is_dependent_buy_proceeds_deferred(requests[index], results_list[index].preflight)
+        )
+        capacity_residual_count = sum(
+            1
+            for index in pending_deferred_indexes
+            if _is_capacity_residual_skipped(requests[index], results_list[index].preflight)
+        )
         self._upsert_batch_record(
             batch_id=batch_id,
             requests=requests,
@@ -1015,8 +1073,10 @@ class QmtManagedOrderService:
             metadata={
                 **(batch.metadata if isinstance(batch.metadata, dict) else {}),
                 "preflight_passed": retry_preflight_passed and not still_deferred,
-                "dependent_buy_deferred": still_deferred,
-                "dependent_buy_count": len(pending_deferred_indexes),
+                "dependent_buy_deferred": dependent_buy_count > 0,
+                "dependent_buy_count": dependent_buy_count,
+                "capacity_residual_skipped": capacity_residual_count > 0,
+                "capacity_residual_count": capacity_residual_count,
                 "dependent_buy_retry": True,
                 "compensation_required": False,
                 "compensation_actions": [],
@@ -1046,14 +1106,20 @@ class QmtManagedOrderService:
         batch = get_batch(batch_id)
         if batch is None:
             return None
-        if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED:
-            return None
         intents = list_intents(batch_id)
         stored_results = tuple(
             _result_from_dict(item)
             for item in (batch.result_json or {}).get("results", ())
             if isinstance(item, dict)
         )
+        if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED or (
+            batch.batch_status == OrderBatchStatus.FAILED
+            and isinstance(batch.metadata, dict)
+            and batch.metadata.get("capacity_residual_skipped")
+            and stored_results
+            and not any(result.broker_called for result in stored_results)
+        ):
+            return None
         results = stored_results or tuple(_result_from_existing_intent(intent) for intent in intents)
         succeeded = sum(1 for result in results if result.success)
         failed = (
@@ -1488,6 +1554,23 @@ def _is_dependent_buy_proceeds_deferred(
     return bool(error_codes) and error_codes <= _DEPENDENT_BUY_PROCEEDS_ERROR_CODES
 
 
+def _is_capacity_residual_skipped(
+    request: ManagedOrderRequest,
+    preflight: OrderPreflightResult,
+) -> bool:
+    if request.order_type != BUY_ORDER_TYPE or preflight.allowed:
+        return False
+    error_codes = {error.code for error in preflight.errors}
+    return bool(error_codes) and error_codes <= _CAPACITY_RESIDUAL_ERROR_CODES
+
+
+def _is_non_compensating_batch_residual(
+    request: ManagedOrderRequest,
+    preflight: OrderPreflightResult,
+) -> bool:
+    return _is_dependent_buy_proceeds_deferred(request, preflight) or _is_capacity_residual_skipped(request, preflight)
+
+
 def _is_dependent_buy_retry_candidate(
     request: ManagedOrderRequest,
     result: ManagedOrderSubmitResult,
@@ -1503,12 +1586,30 @@ def _is_dependent_buy_retry_candidate(
     )
 
 
+def _is_buy_residual_retry_candidate(
+    request: ManagedOrderRequest,
+    result: ManagedOrderSubmitResult,
+) -> bool:
+    if _is_dependent_buy_retry_candidate(request, result):
+        return True
+    error_codes = {error.code for error in result.preflight.errors}
+    return (
+        request.order_type == BUY_ORDER_TYPE
+        and not result.success
+        and not result.broker_called
+        and result.intent_id is None
+        and bool(error_codes)
+        and error_codes <= _CAPACITY_RESIDUAL_ERROR_CODES
+    )
+
+
 def _is_retry_waiting_for_cash(preflight: OrderPreflightResult) -> bool:
     error_codes = {error.code for error in preflight.errors}
     return bool(error_codes) and error_codes <= {
         "INSUFFICIENT_CASH",
         "BATCH_INSUFFICIENT_CASH",
         "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH",
+        *_CAPACITY_RESIDUAL_ERROR_CODES,
         *_DEPENDENT_BUY_PROCEEDS_ERROR_CODES,
     }
 
@@ -1572,6 +1673,40 @@ def _account_group_sell_proceeds_required_error(
             "dependent_sell_orders": _sell_request_summaries(sell_requests),
             "next_action": "submit SELL first; resubmit BUY only after sell fill reconciles account-group cash",
         },
+    )
+
+
+def _skipped_insufficient_capital_error(
+    *,
+    request: ManagedOrderRequest,
+    result: OrderPreflightResult,
+    scope: str,
+    available_cash: Decimal,
+    same_batch_sell_proceeds: Decimal,
+    effective_cash: Decimal,
+    batch_required_cash: Decimal,
+    cumulative_required_cash: Decimal,
+    extra_context: dict[str, Any] | None = None,
+) -> OrderPreflightError:
+    context = {
+        **(extra_context or {}),
+        "account_id": request.account_id,
+        "strategy_name": request.strategy_name,
+        "buy_order_remark": request.order_remark,
+        "symbol": request.symbol,
+        "scope": scope,
+        "available_cash": float(available_cash),
+        "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
+        "effective_cash": float(effective_cash),
+        "batch_required_cash": float(batch_required_cash),
+        "cumulative_required_cash": float(cumulative_required_cash),
+        "required_cash": float(result.freeze_amount),
+        "next_action": "skip this BUY residual; keep submitted SELL/cash-fit BUY orders intact and rebuild next tick",
+    }
+    return OrderPreflightError(
+        "SKIPPED_INSUFFICIENT_CAPITAL",
+        "funds-only capacity allocator skipped this buy instead of failing the whole batch",
+        context,
     )
 
 
