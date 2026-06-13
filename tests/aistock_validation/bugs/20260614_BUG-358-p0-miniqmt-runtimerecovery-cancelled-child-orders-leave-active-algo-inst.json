@@ -1,0 +1,75 @@
+{
+  "actual": "runtime-state.json has algo_status_counts ACTIVE=50 and child_order_status_counts CANCELLED=50 after operator flatten-all workflow; /api status is connected but runtime recovery state is inconsistent.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py",
+    "tests/aistock_validation/bugs/20260614_BUG-358-p0-miniqmt-runtimerecovery-cancelled-child-orders-leave-active-algo-inst.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-358",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T17:29:23.775252Z",
+  "description": "runtime-state.json has algo_status_counts ACTIVE=50 and child_order_status_counts CANCELLED=50 after operator flatten-all workflow; /api status is connected but runtime recovery state is inconsistent.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260614-12031e9427c6",
+      "timestamp": "2026-06-13T17:29:23.775252Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-14 post-restart read-only validation: runtime-state last_write=2026-06-11T15:32:58.829145, runtime_ids=[mqrt_operator_flatten_all_20260611_prepare_next_day], algo_instances_count=50 ACTIVE, child_orders_count=50 CANCELLED"
+  ],
+  "expected": "MiniQMTExecutionRuntime recovery and operator-command flows must never leave algo instances ACTIVE when all their child orders are terminal CANCELLED/REJECTED/FILLED. Restart recovery should reconcile or terminalize such orphan active algos and emit durable evidence so unattended MiniQMT can continue safely.",
+  "first_seen_at": "2026-06-13T17:29:23.775252Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1059,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1059",
+  "last_seen_at": "2026-06-13T17:29:23.775252Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python - <<'PY' read tmp/miniqmt_execution_runtime/runtime-state.json and count algo_instances.status plus child_orders.status; observe ACTIVE=50 and CANCELLED=50. PY",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][RuntimeRecovery] cancelled child orders leave active algo instances after operator flatten",
+  "trigger_condition": {
+    "fingerprint": "12031e9427c64d7425a73229",
+    "source_event_id": "FE-20260614-12031e9427c6"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
