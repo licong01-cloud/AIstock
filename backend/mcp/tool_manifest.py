@@ -150,6 +150,21 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'local_data_apply_repair_confirmed',
                 'local_data_get_repair_status',
                 'local_data_explain_business_impact'),
+ 'qlib_export': ('qlib_export_get_config',
+                 'qlib_export_list_snapshots',
+                 'qlib_export_list_bin_exports',
+                 'qlib_export_get_snapshot_quality',
+                 'qlib_export_validate_snapshot',
+                 'qlib_export_data_check',
+                 'qlib_export_data_preview',
+                 'qlib_export_plan_dataset_update',
+                 'qlib_export_run_h5_dataset_full_confirmed',
+                 'qlib_export_run_h5_dataset_incremental_confirmed',
+                 'qlib_export_run_h5_daily_aux_incremental_all_confirmed',
+                 'qlib_export_build_static_factors_confirmed',
+                 'qlib_export_export_field_map_confirmed',
+                 'qlib_export_run_bin_unified_v2_confirmed',
+                 'qlib_export_generate_backtest_candidate_confirmed'),
  'model_registry': ('model_registry_list',
                     'model_registry_get',
                     'model_registry_compare_trials',
@@ -391,6 +406,7 @@ LEGACY_TOOL_MODULES = ('execution_policy',
  'factor_library',
  'factor_metrics',
  'local_data',
+ 'qlib_export',
  'model_registry',
  'strategy_governance',
  'strategy_packages',
@@ -408,7 +424,8 @@ MODULE_PROFILE_TAGS: dict[str, tuple[str, ...]] = {
     "catalog": ("lite", "full"),
     "research": ("research", "full"),
     "research_assistant": ("assistant", "full"),
-    "local_data": ("data", "local_data", "full"),
+    "local_data": ("data", "local_data", "data_full", "full"),
+    "qlib_export": ("qlib_data", "backtest_data", "data_full", "full"),
     "factor_library": ("factor", "factor_library", "factor_research", "full"),
     "factor_metrics": ("factor", "factor_metrics", "factor_research", "full"),
     "factor_correlation": ("factor", "factor_correlation", "factor_research", "full"),
@@ -592,6 +609,12 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         requires_confirmation=False,
         reason="plan-only preview: LocalDataManagementService.plan_repair inspects overview/status and defers execution to local_data_apply_repair_confirmed",
     ),
+    "qlib_export_plan_dataset_update": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="plan-only preview: Qlib export MCP builds an ordered candidate update plan and defers H5/Bin writes to confirmed tools",
+    ),
     "local_data_list_sync_targets": ToolMetadataOverride(
         risk_level="read_only",
         assistant_usable="direct_or_catalog",
@@ -729,7 +752,7 @@ def _base_risk_for(tool_name: str, module: str) -> str:
         if any(token in tool_name for token in LONG_RUNNING_TOKENS):
             return "long_running"
         return "production_adjacent"
-    if module in {"execution_policy", "strategy_governance", "local_data", "validation", "qe_experiment", "qe_archive"}:
+    if module in {"execution_policy", "strategy_governance", "local_data", "qlib_export", "validation", "qe_experiment", "qe_archive"}:
         if any(token in tool_name for token in ("run", "sync", "repair", "schedule", "promote", "retire", "bind")):
             return "production_adjacent"
     return "read_only"
@@ -783,6 +806,8 @@ def _backend_endpoint_for(tool_name: str, module: str) -> str:
         return "paper-v2/*"
     if module == "qmt_broker_monitoring":
         return "qmt/*"
+    if module == "qlib_export":
+        return "qlib/*"
     return f"{module.replace('_', '-')}/*"
 
 
