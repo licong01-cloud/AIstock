@@ -30,8 +30,8 @@
   "expected": "The simulation runtime scheduler must roll forward eligible LocalSim and MiniQMT daily bindings for the target trade_date without manual DB writes; new strategy packages should remain unattended-capable.",
   "first_seen_at": "2026-06-13T17:55:13.886600Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c8712eac77c4171620e870e63fe962d1142086cc",
+  "fixed_at": "2026-06-13T18:48:07.382148Z",
   "github_issue_number": 1062,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1062",
   "last_seen_at": "2026-06-13T17:55:13.886600Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1063",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -60,6 +61,16 @@
     "fingerprint": "b1686cdd24001da5a2ab4f33",
     "source_event_id": "FE-20260614-b1686cdd2400"
   },
+  "validation_evidence": [
+    "ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 46 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py backend/tests/simulation_runtime/test_ops_api.py -q -> 59 passed",
+    "git diff --check -> passed",
+    "python -m compileall -q backend/services/simulation_runtime backend/tests/simulation_runtime -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s l0 -> passed; guardrail blocking=0",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed; paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep successful"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
