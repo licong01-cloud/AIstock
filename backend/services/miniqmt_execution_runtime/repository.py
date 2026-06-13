@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +18,11 @@ from .models import (
     MiniQMTExecutionRuntimeRecord,
     MiniQMTExecutionRuntimeState,
 )
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH = _PROJECT_ROOT / "tmp" / "miniqmt_execution_runtime" / "runtime-state.json"
+MINIQMT_EXECUTION_RUNTIME_STORE_PATH_ENV = "MINIQMT_EXECUTION_RUNTIME_STORE_PATH"
 
 
 class MiniQMTExecutionRuntimeRepository(Protocol):
@@ -211,3 +218,30 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
             item["child_order_id"]: MiniQMTChildOrder.model_validate(item)
             for item in payload.get("child_orders", [])
         }
+
+
+def default_miniqmt_execution_runtime_repository_path() -> Path:
+    """Return the durable store used by unattended product MiniQMT paths."""
+
+    configured = os.getenv(MINIQMT_EXECUTION_RUNTIME_STORE_PATH_ENV)
+    if configured:
+        return Path(configured)
+    pytest_current_test = os.getenv("PYTEST_CURRENT_TEST")
+    if pytest_current_test:
+        # Keep the product default durable while preventing unit tests from
+        # reusing another test's runtime/event store across repeated runs.
+        test_id = hashlib.sha256(pytest_current_test.encode("utf-8")).hexdigest()[:16]
+        return (
+            _PROJECT_ROOT
+            / "tmp"
+            / "miniqmt_execution_runtime"
+            / "pytest"
+            / f"runtime-state-{os.getpid()}-{test_id}.json"
+        )
+    return DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH
+
+
+def default_miniqmt_execution_runtime_repository() -> MiniQMTExecutionRuntimeRepository:
+    """Build the default durable repository for product runtime clients."""
+
+    return JsonFileMiniQMTExecutionRuntimeRepository(default_miniqmt_execution_runtime_repository_path())
