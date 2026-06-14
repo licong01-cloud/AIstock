@@ -243,6 +243,11 @@ function CodeIntelligencePanel({ summary }: { summary?: ValidationCodeIntelligen
   const understandAnything = isObject(summary?.understand_anything) ? summary?.understand_anything : {};
   const warnings = Array.isArray(summary?.warnings) ? summary?.warnings.filter((item): item is string => typeof item === "string") : [];
   const reasonCodes = Array.isArray(summary?.reason_codes) ? summary?.reason_codes.filter((item): item is string => typeof item === "string") : [];
+  const codegraphFreshness = display(codegraph.effective_freshness || codegraph.freshness || codegraph.effective_status || codegraph.status || "missing");
+  const codegraphMetaHint = codegraph.stale_metadata_warning
+    ? "metadata stale; effective freshness usable"
+    : display(codegraph.generated_at);
+  const codegraphTone = codegraphFreshness === "fresh" ? "success" : "warning";
   return (
     <SectionCard title="Code Intelligence Freshness" eyebrow="CodeGraph / Understand Anything / warning-only">
       <div className="pv2-notice pv2-notice-info">
@@ -252,12 +257,16 @@ function CodeIntelligencePanel({ summary }: { summary?: ValidationCodeIntelligen
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="Data State" value={display(summary?.data_state || "missing")} hint={`artifacts ${display(summary?.artifact_count ?? 0)}`} tone={summary?.data_state === "complete" ? "success" : "warning"} />
         <MetricCard label="Workflow Blocking" value={display(summary?.blocking_for_issue_workflow)} hint="must stay false" tone={summary?.blocking_for_issue_workflow === false ? "success" : "warning"} />
-        <MetricCard label="CodeGraph" value={display(codegraph.freshness || codegraph.status || "missing")} hint={display(codegraph.generated_at)} tone={codegraph.freshness === "fresh" ? "success" : "warning"} />
+        <MetricCard label="CodeGraph" value={codegraphFreshness} hint={codegraphMetaHint} tone={codegraphTone} />
         <MetricCard label="UA Summaries" value={display(understandAnything.summary_count ?? 0)} hint="Understand Anything" tone={Number(understandAnything.summary_count ?? 0) ? "success" : "warning"} />
       </div>
       <KeyValuePanel rows={[
         ["schema_version", summary?.schema_version],
         ["artifact_roots", summary?.artifact_roots],
+        ["codegraph_effective_source", codegraph.effective_source],
+        ["codegraph_stale_metadata_warning", codegraph.stale_metadata_warning],
+        ["codegraph_current_git_commit", codegraph.current_git_commit],
+        ["codegraph_latest_git_commit", codegraph.latest_git_commit],
         ["codegraph_artifact", codegraph.artifact_path],
         ["codegraph_summary", codegraph.summary_ref],
         ["understand_anything_manifest", isObject(understandAnything.manifest) ? understandAnything.manifest.artifact_path : undefined],

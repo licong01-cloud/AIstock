@@ -516,6 +516,52 @@ def test_code_intelligence_summary_endpoint_is_warning_only(client: TestClient) 
     assert payload["understand_anything"]["summary_count"] == 1
 
 
+def test_code_intelligence_summary_uses_effective_latest_freshness(tmp_path: Path) -> None:
+    code_intel_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest"
+    _write_json(
+        code_intel_dir / "codegraph-latest-freshness.json",
+        {
+            "schema_version": "aistock_codegraph_latest_freshness_v1",
+            "generated_at": "2026-06-01T10:00:00Z",
+            "workflow_gate": "warning",
+            "blocking_for_issue_workflow": False,
+            "current_git_commit": "current123",
+            "effective_source": "artifact",
+            "stale_metadata_warning": True,
+            "latest": {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "freshness": "fresh",
+                "git_commit": "old123",
+            },
+            "effective": {
+                "provider": "codegraph",
+                "status": "ok",
+                "freshness": "fresh",
+                "generated_at": "2026-06-01T09:59:00Z",
+                "git_commit": "old123",
+                "index_summary": {"files": 2, "nodes": 3, "edges": 4, "up_to_date": True},
+            },
+            "warnings": [
+                "Latest CodeGraph freshness artifact commit differs from current HEAD, but effective freshness is fresh."
+            ],
+        },
+    )
+    store = ValidationHistoryStore(history_root=tmp_path / "history", repo_root=tmp_path)
+
+    payload = store.code_intelligence_summary()
+
+    assert payload["data_state"] == "complete"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["codegraph"]["artifact_type"] == "codegraph_latest_freshness"
+    assert payload["codegraph"]["freshness"] == "fresh"
+    assert payload["codegraph"]["effective_freshness"] == "fresh"
+    assert payload["codegraph"]["effective_source"] == "artifact"
+    assert payload["codegraph"]["stale_metadata_warning"] is True
+    assert payload["codegraph"]["current_git_commit"] == "current123"
+    assert payload["codegraph"]["latest_git_commit"] == "old123"
+    assert "CodeGraph metadata is stale but effective freshness is fresh." in payload["warnings"]
+
+
 def test_code_intelligence_summary_degrades_when_missing(tmp_path: Path) -> None:
     store = ValidationHistoryStore(history_root=tmp_path / "history", repo_root=tmp_path)
 

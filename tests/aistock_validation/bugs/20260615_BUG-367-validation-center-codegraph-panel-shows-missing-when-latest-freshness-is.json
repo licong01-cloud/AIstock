@@ -6,7 +6,8 @@
     "frontend/src/lib/validation/api.ts",
     "backend/tests/test_validation_center_api.py",
     "tests/aistock_validation/bugs/20260615_BUG-367-validation-center-codegraph-panel-shows-missing-when-latest-freshness-is.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/components/validation/PipelineOverviewCards.tsx"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-367",
@@ -24,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260615-608d47f8f875",
       "timestamp": "2026-06-14T19:11:00.643370Z"
+    },
+    {
+      "timestamp": "2026-06-14T19:25:00Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Added PipelineOverviewCards because the overview card also renders CodeGraph freshness and could show missing from summary fallback."
     }
   ],
   "evidence_uris": [
@@ -83,7 +90,8 @@
       "backend/services/validation/history_store.py",
       "frontend/src/app/validation-center/page.tsx",
       "frontend/src/lib/validation/api.ts",
-      "backend/tests/test_validation_center_api.py"
+      "backend/tests/test_validation_center_api.py",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx"
     ],
     "ui_issue": true,
     "ui_route": "/live",
