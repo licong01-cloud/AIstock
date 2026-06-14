@@ -31,6 +31,7 @@ STATUS_FAILURE_MODULES = {
     "paper_v2_live": ["paper_v2_live"],
     "code_intelligence": ["validation.runner"],
 }
+DIFF_HEADER_PREFIXES = ("--- ", "+++ ", "@@")
 
 
 def _split_csv(values: list[str] | None) -> list[str]:
@@ -41,7 +42,7 @@ def _split_csv(values: list[str] | None) -> list[str]:
 
 
 def _normalize_path(value: str) -> str:
-    text = str(value or "").strip().replace("\\", "/")
+    text = str(value or "").strip().lstrip("\ufeff").replace("\\", "/")
     while text.startswith("./"):
         text = text[2:]
     return text
@@ -56,6 +57,23 @@ def _unique(values: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _is_probable_repo_path(value: str) -> bool:
+    if not value or "\x00" in value:
+        return False
+    lowered = value.lower()
+    if lowered.startswith(("http://", "https://")):
+        return False
+    if any(value.startswith(prefix) for prefix in DIFF_HEADER_PREFIXES):
+        return False
+    if value in {"--- Changes ---", "Changes", "Files"}:
+        return False
+    if ":" in value.split("/", 1)[0]:
+        return False
+    if value.startswith(("/", "\\")):
+        return False
+    return bool(Path(value).suffix or "/" in value)
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -94,9 +112,9 @@ def collect_changed_files(
 ) -> list[str]:
     collected = [_normalize_path(item) for item in _split_csv(changed_files)]
     if changed_files_file and changed_files_file.exists():
-        collected.extend(_normalize_path(line) for line in changed_files_file.read_text(encoding="utf-8").splitlines())
+        collected.extend(_normalize_path(line) for line in changed_files_file.read_text(encoding="utf-8-sig").splitlines())
     collected.extend(_git_changed_files(base_ref, root=root))
-    return _unique([item for item in collected if item])
+    return _unique([item for item in collected if _is_probable_repo_path(item)])
 
 
 def _canonical_status_key(raw_key: str) -> str | None:
@@ -185,9 +203,11 @@ def build_report(
     allowed = [item for item in advice["queue"] if item.get("allowed")]
     deferred = [item for item in advice["queue"] if not item.get("allowed")]
     llm_evidence = llm_provider_adapter.llm_invocation_public_summary(advice.get("llm_invocation_evidence"))
+    llm_gate = "ready" if llm_evidence.get("invoked") else "degraded"
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "workflow_gate": gate["workflow_gate"],
+        "llm_gate": llm_gate,
         "provider": advice["provider"],
         "model": advice["model"],
         "effective_provider": advice.get("effective_provider"),
@@ -238,6 +258,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "# Nightly Adaptive Scheduler",
         "",
         f"- workflow_gate: `{report.get('workflow_gate') or 'unknown'}`",
+        f"- llm_gate: `{report.get('llm_gate') or 'unknown'}`",
         "- execution_mode: `warning_only_advice`",
         f"- provider: `{report.get('effective_provider') or report.get('provider') or 'unknown'}`",
         f"- llm_invoked: `{bool(report.get('llm_invoked'))}`",
@@ -258,6 +279,7 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": report.get("schema_version"),
         "workflow_gate": report.get("workflow_gate"),
+        "llm_gate": report.get("llm_gate"),
         "execution_mode": report.get("execution_mode"),
         "provider": report.get("provider"),
         "model": report.get("model"),
@@ -315,6 +337,7 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
     compact = {
         "check": "nightly-adaptive-scheduler",
         "workflow_gate": report.get("workflow_gate") or "generated",
+        "llm_gate": report.get("llm_gate") or "unknown",
         "execution_mode": "warning_only_advice",
         "llm_invoked": bool(report.get("llm_invoked")),
         "allowed_plan_count": len(queue.get("allowed_plan_keys") or []),
@@ -326,6 +349,7 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
     print(
         "nightly-adaptive-scheduler: "
         f"workflow_gate={compact['workflow_gate']} "
+        f"llm_gate={compact['llm_gate']} "
         f"execution_mode={compact['execution_mode']} "
         f"artifact={compact['artifact'] or 'none'}"
     )
@@ -397,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         report = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "workflow_gate": "blocked",
+            "llm_gate": "degraded",
             "execution_mode": "warning_only_advice",
             "error": llm_provider_adapter.redact_secret_text(str(exc)) if hasattr(llm_provider_adapter, "redact_secret_text") else str(exc),
             "queue_summary": {
