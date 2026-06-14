@@ -636,6 +636,94 @@ def test_nightly_scheduler_advice_rejects_shell_command_fields():
         )
 
 
+def test_nightly_scheduler_advice_normalizes_deepseek_queue_shape(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "id": "deepseek-queue-shape",
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "run validation plans",
+                                    "queue": [
+                                        {"plan_key": "validation_catalog_integrity", "reason": "workflow changed"},
+                                        {"planKey": "validation_center_backend"},
+                                    ],
+                                    "confidence": "0.82",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 6, "total_tokens": 16},
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_scheduler_advice(
+        "deepseek_api",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        recent_failure_modules=["validation.runner"],
+        codegraph_freshness="fresh",
+        resource_budget_seconds=900,
+        invoke_llm=True,
+    )
+
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["llm_advice"]["suggested_plan_keys"] == [
+        "validation_catalog_integrity",
+        "validation_center_backend",
+    ]
+    assert payload["advice_consumption"]["advice_consumed"] is True
+
+
+def test_nightly_scheduler_advice_normalization_rejects_shell_commands(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "unsafe",
+                                    "queue": [{"plan_key": "l0", "command": "python -m nox -s l0"}],
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_scheduler_advice(
+        "deepseek_api",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        codegraph_freshness="fresh",
+        invoke_llm=True,
+    )
+
+    assert payload["llm_gate"] == "degraded"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert "provider advice must not contain shell command fields" in payload["llm_invocation_evidence"]["error"]
+    assert payload["advised_plan_keys"] == []
+
+
 def test_nightly_scheduler_advice_cli_uses_compact_success_output(capsys, tmp_path):
     output = tmp_path / "nightly-scheduler-advice.json"
 

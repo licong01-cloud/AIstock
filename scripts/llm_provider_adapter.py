@@ -45,6 +45,7 @@ NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_ad
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
@@ -228,32 +229,53 @@ def normalize_catalog(payload: Any) -> list[dict[str, Any]]:
 def parse_json_response(text: str) -> dict[str, Any]:
     """Parse provider JSON output and fail closed on malformed/non-object data."""
 
+    payload = _parse_json_value_response(text)
+    if isinstance(payload, dict):
+        return payload
+    raise ProviderAdapterError("provider output JSON schema invalid")
+
+
+def _parse_json_value_response(text: str) -> Any:
+    """Parse a single JSON value embedded in provider prose."""
+
     text = str(text or "")
     candidates = [text]
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    fence = re.search(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", text, flags=re.IGNORECASE | re.DOTALL)
     if fence:
         candidates.append(fence.group(1))
-    extracted = _extract_json_object(text)
-    if extracted:
-        candidates.append(extracted)
+    extracted_object = _extract_json_object(text)
+    if extracted_object:
+        candidates.append(extracted_object)
+    extracted_array = _extract_json_array(text)
+    if extracted_array:
+        candidates.append(extracted_array)
 
     last_error: Exception | None = None
     for candidate in dict.fromkeys(candidates):
         try:
-            payload = json.loads(candidate)
+            return json.loads(candidate)
         except json.JSONDecodeError as exc:
             last_error = exc
             continue
-        if isinstance(payload, dict):
-            return payload
-        last_error = ProviderAdapterError("provider output JSON schema invalid")
     raise ProviderAdapterError("provider output JSON schema invalid") from last_error
 
 
 def _extract_json_object(text: str) -> str | None:
     """Return the first balanced JSON object embedded in provider prose."""
 
-    start = text.find("{")
+    return _extract_json_value(text, "{", "}")
+
+
+def _extract_json_array(text: str) -> str | None:
+    """Return the first balanced JSON array embedded in provider prose."""
+
+    return _extract_json_value(text, "[", "]")
+
+
+def _extract_json_value(text: str, opener: str, closer: str) -> str | None:
+    """Return the first balanced JSON object or array embedded in provider prose."""
+
+    start = text.find(opener)
     if start < 0:
         return None
     depth = 0
@@ -271,9 +293,9 @@ def _extract_json_object(text: str) -> str | None:
             continue
         if char == '"':
             in_string = True
-        elif char == "{":
+        elif char == opener:
             depth += 1
-        elif char == "}":
+        elif char == closer:
             depth -= 1
             if depth == 0:
                 return text[start : index + 1]
@@ -502,7 +524,13 @@ def invoke_provider_json(
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
         content = (message or {}).get("content") if isinstance(message, dict) else choices[0].get("text")
         try:
-            payload = parse_json_response(content or "")
+            if purpose in ADVISORY_LLM_PURPOSES:
+                payload = _normalize_advisory_payload(
+                    _parse_json_value_response(content or ""),
+                    purpose=purpose,
+                )
+            else:
+                payload = parse_json_response(content or "")
             break
         except ProviderAdapterError as exc:
             last_error = exc
@@ -924,6 +952,78 @@ def _compact_llm_messages(*, kind: str, payload: dict[str, Any]) -> list[dict[st
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
     ]
+
+
+def _extract_advisory_plan_keys(raw: Any) -> list[str]:
+    """Extract provider-suggested plan keys from common advisory JSON shapes."""
+
+    keys: list[str] = []
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            if value.strip():
+                keys.append(value.strip())
+            return
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+            return
+        if isinstance(value, dict):
+            for field in (
+                "plan_key",
+                "planKey",
+                "plan",
+                "suggested_plan_keys",
+                "plan_keys",
+                "advised_plan_keys",
+                "recommended_plan_keys",
+                "allowed_plan_keys",
+            ):
+                if field in value:
+                    add(value.get(field))
+            for field in (
+                "queue",
+                "plans",
+                "recommended_plans",
+                "scheduler_advice",
+                "test_plan_advice",
+                "advice",
+            ):
+                child = value.get(field)
+                if isinstance(child, (list, dict)):
+                    add(child)
+
+    add(raw)
+    return list(dict.fromkeys(keys))[:8]
+
+
+def _normalize_advisory_payload(raw: Any, *, purpose: str) -> dict[str, Any]:
+    """Normalize advisory-only provider JSON without broadening its authority."""
+
+    if purpose not in ADVISORY_LLM_PURPOSES:
+        if isinstance(raw, dict):
+            return raw
+        raise ProviderAdapterError("provider output JSON schema invalid")
+    if not _no_shell_commands(raw):
+        raise ProviderAdapterError("provider advice must not contain shell command fields")
+    plan_keys = _extract_advisory_plan_keys(raw)
+    if isinstance(raw, dict):
+        payload = dict(raw)
+    elif isinstance(raw, list):
+        payload = {
+            "summary": "provider returned plan list",
+            "rationale": "normalized advisory-only list response",
+            "risk": "unknown",
+        }
+    else:
+        raise ProviderAdapterError("provider output JSON schema invalid")
+    payload["suggested_plan_keys"] = plan_keys
+    payload.setdefault("summary", "provider advisory parsed")
+    payload.setdefault("rationale", "advisory-only provider response normalized")
+    payload.setdefault("risk", "unknown")
+    return payload
 
 
 def _safe_llm_advice(raw: dict[str, Any], *, allowed_plan_keys: set[str]) -> dict[str, Any]:
