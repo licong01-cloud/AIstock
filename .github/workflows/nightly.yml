@@ -45,6 +45,7 @@ env:
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
+  AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
   contents: read
@@ -358,8 +359,11 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
@@ -380,8 +384,11 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
@@ -416,8 +423,11 @@ jobs:
             $changedFiles = @()
           }
           $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `

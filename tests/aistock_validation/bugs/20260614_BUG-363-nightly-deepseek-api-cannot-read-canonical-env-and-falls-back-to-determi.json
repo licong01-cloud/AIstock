@@ -5,7 +5,9 @@
     "scripts/nightly_adaptive_scheduler.py",
     ".github/workflows/nightly.yml",
     "tests/aistock_validation/bugs/20260614_BUG-363-nightly-deepseek-api-cannot-read-canonical-env-and-falls-back-to-determi.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-363",

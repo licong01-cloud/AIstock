@@ -50,6 +50,9 @@ FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
 CODEGRAPH_FRESHNESS_VALUES = {"fresh", "stale", "missing", "unknown"}
 GUARDED_ROLLOUT_MODES = {"off", "warning_only", "opt_in_auto_file"}
+DEEPSEEK_ENV_FILE_ENV_VARS = ("AISTOCK_LLM_ENV_FILE", "AISTOCK_ENV_FILE")
+DEEPSEEK_ENV_ROOT_VARS = ("AISTOCK_SELF_HOSTED_SOURCE", "AISTOCK_CANONICAL_ROOT", "AISTOCK_ROOT")
+DEEPSEEK_ENV_KEYS = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
 EVALUATION_INFRA_SIGNATURE_TOKENS = (
     "self-hosted runner unavailable",
     "runner unavailable",
@@ -78,6 +81,7 @@ EVALUATION_MODULE_PLAN_MAP = {
     "rl_execution": ["rl_execution_smoke"],
     "local_data": ["data_sync_autonomy_backend"],
 }
+_BOOTSTRAPPED_DEEPSEEK_ENV_FILES: set[str] = set()
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
@@ -99,7 +103,64 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     return config
 
 
+def _candidate_deepseek_env_files() -> list[Path]:
+    candidates: list[Path] = []
+    for env_name in DEEPSEEK_ENV_FILE_ENV_VARS:
+        raw = os.environ.get(env_name)
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    for env_name in DEEPSEEK_ENV_ROOT_VARS:
+        raw_root = os.environ.get(env_name)
+        if raw_root:
+            candidates.append(Path(raw_root).expanduser() / ".env")
+    candidates.append(ROOT / ".env")
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _bootstrap_deepseek_env() -> list[str]:
+    loaded_sources: list[str] = []
+    for candidate in _candidate_deepseek_env_files():
+        candidate_key = str(candidate.resolve(strict=False))
+        if candidate_key in _BOOTSTRAPPED_DEEPSEEK_ENV_FILES:
+            continue
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        _BOOTSTRAPPED_DEEPSEEK_ENV_FILES.add(candidate_key)
+        try:
+            lines = candidate.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            continue
+        loaded_any = False
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key.lower().startswith("export "):
+                key = key[7:].strip()
+            if key not in DEEPSEEK_ENV_KEYS:
+                continue
+            value = value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            if not os.environ.get(key):
+                os.environ[key] = value
+                loaded_any = True
+        if loaded_any:
+            loaded_sources.append(str(candidate))
+    return loaded_sources
+
+
 def validate_config(config: dict[str, Any]) -> None:
+    _bootstrap_deepseek_env()
     if config.get("schema_version") != "aistock_llm_triage_config_v1":
         raise ProviderAdapterError("unsupported llm triage config schema_version")
     providers = config.get("providers")
@@ -391,6 +452,7 @@ def _provider_chat_endpoint(config: dict[str, Any], provider: str) -> tuple[str,
             )
         return f"{base_url}/inference/chat/completions", model, auth_token, credential_source
     if provider == "deepseek_api":
+        _bootstrap_deepseek_env()
         try:
             # Some DB fallback paths print connection diagnostics to stdout;
             # keep JSON-mode CLI output parseable and report sanitized errors.
@@ -461,6 +523,7 @@ def invoke_provider_json(
 
 def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool) -> dict[str, Any]:
     provider = config["providers"]["deepseek_api"]
+    _bootstrap_deepseek_env()
     with contextlib.redirect_stdout(io.StringIO()):
         resolved = resolve_deepseek_config(
             model=str(provider.get("model") or DEFAULT_DEEPSEEK_MODEL),
@@ -764,6 +827,10 @@ def _enabled_provider_chain(config: dict[str, Any], provider: str) -> list[str]:
         deepseek = providers.get("deepseek_api") if isinstance(providers.get("deepseek_api"), dict) else {}
         if deepseek.get("enabled") is True:
             chain.append("deepseek_api")
+    if provider == "deepseek_api":
+        github_models = providers.get("github_models") if isinstance(providers.get("github_models"), dict) else {}
+        if github_models.get("enabled") is True:
+            chain.append("github_models")
     return list(dict.fromkeys(chain))
 
 
@@ -1033,6 +1100,7 @@ def build_test_plan_advice(
         "model": provider_summary["model"],
         "effective_provider": llm_evidence["provider"],
         "effective_model": llm_evidence["model"],
+        "llm_gate": "ready" if llm_evidence["invoked"] else "degraded",
         "module": module,
         "changed_files": changed_files,
         "test_plan_advice": plan_results,
@@ -1199,6 +1267,7 @@ def build_nightly_scheduler_advice(
         "model": provider_summary["model"],
         "effective_provider": llm_evidence["provider"],
         "effective_model": llm_evidence["model"],
+        "llm_gate": "ready" if llm_evidence["invoked"] else "degraded",
         "changed_files": changed_files,
         "recent_failures": {
             "modules": recent_failure_modules,
@@ -1760,6 +1829,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "model": payload.get("model"),
             "effective_provider": payload.get("effective_provider"),
             "effective_model": payload.get("effective_model"),
+            "llm_gate": payload.get("llm_gate"),
             "module": payload.get("module"),
             "changed_files": payload.get("changed_files") or [],
             "test_plan_advice": payload.get("test_plan_advice") or [],
@@ -1780,6 +1850,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "model": payload.get("model"),
             "effective_provider": payload.get("effective_provider"),
             "effective_model": payload.get("effective_model"),
+            "llm_gate": payload.get("llm_gate"),
             "changed_files": payload.get("changed_files") or [],
             "recent_failures": payload.get("recent_failures") or {},
             "codegraph": payload.get("codegraph") or {},

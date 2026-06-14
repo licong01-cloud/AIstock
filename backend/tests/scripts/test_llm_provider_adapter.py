@@ -39,6 +39,23 @@ def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
         adapter.validate_config(config)
 
 
+def test_validate_deepseek_provider_bootstraps_from_canonical_env_file(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'DEEPSEEK_API_KEY="env-file-secret"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.setenv("AISTOCK_LLM_ENV_FILE", str(env_file))
+
+    payload = adapter.validate_deepseek_provider(adapter.load_config(), require_api_key=True)
+
+    assert payload["has_api_key"] is True
+    assert payload["credential_source"] == "env:DEEPSEEK_API_KEY"
+    assert payload["base_url"] == "https://api.deepseek.com/v1"
+
+
 def test_github_model_catalog_selects_deepseek_r1():
     selector = adapter.load_config()["providers"]["github_models"]["model_selector"]
     catalog = {

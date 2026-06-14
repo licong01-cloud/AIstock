@@ -30,6 +30,7 @@ def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_pat
     assert payload["workflow_gate"] == "ready"
     assert payload["execution_mode"] == "warning_only_advice"
     assert payload["public_artifact"] is True
+    assert payload["llm_gate"] == "degraded"
     assert payload["queue_summary"]["allowed_plan_keys"] == ["l0"]
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["advice_consumption"]["warning_only"] is True
@@ -239,13 +240,38 @@ def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_eviden
     assert payload["llm_invocation_evidence"]["fallback_used"] is True
     assert payload["advised_plan_keys"] == ["l0"]
     assert payload["advice_consumption"]["advice_consumed"] is True
+    assert payload["llm_gate"] == "ready"
+
+
+def test_collect_changed_files_filters_diff_headers_and_bom(tmp_path: Path) -> None:
+    changed_files_file = tmp_path / "changed.txt"
+    changed_files_file.write_text(
+        "\ufeff--- Changes ---\n"
+        "+++ b/scripts/llm_provider_adapter.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "scripts/llm_provider_adapter.py\n"
+        "F:/Dev/AIstock/scripts/nightly_adaptive_scheduler.py\n",
+        encoding="utf-8",
+    )
+
+    collected = scheduler.collect_changed_files(
+        changed_files=["./scripts/llm_provider_adapter.py", "https://example.com/nope"],
+        changed_files_file=changed_files_file,
+        base_ref=None,
+        root=scheduler.ROOT,
+    )
+
+    assert collected == ["scripts/llm_provider_adapter.py"]
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
+    assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
+    assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
+    assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
     assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
