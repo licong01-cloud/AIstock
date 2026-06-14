@@ -30,7 +30,6 @@ from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
 
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
-from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
 from ..services.quantevolver.experiment_config import (
     ensure_qe_risk_policy,
     normalize_label_horizon,
