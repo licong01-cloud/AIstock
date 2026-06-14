@@ -1,0 +1,102 @@
+{
+  "actual": "当前官方独立指标计算仍通过 DataSnapshotManager/FactorValuePipeline 使用 factor_values_realtime/DB snapshot 生成因子值，和回测 bin/h5/factor_data_dir 口径不一致。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260615_BUG-365-bin-h5.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-365",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-14T18:10:51.019411Z",
+  "description": "当前官方独立指标计算存在数据源偏差：应仅将因子值输入源切换到回测使用的 bin/h5/factor_data_dir 生成的离线因子缓存，不得修改独立指标计算的指标定义、窗口口径、输出结构和页面交互。官方独立指标、回测缓存、因子相关性应统一使用同一份回测数据集与因子缓存；factor_values_realtime 仅保留兼容/迁移用途，不参与官方链路。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-f2d6bac1c0f5",
+      "timestamp": "2026-06-14T18:10:51.019406Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "官方独立指标只从 rdagent_assets/factor_values/single 这份由 backfill_factor_cache.py 基于 factor_data_dir/bin/h5 生成的因子值缓存读取输入；指标定义、窗口口径、输出结构、UI/API 交互保持不变；不得 fallback 到 factor_values_realtime。",
+  "first_seen_at": "2026-06-14T18:10:51.019411Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1082,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1082",
+  "last_seen_at": "2026-06-14T18:10:51.019411Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方独立指标仅切换为回测 bin/h5 数据源，不改指标逻辑",
+  "trigger_condition": {
+    "fingerprint": "f2d6bac1c0f5066e385dd30c",
+    "source_event_id": "FE-20260615-f2d6bac1c0f5"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0",
+      "validation_module_registry_l0",
+      "qe_read_l3"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "manual_issue_refinement_non_ui_data_source_bug",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

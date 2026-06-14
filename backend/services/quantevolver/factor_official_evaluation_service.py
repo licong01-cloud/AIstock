@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ from .factor_universe_mask_service import (
     FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
-from .factor_value_pipeline import FactorValuePipeline
+from .factor_value_loader import FactorValueLoader
 
 logger = logging.getLogger("aistock.quantevolver.factor_official_evaluation")
 
@@ -28,6 +29,8 @@ PIPELINE_VERSION = "qe_eval_v2"
 CODE_SOURCE = "qe_code_path"
 _DEFAULT_QLIB_BIN = Path(__file__).resolve().parents[3] / "qlib_bin" / "qlib_bin_20260311"
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
+_OFFICIAL_FACTOR_VALUE_CACHE_DIR = Path(__file__).resolve().parents[3] / "rdagent_assets" / "factor_values"
+_OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
 
 # T15 — factor.recompute.completed emit hook (dw-foundation FactorValueArchiveHandler consumer)
 FACTOR_RECOMPUTE_EVENT_TYPE = "factor.recompute.completed"
@@ -405,8 +408,22 @@ class FactorOfficialEvaluationService:
     def __init__(self) -> None:
         self._eligibility_service = FactorEligibilityService()
         self._universe_service = FactorUniverseMaskService()
-        self._pipeline = FactorValuePipeline()
+        self._factor_value_loader = self._build_official_factor_value_loader()
         self._dispatch_service = None
+
+    @staticmethod
+    def _build_official_factor_value_loader() -> FactorValueLoader:
+        cache_dir = _OFFICIAL_FACTOR_VALUE_CACHE_DIR
+        if any(part.lower() == "factor_values_realtime" for part in cache_dir.parts):
+            raise RuntimeError("official evaluation must not use factor_values_realtime")
+        return FactorValueLoader(source="single", pipeline_dir=str(cache_dir))
+
+    def _get_official_factor_value_loader(self) -> FactorValueLoader:
+        loader = getattr(self, "_factor_value_loader", None)
+        if loader is None:
+            loader = self._build_official_factor_value_loader()
+            self._factor_value_loader = loader
+        return loader
 
     def compute(
         self,
@@ -757,26 +774,27 @@ class FactorOfficialEvaluationService:
             }
 
         as_of_date = f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
-        from .data_snapshot_manager import DataSnapshotManager
-
-        snap_meta = DataSnapshotManager().load_meta(data_date)
+        start_date = _OFFICIAL_FACTOR_WINDOW_START
+        end_date = as_of_date
         universe_meta = self._universe_service.metadata(
-            start_date=snap_meta["start_date"],
-            end_date=snap_meta["end_date"],
+            start_date=start_date,
+            end_date=end_date,
         )
         universe_count = len(
             self._universe_service.get_window_union_instruments(
-                start_date=snap_meta["start_date"],
-                end_date=snap_meta["end_date"],
+                start_date=start_date,
+                end_date=end_date,
                 ensure=False,
             )
         )
+        factor_value_loader = self._get_official_factor_value_loader()
+        available_cache_names = set(factor_value_loader.get_available_factors())
 
         # ── 准备指标计算共享上下文（在因子计算之前，只准备一次）──
         # save_failures: factor names whose _save_metrics call raised (incl. emit
         # failures). Round-1 fix: surface these at service-level so partial
         # success no longer reports overall success=True (Codex Lane B P1.2).
-        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": []}
+        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": [], "cache_failures": []}
         metrics_error = None
         metrics_ctx = None
         calc_batch_id = str(__import__("uuid").uuid4())
@@ -789,8 +807,8 @@ class FactorOfficialEvaluationService:
             qlib_bin_path = self._resolve_qlib_bin_path()
             metrics_ctx = prepare_shared_context(
                 qlib_bin_path=qlib_bin_path,
-                start_date=snap_meta["start_date"],
-                end_date=snap_meta["end_date"],
+                start_date=start_date,
+                end_date=end_date,
             )
             logger.info("指标计算共享上下文准备完成")
         except Exception as e:
@@ -861,25 +879,98 @@ class FactorOfficialEvaluationService:
                 db_result["errors"].append(f"{factor_name}: {e}")
                 db_result["save_failures"].append(factor_name)
 
-        # ── 执行因子计算（每个因子成功后通过回调立即入库）──
-        pipeline_result = self._pipeline.compute_factor_values(
-            factor_names=eligible_names,
-            instruments=None,
-            data_date=data_date,
-            max_workers=max_workers,
-            timeout_per_factor=timeout_per_factor,
-            save_parquet=True,
-            on_factor_success=_on_factor_success,
-        )
+        # ── 读取回测口径因子值缓存（每个因子成功后通过回调立即入库）──
+        factor_results = []
+        success_count = 0
+        failed_count = 0
+        t_values = time.time()
+        single_dir = _OFFICIAL_FACTOR_VALUE_CACHE_DIR / "single"
+
+        for factor_name in eligible_names:
+            factor_t0 = time.time()
+            single_path = single_dir / f"{factor_name}.parquet"
+            if factor_name not in available_cache_names:
+                failed_count += 1
+                cache_error = (
+                    f"离线回测因子值缓存不存在: {single_path}；"
+                    "请先用 backfill_factor_cache.py 基于 factor_data_dir/bin/h5 补齐。"
+                )
+                db_result["errors"].append(f"{factor_name}: {cache_error}")
+                db_result["cache_failures"].append(factor_name)
+                factor_results.append({
+                    "name": factor_name,
+                    "success": False,
+                    "rows": 0,
+                    "nan_rate": "0.0%",
+                    "time": "0.0s",
+                    "error": cache_error,
+                })
+                continue
+
+            try:
+                factor_df = factor_value_loader.load_single_factor(
+                    factor_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                if factor_df is None or factor_df.empty:
+                    raise ValueError(f"离线回测因子值缓存为空: {start_date}~{end_date}")
+                date_index = factor_df.index.get_level_values(0)
+                date_min = date_index.min()
+                date_max = date_index.max()
+                if date_min.strftime("%Y-%m-%d") > start_date:
+                    raise ValueError(
+                        f"离线回测因子值缓存未覆盖起始日: cache_start={date_min.strftime('%Y-%m-%d')}, "
+                        f"required_start={start_date}"
+                    )
+                if date_max.strftime("%Y-%m-%d") < end_date:
+                    raise ValueError(
+                        f"离线回测因子值缓存未覆盖截止日: cache_end={date_max.strftime('%Y-%m-%d')}, "
+                        f"required_end={end_date}"
+                    )
+                value_col = factor_df.columns[0]
+                nan_rate = float(factor_df[value_col].isna().mean()) if len(factor_df) else 0.0
+                _on_factor_success(factor_name, str(single_path), factor_df)
+                elapsed = time.time() - factor_t0
+                success_count += 1
+                factor_results.append({
+                    "name": factor_name,
+                    "success": True,
+                    "rows": len(factor_df),
+                    "nan_rate": f"{nan_rate:.1%}",
+                    "time": f"{elapsed:.1f}s",
+                    "error": None,
+                })
+                del factor_df
+            except Exception as e:
+                failed_count += 1
+                error = str(e)
+                db_result["errors"].append(f"{factor_name}: {error}")
+                db_result["cache_failures"].append(factor_name)
+                factor_results.append({
+                    "name": factor_name,
+                    "success": False,
+                    "rows": 0,
+                    "nan_rate": "0.0%",
+                    "time": f"{time.time() - factor_t0:.1f}s",
+                    "error": error,
+                })
 
         # 释放指标计算上下文
         if metrics_ctx is not None:
             del metrics_ctx
             gc.collect()
 
-        summary = pipeline_result.summary()
-        success_count = pipeline_result.success
-        failed_count = pipeline_result.failed
+        summary = {
+            "total": len(factor_results),
+            "success": success_count,
+            "failed": failed_count,
+            "success_rate": f"{success_count / len(factor_results) * 100:.1f}%" if factor_results else "0%",
+            "output_path": str(single_dir) if success_count else None,
+            "merged_shape": None,
+            "total_elapsed_sec": round(time.time() - t_values, 1),
+            "factor_results": factor_results,
+        }
 
         # 构建错误信息（如果有失败因子）
         error_detail = None
@@ -899,10 +990,12 @@ class FactorOfficialEvaluationService:
         # round-1 fix (Codex Lane B P1.2): save_failures 非空时不再报 success。
         has_db_errors = bool(db_result["errors"])
         save_failures = db_result.get("save_failures", [])
+        cache_failures = db_result.get("cache_failures", [])
         overall_success = (
             db_result["inserted"] > 0
             and not metrics_error
             and not save_failures
+            and not cache_failures
         )
         if success_count > 0 and db_result["inserted"] == 0:
             # 因子计算成功但入库全部失败 — 这是严重错误
@@ -920,6 +1013,16 @@ class FactorOfficialEvaluationService:
                 f"指标/事件入库失败 {len(save_failures)} 个因子: "
                 + ", ".join(save_failures[:5])
                 + (" ..." if len(save_failures) > 5 else "")
+            )
+        if cache_failures:
+            if not error_detail:
+                error_detail = ""
+            else:
+                error_detail += " | "
+            error_detail += (
+                f"离线回测因子值缓存读取失败 {len(cache_failures)} 个因子: "
+                + ", ".join(cache_failures[:5])
+                + (" ..." if len(cache_failures) > 5 else "")
             )
 
         result = {
