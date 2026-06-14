@@ -1,14 +1,12 @@
 # AI-Assisted Development and Safety Context
 
-AIstock is a public source A-share quantitative research and engineering platform. It is designed for local software development, data pipeline diagnostics, quantitative experiment management, backtesting, paper-trading simulation, and research workflow validation.
+AIstock is a public source A-share quantitative research and engineering project. It is designed for local software development, data pipeline diagnostics, quantitative experiment management, backtesting, paper-trading simulation, and research workflow validation.
 
 The project includes components such as a FastAPI backend, a Next.js frontend, TDX market-data integration, QuantEvolver / QE experiment tooling, validation workflows, and local MCP-style developer tools. These tools are intended to help authorized developers inspect project files, local logs, experiment metadata, and development databases in a human-supervised engineering workflow.
 
 ## Repository Scope
 
-The public repository is not a complete standalone deployment package. It does not include all private runtime configuration, credentials, database DDL, RD-Agent API integration code, production infrastructure, or local environment state required to reproduce every deployment workflow.
-
-The repository should therefore be understood as a development and review workspace, not as a ready-to-run production trading product.
+The repository should be understood as a research, development, and review workspace, not as a live-trading product.
 
 ## Terminology
 
@@ -34,13 +32,15 @@ AIstock is intended for:
 AIstock is not intended to:
 
 - Provide consumer-facing investment advice.
+- Provide personalized financial, securities, or trading recommendations.
+- Provide live trading functionality or automated real-money trade execution.
 - Determine financial eligibility or creditworthiness.
 - Execute unauthorized trades or control third-party accounts.
 - Send external messages, marketing, spam, or bulk communications.
 - Access third-party systems without authorization.
 - Perform credential theft, phishing, malware, or other abusive activity.
 
-All AI-assisted development on this project should remain human-supervised, local or otherwise authorized, and limited to legitimate software engineering, research diagnostics, documentation, testing, and validation.
+All AI-assisted development on this project should remain human-supervised, local or otherwise authorized, and limited to legitimate software engineering, research diagnostics, documentation, testing, and validation. The project must not be used for real-money trading, production trade execution, or investment-advice delivery.
 
 ## License Status
 
