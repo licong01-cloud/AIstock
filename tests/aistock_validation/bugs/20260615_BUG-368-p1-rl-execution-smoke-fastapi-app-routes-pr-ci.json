@@ -1,0 +1,100 @@
+{
+  "actual": "测试直接遍历 app.routes[].path；FastAPI 0.137 / Starlette 1.3 将 include_router 结果表现为 _IncludedRouter，app.routes 中没有可直接读取的 /api/v1/rl-execution* path，导致 CI 假失败。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260615_BUG-368-p1-rl-execution-smoke-fastapi-app-routes-pr-ci.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/test_rl_execution_module_visibility.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-368",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-14T20:37:48.773037Z",
+  "description": "BUG-365 PR #1089 在 GitHub Actions rerun 后仍只有 Backend tests (rl_execution_smoke) 失败。失败测试 backend/tests/test_rl_execution_module_visibility.py::test_rl_execution_router_loaded_in_main 断言 /api/v1/rl-execution 路由为空；本地按 CI 依赖安装方式复现 FastAPI 0.137 / Starlette 1.3 后确认 app.routes 变为 _IncludedRouter，旧测试直接读取 route.path 无法看到实际路由，但 app.openapi().paths 已包含 /api/v1/rl-execution*。该问题与 BUG-365 因子缓存改动无关，但会阻塞 PR 全绿与合入，需要独立修复 CI/测试兼容性。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-b61407fa4c70",
+      "timestamp": "2026-06-14T20:37:48.773034Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "rl_execution_smoke 在 FastAPI/Starlette 新版和旧版路由实现下都能确认 backend.main 已暴露 /api/v1/rl-execution* 路由。",
+  "first_seen_at": "2026-06-14T20:37:48.773037Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1090,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1090",
+  "last_seen_at": "2026-06-14T20:37:48.773037Z",
+  "module": "rl_execution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s rl_execution_smoke",
+  "required_verification": [
+    "l0",
+    "rl_execution_smoke",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "rl_execution"
+  ],
+  "title": "P1: rl_execution_smoke 在新版 FastAPI 下路由可见性测试读取 app.routes 失效导致 PR CI 阻塞",
+  "trigger_condition": {
+    "fingerprint": "b61407fa4c70b2095dca5bfe",
+    "source_event_id": "FE-20260615-b61407fa4c70"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:rl_execution",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/tests/test_rl_execution_module_visibility.py::test_rl_execution_router_loaded_in_main",
+    "ui_routes": [
+      "/tests/test_rl_execution_module_visibility.py::test_rl_execution_router_loaded_in_main"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
