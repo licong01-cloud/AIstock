@@ -1,8 +1,13 @@
 {
   "actual": "Research Assistant chat fails on broad natural-language data-sync questions with Unknown MCP profile 'qlib_data'. The assistant should resolve a user intent to a valid MCP profile or safe fallback through unified processing logic, not emit a profile-specific error for one question. This appears to be a generic assistant routing/profile-resolution bug affecting multiple natural-language queries and MCP domains.",
   "allowed_write_scope": [
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+    "backend/tests/research_assistant/test_service.py",
     "tests/aistock_validation/bugs/20260615_BUG-366-research-assistant-generic-mcp-profile-resolution-falls-back-to-invalid.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-366",
@@ -20,6 +25,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260615-5d12984ce56c",
       "timestamp": "2026-06-14T18:39:51.755443Z"
+    },
+    {
+      "timestamp": "2026-06-14T18:47:38.021883Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Root cause is generic Research Assistant MCP catalog/profile resolution drift for newly registered gateway profiles; allowed scope expanded to unified catalog sync logic and focused RA regression tests."
+    },
+    {
+      "timestamp": "2026-06-14T18:50:56.384828Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Added focused Research Assistant catalog tests with hard-coded server/tool counts so regression coverage follows gateway manifest growth instead of stale constants."
     }
   ],
   "evidence_uris": [],
@@ -69,5 +86,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "in_progress"
 }

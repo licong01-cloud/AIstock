@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.services.research_assistant.models import (
     ApprovalCreate,
     ChatTurnRequest,
@@ -951,8 +952,8 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "no direct warehouse tool" not in text
     catalog = result["cards"]["runtime_mcp_catalog"]
     assert catalog["source"] == "gateway_manifest_derived_catalog"
-    assert catalog["manifest_tool_count"] == 345
-    assert catalog["tool_count"] == 345
+    assert catalog["manifest_tool_count"] == len(TOOL_MANIFEST)
+    assert catalog["tool_count"] == len(TOOL_MANIFEST)
     assert result["mode_decision"]["intent_type"] == "capability_inquiry"
     assert result["cards"]["action_proposals"] == []
 
