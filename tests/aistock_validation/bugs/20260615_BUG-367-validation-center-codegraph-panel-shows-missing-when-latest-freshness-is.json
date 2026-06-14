@@ -1,0 +1,110 @@
+{
+  "actual": "UI reports CodeGraph missing; backend summary endpoint was unavailable in the current runtime, and code-level summary depends on history artifacts without exposing effective freshness/stale metadata clearly.",
+  "allowed_write_scope": [
+    "backend/services/validation/history_store.py",
+    "frontend/src/app/validation-center/page.tsx",
+    "frontend/src/lib/validation/api.ts",
+    "backend/tests/test_validation_center_api.py",
+    "tests/aistock_validation/bugs/20260615_BUG-367-validation-center-codegraph-panel-shows-missing-when-latest-freshness-is.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-367",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-14T19:11:00.643374Z",
+  "description": "UI reports CodeGraph missing; backend summary endpoint was unavailable in the current runtime, and code-level summary depends on history artifacts without exposing effective freshness/stale metadata clearly.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-608d47f8f875",
+      "timestamp": "2026-06-14T19:11:00.643370Z"
+    }
+  ],
+  "evidence_uris": [
+    "latest-freshness: workflow_gate=warning effective=fresh source=artifact stale_metadata_warning=true artifact_path=tmp/validation/code-intelligence/latest/codegraph-freshness.json; VC 8012 summary endpoint unreachable during diagnosis"
+  ],
+  "expected": "Validation Center Code Intelligence panel shows CodeGraph fresh or fresh with metadata-stale warning when latest-freshness reports effective=fresh, and remains warning-only for missing graph data.",
+  "first_seen_at": "2026-06-14T19:11:00.643374Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1087,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1087",
+  "last_seen_at": "2026-06-14T19:11:00.643374Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/code_intelligence_adapter.py latest-freshness --refresh-if-stale",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation Center CodeGraph panel shows missing when latest freshness is effectively fresh",
+  "trigger_condition": {
+    "fingerprint": "608d47f8f8750efb1c2486c0",
+    "source_event_id": "FE-20260615-608d47f8f875"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/validation/history_store.py",
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "backend/tests/test_validation_center_api.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/live",
+    "ui_routes": [
+      "/live"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
