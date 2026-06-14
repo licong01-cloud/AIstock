@@ -5,11 +5,22 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "backend" / "scripts" / "run_correlation_compute_wsl.py"
 SERVICE = ROOT / "backend" / "services" / "quantevolver" / "correlation_compute_service.py"
+
+
+class _FakeUniverseMaskService:
+    def metadata(self, **_kwargs):
+        return {
+            "universe_key": "shsz_st_pit_active_v1",
+            "universe_rule_version": "test",
+            "universe_fingerprint_sha256": "fp-test",
+            "index_policy": "st_pit_buy_eligible_reindexed_v1",
+        }
 
 
 def test_correlation_wsl_runner_does_not_import_qe_router_or_stub() -> None:
@@ -47,6 +58,185 @@ def test_correlation_wsl_runner_no_args_returns_structured_usage() -> None:
     assert payload["type"] == "result"
     assert payload["data"]["success"] is False
     assert "usage:" in payload["data"]["error"]
+
+
+
+def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.quantevolver.factor_value_loader import _DEFAULT_PIPELINE_DIR
+
+    cache_dir = svc.get_correlation_factor_cache_dir()
+
+    assert cache_dir.name == "factor_values"
+    assert "factor_values_realtime" not in str(cache_dir)
+    assert str(cache_dir) == os.path.normpath(_DEFAULT_PIPELINE_DIR)
+
+
+def test_correlation_cache_status_reports_offline_orphan_parquets(monkeypatch, tmp_path) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    cache_root = tmp_path / "factor_values"
+    single = cache_root / "single"
+    single.mkdir(parents=True)
+    (cache_root / "_meta.json").write_text(
+        json.dumps(
+            {
+                "factors": {
+                    "factor_a": {
+                        "date_range": "2018-08-01~2026-04-30",
+                        "as_of_date": "2026-04-30",
+                        "data_source_mode": "backtest_factor_data_dir",
+                        "window_train_start": "2018-08-01",
+                        "window_backtest_end": "2026-04-30",
+                    }
+                },
+                "data_freshness_profile": "qe_backtest_coverage",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (single / "factor_a.parquet").write_bytes(b"PAR1")
+    (single / "factor_orphan.parquet").write_bytes(b"PAR1")
+
+    class FakePipeline:
+        def get_cached_singles(self):
+            return [
+                {"factor_name": "factor_a", "size_mb": 1.25},
+                {"factor_name": "factor_orphan", "size_mb": 2.0},
+            ]
+
+        def validate_meta_integrity(self):
+            return {"ok": False, "orphan_parquets": ["factor_orphan"], "factor_count": 1}
+
+        def get_computable_factors(self):
+            return [{"factor_name": "factor_a"}]
+
+    monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", cache_root)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
+
+    status = svc.get_correlation_factor_cache_status()
+
+    assert status["cache_source"] == "offline_research_backtest_factor_values"
+    assert status["cache_root"].endswith("factor_values")
+    assert "factor_values_realtime" not in status["cache_root"]
+    assert status["cached_count"] == 2
+    assert status["disk_factor_count"] == 2
+    assert status["meta_factor_count"] == 1
+    assert status["orphan_parquet_count"] == 1
+    assert status["data_source_mode"] == "backtest_factor_data_dir"
+    assert status["window_train_start"] == "2018-08-01"
+    assert status["window_backtest_end"] == "2026-04-30"
+
+
+def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_path) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.quantevolver.correlation_engine import CorrelationResult
+
+    cache_root = tmp_path / "factor_values"
+    single = cache_root / "single"
+    single.mkdir(parents=True)
+    (cache_root / "_meta.json").write_text(
+        json.dumps(
+            {
+                "factors": {
+                    "factor_a": {"as_of_date": "2026-04-10"}
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    idx = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2026-04-09"), pd.Timestamp("2026-04-10")], ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"value": [1.0, 2.0]}, index=idx).to_parquet(single / "factor_b.parquet")
+
+    class FakePipeline:
+        _output_dir = str(cache_root)
+
+        def validate_meta_integrity(self):
+            return {
+                "ok": False,
+                "factor_count": 1,
+                "top_level_as_of_date": "2026-04-10",
+                "orphan_parquets": ["factor_b"],
+            }
+
+        def get_cached_singles(self):
+            return [{"factor_name": "factor_a"}, {"factor_name": "factor_b"}]
+
+        def clear_snapshot(self):
+            raise AssertionError("correlation must not clear or use realtime snapshot cache")
+
+    class FakeCursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            return None
+
+    class FakeCorrelationEngine:
+        def __init__(self, loader):
+            self.loader = loader
+
+        def compute_full_matrix(self, factor_names, **kwargs):
+            assert factor_names == ["factor_a", "factor_b"]
+            assert kwargs["expected_as_of_date"] == "2026-04-10"
+            assert str(self.loader._pipeline_dir).endswith("factor_values")
+            assert "factor_values_realtime" not in str(self.loader._pipeline_dir)
+            return CorrelationResult(
+                matrix=np.array([[1.0, 0.1], [0.1, 1.0]], dtype=float),
+                factor_names=list(factor_names),
+                as_of_date="2026-04-10",
+                effective_window=252,
+                computation_time_sec=0.01,
+                metadata={"num_high_corr_07": 0, "avg_correlation": 0.1, "hdf5_path": str(tmp_path / "corr.h5")},
+            )
+
+    monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", cache_root)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
+    monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
+    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
+        "eligible_factors": 2,
+        "deleted_pairs": 0,
+        "reset_ineligible_catalog": 0,
+        "reset_orphan_catalog": 0,
+        "reset_all_catalog": 0,
+    })
+    monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
+    monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
+    monkeypatch.setattr(svc, "CorrelationEngine", FakeCorrelationEngine)
+    monkeypatch.setattr(svc.FactorValueLoader, "invalidate_single_cache", lambda factor_name=None: None)
+    monkeypatch.setattr(svc.FactorValueLoader, "invalidate_merged_cache", lambda pipeline_dir=None: None)
+    monkeypatch.setattr("glob.glob", lambda pattern: [])
+
+    result = svc.run_correlation_compute_local(["factor_a", "factor_b"], data_date="20260410")
+
+    assert result["success"] is True
+    assert result["cache_source"] == "offline_research_backtest_factor_values"
+    assert result["cache_root"].endswith("factor_values")
 
 
 def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch, tmp_path) -> None:
@@ -127,10 +317,10 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
                 },
             )
 
-    import backend.services.quantevolver.factor_value_pipeline as pipeline_mod
-
-    monkeypatch.setattr(pipeline_mod, "FactorValuePipeline", FakePipeline)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
+    monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
     monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
         "eligible_factors": 2,
         "deleted_pairs": 0,
@@ -153,3 +343,5 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["success_factor_count"] == 2
     assert result["record_count"] == 1
     assert result["as_of_date"] is None
+    assert result["cache_source"] == "offline_research_backtest_factor_values"
+    assert result["cache_root"] == str(tmp_path)

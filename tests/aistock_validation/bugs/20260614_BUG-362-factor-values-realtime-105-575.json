@@ -2,7 +2,13 @@
   "actual": "因子相关性全量计算当前错误依赖 factor_values_realtime / official evaluation snapshot cache，导致因子库相关性只覆盖 105/575 个未禁用因子，pairs 仅 5460/165025。产品目标是独立指标计算、QE 回测、因子相关性共用离线研究/回测因子值缓存 rdagent_assets/factor_values，覆盖训练到回测窗口（例如 2018-08-01 至 2026-04-30 或其子区间），相关性计算不得使用任何实盘/实时 cache，因为实盘数据不会自动预计算且不是相关性口径。需要修复相关性计算、cache status/overview 和错误提示，使其显式使用离线 factor_values 缓存，并补充回归测试防止再次退回 factor_values_realtime。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260614_BUG-362-factor-values-realtime-105-575.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py",
+    "tests/aistock_validation/history/qe/20260614_124920_l3_qe-read-only-workspace-access-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-362",
@@ -10,7 +16,10 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Correlation compute/status/overview must use offline research backtest cache rdagent_assets/factor_values.",
+    "Correlation compute must not use factor_values_realtime or official-evaluation snapshot cache.",
+    "Regression tests must cover cache source, missing-meta handling, and offline status fields."
   ],
   "created_at": "2026-06-14T03:50:36.298211Z",
   "description": "因子相关性全量计算当前错误依赖 factor_values_realtime / official evaluation snapshot cache，导致因子库相关性只覆盖 105/575 个未禁用因子，pairs 仅 5460/165025。产品目标是独立指标计算、QE 回测、因子相关性共用离线研究/回测因子值缓存 rdagent_assets/factor_values，覆盖训练到回测窗口（例如 2018-08-01 至 2026-04-30 或其子区间），相关性计算不得使用任何实盘/实时 cache，因为实盘数据不会自动预计算且不是相关性口径。需要修复相关性计算、cache status/overview 和错误提示，使其显式使用离线 factor_values 缓存，并补充回归测试防止再次退回 factor_values_realtime。",
@@ -40,7 +49,9 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_l3"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

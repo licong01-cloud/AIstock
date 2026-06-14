@@ -30,6 +30,8 @@ from .factor_value_loader import FactorValueLoader
 
 logger = logging.getLogger("aistock.quantevolver.correlation_compute_service")
 REPO_ROOT = Path(__file__).resolve().parents[3]
+CORRELATION_FACTOR_VALUE_CACHE_DIR = REPO_ROOT / "rdagent_assets" / "factor_values"
+CORRELATION_FACTOR_VALUE_CACHE_SOURCE = "offline_research_backtest_factor_values"
 
 # 模块级缓存：避免每次请求都重新实例化
 _correlation_loader: Optional[FactorValueLoader] = None
@@ -42,6 +44,112 @@ _active_dispatch_task_id: Optional[str] = None
 
 
 _MATRIX_TIMEOUT_SEC = 3600  # 60 分钟 (首次加载 448 因子 ~8min + GEMM ~1min; 后续有合并缓存 ~1min)
+
+
+def get_correlation_factor_cache_dir() -> Path:
+    """Return the offline research/backtest factor cache root used by correlation."""
+    return CORRELATION_FACTOR_VALUE_CACHE_DIR
+
+
+def get_correlation_factor_value_pipeline():
+    """Build a FactorValuePipeline bound to the offline research cache."""
+    from .factor_value_pipeline import FactorValuePipeline
+
+    return FactorValuePipeline(output_dir=str(CORRELATION_FACTOR_VALUE_CACHE_DIR))
+
+
+def get_correlation_factor_value_loader(source: str = "single") -> FactorValueLoader:
+    """Build a FactorValueLoader bound to the offline research cache."""
+    return FactorValueLoader(source=source, pipeline_dir=str(CORRELATION_FACTOR_VALUE_CACHE_DIR))
+
+
+def get_correlation_factor_cache_status() -> Dict[str, Any]:
+    """Return correlation cache status without falling back to realtime snapshot cache."""
+    pipeline = get_correlation_factor_value_pipeline()
+    single_dir = CORRELATION_FACTOR_VALUE_CACHE_DIR / "single"
+    meta_path = CORRELATION_FACTOR_VALUE_CACHE_DIR / "_meta.json"
+    meta: dict[str, Any] = {}
+    if meta_path.is_file():
+        import json as _json
+
+        with meta_path.open("r", encoding="utf-8") as fh:
+            meta = _json.load(fh)
+    factors_meta = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+    disk_names = {
+        item.stem
+        for item in single_dir.glob("*.parquet")
+        if not item.name.startswith("_")
+    } if single_dir.is_dir() else set()
+    meta_names = set(factors_meta.keys())
+    integrity = pipeline.validate_meta_integrity()
+    cached_singles = pipeline.get_cached_singles()
+    total_size_mb = sum(item.get("size_mb", 0) for item in cached_singles)
+    date_range = next(
+        (entry.get("date_range") for entry in factors_meta.values() if entry.get("date_range")),
+        None,
+    )
+    status = {
+        "cached_count": len(cached_singles),
+        "total_computable": len(pipeline.get_computable_factors()),
+        "uncached_count": 0,
+        "uncached_factors": [],
+        "total_size_mb": round(total_size_mb, 1),
+        "as_of_date": meta.get("as_of_date"),
+        "generated_at": meta.get("generated_at"),
+        "date_range": date_range,
+    }
+    status.update({
+        "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+        "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
+        "single_dir": str(single_dir),
+        "meta_path": str(meta_path),
+        "data_source_mode": next(
+            (entry.get("data_source_mode") for entry in factors_meta.values() if entry.get("data_source_mode")),
+            meta.get("data_source_mode") or meta.get("data_freshness_profile"),
+        ),
+        "data_freshness_profile": meta.get("data_freshness_profile"),
+        "window_train_start": next(
+            (entry.get("window_train_start") for entry in factors_meta.values() if entry.get("window_train_start")),
+            meta.get("window_train_start"),
+        ),
+        "window_backtest_end": next(
+            (entry.get("window_backtest_end") for entry in factors_meta.values() if entry.get("window_backtest_end")),
+            meta.get("window_backtest_end"),
+        ),
+        "disk_factor_count": len(disk_names),
+        "meta_factor_count": len(meta_names),
+        "orphan_parquet_count": len(disk_names - meta_names),
+        "orphan_meta_count": len(meta_names - disk_names),
+        "integrity_ok": bool(integrity.get("ok")),
+        "integrity": integrity,
+    })
+    return status
+
+
+def _infer_single_factor_cache_meta(pipeline: Any, factor_name: str) -> Dict[str, Any]:
+    """Infer minimal metadata from an offline single-factor parquet without writing cache files."""
+    import pandas as pd
+
+    single_path = Path(str(pipeline._output_dir)) / "single" / f"{factor_name}.parquet"
+    if not single_path.is_file():
+        raise FileNotFoundError(f"single parquet is missing: {single_path}")
+    df = pd.read_parquet(single_path, columns=[])
+    if not isinstance(df.index, pd.MultiIndex):
+        raise ValueError(f"single parquet must use MultiIndex(datetime, instrument): {single_path}")
+    if len(df.index) == 0:
+        raise ValueError(f"single parquet has no index rows: {single_path}")
+    level = "datetime" if "datetime" in df.index.names else 0
+    dates = pd.to_datetime(df.index.get_level_values(level), errors="coerce")
+    if dates.isna().all():
+        raise ValueError(f"single parquet datetime index cannot be parsed: {single_path}")
+    start = dates.min().strftime("%Y-%m-%d")
+    end = dates.max().strftime("%Y-%m-%d")
+    return {
+        "as_of_date": end,
+        "date_range": f"{start}~{end}",
+        "rows": int(len(df.index)),
+        "inferred_from_parquet": True,
+    }
 
 
 class _CorrelationLogBuffer:
@@ -305,15 +413,12 @@ def _reconcile_correlation_state(reset_all: bool = False) -> Dict[str, int]:
 def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, job_id: str = None, data_date: str = None, **_kwargs):
     """统一相关性计算入口 — 同步函数，在 ThreadPoolExecutor 中执行。
 
-    每次计算前清空所有历史相关性数据，使用独立指标计算的 single/*.parquet 缓存全量重算。
-    data_date: 快照日期 (YYYYMMDD)，指定后使用磁盘快照数据
+    每次计算前清空所有历史相关性数据，使用离线研究/回测 single/*.parquet 缓存全量重算。
+    data_date 仅保留为兼容字段；相关性计算不得切换到 realtime/snapshot cache。
     """
-    # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
-    if not data_date and as_of_date:
-        data_date = as_of_date.replace("-", "")
     universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
     if as_of_date:
-        # Correlation reuses official single-factor cache; its universe metadata must match the ST PIT state.
+        # Correlation reuses the offline research cache; its universe metadata must match the ST PIT state.
         universe_metadata = FactorUniverseMaskService().metadata(
             start_date="2018-08-01",
             end_date=as_of_date,
@@ -388,42 +493,39 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # 3. 清除内存缓存
             FactorValueLoader.invalidate_single_cache()
-            FactorValueLoader.invalidate_merged_cache()
+            FactorValueLoader.invalidate_merged_cache(str(CORRELATION_FACTOR_VALUE_CACHE_DIR))
             _correlation_logs.append("[清空] 内存缓存已清除")
 
             # Phase 1: 检查独立指标缓存完整性
-            # 相关性计算强依赖独立指标管线产出的 single/ 缓存，不再自行执行因子代码
-            from .factor_value_pipeline import FactorValuePipeline
-            pipeline = FactorValuePipeline()
+            # 相关性计算强依赖离线研究/回测 single/ 缓存，不再读取 realtime/snapshot cache。
+            pipeline = get_correlation_factor_value_pipeline()
+            _correlation_logs.append(
+                f"[缓存源] 使用离线研究/回测因子缓存: {CORRELATION_FACTOR_VALUE_CACHE_DIR}"
+            )
 
-            # ── Phase 0: meta 权威性自检 ──
-            # 在任何基于 _meta.json 的逻辑之前, 先确认 disk ↔ meta 双向一致、单一快照、字段完整
-            # 任一项不通过立即失败, 禁止基于不可信 meta 继续
+            # Phase 0: cache integrity visibility.
+            # Offline research caches may have all single/*.parquet files but stale/incomplete
+            # _meta.json. Correlation must not fall back to realtime cache; it proceeds with
+            # parquet as availability source and validates/infers metadata below.
             integrity = pipeline.validate_meta_integrity()
             if not integrity.get("ok"):
-                _error_msg = (
-                    f"meta 权威性自检未通过: "
+                _warning_msg = (
+                    f"offline factor cache meta integrity warning: "
                     f"orphan_parquets={len(integrity.get('orphan_parquets') or [])}, "
                     f"orphan_meta_entries={len(integrity.get('orphan_meta_entries') or [])}, "
                     f"as_of_date_distribution={integrity.get('as_of_date_distribution')}, "
                     f"incomplete_entries={len(integrity.get('incomplete_entries') or [])}, "
                     f"top_level_aod_mismatch={integrity.get('top_level_aod_mismatch')}, "
                     f"factor_count={integrity.get('factor_count')}, "
-                    f"error={integrity.get('error')}"
+                    f"error={integrity.get('error')}; continue with offline single/*.parquet "
+                    "and infer missing request-factor metadata in memory only"
                 )
-                _correlation_logs.append(f"[Phase0 自检] {_error_msg}", "ERROR")
-                _correlation_progress.finish("failed", _error_msg)
-                _update_job_status(job_id, "failed")
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": _error_msg,
-                    "integrity": integrity,
-                }
-            _correlation_logs.append(
-                f"[Phase0 自检] 通过: factor_count={integrity['factor_count']}, "
-                f"as_of_date={integrity['top_level_as_of_date']}"
-            )
+                _correlation_logs.append(f"[Phase0 cache check] {_warning_msg}", "WARN")
+            else:
+                _correlation_logs.append(
+                    f"[Phase0 cache check] ok: factor_count={integrity['factor_count']}, "
+                    f"as_of_date={integrity['top_level_as_of_date']}"
+                )
 
             cached_singles = pipeline.get_cached_singles()
             cached_names = {c["factor_name"] for c in cached_singles}
@@ -442,8 +544,8 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 )
                 if len(missing_factors) == len(factor_names):
                     _error_msg = (
-                        f"全部 {len(factor_names)} 个因子均无独立指标缓存 (single/*.parquet)。"
-                        "请先通过 /api/v1/quantevolver/official-evaluation/compute 完成独立指标计算，"
+                        f"全部 {len(factor_names)} 个因子均无离线研究/回测因子值缓存 (single/*.parquet)。"
+                        f"请先补齐 {CORRELATION_FACTOR_VALUE_CACHE_DIR}，"
                         "然后再触发相关性计算。"
                     )
                     _correlation_logs.append(f"[缓存检查] {_error_msg}", "ERROR")
@@ -454,7 +556,9 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                         "status": "failed",
                         "error": _error_msg,
                         "missing_factors": missing_factors,
-                        "hint": "run_official_evaluation_first",
+                        "hint": "run_offline_factor_cache_backfill_first",
+                        "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+                        "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
                     }
 
             compute_factors = [f for f in factor_names if f in cached_names]
@@ -482,59 +586,71 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             )
 
             if not compute_factors:
-                _correlation_logs.append("无可计算的因子，终止", "ERROR")
-                logger.error("无可计算的因子")
-                _correlation_progress.finish("failed", "无可计算的因子")
+                _correlation_logs.append("No computable factors; stop", "ERROR")
+                logger.error("No computable factors")
+                _correlation_progress.finish("failed", "No computable factors")
                 _update_job_status(job_id, "failed")
                 return {
                     "success": False,
                     "status": "failed",
-                    "error": "无可计算的因子",
+                    "error": "No computable factors",
                 }
 
-            # ═══ Phase 1.5: 全量 as_of_date 一致性校验 ═══
+            # Phase 1.5: as_of_date consistency check.
             _meta_path = os.path.join(pipeline._output_dir, "_meta.json")
-            if not os.path.isfile(_meta_path):
-                _error_msg = (
-                    f"_meta.json 不存在 ({_meta_path})，"
-                    "请先完成独立指标计算以生成因子元数据"
+            _meta_data: dict[str, Any] = {"factors": {}}
+            if os.path.isfile(_meta_path):
+                import json as _json
+                with open(_meta_path, "r", encoding="utf-8") as _mf:
+                    _meta_data = _json.load(_mf)
+            else:
+                _correlation_logs.append(
+                    f"[metadata check] _meta.json is missing ({_meta_path}); "
+                    "infer request-factor as_of_date/date_range from offline parquet",
+                    "WARN",
                 )
-                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
-                _correlation_progress.finish("failed", _error_msg)
-                _update_job_status(job_id, "failed")
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": _error_msg,
-                }
-
-            import json as _json
-            with open(_meta_path, "r", encoding="utf-8") as _mf:
-                _meta_data = _json.load(_mf)
             _factors_meta = _meta_data.get("factors", {})
 
-            # 检查每个因子是否都有 meta 记录
-            _missing_meta = [fn for fn in compute_factors if fn not in _factors_meta]
+            # Infer missing or incomplete metadata in memory only; do not write cache files.
+            _runtime_inferred_meta: dict[str, dict] = {}
+            _missing_meta = [
+                fn
+                for fn in compute_factors
+                if not isinstance(_factors_meta.get(fn), dict) or not _factors_meta[fn].get("as_of_date")
+            ]
             if _missing_meta:
-                _error_msg = (
-                    f"{len(_missing_meta)} 个因子缺少 _meta.json 记录，"
-                    f"请先完成独立指标计算: {_missing_meta[:10]}"
-                    + (f"... 等 {len(_missing_meta)} 个" if len(_missing_meta) > 10 else "")
+                _correlation_logs.append(
+                    f"[一致性校验] {_meta_path} 缺少 {len(_missing_meta)} 个因子记录，"
+                    "将从离线 parquet 只读推断 date_range/as_of_date"
                 )
-                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
-                _correlation_progress.finish("failed", _error_msg)
-                _update_job_status(job_id, "failed")
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": _error_msg,
-                    "missing_meta_factors": _missing_meta,
-                }
+                try:
+                    for _fn in _missing_meta:
+                        _runtime_inferred_meta[_fn] = _infer_single_factor_cache_meta(pipeline, _fn)
+                except Exception as exc:
+                    _error_msg = (
+                        f"{len(_missing_meta)} 个因子缺少 _meta.json 记录，且无法从离线 parquet 推断元数据: {exc}. "
+                        f"请先补齐离线研究/回测因子缓存元数据: {_missing_meta[:10]}"
+                        + (f"... 等 {len(_missing_meta)} 个" if len(_missing_meta) > 10 else "")
+                    )
+                    _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                    _correlation_progress.finish("failed", _error_msg)
+                    _update_job_status(job_id, "failed")
+                    return {
+                        "success": False,
+                        "status": "failed",
+                        "error": _error_msg,
+                        "missing_meta_factors": _missing_meta,
+                        "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+                        "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
+                    }
 
             # 全量校验 as_of_date 一致性
             _as_of_dates: dict = {}
             for _fn in compute_factors:
-                _aod = _factors_meta[_fn].get("as_of_date")
+                _meta_entry = _factors_meta.get(_fn)
+                if not isinstance(_meta_entry, dict) or not _meta_entry.get("as_of_date"):
+                    _meta_entry = _runtime_inferred_meta.get(_fn, {})
+                _aod = _meta_entry.get("as_of_date")
                 _as_of_dates.setdefault(_aod, []).append(_fn)
 
             if len(_as_of_dates) > 1:
@@ -550,6 +666,12 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                     "as_of_date_distribution": _detail,
                 }
             _aod_value = list(_as_of_dates.keys())[0] if _as_of_dates else "unknown"
+            if not as_of_date and _aod_value != "unknown":
+                universe_metadata = FactorUniverseMaskService().metadata(
+                    start_date="2018-08-01",
+                    end_date=_aod_value,
+                    universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
+                )
 
             # ── Bug E 修复: 调用方 as_of_date 必须与 meta 中实际值对齐 ──
             # 若调用方显式指定 as_of_date, 它必须与 meta 中的实际值完全匹配, 否则拒绝计算
@@ -573,7 +695,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # Phase 2: 计算相关性
             _correlation_progress.advance(phase="matrix_compute", phase_label="计算相关性矩阵", done=0, total=1)
-            loader = FactorValueLoader(source="single")
+            loader = get_correlation_factor_value_loader(source="single")
             engine = CorrelationEngine(loader)
             phase2_t0 = time.time()
 
@@ -688,6 +810,8 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 "phase3_elapsed_sec": phase3_elapsed,
                 "data_date": data_date,
                 "as_of_date": as_of_date,
+                "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+                "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
             }
 
         except Exception as e:
@@ -704,21 +828,14 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 "error": error_msg,
                 "data_date": data_date,
                 "as_of_date": as_of_date,
+                "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+                "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
                 "traceback": traceback.format_exc().splitlines()[-20:] if not was_cancelled else None,
             }
         finally:
             if timeout_timer is not None:
                 timeout_timer.cancel()
             _stop_event.clear()
-
-            # 清除快照内存缓存（如果使用了快照模式）
-            if data_date and pipeline is not None:
-                try:
-                    pipeline.clear_snapshot()
-                    logger.info(f"已清除快照内存缓存: {data_date}")
-                except Exception as e:
-                    logger.error(f"清除快照缓存失败: {e}", exc_info=True)
-                    raise
 
             # 强制内存清理：无论成功/失败/取消，都释放大对象
             try:
