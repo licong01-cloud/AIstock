@@ -54,8 +54,8 @@ class FactorValueLoader:
 
     # ── 类级别单因子 DataFrame 缓存 ──
     # 所有实例共享，避免 pair 端点每次请求重新加载 parquet
-    # 格式: {factor_name: (DataFrame, loaded_timestamp)}
-    _single_cache: ClassVar[Dict[str, Tuple[pd.DataFrame, float]]] = {}
+    # 格式: {(single_dir, factor_name): (DataFrame, loaded_timestamp)}
+    _single_cache: ClassVar[Dict[Tuple[str, str], Tuple[pd.DataFrame, float]]] = {}
     _single_cache_lock: ClassVar[threading.Lock] = threading.Lock()
     _SINGLE_CACHE_TTL: ClassVar[int] = 3600  # 1 小时过期
 
@@ -64,7 +64,9 @@ class FactorValueLoader:
         """手动清除单因子缓存。factor_name=None 时清除全部。"""
         with cls._single_cache_lock:
             if factor_name:
-                cls._single_cache.pop(factor_name, None)
+                for key in list(cls._single_cache.keys()):
+                    if key[1] == factor_name:
+                        cls._single_cache.pop(key, None)
             else:
                 cls._single_cache.clear()
 
@@ -244,10 +246,11 @@ class FactorValueLoader:
             MultiIndex(datetime, instrument), column=[factor_name]
         """
         now = _time.time()
+        cache_key = (os.path.normcase(os.path.abspath(os.path.normpath(self._single_dir))), factor_name)
 
         # 1) 尝试从缓存读取完整 DataFrame
         with self._single_cache_lock:
-            cached = self._single_cache.get(factor_name)
+            cached = self._single_cache.get(cache_key)
             if cached is not None:
                 cached_df, cached_at = cached
                 if now - cached_at < self._SINGLE_CACHE_TTL:
@@ -264,7 +267,7 @@ class FactorValueLoader:
                     return df
                 else:
                     # TTL 过期
-                    del self._single_cache[factor_name]
+                    del self._single_cache[cache_key]
 
         # 2) 缓存未命中，从 parquet 加载
         fpath = os.path.join(self._single_dir, f"{factor_name}.parquet")
@@ -284,7 +287,7 @@ class FactorValueLoader:
 
         # 3) 存入缓存（存完整 DataFrame，不含日期过滤）
         with self._single_cache_lock:
-            self._single_cache[factor_name] = (df, now)
+            self._single_cache[cache_key] = (df, now)
 
         # 4) 按日期范围过滤后返回
         if start_date or end_date:
