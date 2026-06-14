@@ -29,8 +29,8 @@
   "expected": "官方独立指标只从 rdagent_assets/factor_values/single 这份由 backfill_factor_cache.py 基于 factor_data_dir/bin/h5 生成的因子值缓存读取输入；指标定义、窗口口径、输出结构、UI/API 交互保持不变；不得 fallback 到 factor_values_realtime。",
   "first_seen_at": "2026-06-14T18:10:51.019411Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5d52b057a9be4ff7fa27a2daf04fce53f34d825f",
+  "fixed_at": "2026-06-14T21:20:19.937005Z",
   "github_issue_number": 1082,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1082",
   "last_seen_at": "2026-06-14T18:10:51.019411Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1089",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -85,6 +86,16 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "validation_evidence": [
+    "python -m py_compile backend/services/quantevolver/factor_official_evaluation_service.py backend/services/quantevolver/factor_value_loader.py backend/tests/quantevolver/test_official_evaluation_cache_source.py -> passed",
+    "ruff check backend/services/quantevolver/factor_official_evaluation_service.py backend/services/quantevolver/factor_value_loader.py backend/tests/quantevolver/test_official_evaluation_cache_source.py -> passed",
+    "pytest backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_factor_emit_hook.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/test_correlation_compute_independence.py backend/tests/test_factor_st_pit_metrics_cache.py -q -> 46 passed",
+    "python -m nox -s rl_execution_smoke -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "PowerShell env QE_READ_L3_SKIP_UI=1; python -m nox -s qe_read_l3 -> passed",
+    "python -m nox -s qe_data_contract_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
