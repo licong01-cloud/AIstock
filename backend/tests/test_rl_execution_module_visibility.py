@@ -29,6 +29,21 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RL_EXECUTION_DIR = REPO_ROOT / "backend" / "services" / "rl_execution"
 RL_EXECUTION_INIT = RL_EXECUTION_DIR / "__init__.py"
+RL_EXECUTION_PREFIX = "/api/v1/rl-execution"
+
+
+def _registered_path_set(app: object) -> set[str]:
+    """Return concrete API paths across Starlette route storage variants."""
+    openapi = getattr(app, "openapi", None)
+    if callable(openapi):
+        schema = openapi()
+        paths = schema.get("paths", {}) if isinstance(schema, dict) else {}
+        return {str(path) for path in paths}
+    return {
+        str(path)
+        for route in getattr(app, "routes", [])
+        if (path := getattr(route, "path", ""))
+    }
 
 
 def test_gitignore_does_not_mask_rl_execution() -> None:
@@ -76,11 +91,8 @@ def test_rl_execution_router_loaded_in_main() -> None:
     main = importlib.import_module("backend.main")
     app = getattr(main, "app", None)
     assert app is not None, "backend.main.app is missing"
-    paths = {
-        getattr(route, "path", "")
-        for route in getattr(app, "routes", [])
-    }
-    rl_paths = [p for p in paths if p and p.startswith("/api/v1/rl-execution")]
+    paths = _registered_path_set(app)
+    rl_paths = [p for p in paths if p.startswith(RL_EXECUTION_PREFIX)]
     assert rl_paths, (
         "Expected at least one /api/v1/rl-execution* route registered on backend.main.app"
     )
