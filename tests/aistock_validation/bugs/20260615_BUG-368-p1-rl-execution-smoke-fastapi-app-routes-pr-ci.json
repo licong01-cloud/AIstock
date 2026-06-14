@@ -27,8 +27,8 @@
   "expected": "rl_execution_smoke 在 FastAPI/Starlette 新版和旧版路由实现下都能确认 backend.main 已暴露 /api/v1/rl-execution* 路由。",
   "first_seen_at": "2026-06-14T20:37:48.773037Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67563fb35c1cd636e957d8c77ec394ac039b151f",
+  "fixed_at": "2026-06-14T21:03:40.631203Z",
   "github_issue_number": 1090,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1090",
   "last_seen_at": "2026-06-14T20:37:48.773037Z",
@@ -36,6 +36,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1091",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "rl_execution"
   ],
@@ -83,6 +84,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m py_compile backend/tests/test_rl_execution_module_visibility.py -> passed",
+    "ruff check backend/tests/test_rl_execution_module_visibility.py -> passed",
+    "python -m nox -s rl_execution_smoke -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
