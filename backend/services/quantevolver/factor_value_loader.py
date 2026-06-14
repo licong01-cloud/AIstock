@@ -36,7 +36,7 @@ _DEFAULT_PARQUET = os.path.join(
 _DEFAULT_PIPELINE_DIR = os.path.join(
     os.path.dirname(__file__),
     "..", "..", "..",
-    "rdagent_assets", "factor_values_realtime",
+    "rdagent_assets", "factor_values",
 )
 
 
