@@ -178,6 +178,8 @@ class FakeQeCustomEvoService:
 
 
 class FakeQeArchiveRepository:
+    last_leaderboard_kwargs: dict[str, object] = {}
+
     def get_archive_summary(self) -> dict[str, object]:
         return {
             "run_count": 7,
@@ -204,7 +206,7 @@ class FakeQeArchiveRepository:
         return [{"logical_name": "leaderboard", "view_name": "qe_run_leaderboard", "available": True, "row_count": 5}]
 
     def query_run_leaderboard(self, **kwargs: object) -> list[dict[str, object]]:
-        del kwargs
+        FakeQeArchiveRepository.last_leaderboard_kwargs = dict(kwargs)
         return [
             {
                 "run_id": "run-best",
@@ -1234,21 +1236,47 @@ def test_bug_357_qe_warehouse_health_business_reply_without_diagnostics() -> Non
 
 def test_bug_357_qe_warehouse_leaderboard_business_reply_without_diagnostics() -> None:
     svc = _chat_service_with_qe_fakes()
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
 
     result = svc.chat_turn(ChatTurnRequest(message="\u67e5\u770b QE run leaderboard\uff0c\u544a\u8bc9\u6211\u6700\u597d\u7684\u6a21\u578b\u548c\u5173\u952e\u6307\u6807"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "QE run leaderboard \u6c47\u603b\u5982\u4e0b" in text
-    assert "\u5f53\u524d\u5217\u8868\u9996\u4f4d" in text
+    assert "已按 QE 数仓 leaderboard 查询回测收益排行" in text
+    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一" in text
+    assert "| 排名 | 年化收益/CAGR | Run | 实验 | Task | Loop | 模型 | Sharpe | IR | 最大回撤 | IC/ICIR | 完成时间 |" in text
     assert "run-best" in text
     assert "CatBoost" in text
-    assert "cagr=0.22" in text
+    assert "22.00%" in text
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "qe_warehouse"
     assert route["tool_name"] == "qe_archive_query_run_leaderboard"
     summary = result["cards"]["mcp_summary_result"]
     assert summary["response_mode"] == "qe_warehouse_business_summary"
     assert summary["summary_kind"] == "query_run_leaderboard"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+
+
+def test_bug_376_qe_archive_best_return_question_gets_human_leaderboard_answer() -> None:
+    svc = _chat_service_with_qe_fakes()
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一的是 exp_completed" in text
+    assert "CAGR=22.00%" in text
+    assert "run=run-best" in text
+    assert "模型=CatBoost" in text
+    assert "| 1 | 22.00% | run-best | exp_completed | task-custom-1 | - | CatBoost | 1.4 | 1.1 | - | ICIR=0.8 | 2026-06-13T09:00:00+08:00 |" in text
+    assert "run_count=7" not in text
+    assert "pending_outbox=1" not in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    assert route["side_effect"] == "read_only"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["summary_kind"] == "query_run_leaderboard"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
 
 
 def test_bug_357_qe_draft_does_not_auto_execute_or_surface_insufficient_evidence() -> None:
