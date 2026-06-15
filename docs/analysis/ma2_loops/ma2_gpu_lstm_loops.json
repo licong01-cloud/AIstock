@@ -1,0 +1,802 @@
+[
+ {
+  "label": "MA2G-VOL12 s42",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_atr_compression",
+   "m_vol_of_vol_20d",
+   "m_idio_vol_60d",
+   "neg_momentum_volatility_ratio",
+   "liquidity_adjusted_volatility",
+   "neg_volatility_breakout_momentum_v2",
+   "neg_volatility_10D",
+   "m_intraday_range_compress",
+   "m_tech_atr_ratio_14d",
+   "m_ind_residual_vol_ratio",
+   "neg_turnover_adjusted_volatility",
+   "conditional_momentum_volatility"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a4_vol_lstm",
+   "loop_desc": "MA2G-VOL12 s42",
+   "objectives": [
+    "alpha4_discovery",
+    "volatility_domain",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 42,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 1
+ },
+ {
+  "label": "MA2G-VOL12 s888",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_atr_compression",
+   "m_vol_of_vol_20d",
+   "m_idio_vol_60d",
+   "neg_momentum_volatility_ratio",
+   "liquidity_adjusted_volatility",
+   "neg_volatility_breakout_momentum_v2",
+   "neg_volatility_10D",
+   "m_intraday_range_compress",
+   "m_tech_atr_ratio_14d",
+   "m_ind_residual_vol_ratio",
+   "neg_turnover_adjusted_volatility",
+   "conditional_momentum_volatility"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a4_vol_lstm",
+   "loop_desc": "MA2G-VOL12 s888",
+   "objectives": [
+    "alpha4_discovery",
+    "volatility_domain",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 888,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 2
+ },
+ {
+  "label": "MA2G-VOL12 s2024",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_atr_compression",
+   "m_vol_of_vol_20d",
+   "m_idio_vol_60d",
+   "neg_momentum_volatility_ratio",
+   "liquidity_adjusted_volatility",
+   "neg_volatility_breakout_momentum_v2",
+   "neg_volatility_10D",
+   "m_intraday_range_compress",
+   "m_tech_atr_ratio_14d",
+   "m_ind_residual_vol_ratio",
+   "neg_turnover_adjusted_volatility",
+   "conditional_momentum_volatility"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a4_vol_lstm",
+   "loop_desc": "MA2G-VOL12 s2024",
+   "objectives": [
+    "alpha4_discovery",
+    "volatility_domain",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 2024,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 3
+ },
+ {
+  "label": "MA2G-VOL12 s2026",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_atr_compression",
+   "m_vol_of_vol_20d",
+   "m_idio_vol_60d",
+   "neg_momentum_volatility_ratio",
+   "liquidity_adjusted_volatility",
+   "neg_volatility_breakout_momentum_v2",
+   "neg_volatility_10D",
+   "m_intraday_range_compress",
+   "m_tech_atr_ratio_14d",
+   "m_ind_residual_vol_ratio",
+   "neg_turnover_adjusted_volatility",
+   "conditional_momentum_volatility"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a4_vol_lstm",
+   "loop_desc": "MA2G-VOL12 s2026",
+   "objectives": [
+    "alpha4_discovery",
+    "volatility_domain",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 2026,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 4
+ },
+ {
+  "label": "MA2G-VOL12 s12345",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_atr_compression",
+   "m_vol_of_vol_20d",
+   "m_idio_vol_60d",
+   "neg_momentum_volatility_ratio",
+   "liquidity_adjusted_volatility",
+   "neg_volatility_breakout_momentum_v2",
+   "neg_volatility_10D",
+   "m_intraday_range_compress",
+   "m_tech_atr_ratio_14d",
+   "m_ind_residual_vol_ratio",
+   "neg_turnover_adjusted_volatility",
+   "conditional_momentum_volatility"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a4_vol_lstm",
+   "loop_desc": "MA2G-VOL12 s12345",
+   "objectives": [
+    "alpha4_discovery",
+    "volatility_domain",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 12345,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 5
+ },
+ {
+  "label": "MA2G-MARG10 s42",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_md_rz_rq_sentiment",
+   "dynamic_flow_volatility_sentiment",
+   "ChipWinnerRateEliteBuyIntensity",
+   "sentiment_order_imbalance",
+   "m_turnover_mf_divergence",
+   "m_gap_frequency_20d",
+   "neg_Composite_Factor_Multi_Dim",
+   "dynamic_valuation_factor",
+   "bid_ask_spread_change_factor",
+   "small_order_flow_intensity"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a5_marg_lstm",
+   "loop_desc": "MA2G-MARG10 s42",
+   "objectives": [
+    "alpha5_discovery",
+    "margin_sentiment",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 42,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 6
+ },
+ {
+  "label": "MA2G-MARG10 s888",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_md_rz_rq_sentiment",
+   "dynamic_flow_volatility_sentiment",
+   "ChipWinnerRateEliteBuyIntensity",
+   "sentiment_order_imbalance",
+   "m_turnover_mf_divergence",
+   "m_gap_frequency_20d",
+   "neg_Composite_Factor_Multi_Dim",
+   "dynamic_valuation_factor",
+   "bid_ask_spread_change_factor",
+   "small_order_flow_intensity"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a5_marg_lstm",
+   "loop_desc": "MA2G-MARG10 s888",
+   "objectives": [
+    "alpha5_discovery",
+    "margin_sentiment",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 888,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 7
+ },
+ {
+  "label": "MA2G-MARG10 s2024",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_md_rz_rq_sentiment",
+   "dynamic_flow_volatility_sentiment",
+   "ChipWinnerRateEliteBuyIntensity",
+   "sentiment_order_imbalance",
+   "m_turnover_mf_divergence",
+   "m_gap_frequency_20d",
+   "neg_Composite_Factor_Multi_Dim",
+   "dynamic_valuation_factor",
+   "bid_ask_spread_change_factor",
+   "small_order_flow_intensity"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a5_marg_lstm",
+   "loop_desc": "MA2G-MARG10 s2024",
+   "objectives": [
+    "alpha5_discovery",
+    "margin_sentiment",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 2024,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 8
+ },
+ {
+  "label": "MA2G-MARG10 s2026",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_md_rz_rq_sentiment",
+   "dynamic_flow_volatility_sentiment",
+   "ChipWinnerRateEliteBuyIntensity",
+   "sentiment_order_imbalance",
+   "m_turnover_mf_divergence",
+   "m_gap_frequency_20d",
+   "neg_Composite_Factor_Multi_Dim",
+   "dynamic_valuation_factor",
+   "bid_ask_spread_change_factor",
+   "small_order_flow_intensity"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a5_marg_lstm",
+   "loop_desc": "MA2G-MARG10 s2026",
+   "objectives": [
+    "alpha5_discovery",
+    "margin_sentiment",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 2026,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 9
+ },
+ {
+  "label": "MA2G-MARG10 s12345",
+  "node_id": "wsl2-5080",
+  "model_id": "__seed_LSTM_10D_hs64_d02__",
+  "factor_keys": [
+   "m_md_rz_rq_sentiment",
+   "dynamic_flow_volatility_sentiment",
+   "ChipWinnerRateEliteBuyIntensity",
+   "sentiment_order_imbalance",
+   "m_turnover_mf_divergence",
+   "m_gap_frequency_20d",
+   "neg_Composite_Factor_Multi_Dim",
+   "dynamic_valuation_factor",
+   "bid_ask_spread_change_factor",
+   "small_order_flow_intensity"
+  ],
+  "strategy_id": "score_weighted_topk_v2",
+  "label_horizon": 20,
+  "runtime_flags": {
+   "group": "a5_marg_lstm",
+   "loop_desc": "MA2G-MARG10 s12345",
+   "objectives": [
+    "alpha5_discovery",
+    "margin_sentiment",
+    "multi_alpha_sourcing"
+   ],
+   "random_seed": 12345,
+   "seed_policy": "fixed",
+   "design_round": "MA2",
+   "archive_policy": "AUTO"
+  },
+  "execution_algo": "V25_1_SMALL_CAP",
+  "strategy_params": {
+   "topk": 25,
+   "n_drop": 2,
+   "max_n_drop": 2,
+   "max_weight": 0.05,
+   "stock_pool": "filtered_pool_20260428",
+   "risk_policy": {
+    "enabled": true,
+    "providers": [
+     "st_pit"
+    ],
+    "hard_actions": [
+     "block_buy",
+     "force_exit"
+    ],
+    "score_overlay": {
+     "enabled": false,
+     "positive_multiplier_cap": 1.1,
+     "negative_multiplier_floor": 0.7
+    },
+    "policy_version": "stock_event_risk_policy_v1",
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "strict_data_ready": true,
+    "visible_time_mode": "next_trading_session"
+   },
+   "initial_cash": 10000000,
+   "label_horizon": 20,
+   "weight_method": "softmax",
+   "unfilled_handler": "TAIL_SUBSTITUTE",
+   "max_position_ratio": 0.95,
+   "unfilled_backup_depth": 15,
+   "max_single_order_value": 5000000,
+   "sector_blacklist_enabled": true
+  },
+  "execution_algo_params": {
+   "device": "cuda",
+   "min_cost": 5,
+   "max_buckets": 12,
+   "tolerance_bps": 10,
+   "commission_rate": 0.00025,
+   "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+   "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+  },
+  "stock_pool": "filtered_pool_20260428",
+  "backtest_only": false,
+  "loop_index": 10
+ }
+]
