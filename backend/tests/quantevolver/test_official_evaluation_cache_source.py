@@ -16,7 +16,7 @@ class _DummyEligibility:
     def __init__(self, names: list[str]):
         self._names = names
 
-    def list_eligible_factors(self, factor_names=None, include_disabled=True):
+    def list_eligible_factors(self, factor_names=None, include_disabled=True, source_mode="official_offline"):
         names = factor_names or self._names
         return [{"factor_name": name} for name in names]
 
@@ -121,6 +121,9 @@ def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeyp
     real_import = builtins.__import__
     monkeypatch.setattr(builtins, "__import__", _guard_import)
 
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+
+
     service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
     service._eligibility_service = _DummyEligibility(["Alpha_Test"])
     service._universe_service = _DummyUniverse()
@@ -164,6 +167,7 @@ def test_compute_local_fails_fast_when_backtest_cache_window_is_incomplete(monke
     monkeypatch.setattr(engine, "compute_single_factor_metrics", lambda *args, **kwargs: {"metrics": {}})
     monkeypatch.setattr(svc, "get_conn", lambda: _Conn())
 
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
     service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
     service._eligibility_service = _DummyEligibility(["Alpha_Test"])
     service._universe_service = _DummyUniverse()

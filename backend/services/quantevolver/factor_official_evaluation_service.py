@@ -21,12 +21,13 @@ from .factor_universe_mask_service import (
 )
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_value_loader import FactorValueLoader
+from .wsl_runtime_guard import assert_wsl_runtime
 
 logger = logging.getLogger("aistock.quantevolver.factor_official_evaluation")
 
 CALC_ENGINE = "qe_eval_v2"
 PIPELINE_VERSION = "qe_eval_v2"
-CODE_SOURCE = "qe_code_path"
+CODE_SOURCE = "code_text"
 _DEFAULT_QLIB_BIN = Path(__file__).resolve().parents[3] / "qlib_bin" / "qlib_bin_20260311"
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
 _OFFICIAL_FACTOR_VALUE_CACHE_DIR = Path(__file__).resolve().parents[3] / "rdagent_assets" / "factor_values"
@@ -470,6 +471,7 @@ class FactorOfficialEvaluationService:
         eligible = self._eligibility_service.list_eligible_factors(
             factor_names=factor_names,
             include_disabled=include_disabled,
+            source_mode="official_offline",
         )
         eligible_names = [row["factor_name"] for row in eligible]
         skipped = sorted(set(requested) - set(eligible_names)) if requested else []
@@ -753,6 +755,7 @@ class FactorOfficialEvaluationService:
         max_workers: int = 4,
         timeout_per_factor: int = 600,
     ) -> Dict[str, Any]:
+        assert_wsl_runtime("official_evaluation_local_compute")
         if not data_date:
             raise ValueError("data_date 参数必填")
 
@@ -760,6 +763,7 @@ class FactorOfficialEvaluationService:
         eligible = self._eligibility_service.list_eligible_factors(
             factor_names=factor_names,
             include_disabled=include_disabled,
+            source_mode="official_offline",
         )
         eligible_names = [row["factor_name"] for row in eligible]
         skipped = sorted(set(requested) - set(eligible_names)) if requested else []
@@ -892,8 +896,8 @@ class FactorOfficialEvaluationService:
             if factor_name not in available_cache_names:
                 failed_count += 1
                 cache_error = (
-                    f"离线回测因子值缓存不存在: {single_path}；"
-                    "请先用 backfill_factor_cache.py 基于 factor_data_dir/bin/h5 补齐。"
+                    f"official offline factor cache is missing: {single_path}; "
+                    "run official full factor compute from Factor Library UI before metrics/correlation."
                 )
                 db_result["errors"].append(f"{factor_name}: {cache_error}")
                 db_result["cache_failures"].append(factor_name)
@@ -1426,15 +1430,15 @@ class FactorOfficialEvaluationService:
                 if not tx_committed:
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as rollback_exc:
+                        logger.error("official metric save rollback failed: %s", rollback_exc, exc_info=True)
                 raise
             finally:
                 if prev_autocommit is not None:
                     try:
                         conn.autocommit = prev_autocommit
-                    except Exception:
-                        pass
+                    except Exception as autocommit_exc:
+                        logger.error("failed to restore official metric connection autocommit: %s", autocommit_exc, exc_info=True)
 
         return {
             "inserted": inserted,

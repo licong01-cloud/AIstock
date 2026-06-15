@@ -43,7 +43,7 @@ _TASK_TYPE_COMMANDS = {
     "fin_factor_report": "fin_factor_report",
 }
 
-_CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation"}
+_CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation", "official_factor_full_compute"}
 _REMOTE_CONDA_ENV = "rdagent-gpu"
 _SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -977,7 +977,7 @@ class DispatchService:
         total = len(all_lines)
         return {
             "task_id": task_id,
-            "lines": [l.rstrip("\n") for l in all_lines[offset:offset + limit]],
+            "lines": [line.rstrip("\n") for line in all_lines[offset:offset + limit]],
             "total": total,
             "offset": offset,
         }
