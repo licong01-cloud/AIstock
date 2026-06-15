@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.mcp.tool_manifest import TOOL_MANIFEST
+from backend.mcp.tool_manifest import MODULE_TOOL_NAMES, TOOL_MANIFEST
 from backend.services.research_assistant.mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
@@ -52,13 +52,14 @@ def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
 def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() -> None:
     catalog = load_catalog()
     assert catalog["catalog_source"] == "gateway_manifest_derived_catalog"
-    assert catalog["server_count"] == 11
-    assert catalog["tool_count"] == len(TOOL_MANIFEST) == 345
+    assert catalog["server_count"] == len(default_mcp_servers())
+    assert catalog["tool_count"] == len(TOOL_MANIFEST)
     assert {item["server_key"] for item in default_mcp_servers()} == {
         "aistock-gateway-lite",
         "research-assistant",
         "aistock-research",
         "aistock-local-data",
+        "aistock-qlib-data",
         "aistock-validation",
         "aistock-qe",
         "aistock-factor",
@@ -97,7 +98,10 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     }
     assert all(tool["risk_level"] == "low" and tool["side_effect_level"] == "read_only" for tool in catalog_tools)
 
-    assert len([tool for tool in tools if tool["server_key"] == "aistock-local-data"]) == 47
+    assert len([tool for tool in tools if tool["server_key"] == "aistock-local-data"]) == len(MODULE_TOOL_NAMES["local_data"])
+    qlib_tools = [tool for tool in tools if tool["server_key"] == "aistock-qlib-data"]
+    assert len(qlib_tools) == len(MODULE_TOOL_NAMES["qlib_export"])
+    assert any(tool["tool_name"] == "qlib_export_list_snapshots" for tool in qlib_tools)
     qe_tools = [tool for tool in tools if tool["server_key"] == "aistock-qe"]
     assert len(qe_tools) == 70
     assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_tools)
@@ -137,13 +141,14 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
 def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanized() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
-    assert result["seeded"]["mcp_servers"] == 11
-    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST) == 345
+    assert result["seeded"]["mcp_servers"] == len(default_mcp_servers())
+    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST)
 
     tools = svc.repository.list_records("mcp_tools", limit=500)["items"]
-    assert len(tools) == 345
+    assert len(tools) == len(TOOL_MANIFEST)
     assert any(tool["server_key"] == "aistock-gateway-lite" and tool["tool_name"] == "mcp_gateway_health" for tool in tools)
     assert any(tool["server_key"] == "aistock-factor" and tool["tool_name"] == "factor_library_list" for tool in tools)
+    assert any(tool["server_key"] == "aistock-qlib-data" and tool["tool_name"] == "qlib_export_list_snapshots" for tool in tools)
     assert any(tool["server_key"] == "aistock-qe" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-trading-ops" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
     assert any(tool["server_key"] == "aistock-paper-v2-monitor" and tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in tools)

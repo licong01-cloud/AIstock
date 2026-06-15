@@ -58,6 +58,13 @@ SERVER_DISPLAY_METADATA: dict[str, dict[str, Any]] = {
         "domain": "local_data",
         "summary_zh": "Local market-data readiness, sync, schedules, jobs and repair plans",
     },
+    "aistock-qlib-data": {
+        "title": "Qlib Backtest Data MCP",
+        "display_name_zh": "Qlib Backtest Data",
+        "business_aliases_zh": ["Qlib data", "backtest dataset", "dataset export", "H5/Bin data"],
+        "domain": "qlib_data",
+        "summary_zh": "Qlib H5/Bin dataset snapshots, quality checks, previews and candidate export plans",
+    },
     "aistock-validation": {
         "title": "Validation / Issue MCP",
         "display_name_zh": "验证与Issue",
@@ -182,6 +189,25 @@ def _arg_value(args: list[str], prefix: str) -> str | None:
     return None
 
 
+def _manifest_modules_for_profile(profile: str | None) -> tuple[str, ...]:
+    selected = "research" if profile in {None, ""} else str(profile)
+    modules: dict[str, None] = {}
+    for entry in TOOL_MANIFEST:
+        if selected in entry.profile_tags:
+            modules.setdefault(entry.module, None)
+    return tuple(modules)
+
+
+def _resolve_gateway_modules_for_profile(profile: str | None, modules_arg: str | None) -> tuple[str, ...] | None:
+    try:
+        return tuple(resolve_modules(profile=profile, modules=modules_arg))
+    except ValueError:
+        if modules_arg is not None:
+            raise
+        modules = _manifest_modules_for_profile(profile)
+        return modules or None
+
+
 def derive_gateway_server_catalog(config_path: Path | None = None) -> GatewayServerCatalog:
     path = MCP_CONFIG_PATH if config_path is None else config_path
     config = _load_mcp_config(path)
@@ -196,7 +222,9 @@ def derive_gateway_server_catalog(config_path: Path | None = None) -> GatewaySer
             continue
         profile = _arg_value(args, "--profile") or "research"
         modules_arg = _arg_value(args, "--modules")
-        modules = tuple(resolve_modules(profile=profile, modules=modules_arg))
+        modules = _resolve_gateway_modules_for_profile(profile, modules_arg)
+        if modules is None:
+            continue
         if not modules:
             raise ValueError(f"Gateway server {server_key} resolved no modules")
         server_key_to_profile[str(server_key)] = profile
