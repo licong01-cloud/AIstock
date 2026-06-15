@@ -87,6 +87,67 @@ def test_official_constructor_uses_offline_single_loader(monkeypatch):
     assert not hasattr(service, "_pipeline")
 
 
+def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch):
+    captured = {}
+
+    class _FakeComposer:
+        def _fetch_workspace_config(self, node_id=None):
+            captured["config_node_id"] = node_id
+            return {"factor_data_dir": "/mnt/f/factor_data", "qlib_data_path": "/mnt/f/qlib_bin"}
+
+    class _FakeFullComputeDispatch:
+        def __init__(self, dispatch_service=None):
+            captured["dispatch_service"] = dispatch_service
+
+        def submit(self, **kwargs):
+            captured["submit"] = kwargs
+            return {
+                "ok": True,
+                "status": "running",
+                "task_id": "official_factor_full_test",
+                "dispatch_task_id": "official_factor_full_test",
+                "node_id": kwargs.get("node_id"),
+                "payload": {
+                    "cache_source": "official_offline_backtest_factor_data",
+                    "code_source": "code_text",
+                },
+                "cache_root": "rdagent_assets/factor_values",
+            }
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.ConfigComposer",
+        lambda: _FakeComposer(),
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.official_factor_full_compute_dispatch_service.OfficialFactorFullComputeDispatchService",
+        _FakeFullComputeDispatch,
+    )
+
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    service._dispatch_service = object()
+
+    result = service.compute(
+        factor_names=["Alpha_Test"],
+        data_date="20260430",
+        include_disabled=True,
+        max_workers=4,
+        timeout_per_factor=900,
+    )
+
+    assert result["success"] is True
+    assert result["task_type"] == "official_factor_full_compute"
+    assert result["legacy_compatibility"] == "official_evaluation_compute_forwarded_to_official_factor_full_compute"
+    assert result["cache_source"] == "official_offline_backtest_factor_data"
+    assert captured["submit"]["factor_names"] == ["Alpha_Test"]
+    assert captured["submit"]["factor_data_dir"] == "/mnt/f/factor_data"
+    assert captured["submit"]["qlib_bin_path"] == "/mnt/f/qlib_bin"
+    assert captured["submit"]["start_date"] == "2018-08-01"
+    assert captured["submit"]["end_date"] == "2026-04-30"
+    assert captured["submit"]["workers"] == 4
+    assert captured["submit"]["batch_size"] == 16
+
+
+
 def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeypatch):
     calls = {"loader": [], "prepare": None, "metrics_factor": None, "saved": None}
 

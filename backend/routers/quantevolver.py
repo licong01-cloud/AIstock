@@ -1406,16 +1406,19 @@ class ManualFactorValidate(BaseModel):
 
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
-    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口，请使用 official-evaluation/compute")
-    data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
+    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口会转发到 official full-compute")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
-    data_date: str = Field(..., description="评估快照日期 (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: str = Field("2018-08-01", description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期；空时使用 data_date 或默认 2026-04-30")
     include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
+    force: bool = Field(False, description="强制重新生成 official cache 并计算指标")
 
 
 class DeletionAnalyzeRequest(BaseModel):
@@ -3839,6 +3842,7 @@ def factor_cache_stats():
 
 class FactorCacheComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="因子名列表；空/None = 全部可用因子")
+    include_disabled: bool = Field(False, description="仅在显式 factor_names 时允许计算 disabled 因子；全量默认只计算启用因子")
     experiment_id: Optional[str] = Field(None, description="实验 ID；仅用于继承节点/数据目录配置，不限制缓存作用域")
     start_date: str = Field(..., description="起始日期；必须由 UI 显式传入")
     end_date: str = Field(..., description="结束日期；必须由 UI 显式传入")
@@ -3913,7 +3917,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             factor_data_dir=str(factor_data_dir or ""),
             start_date=resolved_start,
             end_date=resolved_end,
-            include_disabled=False,
+            include_disabled=bool(req.factor_names and req.include_disabled),
             batch_size=max(1, min(int(req.workers or 1) * 4, 32)),
             workers=req.workers,
             timeout_per_factor=req.timeout_per_factor,
@@ -3937,6 +3941,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "workers": req.workers,
         "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
         "factor_count": len(req.factor_names) if req.factor_names else "all_enabled_code_text",
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "experiment_id": req.experiment_id,
         "strict_backtest_data": req.strict_backtest_data,
         "data_source_mode": "official_offline_backtest_factor_data",
@@ -3959,6 +3964,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "experiment_id": req.experiment_id,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "factor_data_dir": factor_data_dir,
         "qlib_bin_path": qlib_bin_path,
         "node_id": dispatch_result.get("node_id") or node_id,
@@ -4163,18 +4169,12 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
 @router.post("/factors/batch-compute-metrics-unified", summary="统一批量独立指标计算")
 async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
     """Legacy 接口：转调 official evaluation writer。"""
-    if not req.data_date:
-        raise HTTPException(
-            400,
-            "必须指定 data_date（快照日期），确保所有因子使用相同数据计算，便于横向比对。"
-            "请在因子库页面选择或创建数据快照。"
-        )
     from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
     svc = FactorOfficialEvaluationService()
     result = await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or "",
         include_disabled=req.all_available,
     )
     return {
@@ -4193,12 +4193,6 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
         return f"data: {json.dumps(data, ensure_ascii=False)}\\n\\n"
 
     async def event_generator():
-        if not req.data_date:
-            yield _sse({
-                "type": "error",
-                "error": "必须指定 data_date（快照日期），确保所有因子使用相同数据计算。",
-            })
-            return
         yield _sse({
             "type": "stream_start",
             "deprecated": True,
@@ -4211,7 +4205,7 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
             result = await asyncio.to_thread(
                 svc.compute,
                 factor_names=req.factor_names,
-                data_date=req.data_date,
+                data_date=req.data_date or "",
                 include_disabled=req.all_available,
             )
             yield _sse({"type": "stream_complete", **result, "deprecated": True})
@@ -4233,10 +4227,13 @@ async def official_evaluation_compute(req: OfficialEvaluationComputeRequest):
     return await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.include_disabled,
         max_workers=req.max_workers,
         timeout_per_factor=req.timeout_per_factor,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        force=req.force,
     )
 
 

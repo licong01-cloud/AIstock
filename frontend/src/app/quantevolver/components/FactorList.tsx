@@ -357,6 +357,12 @@ export default function FactorList({
     total_metrics_skipped?: number;
     fail_count?: number;
     error?: string;
+    task_id?: string;
+    dispatch_task_id?: string;
+    data_start?: string;
+    data_end?: string;
+    cache_root?: string;
+    node_id?: string | null;
     logs?: string[];
     dispatch_status?: string;
     details?: any[];
@@ -516,6 +522,11 @@ export default function FactorList({
   const [selectedCacheTaskId, setSelectedCacheTaskId] = useState<string | null>(null);
   const [selectedCacheTask, setSelectedCacheTask] = useState<CacheTaskDetail | null>(null);
 
+  useEffect(() => {
+    if (cacheContext?.trainStart) setCacheStartDate(cacheContext.trainStart);
+    if (cacheContext?.backtestEnd) setCacheEndDate(cacheContext.backtestEnd);
+  }, [cacheContext?.trainStart, cacheContext?.backtestEnd]);
+
   const isSelection = mode === "selection";
   const isAlphaSourceFilter = sourceFilter === "alpha158" || sourceFilter === "alpha360";
   const shouldExcludeAlphaSources = !showAlpha && !isAlphaSourceFilter;
@@ -596,40 +607,46 @@ export default function FactorList({
     return () => clearInterval(timer);
   }, [isSelection, cacheTasks, selectedCacheTaskId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
 
-  const triggerCacheCompute = useCallback(async (
+  const submitOfficialFullCompute = useCallback(async (
     factorNames?: string[],
     force = false,
   ) => {
     if (!cacheStartDate || !cacheEndDate) {
-      alert("请先选择开始/结束日期");
-      return;
+      throw new Error("请先选择官方离线缓存开始/结束日期");
     }
     if (cacheStartDate > cacheEndDate) {
-      alert("开始日期不能晚于结束日期");
-      return;
+      throw new Error("开始日期不能晚于结束日期");
     }
+    const includeDisabled = Boolean(factorNames && factorNames.length > 0);
+    const body: any = {
+      workers: cacheWorkers,
+      timeout_per_factor: 1800,
+      force,
+      start_date: cacheStartDate,
+      end_date: cacheEndDate,
+      include_disabled: includeDisabled,
+      strict_backtest_data: true,
+    };
+    if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
+    if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
+    const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) throw new Error(d.detail || d.error || "官方离线因子任务提交失败");
+    setSelectedCacheTaskId(d.task_id);
+    await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
+    return d;
+  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
+
+  const triggerCacheCompute = useCallback(async (
+    factorNames?: string[],
+    force = false,
+  ) => {
     setCacheBusy(true);
     try {
-      const body: any = {
-        workers: cacheWorkers,
-        timeout_per_factor: 1800,
-        force,
-        start_date: cacheStartDate,
-        end_date: cacheEndDate,
-        strict_backtest_data: true,
-      };
-      if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
-      if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
-      const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const d = await r.json();
-      if (d.ok) {
-        setSelectedCacheTaskId(d.task_id);
-        await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
-        alert(`Official offline factor compute submitted (task_id: ${d.task_id})`);
-      }
-      else alert(d.detail || "提交失败");
+      const d = await submitOfficialFullCompute(factorNames, force);
+      alert(`Official offline factor compute submitted (task_id: ${d.task_id})`);
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
-  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
+  }, [submitOfficialFullCompute]);
 
   const triggerRemoteSync = useCallback(async (factorNames?: string[]) => {
     setRemoteSyncBusy(true);
@@ -1155,53 +1172,27 @@ export default function FactorList({
     const tasks = Array.from(selectedTasks);
     if (tasks.length === 0) return;
     setTaskResults({});
-    // 逐task反查因子名，再用unified端点统一计算
+    const officialWindow = `${cacheStartDate} ~ ${cacheEndDate}`;
+    // Each task is submitted through the official full-compute path.
     for (const tid of tasks) {
       setTaskComputing(prev => new Set(prev).add(tid));
       try {
-        // 强制快照模式检查
-        if (!activeSnapshot) {
-          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "请先选择数据快照" } }));
-          setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
-          continue;
-        }
-        // 1. 反查该task下的因子列表
         const listRes = await fetch(`${API}/rdagent/catalogs/factors?source_task_id=${encodeURIComponent(tid)}&limit=500`);
         const listData = await listRes.json();
         const factorNames = (listData.items || []).map((f: any) => f.factor_name || f.name).filter(Boolean);
         if (factorNames.length === 0) {
-          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "无因子" } }));
+          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "no factors" } }));
           setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
           continue;
         }
-        // 2. 用unified端点计算指标
-        let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            factor_names: factorNames,
-            data_date: activeSnapshot,
-            include_disabled: true,
-          }),
-        });
-        if (res.status === 404) {
-          res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              factor_names: factorNames,
-              data_date: activeSnapshot,
-              all_available: false,
-            }),
-          });
-        }
-        const data = await res.json();
-        const okCount = data.db_result?.inserted || 0;
+        const data = await submitOfficialFullCompute(factorNames, false);
         setTaskResults(prev => ({
           ...prev,
           [tid]: {
-            ok: data.success !== false,
-            msg: data.success !== false ? `${factorNames.length}因子, ${okCount}条指标写入` : (data.error || "失败"),
+            ok: data.ok !== false,
+            msg: data.ok !== false
+              ? `${factorNames.length} factors official full-compute submitted, window ${officialWindow}`
+              : (data.error || "failed"),
           },
         }));
       } catch (e: any) {
@@ -1251,60 +1242,28 @@ export default function FactorList({
   }
 
   async function batchFetchMetrics() {
-    if (!activeSnapshot) {
-      alert("请先选择数据快照后再执行指标计算。");
-      return;
-    }
     const selectedCount = actualSelectedFactors.size;
     if (selectedCount === 0) {
-      alert("请先选择要计算指标的因子");
+      alert("Select factors before submitting official metrics compute.");
       return;
     }
     const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
-    if (!confirm(`确定要基于快照 ${activeSnapshot} 计算选中的 ${selectedCount} 个因子指标吗？`)) return;
+    if (!confirm(`Submit ${selectedCount} factors to official full-compute for ${cacheStartDate} ~ ${cacheEndDate}? This generates the shared cache and official metrics.`)) return;
 
     setMetricsLoading(true);
     setMetricsResult(null);
     try {
-      let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, include_disabled: true }),
-      });
-      if (res.status === 404) {
-        res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, all_available: false }),
-        });
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setMetricsResult({
-          ...data,
-          ok: false,
-          success: false,
-          error: data.detail || data.error || `HTTP ${res.status}`,
-        });
-        return;
-      }
-      const ok = data.success === true;
-      setMetricsResult({ ...data, ok });
-      if (ok) {
-        loadData();
-        loadIndSummary();
-      }
+      const data = await submitOfficialFullCompute(factorNames, false);
+      setMetricsResult({ ...data, ok: data.ok !== false, success: data.ok !== false });
+      loadData();
+      loadIndSummary();
     } catch (e: any) {
-      setMetricsResult({ ok: false, success: false, error: e?.message || "指标计算失败" });
+      setMetricsResult({ ok: false, success: false, error: e?.message || "metrics compute submit failed" });
     } finally {
       setMetricsLoading(false);
       setLocalSelectedFactors(new Set());
     }
   }
-
-  useEffect(() => {
-    setPage(1);
-  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder, availabilityFilter, cacheCoverageFilter, cacheStartDate, cacheEndDate]);
 
   async function batchAnalyze() {
     const selectedCount = actualSelectedFactors.size;
@@ -1933,16 +1892,16 @@ export default function FactorList({
       {!isSelection && (
         <section style={{ background: "#fff", borderRadius: 12, padding: "12px 16px", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>数据快照</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>历史快照/兼容</span>
 
             {/* 当前选中的快照 */}
             <select
               value={activeSnapshot}
               onChange={e => setActiveSnapshot(e.target.value)}
               style={{ padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", minWidth: 160 }}
-              title="选择数据快照用于因子计算"
+              title="历史兼容快照仅用于旧全流程；官方独立指标计算不使用快照"
             >
-              <option value="">实时数据（无快照）</option>
+              <option value="">未选择历史快照</option>
               {snapshots.filter(s => s.status === "ready").map(s => (
                 <option key={s.data_date} value={s.data_date}>
                   {s.data_date} ({s.instruments_count || "?"}只 / {s.disk_size_mb || "?"}MB)
@@ -1952,11 +1911,11 @@ export default function FactorList({
 
             {activeSnapshot ? (
               <span style={{ fontSize: 11, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 4 }}>
-                快照 {activeSnapshot} — 所有因子使用相同数据，可横向比对
+                快照 {activeSnapshot} — 仅用于旧全流程；官方指标走离线缓存
               </span>
             ) : (
-              <span style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", padding: "2px 8px", borderRadius: 4 }}>
-                未选择快照 — 请先选择或创建快照后再计算因子指标
+              <span style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", padding: "2px 8px", borderRadius: 4 }}>
+                官方独立指标无需快照；请选择上方官方离线缓存窗口
               </span>
             )}
 
@@ -2409,7 +2368,7 @@ export default function FactorList({
                   opacity: (metricsLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {metricsLoading ? "计算中..." : `计算指标(${actualSelectedFactors.size})`}
+                {metricsLoading ? "提交中..." : `提交官方指标计算(${actualSelectedFactors.size})`}
               </button>
 
               <button
@@ -2493,8 +2452,10 @@ export default function FactorList({
           }}>
             {metricsResult.ok ? (
               <span>
-                <strong>指标获取完成：</strong>
-                新增 {metricsResult.total_metrics_inserted ?? metricsResult.db_result?.inserted ?? 0} 条，跳过 {metricsResult.total_metrics_skipped ?? metricsResult.db_result?.skipped ?? 0} 条（已存在）
+                <strong>官方 full-compute 已提交：</strong>
+                task {metricsResult.task_id || metricsResult.dispatch_task_id || "-"}，
+                窗口 {metricsResult.data_start || cacheStartDate} ~ {metricsResult.data_end || cacheEndDate}，
+                缓存 {metricsResult.cache_root || "rdagent_assets/factor_values"}
                 {(metricsResult.fail_count ?? 0) > 0 && (
                   <span style={{ color: "#b45309" }}>（{metricsResult.fail_count} 个任务失败）</span>
                 )}
@@ -2516,7 +2477,7 @@ export default function FactorList({
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <span>
-                  <strong>指标获取失败：</strong>
+                  <strong>官方 full-compute 提交失败：</strong>
                   {metricsResult.error
                     || metricsResult.details?.filter((d: any) => !d.ok).map((d: any) => d.errors?.[0]).filter(Boolean).join("; ")
                     || metricsResult.db_result?.errors?.join("; ")

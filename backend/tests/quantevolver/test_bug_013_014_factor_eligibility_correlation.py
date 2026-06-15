@@ -102,6 +102,9 @@ class TestBug013DisabledFactorEligibility:
         import inspect
         sig = inspect.signature(FactorOfficialEvaluationService.compute)
         assert sig.parameters["include_disabled"].default is True
+        assert sig.parameters["data_date"].default == ""
+        assert sig.parameters["start_date"].default is None
+        assert sig.parameters["end_date"].default is None
 
 
 # BUG-014: Correlation should give clear error when no standalone metrics cache exists
