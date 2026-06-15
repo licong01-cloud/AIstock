@@ -37,8 +37,8 @@
   "expected": "Before the next unattended trading day, MiniQMT simulation runtime must reconcile broker order/trade state, terminalize or safely retry historical runs, avoid duplicate order remark replay, and expose a readiness state with no stale active runs or open-like broker blockers.",
   "first_seen_at": "2026-06-15T13:17:09.976491Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ebd73dcd15415cfb882b62bd35c649592f00ac76",
+  "fixed_at": "2026-06-15T14:33:42.610634Z",
   "github_issue_number": 1108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1108",
   "last_seen_at": "2026-06-15T13:17:09.976491Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -66,6 +67,12 @@
     "fingerprint": "cfc55533bf769ce7ed008ed5",
     "source_event_id": "FE-20260615-cfc55533bf76"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 49 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k 'stale_historical_miniqmt_planning_runs or order_ledger_evidence_by_reconcile_only or keeps_miniqmt_capacity_residual_retryable_when_open_orders_remain or recovers_called_miniqmt_retryable_run_by_reconcile_only or preflight_failure_stays_retryable_and_can_resubmit' -q -> 5 passed, 44 deselected",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership scan mapped=12 unmapped=0 ambiguous=0",
+    "python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py tests/aistock_validation/bugs/20260615_BUG-374-miniqmt-unattended-simulation-blocked-by-stale-open-broker-orders-and-re.json -> success; guardrail blocking=0"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
