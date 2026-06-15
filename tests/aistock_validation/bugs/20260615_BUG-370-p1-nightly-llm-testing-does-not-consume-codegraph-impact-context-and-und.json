@@ -8,7 +8,8 @@
     "scripts/llm_provider_adapter.py",
     "scripts/nightly_adaptive_scheduler.py",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260615_BUG-370-p1-nightly-llm-testing-does-not-consume-codegraph-impact-context-and-und.json"
+    "tests/aistock_validation/bugs/20260615_BUG-370-p1-nightly-llm-testing-does-not-consume-codegraph-impact-context-and-und.json",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-370",
