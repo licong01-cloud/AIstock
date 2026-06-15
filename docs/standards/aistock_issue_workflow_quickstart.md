@@ -12,6 +12,18 @@ The skill/command/prompt layer is intentionally thin. The source of truth is `sc
 
 Next hardening baseline: `docs/architecture/aistock_issue_workflow_hardening_plan_v2_1_20260526.md`. Before continuing lower-priority issue workflow R&D, prioritize the v2.1 client-stale detection, single-active-worktree guard, pre-PR gate, close-sync, cleanup, and timing telemetry phases.
 
+## Documentation Fast Path
+
+Documentation work is split into three tiers so ordinary docs do not pay the full BUG/validation workflow cost:
+
+| Tier | Scope | Required Flow | Validation |
+| --- | --- | --- | --- |
+| `docs-fast-update` | Existing ordinary docs under `docs/architecture/`, `docs/analysis/`, `docs/design/`, `docs/handoff/`, `docs/operations/`, `docs/operations_*.md`, or `README.md` | isolated worktree, version/date plus 1-3 change bullets, PR, authorized merge, root sync, cleanup | `git diff --check` |
+| `docs-fast-new` | New docs in the same ordinary documentation set | same as `docs-fast-update` | `git diff --check` |
+| `docs-controlled` | `docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`, workflow/CI/catalog docs | normal issue/workflow guardrails | selected workflow validation |
+
+Do not create BUG JSON, Context Packs, CodeGraph/UA artifacts, nox, pytest, backend, or frontend validation for `docs-fast-update` or `docs-fast-new`. If a documentation task touches controlled paths, stop the docs fast path and use the normal workflow.
+
 ## Trigger Examples
 
 - `按规范修复 BUG-112，不要合入 main`
