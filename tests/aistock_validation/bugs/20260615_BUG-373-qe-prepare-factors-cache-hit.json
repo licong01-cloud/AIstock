@@ -32,8 +32,8 @@
   "expected": "QE 回测因子缓存命中检查必须复用官方 official cache-hit contract 或生成等价结构化结果：校验 single parquet、_meta.json、as_of_date、日期子窗口覆盖、universe、index_policy、source hash，并分类输出 missing_from_cache、missing_meta、as_of_date_mismatch、window_not_covered、universe_mismatch、index_policy_mismatch、hash_mismatch、schema_invalid；不得读取 factor_values_realtime；回归测试证明 QE 子窗口可命中 2018-08-01~2026-04-30 full cache。",
   "first_seen_at": "2026-06-15T13:07:25.168317Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe0353a226a3b42389e09ae0aa446b3362f82e40",
+  "fixed_at": "2026-06-15T13:30:06.450336Z",
   "github_issue_number": 1107,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1107",
   "last_seen_at": "2026-06-15T13:07:25.168317Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1110",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -61,6 +62,15 @@
     "fingerprint": "d012eca8e611e8e437edff2b",
     "source_event_id": "FE-20260615-d012eca8e611"
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_official_runtime_validation.py backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_multi_alpha_command_generation.py -> 89 passed",
+    "python -m py_compile backend/services/quantevolver/config_composer.py backend/services/quantevolver/factor_value_loader.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_official_runtime_validation.py -> passed",
+    "python -m ruff check backend/services/quantevolver/config_composer.py backend/services/quantevolver/factor_value_loader.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_official_runtime_validation.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
