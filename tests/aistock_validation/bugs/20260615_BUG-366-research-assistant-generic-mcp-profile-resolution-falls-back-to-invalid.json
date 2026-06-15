@@ -27,24 +27,24 @@
       "timestamp": "2026-06-14T18:39:51.755443Z"
     },
     {
-      "timestamp": "2026-06-14T18:47:38.021883Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Root cause is generic Research Assistant MCP catalog/profile resolution drift for newly registered gateway profiles; allowed scope expanded to unified catalog sync logic and focused RA regression tests."
+      "actor": "codex",
+      "note": "Root cause is generic Research Assistant MCP catalog/profile resolution drift for newly registered gateway profiles; allowed scope expanded to unified catalog sync logic and focused RA regression tests.",
+      "timestamp": "2026-06-14T18:47:38.021883Z"
     },
     {
-      "timestamp": "2026-06-14T18:50:56.384828Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Added focused Research Assistant catalog tests with hard-coded server/tool counts so regression coverage follows gateway manifest growth instead of stale constants."
+      "actor": "codex",
+      "note": "Added focused Research Assistant catalog tests with hard-coded server/tool counts so regression coverage follows gateway manifest growth instead of stale constants.",
+      "timestamp": "2026-06-14T18:50:56.384828Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-14T18:39:51.755447Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ac0eca67c8c5b7ce31a98681d6de473344909008",
+  "fixed_at": "2026-06-15T09:31:55.794244Z",
   "github_issue_number": 1085,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1085",
   "last_seen_at": "2026-06-14T18:39:51.755447Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1086",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -74,6 +75,12 @@
     "fingerprint": "5d12984ce56c297b960ab009",
     "source_event_id": "FE-20260615-5d12984ce56c"
   },
+  "validation_evidence": [
+    "python -m nox -s rl_execution_smoke -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_mcp_contract -> passed",
+    "python -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_service.py -q -p no:cacheprovider -> 88 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
