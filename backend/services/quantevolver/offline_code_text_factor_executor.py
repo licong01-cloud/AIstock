@@ -4,7 +4,6 @@ from __future__ import annotations
 import contextlib
 import builtins as _builtins
 import os
-import re
 import tempfile
 import threading
 import time
@@ -108,7 +107,6 @@ class OfflineCodeTextFactorExecutor:
 
     def _build_pandas_proxy(self):
         original_read_hdf = pd.read_hdf
-        original_read_parquet = pd.read_parquet
 
         def read_hdf(path_or_buf, *args, **kwargs):
             path_s = str(path_or_buf)
