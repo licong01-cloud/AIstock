@@ -40,8 +40,8 @@
   "expected": "At market close MiniQMT simulation runtime must reconcile broker orders/trades and terminalize each daily run into explicit business states: SUCCEEDED when all required intents are filled, PARTIAL/RESIDUAL_SKIPPED when capacity-limited buys are intentionally skipped, or actionable non-retryable/retryable failure when unfilled orders require next-day recovery. Status=50 unfilled orders must be recorded as day-expired/open-order evidence and must not leave a run indefinitely SUBMITTING or make next-day unattended simulation unsafe.",
   "first_seen_at": "2026-06-15T08:29:15.017517Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "10140b50d51158e10c8bd4e621f180d8e8b35947",
+  "fixed_at": "2026-06-15T09:43:54.567457Z",
   "github_issue_number": 1095,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1095",
   "last_seen_at": "2026-06-15T08:29:15.017517Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1097",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -69,6 +70,14 @@
     "fingerprint": "fca5a3faac093d61939fbf5e",
     "source_event_id": "FE-20260615-fca5a3faac09"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (47 passed)",
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> passed (32 passed)",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/qmt_strategy_ledger/repository.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/simulation_runtime backend/services/qmt_strategy_ledger backend/tests/simulation_runtime -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
