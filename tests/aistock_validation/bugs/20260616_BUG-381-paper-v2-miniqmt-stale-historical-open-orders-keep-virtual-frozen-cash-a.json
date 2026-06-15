@@ -1,0 +1,74 @@
+{
+  "actual": "Historical 2026-06-15 order_status=50 rows remain in qmt_strategy.order_ledger/order_intent, and the corresponding BUY FREEZE_BUY cash entries remain unreleased in virtual cash. Today 2026-06-16 has no open ledger rows and no unattributed orders, so the submit gate is not blocked, but per-strategy cash is still reduced by stale frozen cash.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "tests/aistock_validation/bugs/20260616_BUG-381-paper-v2-miniqmt-stale-historical-open-orders-keep-virtual-frozen-cash-a.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-381",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T18:23:49.175603Z",
+  "description": "Historical 2026-06-15 order_status=50 rows remain in qmt_strategy.order_ledger/order_intent, and the corresponding BUY FREEZE_BUY cash entries remain unreleased in virtual cash. Today 2026-06-16 has no open ledger rows and no unattributed orders, so the submit gate is not blocked, but per-strategy cash is still reduced by stale frozen cash.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-6618379b7939",
+      "timestamp": "2026-06-15T18:23:49.175603Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-16 validation: scheduler 08:55 tick submit=false; stale order diagnostics and qmt_strategy cash ledger read-only SQL"
+  ],
+  "expected": "At trade-date rollover, historical unfilled/open-like MiniQMT orders must be terminalized or explicitly released in the AIstock virtual ledger without mutating broker state, and any stale broker cancelable report must not keep strategy cash frozen for the next trading day. The lifecycle should follow the approved MiniQMT/vn.py-style daily boundary: previous-day unfilled orders no longer participate in today's strategy cash/open-order state, while audit evidence remains preserved.",
+  "first_seen_at": "2026-06-15T18:23:49.175603Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1129,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1129",
+  "last_seen_at": "2026-06-15T18:23:49.175603Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/qmt/orders?cancelable_only=true; read-only SQL on qmt_strategy.order_ledger/order_intent/cash_ledger for orders 1090533228,1090522856,1090532707",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT stale historical open orders keep virtual frozen cash after trading day rollover",
+  "trigger_condition": {
+    "fingerprint": "6618379b7939405c9de547d1",
+    "source_event_id": "FE-20260616-6618379b7939"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
