@@ -1,0 +1,76 @@
+{
+  "actual": "2026-06-15 16:12 read-only API/DB/broker snapshot: runs_summary by_status={SUCCEEDED:2, SUBMITTING:1, FAILED_RETRYABLE:1}; MiniQMT L16 qmt_batch_status=PARTIAL, submitted_intents=35, failed_intents=19, failure_codes={SKIPPED_INSUFFICIENT_CAPITAL:19}; MiniQMT L2 qmt_batch_status=PARTIAL, submitted_intents=15, failed_intents=1, failure_codes={SKIPPED_INSUFFICIENT_CAPITAL:1}; broker orders_count=50 with status 56=47 and status 50=3, all three status=50 have traded_volume=0. LocalSim runs both SUCCEEDED.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "tests/aistock_validation/bugs/20260615_BUG-369-p0-miniqmt-simulationruntime-end-of-day-partial-miniqmt-runs-remain-subm.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-369",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T08:29:15.017517Z",
+  "description": "2026-06-15 16:12 read-only API/DB/broker snapshot: runs_summary by_status={SUCCEEDED:2, SUBMITTING:1, FAILED_RETRYABLE:1}; MiniQMT L16 qmt_batch_status=PARTIAL, submitted_intents=35, failed_intents=19, failure_codes={SKIPPED_INSUFFICIENT_CAPITAL:19}; MiniQMT L2 qmt_batch_status=PARTIAL, submitted_intents=15, failed_intents=1, failure_codes={SKIPPED_INSUFFICIENT_CAPITAL:1}; broker orders_count=50 with status 56=47 and status 50=3, all three status=50 have traded_volume=0. LocalSim runs both SUCCEEDED.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-fca5a3faac09",
+      "timestamp": "2026-06-15T08:29:15.017512Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-15 close validation in current Codex session: QMT connected SIM 62266303; LocalSim SUCCEEDED x2; MiniQMT SUBMITTING x1/FAILED_RETRYABLE x1; three status=50 unfilled broker orders after close."
+  ],
+  "expected": "At market close MiniQMT simulation runtime must reconcile broker orders/trades and terminalize each daily run into explicit business states: SUCCEEDED when all required intents are filled, PARTIAL/RESIDUAL_SKIPPED when capacity-limited buys are intentionally skipped, or actionable non-retryable/retryable failure when unfilled orders require next-day recovery. Status=50 unfilled orders must be recorded as day-expired/open-order evidence and must not leave a run indefinitely SUBMITTING or make next-day unattended simulation unsafe.",
+  "first_seen_at": "2026-06-15T08:29:15.017517Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1095,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1095",
+  "last_seen_at": "2026-06-15T08:29:15.017517Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only after close: GET /api/v1/simulation-runtime/runs?trade_date=2026-06-15&limit=50; GET /api/v1/simulation-runtime/runs/simrun_4d4c2069c8d287b9; GET /api/v1/simulation-runtime/runs/simrun_2f2e4381de291957; GET /api/v1/qmt/orders; SELECT from paper_v2.simulation_daily_run and qmt_strategy.order_ledger/trade_ledger for trade_date='2026-06-15'.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT][SimulationRuntime] end-of-day partial MiniQMT runs remain SUBMITTING/FAILED_RETRYABLE with open status-50 orders and residual capital skips",
+  "trigger_condition": {
+    "fingerprint": "fca5a3faac093d61939fbf5e",
+    "source_event_id": "FE-20260615-fca5a3faac09"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
