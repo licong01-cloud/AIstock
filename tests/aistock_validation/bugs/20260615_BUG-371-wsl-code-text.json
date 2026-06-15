@@ -52,8 +52,8 @@
   "expected": "因子库 UI/API 提交 WSL dispatch official_factor_full_compute；WSL worker 一次加载回测底层数据到只读内存缓存，使用原始 code_text 分批生成 rdagent_assets/factor_values/single 缓存并同批计算官方独立指标；相关性和 QE 回测复用同一 official cache；所有实现通过设计文档 G0-G12/DAI-001-DAI-012 验收矩阵。",
   "first_seen_at": "2026-06-15T10:10:47.369757Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b7a1d4ee463ac2f56b29de0882d4ffe87508ddea",
+  "fixed_at": "2026-06-15T12:16:33.755144Z",
   "github_issue_number": 1100,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1100",
   "last_seen_at": "2026-06-15T10:10:47.369757Z",
@@ -61,6 +61,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1102",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -72,7 +73,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -117,6 +118,16 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub PR #1102 statusCheckRollup -> all required checks success",
+    "python -m py_compile backend/services/quantevolver/wsl_runtime_guard.py backend/services/quantevolver/backtest_base_data_memory_cache.py backend/services/quantevolver/offline_code_text_factor_executor.py backend/services/quantevolver/official_factor_batch_compute_service.py backend/services/quantevolver/official_factor_full_compute_dispatch_service.py backend/scripts/run_official_factor_full_compute_wsl.py backend/scripts/run_official_evaluation_wsl.py backend/scripts/run_correlation_compute_wsl.py backend/routers/quantevolver.py backend/services/quantevolver/factor_eligibility_service.py backend/services/quantevolver/factor_official_evaluation_service.py backend/services/quantevolver/correlation_compute_service.py scripts/backfill_factor_cache.py -> passed",
+    "python -m pytest -q backend/tests/quantevolver/test_wsl_runtime_guard.py backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_offline_eligibility.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/test_correlation_compute_independence.py -> 27 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed",
+    "cd frontend && npm run lint -> passed",
+    "cd frontend && npm run build -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
