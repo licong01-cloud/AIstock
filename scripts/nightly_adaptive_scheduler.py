@@ -174,6 +174,10 @@ def codegraph_freshness_from_artifact(path: Path | None, explicit: str | None) -
     }
 
 
+def code_intelligence_refs_from_artifact(path: Path | None) -> dict[str, Any]:
+    return llm_provider_adapter.code_intelligence_refs_from_file(path)
+
+
 def build_report(
     *,
     provider: str,
@@ -181,6 +185,7 @@ def build_report(
     changed_files: list[str],
     statuses: dict[str, str],
     codegraph: dict[str, Any],
+    code_intelligence_refs: dict[str, Any] | None = None,
     resource_budget_seconds: int,
     workspace_path: str | None = None,
     invoke_llm: bool = False,
@@ -194,6 +199,7 @@ def build_report(
         changed_files=changed_files,
         recent_failure_modules=recent_failure_modules,
         codegraph_freshness=str(codegraph["freshness"]),
+        code_intelligence_refs=code_intelligence_refs,
         resource_budget_seconds=resource_budget_seconds,
         workspace_path=workspace_path,
         invoke_llm=invoke_llm,
@@ -219,6 +225,7 @@ def build_report(
             "nightly_statuses": statuses,
             "recent_failure_modules": recent_failure_modules,
             "codegraph": codegraph,
+            "code_intelligence_refs": code_intelligence_refs or {},
         },
         "queue_summary": {
             "queue_count": len(advice["queue"]),
@@ -289,6 +296,7 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "changed_files": input_refs.get("changed_files") or [],
             "statuses": input_refs.get("nightly_statuses") or input_refs.get("statuses") or {},
             "codegraph": input_refs.get("codegraph") or {},
+            "code_intelligence_refs": input_refs.get("code_intelligence_refs") or {},
         },
         "queue_summary": {
             "queue_count": queue.get("queue_count", 0),
@@ -366,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--status", action="append", default=None, help="Nightly status as key=value; may be repeated.")
     parser.add_argument("--codegraph-freshness-json")
     parser.add_argument("--codegraph-freshness")
+    parser.add_argument("--code-intelligence-json")
     parser.add_argument("--resource-budget-seconds", type=int, default=900)
     parser.add_argument("--workspace-path")
     parser.add_argument(
@@ -406,12 +415,16 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.codegraph_freshness_json) if args.codegraph_freshness_json else None,
             args.codegraph_freshness,
         )
+        code_intelligence_refs = code_intelligence_refs_from_artifact(
+            Path(args.code_intelligence_json) if args.code_intelligence_json else None
+        )
         report = build_report(
             provider=provider,
             config_path=Path(args.config),
             changed_files=changed_files,
             statuses=statuses,
             codegraph=codegraph,
+            code_intelligence_refs=code_intelligence_refs,
             resource_budget_seconds=args.resource_budget_seconds,
             workspace_path=args.workspace_path,
             invoke_llm=args.invoke_llm,
