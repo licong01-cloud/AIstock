@@ -1,0 +1,98 @@
+{
+  "actual": "用户询问“目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？”时，Research Assistant 应理解为已入仓 QE run 的收益排行查询，默认 research_valid=true，调用 qe_archive_query_run_leaderboard(order_by=cagr) 并以结论优先/中文表格回答；当前实际回复为 QE 数仓健康汇总或实验状态清单，未回答最高收益和对应实验。此前 Phase 7 已完成，说明自然语言语义路由能力未达到既有设计验收目标，需按 BUG 修复而不是继续补关键词。修复应覆盖语义意图解析、工具选择理由、参数规划和拟人化业务回复，不应只针对固定短语做硬编码。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260615_BUG-376-research-assistant-qe.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-376",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T14:13:29.726795Z",
+  "description": "用户询问“目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？”时，Research Assistant 应理解为已入仓 QE run 的收益排行查询，默认 research_valid=true，调用 qe_archive_query_run_leaderboard(order_by=cagr) 并以结论优先/中文表格回答；当前实际回复为 QE 数仓健康汇总或实验状态清单，未回答最高收益和对应实验。此前 Phase 7 已完成，说明自然语言语义路由能力未达到既有设计验收目标，需按 BUG 修复而不是继续补关键词。修复应覆盖语义意图解析、工具选择理由、参数规划和拟人化业务回复，不应只针对固定短语做硬编码。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-e7564c31b557",
+      "timestamp": "2026-06-15T14:13:29.726792Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-15T14:13:29.726795Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1113,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1113",
+  "last_seen_at": "2026-06-15T14:13:29.726795Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant 对 QE 数仓收益排行自然语言问题误路由为健康汇总",
+  "trigger_condition": {
+    "fingerprint": "e7564c31b5576d2c4799e277",
+    "source_event_id": "FE-20260615-e7564c31b557"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
