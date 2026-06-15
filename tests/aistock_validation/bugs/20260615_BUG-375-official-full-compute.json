@@ -36,8 +36,8 @@
   "expected": "所有因子库官方独立指标重算入口统一提交 official_factor_full_compute 或等价 full-compute dispatch；UI 不再要求数据快照，不再提示实时数据/快照用于官方指标；后端 legacy official_evaluation 入口若保留只作为兼容层转发到 full compute 或显式只读查询，不得触发实时/快照语义计算；测试证明计算指标、Task 指标和全量按钮都使用同一 official offline cache 任务契约。",
   "first_seen_at": "2026-06-15T13:44:47.733547Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bc11b17b08957b0c5b2ba3905b2fa0f34cbd3c65",
+  "fixed_at": "2026-06-15T14:59:56.188220Z",
   "github_issue_number": 1112,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1112",
   "last_seen_at": "2026-06-15T13:44:47.733547Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1117",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -100,6 +101,17 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> 20 passed",
+    "python -m ruff check backend/services/quantevolver/factor_official_evaluation_service.py backend/routers/quantevolver.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> passed",
+    "python -m py_compile backend/services/quantevolver/factor_official_evaluation_service.py backend/routers/quantevolver.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed, 8 passed",
+    "python -m nox -s l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed, qe_read_backend 14 passed",
+    "npm --prefix frontend run lint -> passed with existing repo warnings",
+    "npm --prefix frontend run build -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
