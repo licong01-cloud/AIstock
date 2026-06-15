@@ -25,7 +25,8 @@
     "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py",
     "backend/tests/test_correlation_compute_independence.py",
     "backend/routers/quantevolver_evolution.py",
-    "backend/services/quantevolver/correlation_scheduler.py"
+    "backend/services/quantevolver/correlation_scheduler.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-371",

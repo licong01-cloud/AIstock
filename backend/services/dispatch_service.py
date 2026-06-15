@@ -977,7 +977,7 @@ class DispatchService:
         total = len(all_lines)
         return {
             "task_id": task_id,
-            "lines": [l.rstrip("\n") for l in all_lines[offset:offset + limit]],
+            "lines": [line.rstrip("\n") for line in all_lines[offset:offset + limit]],
             "total": total,
             "offset": offset,
         }
