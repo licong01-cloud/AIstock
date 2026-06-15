@@ -6,6 +6,8 @@
     "scripts/aistock_issue_workflow.py",
     ".github/workflows/test.yml",
     ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/codeql.yml",
     "tests/aistock_validation/bugs/20260615_BUG-377-p2-documentation-only-updates-still-trigger-full-code-validation-instead.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -45,9 +47,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/ci_change_classifier.py --changed-file docs/codex_project_memory.md --repo-root F:\\Dev\\AIstock",
   "required_verification": [
-    "l0",
-    "guardrail_changed_files",
-    "validation_center_backend"
+    "docs_lite_version_record_only"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

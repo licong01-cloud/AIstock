@@ -33,7 +33,37 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect docs-lite lane
+        id: docs_lite
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          git fetch origin "${BASE_REF}" --no-tags || true
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
+          DOCS_LITE=1
+          while IFS= read -r path; do
+            case "${path}" in
+              docs/architecture/*|docs/analysis/*|docs/operations/*|docs/operations_*.md|README.md)
+                ;;
+              docs/standards/*|docs/codex_project_memory.md|AGENTS.md|AGENTS.override.md|.codex/*|.claude/*)
+                DOCS_LITE=0
+                break
+                ;;
+              "")
+                ;;
+              *)
+                DOCS_LITE=0
+                break
+                ;;
+            esac
+          done < tmp/validation/pr_quality/changed_files.txt
+          echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
+
       - name: Set up Python 3.12
+        if: steps.docs_lite.outputs.docs_lite != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -41,11 +71,13 @@ jobs:
           cache-dependency-path: .github/requirements/pr-quality.txt
 
       - name: Install quality tooling
+        if: steps.docs_lite.outputs.docs_lite != '1'
         run: |
           python -m pip install --upgrade pip
           python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
 
       - name: Build AIstock PR quality summary
+        if: steps.docs_lite.outputs.docs_lite != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
@@ -69,7 +101,28 @@ jobs:
             "${ENFORCE_ARGS[@]}"
           cat tmp/validation/pr_quality/summary.md
 
+      - name: Build docs-lite version record
+        if: steps.docs_lite.outputs.docs_lite == '1'
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          {
+            echo "# Docs-lite version record"
+            echo ""
+            echo "- validation: version/change-record only"
+            echo "- code_validation: skipped"
+            echo "- code_intelligence: skipped"
+            echo "- semgrep: skipped"
+            echo "- codeql: skipped"
+            echo ""
+            echo "## Changed files"
+            sed 's/^/- `/' tmp/validation/pr_quality/changed_files.txt | sed 's/$/`/'
+          } > tmp/validation/pr_quality/summary.md
+          cp tmp/validation/pr_quality/summary.md tmp/validation/pr_quality/docs-lite-version-record.md
+          printf '{"docs_lite":true,"validation":"version_change_record_only"}\n' > tmp/validation/pr_quality/summary.json
+          cat tmp/validation/pr_quality/summary.md
+
       - name: Build code intelligence PR artifact
+        if: steps.docs_lite.outputs.docs_lite != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -86,6 +139,7 @@ jobs:
           cat tmp/validation/pr_quality/code-intelligence-summary.md
 
       - name: Ruff changed Python files
+        if: steps.docs_lite.outputs.docs_lite != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -99,6 +153,7 @@ jobs:
           fi
 
       - name: Semgrep AIstock guardrails (report-only phase)
+        if: steps.docs_lite.outputs.docs_lite != '1'
         continue-on-error: true
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
@@ -121,11 +176,19 @@ jobs:
             const marker = '<!-- aistock-pr-quality-summary -->';
             const summaryPath = 'tmp/validation/pr_quality/summary.md';
             const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
+            const docsLitePath = 'tmp/validation/pr_quality/docs-lite-version-record.md';
             const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
             const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
+            const docsLite = fs.existsSync(docsLitePath) ? fs.readFileSync(docsLitePath, 'utf8') : '';
             const maxChars = 55000;
             const compactFooter = 'Semgrep and code intelligence are report-only in this rollout; existing AIstock CI remains the blocking gate.';
-            let body = `${marker}\n${summary}\n\n${codeIntel}\n\n${compactFooter}`;
+            let body = `${marker}\n${summary}`;
+            if (docsLite) {
+              body = `${marker}\n${docsLite}\n\n${summary}`;
+            } else {
+              body = `${marker}\n${summary}\n\n${codeIntel}`;
+            }
+            body = `${body}\n\n${compactFooter}`;
             if (body.length > maxChars) {
               body = `${marker}\n${summary}\n\nCode intelligence summary was omitted from the PR comment because the compact budget was exceeded. See the uploaded pr-quality artifact for details.\n\n${compactFooter}`;
             }
@@ -146,3 +209,4 @@ jobs:
           name: pr-quality-${{ github.run_id }}
           path: tmp/validation/pr_quality/
           if-no-files-found: ignore
+
