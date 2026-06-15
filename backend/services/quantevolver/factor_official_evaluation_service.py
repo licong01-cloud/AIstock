@@ -403,6 +403,15 @@ def _prepare_monthly_ic_rows(monthly_series: list) -> list[Dict[str, Any]]:
     return rows
 
 
+
+
+def _normalize_official_window_date(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    return raw
+
+
 class FactorOfficialEvaluationService:
     """官方独立指标执行/读取服务。"""
 
@@ -433,6 +442,12 @@ class FactorOfficialEvaluationService:
         include_disabled: bool = True,
         max_workers: int = 4,
         timeout_per_factor: int = 600,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        force: bool = False,
+        factor_data_dir: str | None = None,
+        qlib_bin_path: str | None = None,
+        node_id: str | None = None,
     ) -> Dict[str, Any]:
         try:
             return self._compute_via_dispatch(
@@ -441,9 +456,15 @@ class FactorOfficialEvaluationService:
                 include_disabled=include_disabled,
                 max_workers=max_workers,
                 timeout_per_factor=timeout_per_factor,
+                start_date=start_date,
+                end_date=end_date,
+                force=force,
+                factor_data_dir=factor_data_dir,
+                qlib_bin_path=qlib_bin_path,
+                node_id=node_id,
             )
         except Exception as exc:
-            logger.error("official evaluation compute 失败: %s", exc, exc_info=True)
+            logger.error("official evaluation compute failed: %s", exc, exc_info=True)
             return {
                 "success": False,
                 "error": str(exc),
@@ -457,162 +478,73 @@ class FactorOfficialEvaluationService:
         include_disabled: bool,
         max_workers: int,
         timeout_per_factor: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        force: bool = False,
+        factor_data_dir: str | None = None,
+        qlib_bin_path: str | None = None,
+        node_id: str | None = None,
     ) -> Dict[str, Any]:
-        import asyncio
-        import time
-
-        from ...services.dispatch_service import DispatchService
-
-        if not data_date:
-            raise ValueError("data_date 参数必填")
+        from .config_composer import ConfigComposer
+        from .official_factor_batch_compute_service import (
+            OFFICIAL_FACTOR_WINDOW_END,
+            OFFICIAL_FACTOR_WINDOW_START,
+        )
+        from .official_factor_full_compute_dispatch_service import (
+            OfficialFactorFullComputeDispatchService,
+        )
 
         requested = factor_names or []
-        dispatch_service = self._dispatch_service or DispatchService()
-        eligible = self._eligibility_service.list_eligible_factors(
+        resolved_start = _normalize_official_window_date(start_date or OFFICIAL_FACTOR_WINDOW_START)
+        resolved_end = _normalize_official_window_date(end_date or data_date or OFFICIAL_FACTOR_WINDOW_END)
+        if not resolved_start or not resolved_end:
+            raise ValueError("official factor compute requires start_date/end_date")
+        if resolved_start > resolved_end:
+            raise ValueError(f"invalid official factor window: {resolved_start} > {resolved_end}")
+
+        cfg = ConfigComposer()._fetch_workspace_config(node_id)
+        resolved_factor_data_dir = factor_data_dir or cfg.get("factor_data_dir")
+        resolved_qlib_bin_path = qlib_bin_path or cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+        if not resolved_factor_data_dir:
+            raise ValueError("failed to resolve QE factor_data_dir for official full compute")
+
+        submitter = OfficialFactorFullComputeDispatchService(self._dispatch_service)
+        result = submitter.submit(
             factor_names=factor_names,
+            factor_data_dir=str(resolved_factor_data_dir),
+            start_date=resolved_start,
+            end_date=resolved_end,
             include_disabled=include_disabled,
-            source_mode="official_offline",
+            batch_size=max(1, min(int(max_workers or 1) * 4, 32)),
+            workers=max_workers,
+            timeout_per_factor=timeout_per_factor,
+            force=force,
+            qlib_bin_path=str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
+            node_id=node_id or _DEFAULT_DISPATCH_NODE_ID,
         )
-        eligible_names = [row["factor_name"] for row in eligible]
-        skipped = sorted(set(requested) - set(eligible_names)) if requested else []
-
-        if not eligible_names:
-            return {
-                "success": False,
-                "error": "无满足 official evaluation 准入条件的因子",
-                "requested_factors": requested,
-                "eligible_factors": [],
-                "skipped_factors": skipped,
-            }
-
-        payload = {
-            "factor_names": eligible_names,
-            "data_date": data_date,
-            "include_disabled": include_disabled,
-            "max_workers": max_workers,
-            "timeout_per_factor": timeout_per_factor,
-        }
-        created = asyncio.run(dispatch_service.create_and_submit_task({
-            "task_name": f"official_evaluation_{data_date}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            "task_type": "official_evaluation",
-            "node_id": _DEFAULT_DISPATCH_NODE_ID,
-            "payload": payload,
-        }))
-        task_id = created["task_id"]
-
-        snapshot_date = self._snapshot_date_from_data_date(data_date)
-        created_at = created.get("created_at")
-        deadline = time.time() + max(timeout_per_factor * max(len(eligible_names), 1), 600)
-        sync_failure_grace = max(300, min(timeout_per_factor + 120, 1800))
-        last_activity_at = time.time()
-        last_metric_rows = 0
-        last_task = created
-        while time.time() < deadline:
-            asyncio.run(dispatch_service.sync_running_tasks())
-            last_task = dispatch_service.get_task(task_id) or last_task
-            status = last_task.get("status")
-            coverage = self._get_metrics_coverage(
-                eligible_names,
-                snapshot_date=snapshot_date,
-                calculated_after=created_at,
-            )
-            metric_rows = int(coverage.get("metric_rows") or 0)
-            if metric_rows > last_metric_rows:
-                last_metric_rows = metric_rows
-                last_activity_at = time.time()
-            if coverage.get("complete"):
-                self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
-                return self._build_recovered_metrics_result(
-                    requested=requested or eligible_names,
-                    eligible_names=eligible_names,
-                    skipped=skipped,
-                    snapshot_date=snapshot_date,
-                    coverage=coverage,
-                    task_id=task_id,
-                    remote_task_id=last_task.get("remote_task_id"),
-                    dispatch_status=last_task.get("status"),
-                    reason="db_metrics_complete",
-                )
-            if status in {"success", "failed", "canceled"}:
-                if status == "failed" and self._is_sync_unreachable_failure(last_task):
-                    if time.time() - last_activity_at <= sync_failure_grace:
-                        logger.warning(
-                            "official evaluation dispatch %s marked failed by sync, "
-                            "but metrics are still progressing (%s/%s factors); waiting",
-                            task_id,
-                            coverage.get("complete_factor_count"),
-                            len(eligible_names),
-                        )
-                        time.sleep(5)
-                        continue
-                break
-            time.sleep(2)
-        else:
-            raise TimeoutError(f"official evaluation dispatch task timeout: {task_id}")
-
-        result_bundle = asyncio.run(dispatch_service.get_task_results(task_id))
-        latest_result = result_bundle.get("latest_result") or {}
-        latest_result.setdefault("requested_factors", requested or eligible_names)
-        latest_result.setdefault("eligible_factors", eligible_names)
-        latest_result.setdefault("skipped_factors", skipped)
-        latest_result.setdefault("dispatch_task_id", task_id)
-        latest_result.setdefault("remote_task_id", last_task.get("remote_task_id"))
-        if latest_result.get("success") is True:
-            self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
-            latest_result.setdefault("dispatch_status", last_task.get("status"))
-            latest_result.setdefault("recovered_from_dispatch_status", last_task.get("status"))
-            return latest_result
-        if last_task.get("status") == "success":
-            latest_result.setdefault("success", True)
-            return latest_result
-
-        log_excerpt: list[str] = []
-        try:
-            log_file = dispatch_service.get_log_file_path(task_id)
-            if log_file and log_file.exists():
-                content = log_file.read_text(encoding="utf-8", errors="replace")
-                if content.strip():
-                    log_excerpt = content.splitlines()[-80:]
-                else:
-                    log_excerpt = ["[日志文件为空 — 节点可能未开始执行或启动即崩溃]"]
-            else:
-                log_excerpt = ["[日志文件不存在]"]
-        except Exception as log_exc:
-            logger.warning("读取 official evaluation dispatch 日志失败 (task=%s): %s", task_id, log_exc)
-
-        # 构建有用的错误信息
-        dispatch_error = last_task.get("error_message") or ""
-        node_status = last_task.get("status", "unknown")
-        error_parts = []
-        if dispatch_error:
-            error_parts.append(dispatch_error)
-        # 从 latest_result 中提取 pipeline_summary 的逐因子错误
-        pipeline_summary = latest_result.get("pipeline_summary") or {}
-        factor_errors = pipeline_summary.get("factor_results", [])
-        failed_factors = [f for f in factor_errors if f.get("error")]
-        if failed_factors:
-            sample = failed_factors[:3]
-            error_parts.append(
-                f"因子失败示例({len(failed_factors)}个): "
-                + "; ".join(f"{f.get('name','?')}: {f.get('error','?')[:100]}" for f in sample)
-            )
-        if not error_parts:
-            error_parts.append(f"dispatch task {node_status}, 无详细错误信息（检查节点日志）")
-
-        latest_result.setdefault("success", False)
-        latest_result.setdefault("dispatch_status", node_status)
-        latest_result.setdefault("error", " | ".join(error_parts))
-        if log_excerpt:
-            latest_result.setdefault("logs", log_excerpt)
-        latest_result.setdefault(
-            "metrics_coverage",
-            self._get_metrics_coverage(
-                eligible_names,
-                snapshot_date=snapshot_date,
-                calculated_after=created_at,
+        ok = bool(result.get("ok", True))
+        return {
+            **result,
+            "ok": ok,
+            "success": ok,
+            "status": result.get("status", "queued"),
+            "requested_factors": requested or "all_enabled_code_text",
+            "data_start": resolved_start,
+            "data_end": resolved_end,
+            "snapshot_date": resolved_end,
+            "as_of_date": resolved_end,
+            "factor_data_dir": str(resolved_factor_data_dir),
+            "qlib_bin_path": str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
+            "cache_source": "official_offline_backtest_factor_data",
+            "data_source_mode": "official_offline_backtest_factor_data",
+            "code_source": "code_text",
+            "task_type": "official_factor_full_compute",
+            "legacy_compatibility": "official_evaluation_compute_forwarded_to_official_factor_full_compute",
+            "message": (
+                "submitted official_factor_full_compute; official independent metrics are "
+                "computed from the same offline cache generated from backtest factor_data_dir/qlib data"
             ),
-        )
-        return latest_result
+        }
 
     @staticmethod
     def _snapshot_date_from_data_date(data_date: str) -> str:
