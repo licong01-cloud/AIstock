@@ -899,6 +899,41 @@ def test_nightly_status_summary_keeps_payload_when_code_intelligence_fails_with_
     assert "- code_intelligence: `failure`" in issue_payload["body"]
 
 
+def test_nightly_context_pack_includes_code_intelligence_refs() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "failure",
+                "paperV2Live": "success",
+                "codeIntelligence": "success",
+            },
+            "run_id": "9005",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9005",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    payload["code_intelligence_refs"] = {
+        "context_ref": "tmp/validation/code-intelligence/9005/codegraph-context.md",
+        "affected_tests_ref": "tmp/validation/code-intelligence/9005/affected-tests.json",
+        "affected_tests_count": 1,
+        "understand_anything_summary_ref": "tmp/validation/code-intelligence/9005/ua-validation-summary.md",
+        "understand_anything_status": "available",
+    }
+    payload["llm_triage_advice"] = summary._build_nightly_llm_triage_advice(payload)
+
+    context_pack = summary.build_context_pack(payload, github_issue_number=519)
+    markdown = summary.render_context_pack_markdown(context_pack)
+
+    assert context_pack["code_intelligence_refs"]["affected_tests_count"] == 1
+    assert "## Code Intelligence Refs" in markdown
+    assert "code_intelligence_context_ref" in markdown
+    assert "code_intelligence_ua_summary_ref" in markdown
+
+
 def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     payload = summary.summarize_nightly_status(
         {
@@ -978,7 +1013,10 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
-    script = workflow["jobs"]["full-summary"]["steps"][4]["with"]["script"]
+    steps = workflow["jobs"]["full-summary"]["steps"]
+    script = next(step for step in steps if step.get("name") == "Auto-register failure as actionable GitHub Issue")[
+        "with"
+    ]["script"]
 
     assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script
@@ -1017,13 +1055,16 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "llm-prompt-evaluation.json" in code_steps
     assert "guarded-rollout-gate" in code_steps
     assert "llm-guarded-rollout-gate.json" in code_steps
-    summary_run = workflow["jobs"]["full-summary"]["steps"][1]["run"]
+    full_summary_steps = workflow["jobs"]["full-summary"]["steps"]
+    summary_run = next(step for step in full_summary_steps if step.get("name") == "Compose nightly summary")["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run
-    failure_run = workflow["jobs"]["full-summary"]["steps"][2]["run"]
-    assert "LLM_TRIAGE_MODE" in workflow["jobs"]["full-summary"]["steps"][2]["env"]
+    failure_step = next(step for step in full_summary_steps if step.get("name") == "Build Nightly failure issue context")
+    failure_run = failure_step["run"]
+    assert "LLM_TRIAGE_MODE" in failure_step["env"]
     assert 'LLM_ARGS=(--llm-triage-mode "${LLM_TRIAGE_MODE}")' in failure_run
     assert '"${LLM_ARGS[@]}"' in failure_run
+    assert "--code-intelligence-json" in failure_run
 
 
 def test_nightly_workflow_success_manifests_are_compact() -> None:

@@ -549,6 +549,39 @@ def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_p
     assert "provider_chain" in artifact["llm_invocation_evidence"]
 
 
+def test_test_plan_advice_includes_compact_code_intelligence_refs(tmp_path):
+    code_refs = tmp_path / "code-intelligence-summary.json"
+    code_refs.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_code_intelligence_summary_v1",
+                "context_ref": "tmp/validation/code-intelligence/1/codegraph-context.md",
+                "affected_tests_ref": "tmp/validation/code-intelligence/1/affected-tests.json",
+                "affected_tests_count": 2,
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/1/ua-validation-summary.md",
+                "understand_anything": {"status": "available", "freshness": "base_current"},
+                "context": {"large_payload": "x" * 1000},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_test_plan_advice(
+        "deterministic",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        module="validation.runner",
+        code_intelligence_refs=adapter.code_intelligence_refs_from_file(code_refs),
+    )
+
+    refs = payload["code_intelligence_refs"]
+    assert refs["context_ref"].endswith("codegraph-context.md")
+    assert refs["affected_tests_count"] == 2
+    assert refs["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert "context" not in refs
+    assert payload["llm_invocation_evidence"]["input_policy"] == "plan_key_intent_catalog_plus_code_intelligence_refs_only"
+
+
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
 
@@ -604,6 +637,29 @@ def test_nightly_scheduler_advice_codegraph_missing_is_warning_only():
     assert payload["deterministic_gate"]["workflow_gate"] == "warning"
     assert payload["codegraph"]["warning_only"] is True
     assert payload["deterministic_gate"]["allowed_plan_count"] >= 1
+
+
+def test_nightly_scheduler_advice_includes_codegraph_and_ua_refs():
+    payload = adapter.build_nightly_scheduler_advice(
+        "deterministic",
+        adapter.load_config(),
+        changed_files=["scripts/nightly_adaptive_scheduler.py"],
+        codegraph_freshness="fresh",
+        code_intelligence_refs={
+            "context_ref": "tmp/validation/code-intelligence/1/codegraph-context.md",
+            "affected_tests_ref": "tmp/validation/code-intelligence/1/affected-tests.json",
+            "affected_tests_count": 1,
+            "understand_anything_summary_ref": "tmp/validation/code-intelligence/1/ua-validation-summary.md",
+            "understand_anything_status": "available",
+        },
+    )
+
+    refs = payload["code_intelligence_refs"]
+    assert refs["context_ref"].endswith("codegraph-context.md")
+    assert refs["affected_tests_ref"].endswith("affected-tests.json")
+    assert refs["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert payload["test_plan_advice_gate"]["workflow_gate"] in {"ready", "blocked"}
+    assert payload["llm_invocation_evidence"]["input_policy"] == "changed_files_recent_failures_codegraph_ua_refs_catalog_only"
 
 
 def test_nightly_scheduler_advice_rejects_live_trading_or_business_state_plans():
