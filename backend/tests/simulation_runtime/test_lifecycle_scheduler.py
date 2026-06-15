@@ -1961,6 +1961,146 @@ def test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> 
     assert len(broker.place_order_payloads) == placed_count
 
 
+def test_scheduler_recovers_miniqmt_retryable_run_with_order_ledger_evidence_by_reconcile_only() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_scheduler_qmt_ledger_side_effect",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_scheduler_qmt_ledger_side_effect",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker()
+    snapshot_client = FakeQmtSnapshotClient(
+        positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
+    )
+    managed_order_service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
+    context = SimulationRunContext(
+        portfolio_id="portfolio_qmt",
+        current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
+        current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+        managed_order_service=managed_order_service,
+        qmt_ledger_repository=qmt_repo,
+        qmt_sync_service=QmtStrategyLedgerSyncService(
+            repository=qmt_repo,
+            qmt_client=snapshot_client,
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            trade_date=TRADE_DATE,
+            calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        ),
+        qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+        broker_positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}],
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={qmt_binding.binding_id: context}),
+    )
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    failed_run = repo.update_simulation_daily_run(
+        submitted.results[0].run.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "broker_called": False,
+            "reconcile_after_submit": {
+                "side_effect_evidence": {
+                    "schema_version": "miniqmt_broker_side_effect_evidence_v1",
+                    "broker_side_effect_count": 1,
+                }
+            },
+        },
+    )
+    placed_count = len(broker.place_order_payloads)
+
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    recovered_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered.results[0].status == "RECONCILED"
+    assert recovered_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert recovered_run.run_payload_json["reconcile_after_submit"]["side_effect_evidence"]["broker_side_effect_count"] > 0
+    assert len(broker.place_order_payloads) == placed_count
+
+
+def test_scheduler_terminalizes_stale_historical_miniqmt_planning_runs_before_today_tick() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_qmt",
+                    current_positions={},
+                    current_prices={"000001.SZ": 10.0, "688001.SH": 20.0},
+                    managed_order_service=QmtManagedOrderService(
+                        repository=InMemoryQmtStrategyLedgerRepository(),
+                        broker=FakeManagedOrderBroker(),  # type: ignore[arg-type]
+                        calendar_provider=StaticTradingCalendarProvider([TRADE_DATE]),
+                    ),
+                )
+            }
+        ),
+    )
+    stale = scheduler.run_once(
+        trade_date=date(2026, 5, 20),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        created_by="codex_final_minqmt_multistrategy_dry_run_20260603",
+    )
+    stale_run = repo.get_simulation_daily_run(stale.results[0].run.run_id)
+
+    today = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    terminalized = repo.get_simulation_daily_run(stale_run.run_id)
+
+    assert today.stale_terminalized_count == 1
+    assert today.stale_run_results[0]["run_id"] == stale_run.run_id
+    assert terminalized.status == SimulationDailyRunStatus.CANCELLED
+    assert terminalized.run_payload_json["stale_active_terminalization"]["previous_status"] == "PLANNING_EXECUTION"
+    assert terminalized.run_payload_json["stale_active_terminalization"]["had_broker_side_effect"] is False
+
+
 def test_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
