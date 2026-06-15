@@ -157,3 +157,41 @@ def test_correlation_runtime_validation_classifies_exclusions(tmp_path: Path) ->
     assert report["gate_status"] == "passed"
     assert report["excluded_summary"] == {"missing_from_cache": 1, "degenerate_nan": 0}
     assert report["checks"]["official_cache_only"] is True
+
+
+def test_factor_value_loader_classifies_hash_mismatch(tmp_path: Path) -> None:
+    cache_root = tmp_path / "factor_values"
+    single_dir = cache_root / "single"
+    single_dir.mkdir(parents=True)
+    idx = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2018-08-01"), pd.Timestamp("2026-04-30")], ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"value": [1.0, 2.0]}, index=idx).to_parquet(single_dir / "factor_a.parquet")
+    (cache_root / "_meta.json").write_text(
+        json.dumps(
+            {
+                "source_system": "official_offline_backtest_factor_data",
+                "as_of_date": "2026-04-30",
+                "factors": {
+                    "factor_a": {
+                        "source_hash_raw": "old-hash",
+                        "as_of_date": "2026-04-30",
+                        "date_range": "2018-08-01~2026-04-30",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loader = FactorValueLoader(source="single", pipeline_dir=str(cache_root))
+    result = loader.validate_official_cache_window_hit(
+        ["factor_a"],
+        "2020-01-01",
+        "2021-01-01",
+        expected_code_hashes={"factor_a": "new-hash"},
+    )
+
+    assert result["gate_status"] == "failed"
+    assert result["miss_reasons"]["hash_mismatch"] == ["factor_a"]
