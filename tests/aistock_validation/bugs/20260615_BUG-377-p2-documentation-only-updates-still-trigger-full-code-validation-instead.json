@@ -33,8 +33,8 @@
   "expected": "Docs-only updates preserve a simple version/change record and do not require code validation, business nox, CodeQL, Semgrep, or backend/frontend tests unless the change also touches code, workflow, catalog, standard YAML, dependency, or production-sensitive paths.",
   "first_seen_at": "2026-06-15T14:23:30.901321Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "058e1aa240e6886e98381f28398cb4924f96e02d",
+  "fixed_at": "2026-06-15T16:21:37.358627Z",
   "github_issue_number": 1114,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1114",
   "last_seen_at": "2026-06-15T14:23:30.901321Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1120",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "33259ed8ca0a3f6d4c9fce76",
     "source_event_id": "FE-20260615-33259ed8ca0a"
   },
+  "validation_evidence": [
+    "gh pr checks 1120 -> 17 passed, 0 failed; docs_lite_version_record_only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
