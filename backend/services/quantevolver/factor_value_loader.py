@@ -241,6 +241,7 @@ class FactorValueLoader:
         expected_universe_key: Optional[str] = None,
         expected_universe_fingerprint_sha256: Optional[str] = None,
         expected_index_policy: Optional[str] = None,
+        expected_code_hashes: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Validate QE sub-window cache-hit eligibility for official single cache."""
         requested = [str(name).strip() for name in factor_names if str(name).strip()]
@@ -254,6 +255,7 @@ class FactorValueLoader:
             "window_not_covered": [],
             "universe_mismatch": [],
             "index_policy_mismatch": [],
+            "hash_mismatch": [],
             "schema_invalid": [],
         }
         top_level_errors: List[str] = []
@@ -306,6 +308,10 @@ class FactorValueLoader:
                 miss_reasons["universe_mismatch"].append(factor_name)
             if expected_index_policy and str(entry.get("index_policy") or meta.get("index_policy")) != expected_index_policy:
                 miss_reasons["index_policy_mismatch"].append(factor_name)
+            expected_hash = (expected_code_hashes or {}).get(factor_name)
+            cached_hash = entry.get("source_hash_raw") or entry.get("code_hash")
+            if expected_hash and cached_hash != expected_hash:
+                miss_reasons["hash_mismatch"].append(factor_name)
 
         miss_factor_names = sorted({name for names in miss_reasons.values() for name in names})
         hit_factor_names = [name for name in requested if name not in miss_factor_names]
@@ -323,6 +329,7 @@ class FactorValueLoader:
             "end_date": end_date,
             "expected_as_of_date": expected_as_of_date,
             "as_of_date": meta.get("as_of_date"),
+            "expected_code_hashes": expected_code_hashes or {},
             "requested_factor_count": len(requested),
             "hit_factor_count": len(hit_factor_names),
             "miss_factor_count": len(miss_factor_names),
