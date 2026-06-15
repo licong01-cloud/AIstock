@@ -33,8 +33,8 @@
   "expected": "提供标准化 WSL runtime validation 入口，能在不重启生产服务的前提下执行 2/16/full 因子计算验收、相关性 official cache 验收、QE 子窗口 cache-hit 验收，并输出结构化 JSON/Markdown 证据；验收失败必须分类显示 missing cache、schema、metadata、coverage、memory、correlation excluded、QE cache miss 等原因。",
   "first_seen_at": "2026-06-15T12:34:30.712252Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "536c30c6961418a1af012a7001a68e8fb97d01ca",
+  "fixed_at": "2026-06-15T12:57:54.889523Z",
   "github_issue_number": 1104,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1104",
   "last_seen_at": "2026-06-15T12:34:30.712252Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1105",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -62,6 +63,16 @@
     "fingerprint": "ec1104c962ba08dfa5ed95f7",
     "source_event_id": "FE-20260615-ec1104c962ba"
   },
+  "validation_evidence": [
+    "GitHub PR #1105 statusCheckRollup -> all required checks success",
+    "python -m pytest -q backend/tests/quantevolver/test_official_runtime_validation.py backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/test_correlation_compute_independence.py -> 16 passed",
+    "python -m py_compile backend/services/quantevolver/official_factor_batch_compute_service.py backend/services/quantevolver/factor_value_loader.py backend/services/quantevolver/correlation_compute_service.py backend/tests/quantevolver/test_official_runtime_validation.py -> passed",
+    "python -m ruff check backend/services/quantevolver/official_factor_batch_compute_service.py backend/services/quantevolver/factor_value_loader.py backend/services/quantevolver/correlation_compute_service.py backend/tests/quantevolver/test_official_runtime_validation.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
