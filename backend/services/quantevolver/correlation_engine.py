@@ -13,7 +13,6 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import h5py
@@ -166,6 +165,22 @@ class CorrelationResult:
                         "data_period": f"252d_as_of_{self.as_of_date}",
                     })
         return records
+
+    def get_no_valid_pair_factors(self) -> list[str]:
+        """Return factor names whose off-diagonal correlations are all NaN."""
+        if self.matrix.size == 0:
+            return list(self.factor_names)
+
+        no_valid_pairs: list[str] = []
+        for idx, name in enumerate(self.factor_names):
+            row = np.asarray(self.matrix[idx], dtype=float)
+            if row.size <= 1:
+                no_valid_pairs.append(name)
+                continue
+            off_diag = np.delete(row, idx)
+            if np.all(np.isnan(off_diag)):
+                no_valid_pairs.append(name)
+        return no_valid_pairs
 
 
 class CorrelationEngine:
@@ -356,8 +371,7 @@ class CorrelationEngine:
                 "universe_rule_version": expected_universe_rule_version,
                 "universe_fingerprint_sha256": expected_universe_fingerprint_sha256,
                 "index_policy": expected_index_policy,
-                "num_high_corr_07": len(result.get_high_corr_pairs(0.7))
-                    if False else 0,  # 占位，下面计算
+                "num_high_corr_07": 0,
             },
         )
         # 修正 metadata 中的 high_corr 计数
@@ -628,7 +642,6 @@ class CorrelationEngine:
         最终 ρ̂(i,j) = Σ w_t * ρ_t(i,j) / Σ w_t (NaN-aware)
         """
         T = len(daily_corrs)
-        K = daily_corrs[0].shape[0]
 
         # 权重: 最近一天权重最大, shape (T, 1, 1) 用于广播
         weights = np.array([self._lambda ** (T - 1 - t) for t in range(T)])
