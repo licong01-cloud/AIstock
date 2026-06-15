@@ -27,6 +27,16 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - For UI BUG intake, use `submit-bug` returned `ui_intake_hints` as the first route/scope/reproduce checklist; do not broad-scan frontend until those hints fail or prove stale.
 - Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
 
+## Documentation Fast Path
+
+Use the three-tier docs flow instead of the BUG workflow for ordinary documentation work:
+
+- `docs-fast-update`: update an existing ordinary doc under `docs/architecture/`, `docs/analysis/`, `docs/design/`, `docs/handoff/`, `docs/operations/`, `docs/operations_*.md`, or `README.md`.
+- `docs-fast-new`: create a new doc in the same ordinary documentation set.
+- `docs-controlled`: any change under `docs/standards/`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/`, or `.claude/`; do not use the docs fast path.
+
+For `docs-fast-update` and `docs-fast-new`, use an isolated worktree/branch, keep a version/date plus 1-3 change bullets in the document, run only `git diff --check`, create the PR, and after authorized merge sync root and clean the task worktree/branch. Do not create BUG JSON, Context Pack, CodeGraph/UA artifacts, nox, pytest, backend, or frontend validation for ordinary docs.
+
 ## Workflow
 
 1. Health-check the environment:

@@ -2,7 +2,16 @@
   "actual": "Simplify AIstock documentation handling into three tiers: docs-fast-update, docs-fast-new, and docs-controlled. Ordinary docs should require only a worktree, version/change note, PR, and minimal diff check; strict workflow/standards/agent docs keep full guardrails.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260616_BUG-378-bug-378-p2-simplify-documentation-workflow-into-three-tiers-for-fast-pat.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/ci_change_classifier.py",
+    "scripts/issue_flow.py",
+    "scripts/aistock_issue_workflow.py",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-378",
@@ -41,7 +50,7 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -54,32 +63,6 @@
   "trigger_condition": {
     "fingerprint": "95d2730fcc5c503348ab9807",
     "source_event_id": "FE-20260616-95d2730fcc5c"
-  },
-  "ui_intake_hints": {
-    "labels": [
-      "bug",
-      "ui",
-      "module:validation",
-      "type:bug"
-    ],
-    "recommended_verification": [
-      "l0"
-    ],
-    "reproduce_required": true,
-    "reproduce_template": [
-      "Open the affected AIstock page/route.",
-      "Perform the visible user action that currently fails or looks wrong.",
-      "Verify the expected visible state, table, dialog, or form behavior."
-    ],
-    "schema_version": "aistock_ui_issue_intake_hints_v1",
-    "scope_source": "inferred_from_module_route_and_changed_files",
-    "ui_component_scope": [],
-    "ui_issue": true,
-    "ui_route": "/change",
-    "ui_routes": [
-      "/change"
-    ],
-    "visual_acceptance_required": true
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -96,5 +79,6 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed",
+  "scope_expansion_reason": "Workflow documentation/process bug: implement three-tier docs-fast/docs-controlled routing and update client instructions; original UI-inferred scope was false positive."
 }

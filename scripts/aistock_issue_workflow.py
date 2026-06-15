@@ -4096,6 +4096,8 @@ def _infer_fast_path_tier(
     tier = "T0"
     categories = {_file_category(path) for path in changed_files}
     docs_lite_change = bool(changed_files) and all(flow._is_docs_lite_path(path) for path in changed_files)
+    docs_fast_tier = validation.get("docs_fast_tier")
+    docs_controlled_required = bool(validation.get("docs_controlled_required"))
     metadata_only = bool(categories) and categories <= {"docs", "client_wrapper", "bug_registry"} and not record
     severity_parts = str((record or {}).get("severity") or "").upper().split()
     severity = severity_parts[0] if severity_parts else ""
@@ -4110,9 +4112,12 @@ def _infer_fast_path_tier(
     if not changed_files:
         reasons.append("no changed files supplied; plan uses issue metadata and l0 fallback")
     if docs_lite_change:
-        reasons.append("docs-lite scope uses version/change-record review only")
+        reasons.append(f"{docs_fast_tier or 'docs-fast-update'} scope uses git diff check plus version/change note only")
     elif metadata_only:
         reasons.append("docs/client/registry-only scope can stay T0")
+    if docs_controlled_required:
+        tier = _bump_fast_path_tier(tier, "T1")
+        reasons.append("controlled docs/client instructions keep normal workflow guardrails")
     if categories & {"workflow", "validation_catalog", "backend", "frontend", "scripts", "tests"}:
         tier = _bump_fast_path_tier(tier, "T1")
         reasons.append("code, workflow, test, or validation catalog files require T1")

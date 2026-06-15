@@ -273,6 +273,39 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
 
 
+def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--changed-file",
+        "docs/analysis/example.md",
+        "--changed-file",
+        "docs/design/example.md",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["docs_lite"] is True
+    assert payload["docs_fast_tier"] == "docs_fast_update"
+    assert payload["docs_fast_validation"] == "git_diff_check_and_version_note_only"
+    assert payload["docs_controlled_required"] is False
+    assert payload["required_plans"] == []
+
+
+def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--changed-file",
+        "docs/standards/aistock_issue_workflow_quickstart.md",
+        "--changed-file",
+        "AGENTS.md",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["docs_lite"] is False
+    assert payload["docs_fast_tier"] is None
+    assert payload["docs_controlled_required"] is True
+    assert payload["required_plans"] == ["l0"]
+
+
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue = _write_json(tmp_path / "bug.json", {
         "bug_id": "BUG-124",

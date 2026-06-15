@@ -873,18 +873,32 @@ def test_finish_batch_scope_check_accepts_glob_scope(
     assert payload["scope_check"]["status"] == "passed"
 
 
-def test_fast_path_classifies_docs_only_as_t0(isolated_workflow_root: Path) -> None:
+def test_fast_path_classifies_ordinary_docs_as_docs_fast_t0(isolated_workflow_root: Path) -> None:
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=["docs/analysis/example.md"],
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_fast_path_v1"
+    assert payload["task_tier"] == "T0"
+    assert payload["validation"]["docs_fast_tier"] == "docs_fast_update"
+    assert payload["validation"]["required_plans"] == []
+    assert payload["context_strategy"]["max_initial_files"] == 4
+    assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert payload["required_commands"] == []
+
+
+def test_fast_path_classifies_controlled_docs_as_t1(isolated_workflow_root: Path) -> None:
     payload = workflow.build_fast_path_plan(
         bug_id=None,
         issue_json=None,
         changed_files=["docs/standards/aistock_issue_workflow_quickstart.md"],
     )
 
-    assert payload["schema_version"] == "aistock_issue_workflow_fast_path_v1"
-    assert payload["task_tier"] == "T0"
-    assert payload["context_strategy"]["max_initial_files"] == 4
-    assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
-    assert payload["production_gates"]["ddl"] == "noop"
+    assert payload["task_tier"] == "T1"
+    assert payload["validation"]["docs_controlled_required"] is True
     assert "python -m nox -s l0" in payload["required_commands"]
 
 

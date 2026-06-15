@@ -51,10 +51,16 @@ VALID_CANDIDATE_TRANSITIONS = {
     "ignored": set(),
 }
 VALID_BUG_STATUSES = {"open", "in_progress", "fixed", "verified", "wontfix"}
-DOCS_LITE_PREFIXES = ("docs/architecture/", "docs/analysis/", "docs/operations/")
+DOCS_LITE_PREFIXES = (
+    "docs/architecture/",
+    "docs/analysis/",
+    "docs/design/",
+    "docs/handoff/",
+    "docs/operations/",
+)
 DOCS_LITE_ROOT_FILES = {"README.md"}
-DOCS_STRICT_PREFIXES = ("docs/standards/",)
-DOCS_STRICT_FILES = {"docs/codex_project_memory.md"}
+DOCS_STRICT_PREFIXES = ("docs/standards/", ".codex/", ".claude/")
+DOCS_STRICT_FILES = {"docs/codex_project_memory.md", "AGENTS.md", "AGENTS.override.md"}
 ISSUE_FORM_LABEL_ALIASES = {
     "existing bug id": "bug_id",
     "severity": "severity",
@@ -121,6 +127,20 @@ def _is_docs_lite_path(path: str) -> bool:
 
 def _is_docs_lite_change(changed_files: list[str]) -> bool:
     return bool(changed_files) and all(_is_docs_lite_path(path) for path in changed_files)
+
+
+def _docs_fast_tier(changed_files: list[str], added_files: list[str] | None = None) -> str | None:
+    if not _is_docs_lite_change(changed_files):
+        return None
+    added = {_norm_path(path) for path in (added_files or [])}
+    return "docs_fast_new" if any(_norm_path(path) in added for path in changed_files) else "docs_fast_update"
+
+
+def _docs_controlled_required(changed_files: list[str]) -> bool:
+    return any(
+        _norm_path(path) in DOCS_STRICT_FILES or _norm_path(path).startswith(DOCS_STRICT_PREFIXES)
+        for path in changed_files
+    )
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -318,6 +338,8 @@ def match_changed_files(changed_files: list[str]) -> dict[str, Any]:
 
 def select_validation(changed_files: list[str], module: str | None = None) -> dict[str, Any]:
     docs_lite_change = _is_docs_lite_change(changed_files)
+    docs_fast_tier = _docs_fast_tier(changed_files)
+    docs_controlled_required = _docs_controlled_required(changed_files)
     modules = _catalog_modules()
     plans = _plans_by_key()
     ownership = match_changed_files(changed_files)
@@ -390,6 +412,9 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         "production_gates": gates,
         "docs_lite": docs_lite_change,
         "docs_lite_validation": "version_change_record_only" if docs_lite_change else None,
+        "docs_fast_tier": docs_fast_tier,
+        "docs_fast_validation": "git_diff_check_and_version_note_only" if docs_lite_change else None,
+        "docs_controlled_required": docs_controlled_required,
     }
 
 
@@ -1240,6 +1265,7 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
     p0p1_gate = summary.get("p0p1_evidence_gate") if isinstance(summary.get("p0p1_evidence_gate"), dict) else {}
     design_gate = summary.get("design_compliance_gate") if isinstance(summary.get("design_compliance_gate"), dict) else {}
     docs_lite = bool(validation.get("docs_lite"))
+    docs_fast_tier = validation.get("docs_fast_tier")
     compact = {
         "schema_version": "aistock_pr_quality_llm_summary_v1",
         "provider": "deterministic",
@@ -1255,6 +1281,9 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "design_compliance_gate": design_gate.get("workflow_gate"),
         "docs_lite": docs_lite,
         "docs_lite_validation": validation.get("docs_lite_validation"),
+        "docs_fast_tier": docs_fast_tier,
+        "docs_fast_validation": validation.get("docs_fast_validation"),
+        "docs_controlled_required": validation.get("docs_controlled_required"),
         "required_validation_count": 0 if docs_lite else len(validation.get("required_plans") or []),
         "recommended_validation_count": 0 if docs_lite else len(validation.get("recommended_plans") or []),
         "production_gates": {
@@ -1263,8 +1292,8 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
             "production_backend_dependency_gate": summary.get("production_backend_dependency_gate"),
         },
         "code_intelligence": {
-            "used": "skipped_for_docs_lite" if docs_lite else "not_available_in_pr_quality_summary",
-            "fallback_reason": "version_change_record_only" if docs_lite else "code_intelligence_artifact_built_in_separate_pr_quality_step",
+            "used": "skipped_for_docs_fast" if docs_lite else "not_available_in_pr_quality_summary",
+            "fallback_reason": "git_diff_check_and_version_note_only" if docs_lite else "code_intelligence_artifact_built_in_separate_pr_quality_step",
         },
     }
     prompt_payload = json.dumps(compact, ensure_ascii=False, sort_keys=True)
@@ -1407,7 +1436,9 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
         f"- feature_linkage_gate: `{(summary.get('feature_linkage_gate') or {}).get('workflow_gate')}`",
         f"- docs_lite: `{summary.get('docs_lite')}`",
-        f"- docs_lite_validation: `{summary.get('docs_lite_validation') or 'none'}`",
+        f"- docs_fast_tier: `{summary.get('docs_fast_tier') or 'none'}`",
+        f"- docs_fast_validation: `{summary.get('docs_fast_validation') or 'none'}`",
+        f"- docs_controlled_required: `{summary.get('docs_controlled_required')}`",
         f"- required_validation: `{', '.join(required_validation) if required_validation else 'none'}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
@@ -1417,8 +1448,8 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
     ]
     if summary.get("docs_lite"):
         lines.extend([
-            "### Docs-Lite Lane",
-            "- Ordinary documentation updates require only a version/change record.",
+            "### Docs Fast Lane",
+            "- Ordinary documentation updates require only a version/change note and diff check.",
             "- Code validation, CodeGraph, Semgrep, CodeQL, nox, and backend tests are intentionally skipped.",
             "",
         ])
