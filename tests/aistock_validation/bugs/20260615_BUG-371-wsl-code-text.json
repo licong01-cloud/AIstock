@@ -1,0 +1,118 @@
+{
+  "actual": "当前只读核对显示 official evaluation/correlation 虽经 dispatch 进入 WSL runner，但因子值生成仍依赖手工 backfill_factor_cache.py 且每因子 subprocess 重复读取文件；_compute_local、correlation local runner、backfill 缺少 WSL-only guard；官方离线链路仍存在 qe_code_path/transformation_status/realtime snapshot 历史分支风险。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "scripts/backfill_factor_cache.py",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/tests/quantevolver/test_wsl_runtime_guard.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/scripts/run_official_evaluation_wsl.py",
+    "backend/scripts/run_correlation_compute_wsl.py",
+    "tests/aistock_validation/bugs/20260615_BUG-371-wsl-code-text.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-371",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T10:10:47.369757Z",
+  "description": "当前只读核对显示 official evaluation/correlation 虽经 dispatch 进入 WSL runner，但因子值生成仍依赖手工 backfill_factor_cache.py 且每因子 subprocess 重复读取文件；_compute_local、correlation local runner、backfill 缺少 WSL-only guard；官方离线链路仍存在 qe_code_path/transformation_status/realtime snapshot 历史分支风险。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-b340f2b407e1",
+      "timestamp": "2026-06-15T10:10:47.369753Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md"
+  ],
+  "expected": "因子库 UI/API 提交 WSL dispatch official_factor_full_compute；WSL worker 一次加载回测底层数据到只读内存缓存，使用原始 code_text 分批生成 rdagent_assets/factor_values/single 缓存并同批计算官方独立指标；相关性和 QE 回测复用同一 official cache；所有实现通过设计文档 G0-G12/DAI-001-DAI-012 验收矩阵。",
+  "first_seen_at": "2026-06-15T10:10:47.369757Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1100,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1100",
+  "last_seen_at": "2026-06-15T10:10:47.369757Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'factor_values_realtime|RealtimeFactorDataLoader|qe_code_path|transformation_status|backfill_factor_cache' backend/services/quantevolver backend/scripts scripts/backfill_factor_cache.py",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方全量因子独立指标计算必须在 WSL 使用回测 code_text 与底层数据内存缓存分批生成因子值并计算指标",
+  "trigger_condition": {
+    "fingerprint": "b340f2b407e1142809c5c9e2",
+    "source_event_id": "FE-20260615-b340f2b407e1"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "scripts/backfill_factor_cache.py",
+      "backend/scripts/run_official_evaluation_wsl.py",
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/routers/quantevolver.py",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "backend/tests/quantevolver/test_wsl_runtime_guard.py",
+      "backend/tests/quantevolver/test_official_factor_batch_compute.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md",
+    "ui_routes": [
+      "/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
