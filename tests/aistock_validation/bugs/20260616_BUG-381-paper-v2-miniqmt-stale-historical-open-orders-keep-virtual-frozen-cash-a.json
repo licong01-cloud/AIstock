@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/qmt_strategy_ledger/sync_service.py",
     "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
     "tests/aistock_validation/bugs/20260616_BUG-381-paper-v2-miniqmt-stale-historical-open-orders-keep-virtual-frozen-cash-a.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
