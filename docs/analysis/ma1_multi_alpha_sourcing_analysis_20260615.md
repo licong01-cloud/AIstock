@@ -222,4 +222,84 @@ MA1 成功验证了「主题块 × 模型族」对称对照设计，确认了因
 
 ---
 
-*实验数据来源：QE 数仓（qe_archive）· MCP aistock-qe。本文档由 worktree `docs/ma1-multi-alpha-sourcing-20260615` 编写。*
+---
+
+# MA2 Round2 实验设计（2026-06-15，进行中）
+
+## 8.1 设计依据（基于 MA1 + R20B 已有数据）
+
+| 信号域 | × LSTM | × LGBM_C | MA2 决策 |
+|--------|--------|----------|---------|
+| VOL12 波动率 | **从未测试**（R20A GPU 失败缺口） | R20B 已测 4 seed（均 CAGR≈25%） | GPU 全新高价值；CPU 统一 5-seed 框架 |
+| MARG10 融资融券 | **从未测试**（R20A GPU 失败缺口） | R20B 已测 4 seed（best 83.5%） | GPU 全新高价值；CPU 统一 5-seed 框架 |
+
+**因子独立性验证（MA2 相对 MA1 A_Flow 块）：**
+- **VOL12**（12 因子）：与 A_Flow **零重叠** ✅ 纯新波动率信号域
+- **MARG10**（10 因子）：与 A_Flow 重叠 **6** 个，但核心 `m_md_rz_rq_sentiment`（ICIR=0.69）+ `sentiment_order_imbalance` + `m_gap_frequency_20d` + `dynamic_valuation_factor` 共 4 个独立 → Phase0 量化重叠
+
+**设计逻辑**：MA2 用 MA1 验证的正确配置（h20/V25/topk25/nd2）测两个新信号域。GPU(LSTM) 全新数据填补 R20A 失败缺口；CPU(LGBM_C) 虽与 R20B 4-seed 部分重叠，但统一到 5-seed 框架使 **5-domain × 2-model 全景矩阵完整可比**（Flow/TurnMom/FundVal from MA1 + Vol/Marg from MA2）。
+
+## 8.2 实验规格
+
+| Task | 节点 | 并行度 | 模型 | 内容 | Loops |
+|------|------|--------|------|------|-------|
+| **MA2-GPU** | `wsl2-5080` | parallel_2 | `__seed_LSTM_10D_hs64_d02__`（cuda） | L1-5 VOL12×5seed + L6-10 MARG10×5seed | 10 |
+| **MA2-CPU** | `rdagent-node1` | parallel_4 | `__seed_LGBModel_conservative_v1__`（cpu） | L1-5 VOL12×5seed + L6-10 MARG10×5seed | 10 |
+
+- Seeds：`{42, 888, 2024, 2026, 12345}`（每个块 5 seed）
+- 配置：topk=25 / n_drop=2 / label_horizon=20 / V25_1_SMALL_CAP / no-HMM / 10M（同 MA1）
+- Groups：`a4_vol_{lstm,lgbmc}` + `a5_marg_{lstm,lgbmc}`
+- 回测：2024-07-01 ~ 2026-04-27，stock_pool=`filtered_pool_20260428`
+
+## 8.3 因子集（取自 R20B 权威配置，已验证可运行）
+
+**VOL12（波动率域，12 因子）：**
+`m_atr_compression, m_vol_of_vol_20d, m_idio_vol_60d, neg_momentum_volatility_ratio, liquidity_adjusted_volatility, neg_volatility_breakout_momentum_v2, neg_volatility_10D, m_intraday_range_compress, m_tech_atr_ratio_14d, m_ind_residual_vol_ratio, neg_turnover_adjusted_volatility, conditional_momentum_volatility`
+
+**MARG10（融资融券情绪域，10 因子）：**
+`m_md_rz_rq_sentiment, dynamic_flow_volatility_sentiment, ChipWinnerRateEliteBuyIntensity, sentiment_order_imbalance, m_turnover_mf_divergence, m_gap_frequency_20d, neg_Composite_Factor_Multi_Dim, dynamic_valuation_factor, bid_ask_spread_change_factor, small_order_flow_intensity`
+
+## 8.4 执行进度
+
+- [x] 设计完成（基于 MA1 数据 + R20B 因子集）
+- [x] loops 生成 + 校验（factor_count、device、model_id、seeds、group 全部核对）
+- [x] 因子重叠验证（VOL12 零重叠 / MARG10 6 重叠）
+- [x] loops 工件落盘：`docs/analysis/ma2_loops/ma2_gpu_lstm_loops.json` + `ma2_cpu_lgbmc_loops.json`
+- [ ] **创建 MA2-GPU task**（`qe_custom_evo_create_pending`）
+- [ ] **创建 MA2-CPU task**（`qe_custom_evo_create_pending`）
+- [ ] **启动两个 task**（`qe_custom_evo_run_confirmed`）
+- [ ] 记录 task_id 到本节
+
+## 8.5 ⚡ 重启 Claude Code 后的恢复步骤
+
+> 进度已全部持久化。重启后 MEMORY.md 会自动提示「MA2 待创建启动」，按以下步骤继续即可，**无需重新设计/生成 loops**。
+
+**第一步：创建 MA2-GPU task** —— 调用 `qe_custom_evo_create_pending`：
+```
+task_name      = "MA2-GPU MultiAlpha LSTM 2blocks(Vol/Marg) h20 5seed"
+target_desc    = "MA2 GPU wsl2-5080 parallel_2. 10 loops: 2 decorrelated-theme blocks (D=VOL12 volatility / E=MARG10 margin_sentiment) x LSTM_10D_hs64_d02 h20 5seed(42/888/2024/2026/12345). Multi-alpha sourcing round2, fills R20A GPU LSTM gap (VOL12/MARG10 never tested on LSTM). topk25/nd2/h20/V25_1_SMALL_CAP/no-HMM/10M/cuda."
+node_id        = "wsl2-5080"
+node_parallelism = {"wsl2-5080": 2}
+engine_mode    = "unified"
+loops          = 读 docs/analysis/ma2_loops/ma2_gpu_lstm_loops.json（10 个完整 loop dict，已含 loop_index）
+```
+
+**第二步：创建 MA2-CPU task** —— 同上，参数替换：
+```
+task_name      = "MA2-CPU MultiAlpha LGBM_C 2blocks(Vol/Marg) h20 5seed"
+target_desc    = "MA2 CPU rdagent-node1 parallel_4. 10 loops: 2 blocks (D=VOL12 / E=MARG10) x LGBM_C h20 5seed(42/888/2024/2026/12345). Multi-alpha sourcing round2, unified 5seed framework (R20B tested 4seed LGBM_C; MA2 adds seed 888 + aligns to MA1). topk25/nd2/h20/V25_1_SMALL_CAP/no-HMM/10M/cpu."
+node_id        = "rdagent-node1"
+node_parallelism = {"rdagent-node1": 4}
+engine_mode    = "unified"
+loops          = 读 docs/analysis/ma2_loops/ma2_cpu_lgbmc_loops.json
+```
+
+**第三步：启动** —— 对每个 task 调用 `qe_custom_evo_run_confirmed(task_id=<返回值>)`。
+
+**第四步**：把返回的 task_id 填回本节 8.4，commit。
+
+> 注：loops JSON 每个含 loop_index + 完整 strategy_params + execution_algo_params（cuda/cpu）+ runtime_flags，可直接作为 `loops` 参数传入，无需再加工。MCP 后端为内网（端口 8001），不走外网代理。
+
+---
+
+*实验数据来源：QE 数仓（qe_archive）· MCP aistock-qe。本文档由 worktree `docs/ma1-multi-alpha-sourcing-20260615` 编写。MA2 设计与进度同录于此文档（§8）。*
