@@ -72,6 +72,36 @@ def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     assert str(cache_dir) == os.path.normpath(_DEFAULT_PIPELINE_DIR)
 
 
+def test_correlation_result_classifies_no_valid_pair_factors() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationResult
+
+    result = CorrelationResult(
+        matrix=np.array(
+            [
+                [1.0, np.nan, 0.42],
+                [np.nan, 1.0, np.nan],
+                [0.42, np.nan, 1.0],
+            ],
+            dtype=float,
+        ),
+        factor_names=["factor_a", "quality_structure_composite", "factor_b"],
+        as_of_date="2026-04-30",
+        effective_window=252,
+        computation_time_sec=0.01,
+    )
+
+    assert result.to_db_records(threshold=0) == [
+        {
+            "factor_a": "factor_a",
+            "factor_b": "factor_b",
+            "correlation": 0.42,
+            "method": "spearman_ewma",
+            "data_period": "252d_as_of_2026-04-30",
+        }
+    ]
+    assert result.get_no_valid_pair_factors() == ["quality_structure_composite"]
+
+
 def test_correlation_cache_status_reports_offline_orphan_parquets(monkeypatch, tmp_path) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
 
@@ -348,3 +378,147 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["as_of_date"] is None
     assert result["cache_source"] == "offline_research_backtest_factor_values"
     assert result["cache_root"] == str(tmp_path)
+
+
+
+def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(monkeypatch, tmp_path) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.quantevolver.correlation_engine import CorrelationResult
+
+    factors = ["factor_a", "quality_structure_composite", "factor_b"]
+    (tmp_path / "_meta.json").write_text(
+        json.dumps(
+            {
+                "factors": {
+                    name: {"as_of_date": "2026-04-30"}
+                    for name in factors
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class FakePipeline:
+        _output_dir = str(tmp_path)
+
+        def validate_meta_integrity(self):
+            return {
+                "ok": True,
+                "factor_count": 3,
+                "top_level_as_of_date": "2026-04-30",
+            }
+
+        def get_cached_singles(self):
+            return [{"factor_name": name} for name in factors]
+
+    class FakeCursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            return None
+
+    class FakeCorrelationEngine:
+        def __init__(self, loader):
+            self.loader = loader
+
+        def compute_full_matrix(self, factor_names, **kwargs):
+            assert factor_names == factors
+            assert kwargs["expected_as_of_date"] == "2026-04-30"
+            return CorrelationResult(
+                matrix=np.array(
+                    [
+                        [1.0, np.nan, 0.42],
+                        [np.nan, 1.0, np.nan],
+                        [0.42, np.nan, 1.0],
+                    ],
+                    dtype=float,
+                ),
+                factor_names=list(factor_names),
+                as_of_date="2026-04-30",
+                effective_window=252,
+                computation_time_sec=0.01,
+                metadata={
+                    "num_high_corr_07": 0,
+                    "avg_correlation": 0.42,
+                    "hdf5_path": str(tmp_path / "corr_20260430.h5"),
+                },
+            )
+
+    persisted_records = []
+    persisted_metadata = []
+
+    def fake_persist_records(records, **_kwargs):
+        persisted_records.extend(records)
+        return len(records)
+
+    def fake_persist_metadata(result):
+        persisted_metadata.append(dict(result.metadata))
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
+    monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
+    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
+        "eligible_factors": 3,
+        "deleted_pairs": 0,
+        "reset_ineligible_catalog": 0,
+        "reset_orphan_catalog": 0,
+        "reset_all_catalog": 0,
+    })
+    monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_persist_correlations_batch", fake_persist_records)
+    monkeypatch.setattr(svc, "_persist_correlation_metadata", fake_persist_metadata)
+    monkeypatch.setattr(svc, "CorrelationEngine", FakeCorrelationEngine)
+    monkeypatch.setattr(svc.FactorValueLoader, "invalidate_single_cache", lambda factor_name=None: None)
+    monkeypatch.setattr(svc.FactorValueLoader, "invalidate_merged_cache", lambda pipeline_dir=None: None)
+    monkeypatch.setattr("glob.glob", lambda pattern: [])
+
+    result = svc.run_correlation_compute_local(factors)
+
+    assert result["success"] is True
+    assert result["requested_factor_count"] == 3
+    assert result["success_factor_count"] == 2
+    assert result["failed_factor_count"] == 1
+    assert result["record_count"] == 1
+    assert result["success_factors"] == ["factor_a", "factor_b"]
+    assert result["excluded_factors"]["missing_from_cache"] == []
+    assert result["excluded_factors"]["degenerate_nan"] == []
+    assert result["excluded_factors"]["no_valid_pairs"] == ["quality_structure_composite"]
+    assert result["runtime_validation"]["excluded_summary"] == {
+        "missing_from_cache": 0,
+        "degenerate_nan": 0,
+        "no_valid_pairs": 1,
+    }
+    assert result["runtime_validation"]["checks"]["excluded_factors_classified"] is True
+    assert persisted_records == [
+        {
+            "factor_a": "factor_a",
+            "factor_b": "factor_b",
+            "correlation": 0.42,
+            "method": "spearman_ewma",
+            "data_period": "252d_as_of_2026-04-30",
+        }
+    ]
+    assert persisted_metadata[0]["num_pair_valid_factors"] == 2
+    assert persisted_metadata[0]["no_valid_pair_factors"] == ["quality_structure_composite"]
