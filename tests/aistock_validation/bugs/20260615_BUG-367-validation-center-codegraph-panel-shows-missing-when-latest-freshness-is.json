@@ -27,10 +27,10 @@
       "timestamp": "2026-06-14T19:11:00.643370Z"
     },
     {
-      "timestamp": "2026-06-14T19:25:00Z",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Added PipelineOverviewCards because the overview card also renders CodeGraph freshness and could show missing from summary fallback."
+      "actor": "codex",
+      "note": "Added PipelineOverviewCards because the overview card also renders CodeGraph freshness and could show missing from summary fallback.",
+      "timestamp": "2026-06-14T19:25:00Z"
     }
   ],
   "evidence_uris": [
@@ -39,8 +39,8 @@
   "expected": "Validation Center Code Intelligence panel shows CodeGraph fresh or fresh with metadata-stale warning when latest-freshness reports effective=fresh, and remains warning-only for missing graph data.",
   "first_seen_at": "2026-06-14T19:11:00.643374Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "630ca8831d5193a60aff65dba518938093914845",
+  "fixed_at": "2026-06-15T02:06:00.786964Z",
   "github_issue_number": 1087,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1087",
   "last_seen_at": "2026-06-14T19:11:00.643374Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1088",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -100,6 +101,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1088 merged at 630ca883 after CI green; local validation_center_backend 429 passed; l0 and validation_module_registry_l0 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
