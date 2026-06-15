@@ -9,6 +9,10 @@ from typing import Any
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
 WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged", *CLOSE_SYNC_STATUSES}
+DOCS_ONLY_PREFIXES = ("docs/",)
+DOCS_ONLY_ROOT_FILES = {"README.md", "AGENTS.md", "AGENTS.override.md"}
+DOCS_LIGHT_EXCLUDED_PREFIXES = ("docs/standards/",)
+DOCS_LIGHT_EXCLUDED_FILES = {"docs/codex_project_memory.md", "AGENTS.md", "AGENTS.override.md"}
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/issue-auto-link.yml",
     ".github/workflows/issue-on-test-fail.yml",
@@ -106,6 +110,28 @@ def _is_bug_registry_metadata_path(path: str) -> bool:
     return path.startswith(BUG_REGISTRY_PREFIX)
 
 
+def _is_docs_path(path: str) -> bool:
+    return path.startswith(DOCS_ONLY_PREFIXES) or path in DOCS_ONLY_ROOT_FILES
+
+
+def _is_docs_lite_path(path: str) -> bool:
+    if not _is_docs_path(path):
+        return False
+    if path in DOCS_LIGHT_EXCLUDED_FILES:
+        return False
+    return not path.startswith(DOCS_LIGHT_EXCLUDED_PREFIXES)
+
+
+def _docs_lite_kind(paths: list[str]) -> str:
+    if any(path.startswith("docs/architecture/") for path in paths):
+        return "design_docs_only"
+    if any(path.startswith("docs/operations/") or path.startswith("docs/operations_") for path in paths):
+        return "operations_docs_only"
+    if any(path.startswith("docs/analysis/") for path in paths):
+        return "analysis_docs_only"
+    return "documentation_only"
+
+
 def _workflow_bug_metadata_file(rel_path: str, *, repo_root: Path) -> bool:
     if Path(rel_path).name.startswith(".") or not rel_path.endswith(".json"):
         return False
@@ -138,6 +164,8 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     bug_registry_files = [path for path in normalized if path.startswith(BUG_REGISTRY_PREFIX)]
     non_bug_registry_files = [path for path in normalized if not path.startswith(BUG_REGISTRY_PREFIX)]
     prompt_evaluation_files = [path for path in normalized if _prompt_evaluation_required(path)]
+    docs_lite_only = bool(normalized) and all(_is_docs_lite_path(path) for path in normalized)
+    docs_only = bool(normalized) and all(_is_docs_path(path) for path in normalized)
 
     if not normalized:
         reasons.append("no changed files detected; keep full backend CI")
@@ -191,12 +219,18 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     )
     if workflow_validation_only:
         reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
+    if docs_lite_only:
+        reasons.append("only lightweight documentation files changed; version/change-record review only")
+    elif docs_only:
+        reasons.append("documentation files changed but include standards or agent instructions; keep normal guardrails")
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
 
-    backend_required = not (close_sync_metadata_only or workflow_validation_only)
+    backend_required = not (close_sync_metadata_only or workflow_validation_only or docs_lite_only)
     classification = "full_ci_required"
-    if close_sync_metadata_only:
+    if docs_lite_only:
+        classification = _docs_lite_kind(normalized)
+    elif close_sync_metadata_only:
         classification = "close_sync_metadata_only"
     elif workflow_validation_only:
         classification = "workflow_validation_only"
@@ -208,14 +242,17 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
         "non_bug_registry_files": non_bug_registry_files,
         "metadata_statuses": metadata_statuses,
         "metadata_only": metadata_only,
+        "docs_only": docs_only,
+        "docs_lite_only": docs_lite_only,
         "close_sync_metadata_only": close_sync_metadata_only,
         "workflow_bug_metadata_files": workflow_bug_metadata_files,
         "workflow_validation_only": workflow_validation_only,
         "workflow_validation_required": workflow_validation_only,
+        "docs_lite_required": docs_lite_only,
         "prompt_evaluation_files": prompt_evaluation_files,
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
-        "static_gate_required": True,
+        "static_gate_required": not docs_lite_only,
         "pr_quality_required": True,
         "classification": classification,
         "reasons": reasons,
@@ -234,6 +271,8 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"backend_required={str(payload['backend_required']).lower()}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
+        f"docs_lite_required={str(payload['docs_lite_required']).lower()}",
+        f"static_gate_required={str(payload['static_gate_required']).lower()}",
         f"prompt_evaluation_required={str(payload['prompt_evaluation_required']).lower()}",
         f"classification={payload['classification']}",
     ]
@@ -260,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
         "workflow_validation_required": payload["workflow_validation_required"],
+        "docs_lite_required": payload["docs_lite_required"],
+        "static_gate_required": payload["static_gate_required"],
         "prompt_evaluation_required": payload["prompt_evaluation_required"],
         "changed_file_count": payload["changed_file_count"],
     }, ensure_ascii=False, sort_keys=True))
