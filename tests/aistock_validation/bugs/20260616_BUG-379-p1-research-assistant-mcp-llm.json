@@ -1,8 +1,13 @@
 {
-  "actual": "?? live ?????????? archive ????? QE ??????????? archive ????????????????????????????????????",
+  "actual": "live 问答中，用户询问已入仓 QE 实验里回测收益最好/最赚钱的是哪个实验及收益时，答复可能路由到 qe_archive_health 或状态汇总，未稳定选择 qe_archive_query_run_leaderboard，也不会在人类可读结论中直接给出排名第一实验和收益。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/semantic_tool_planner.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-379",
@@ -13,17 +18,42 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-15T18:13:00.350484Z",
-  "description": "?? live ?????????? archive ????? QE ??????????? archive ????????????????????????????????????",
+  "description": "Research Assistant 对自然语言业务问题仍依赖固定词语/短句路由，遇到 QE archive 中收益最佳、效果最好等语义查询时容易返回健康汇总或状态列表，不能像 Codex/Claude Code 一样先理解真实意图再匹配 MCP 工具。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260616-27cd8cc874a1",
       "timestamp": "2026-06-15T18:13:00.350479Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "backend/services/research_assistant/tool_router.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/semantic_tool_planner.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_service.py"
+      ],
+      "note": "Expanded scope from registry-only intake to Research Assistant semantic MCP planning, service integration, legacy fallback router, and focused regression tests. The fix must not add phrase/synonym routing; it must use an LLM-derived structured intent plan before tool execution.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-15T18:19:49.090818Z"
+    },
+    {
+      "action": "implement_fix",
+      "actor": "codex",
+      "note": "Implemented an LLM semantic MCP planner that selects audited tools from business meaning and catalog context before legacy fallback; added service regression tests for semantic leaderboard routing and metric clarification without adding new phrase/synonym route rules.",
+      "timestamp": "2026-06-15T19:44:14.490882Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "???????????????Research Assistant ?? Codex/Claude Code ????????????? MCP ?????????????????? QE run leaderboard???????????????????????????????",
+  "expected": "Research Assistant 应先由 LLM 基于用户真实意图、业务域和已审计 MCP 工具目录生成结构化工具计划；明确的收益排行问题应选择只读 qe_archive_query_run_leaderboard 并传递安全查询参数，口径不清的“哪个最好”应先追问比较指标，而不是新增特定词语/短句/synonym 路由规则。",
   "first_seen_at": "2026-06-15T18:13:00.350484Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -43,7 +73,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -52,7 +83,7 @@
   "suspected_modules": [
     "research_assistant"
   ],
-  "title": "P1: Research Assistant MCP ???? LLM ???????",
+  "title": "P1: Research Assistant MCP 路由未基于 LLM 语义理解选择工具",
   "trigger_condition": {
     "fingerprint": "27cd8cc874a14e6f31e71509",
     "source_event_id": "FE-20260616-27cd8cc874a1"
@@ -69,5 +100,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }

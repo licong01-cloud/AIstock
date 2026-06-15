@@ -64,6 +64,23 @@ class DialogueAwareFakeLlmClient:
 FakeLlmClient = DialogueAwareFakeLlmClient
 
 
+class SemanticPlanningFakeLlmClient(DialogueAwareFakeLlmClient):
+    def __init__(self, plan: dict[str, object]) -> None:
+        super().__init__()
+        self.plan = dict(plan)
+        self.plan_calls: list[dict[str, object]] = []
+
+    def complete_tool_plan(self, **kwargs: object) -> LlmCallResult:
+        self.plan_calls.append(kwargs)
+        return LlmCallResult(
+            content=json.dumps(self.plan, ensure_ascii=False),
+            provider="fake",
+            model="fake-semantic-planner",
+            duration_ms=1,
+            usage={"prompt_tokens": 12, "completion_tokens": 8},
+        )
+
+
 class PromptTooLongOnceLlmClient(FakeLlmClient):
     def __init__(self) -> None:
         super().__init__()
@@ -1277,6 +1294,65 @@ def test_bug_376_qe_archive_best_return_question_gets_human_leaderboard_answer()
     summary = result["cards"]["mcp_summary_result"]
     assert summary["summary_kind"] == "query_run_leaderboard"
     assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+
+
+def test_bug_379_semantic_planner_overrides_legacy_route_without_new_phrase_rules() -> None:
+    fake = SemanticPlanningFakeLlmClient(
+        {
+            "status": "tool_plan",
+            "domain": "qe_warehouse",
+            "server_key": "aistock-qe",
+            "tool_name": "qe_archive_query_run_leaderboard",
+            "tool_args": {"order_by": "cagr", "limit": 1},
+            "confidence": 0.91,
+            "reason": "The user asks for the best archived QE result by return, so a run leaderboard query is the relevant read-only evidence.",
+        }
+    )
+    svc = _chat_service_with_qe_fakes(fake)
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我从 QE archive 中找一个按 CAGR 口径的冠军样本，并说出它的数值。"))
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["planner_source"] == "llm_semantic_tool_planner"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    assert route["tool_args"]["order_by"] == "cagr"
+    assert route["limit"] == 1
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["limit"] == 1
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "CAGR=22.00%" in text
+    assert "run_count=7" not in text
+    assert len(fake.plan_calls) == 1
+    planner_context = "\n".join(str(message.get("content", "")) for message in fake.plan_calls[0]["messages"])  # type: ignore[index]
+    assert "Do not use keyword matching or synonym lists" in planner_context
+    assert "audited_tools" in planner_context
+
+
+def test_bug_379_semantic_planner_asks_metric_clarification_for_underspecified_best() -> None:
+    fake = SemanticPlanningFakeLlmClient(
+        {
+            "status": "clarification",
+            "domain": "qe_warehouse",
+            "confidence": 0.82,
+            "reason": "The user asks for the best QE experiment but does not state whether best means return, risk-adjusted return, stability, or latest status.",
+            "clarification_questions": ["你希望按收益、Sharpe/IR、稳定性，还是最新状态来判断“最好”？"],
+        }
+    )
+    svc = _chat_service_with_qe_fakes(fake)
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="QE 实验里哪个最好？"))
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["planner_source"] == "llm_semantic_tool_planner"
+    assert route["requires_clarification"] is True
+    assert "mcp_execution_result" not in result["cards"]
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs == {}
+    text = result["assistant_message"]["content_text"]
+    assert "需要先确认比较口径" in text
+    assert "收益、Sharpe/IR、稳定性" in text
+    assert "QE 实验状态" not in text
 
 
 def test_bug_357_qe_draft_does_not_auto_execute_or_surface_insufficient_evidence() -> None:
