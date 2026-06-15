@@ -33,6 +33,7 @@ from backend.services.qmt_strategy_ledger.models import (
     OrderBatchRecord,
     OrderBatchStatus,
     OrderIntentRecord,
+    STATUS_OPEN_LIKE,
     new_id as new_qmt_id,
 )
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
@@ -2953,7 +2954,7 @@ class SimulationLifecycleScheduler:
             return (
                 binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
                 and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
-                and SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(run.run_payload_json)
+                and SimulationLifecycleScheduler._mini_qmt_batch_has_deferred_dependent_buy(run.run_payload_json)
             )
         statuses = {
             SimulationDailyRunStatus.CREATED,
@@ -3011,15 +3012,16 @@ class SimulationLifecycleScheduler:
                 SimulationDailyRunStatus.SUCCEEDED,
                 SimulationDailyRunStatus.FAILED_RETRYABLE,
             }
-            and SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+            and (
+                SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+                or SimulationLifecycleScheduler._mini_qmt_batch_has_terminal_capacity_residual(run.run_payload_json)
+            )
         )
 
     @staticmethod
     def _mini_qmt_batch_has_deferred_dependent_buy(payload: dict[str, Any]) -> bool:
-        return SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(
-            payload,
-            allowed_error_codes=_MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES,
-        )
+        summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(payload)
+        return bool(summary.get("noncompensating_residual")) and int(summary.get("dependent_buy_count") or 0) > 0
 
     @staticmethod
     def _mini_qmt_batch_has_retryable_buy_residual(
@@ -3027,32 +3029,90 @@ class SimulationLifecycleScheduler:
         *,
         allowed_error_codes: frozenset[str] = _MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES,
     ) -> bool:
+        summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(
+            payload,
+            allowed_error_codes=allowed_error_codes,
+        )
+        return bool(summary.get("noncompensating_residual"))
+
+    @staticmethod
+    def _mini_qmt_batch_has_noncompensating_residual(payload: dict[str, Any]) -> bool:
+        summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(payload)
+        return bool(summary.get("noncompensating_residual"))
+
+    @staticmethod
+    def _mini_qmt_batch_has_terminal_capacity_residual(payload: dict[str, Any]) -> bool:
+        summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(payload)
+        return (
+            bool(summary.get("noncompensating_residual"))
+            and int(summary.get("capacity_residual_count") or 0) > 0
+            and int(summary.get("dependent_buy_count") or 0) == 0
+        )
+
+    @staticmethod
+    def _mini_qmt_batch_residual_summary(
+        payload: dict[str, Any],
+        *,
+        allowed_error_codes: frozenset[str] = _MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES,
+    ) -> dict[str, Any]:
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
+        summary: dict[str, Any] = {
+            "schema_version": "miniqmt_batch_residual_summary_v1",
+            "qmt_batch_status": status,
+            "partial": status == "PARTIAL",
+            "compensation_required": bool(batch.get("compensation_required")),
+            "failed_result_count": 0,
+            "broker_called_failed_count": 0,
+            "dependent_buy_count": 0,
+            "capacity_residual_count": 0,
+            "unknown_residual_count": 0,
+            "error_codes": [],
+            "noncompensating_residual": False,
+        }
         if status != "PARTIAL" or bool(batch.get("compensation_required")):
-            return False
+            return summary
         results = batch.get("results")
         if not isinstance(results, list):
-            return False
-        saw_retryable_residual = False
+            return summary
+        error_codes_seen: set[str] = set()
         for result in results:
             if not isinstance(result, dict) or bool(result.get("success")):
                 continue
+            summary["failed_result_count"] = int(summary["failed_result_count"]) + 1
             if bool(result.get("broker_called")):
-                return False
+                summary["broker_called_failed_count"] = int(summary["broker_called_failed_count"]) + 1
+                continue
             preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
             errors = preflight.get("errors")
             if not isinstance(errors, list):
-                return False
+                summary["unknown_residual_count"] = int(summary["unknown_residual_count"]) + 1
+                continue
             error_codes = {
                 str(error.get("code") or "").upper()
                 for error in errors
                 if isinstance(error, dict) and str(error.get("code") or "").strip()
             }
+            error_codes_seen.update(error_codes)
             if not error_codes or not error_codes <= allowed_error_codes:
-                return False
-            saw_retryable_residual = True
-        return saw_retryable_residual
+                summary["unknown_residual_count"] = int(summary["unknown_residual_count"]) + 1
+                continue
+            if error_codes <= _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES:
+                summary["dependent_buy_count"] = int(summary["dependent_buy_count"]) + 1
+            elif error_codes <= _MINIQMT_CAPACITY_RESIDUAL_RETRY_ERROR_CODES:
+                summary["capacity_residual_count"] = int(summary["capacity_residual_count"]) + 1
+            else:
+                summary["unknown_residual_count"] = int(summary["unknown_residual_count"]) + 1
+        failed_count = int(summary["failed_result_count"])
+        known_residual_count = int(summary["dependent_buy_count"]) + int(summary["capacity_residual_count"])
+        summary["error_codes"] = sorted(error_codes_seen)
+        summary["noncompensating_residual"] = (
+            failed_count > 0
+            and known_residual_count == failed_count
+            and int(summary["broker_called_failed_count"]) == 0
+            and int(summary["unknown_residual_count"]) == 0
+        )
+        return summary
 
     @staticmethod
     def _mini_qmt_batch_succeeded(payload: dict[str, Any]) -> bool:
@@ -3171,27 +3231,30 @@ class SimulationLifecycleScheduler:
             strategy_scope=strategy_scope,
             context=context,
         )
+        batch_residual_summary = self._mini_qmt_batch_residual_summary(run.run_payload_json)
+        open_order_evidence = self._miniqmt_open_order_evidence(
+            binding=binding,
+            run=run,
+            context=context,
+        )
+        submit_result_gate = self._miniqmt_submit_result_gate(
+            run=run,
+            run_status_gate=run_status_gate,
+            batch_residual_summary=batch_residual_summary,
+            open_order_evidence=open_order_evidence,
+        )
         payload = {
             **payload,
             "strategy_scope": strategy_scope,
             "run_status_gate": run_status_gate,
+            "submit_result_gate": submit_result_gate,
+            "qmt_batch_residual_summary": batch_residual_summary,
+            "open_order_evidence": open_order_evidence,
         }
-        batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
-        if run_status_gate["status"] == "SUCCEEDED" and batch_succeeded:
+        if submit_result_gate["status"] == "SUCCEEDED":
             next_status = SimulationDailyRunStatus.SUCCEEDED
         else:
             next_status = SimulationDailyRunStatus.FAILED_RETRYABLE
-        if not batch_succeeded:
-            payload = {
-                **payload,
-                "submit_result_gate": {
-                    "schema_version": "miniqmt_reconcile_submit_result_gate_v1",
-                    "status": "blocked",
-                    "reason": "MiniQMT reconciliation cannot mark a run successful when submit batch did not succeed",
-                    "qmt_batch_status": run.run_payload_json.get("qmt_batch_status"),
-                    "broker_called": bool(run.run_payload_json.get("broker_called")),
-                },
-            }
         self.repository.update_simulation_daily_run(
             run.run_id,
             status=next_status,
@@ -3202,6 +3265,93 @@ class SimulationLifecycleScheduler:
             payload_unset=("submit_failure",) if next_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return payload
+
+    @staticmethod
+    def _miniqmt_submit_result_gate(
+        *,
+        run: SimulationDailyRun,
+        run_status_gate: dict[str, Any],
+        batch_residual_summary: dict[str, Any],
+        open_order_evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+        terminal_capacity_residual = (
+            bool(batch_residual_summary.get("noncompensating_residual"))
+            and int(batch_residual_summary.get("capacity_residual_count") or 0) > 0
+            and int(batch_residual_summary.get("dependent_buy_count") or 0) == 0
+        )
+        open_order_count = int(open_order_evidence.get("open_order_count") or 0)
+        if run_status_gate.get("status") != "SUCCEEDED":
+            status = "blocked"
+            reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
+        elif open_order_count > 0:
+            status = "blocked"
+            reason = "miniqmt_open_orders_remain_after_reconciliation"
+        elif batch_succeeded:
+            status = "SUCCEEDED"
+            reason = "miniqmt_batch_succeeded_and_reconciled"
+        elif terminal_capacity_residual:
+            status = "SUCCEEDED"
+            reason = "miniqmt_capacity_residual_skipped_and_reconciled"
+        else:
+            status = "blocked"
+            reason = "MiniQMT reconciliation cannot mark a run successful when submit batch did not succeed"
+        return {
+            "schema_version": "miniqmt_reconcile_submit_result_gate_v2",
+            "status": status,
+            "reason": reason,
+            "qmt_batch_status": run.run_payload_json.get("qmt_batch_status"),
+            "broker_called": bool(run.run_payload_json.get("broker_called")),
+            "batch_succeeded": batch_succeeded,
+            "terminal_capacity_residual": terminal_capacity_residual,
+            "open_order_count": open_order_count,
+        }
+
+    @staticmethod
+    def _miniqmt_open_order_evidence(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+    ) -> dict[str, Any]:
+        repository = getattr(context, "qmt_ledger_repository", None)
+        list_order_ledger = getattr(repository, "list_order_ledger", None)
+        orders = []
+        if callable(list_order_ledger):
+            orders = list_order_ledger(
+                account_id=binding.broker_account_id,
+                trade_date=run.trade_date,
+                strategy_id=binding.strategy_id,
+                batch_id=run.run_payload_json.get("qmt_batch_id"),
+            )
+        open_orders = [
+            order
+            for order in orders
+            if getattr(order, "order_status", None) == STATUS_OPEN_LIKE
+            and int(getattr(order, "order_volume", 0) or 0) > int(getattr(order, "traded_volume", 0) or 0)
+        ]
+        return {
+            "schema_version": "miniqmt_open_order_evidence_v1",
+            "source": "qmt_strategy.order_ledger",
+            "account_id": binding.broker_account_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": run.trade_date.isoformat(),
+            "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+            "open_order_count": len(open_orders),
+            "open_orders": [
+                {
+                    "qmt_order_id": order.qmt_order_id,
+                    "symbol": order.symbol,
+                    "order_type": order.order_type,
+                    "order_volume": order.order_volume,
+                    "traded_volume": order.traded_volume,
+                    "order_status": order.order_status,
+                    "status_msg": order.status_msg,
+                    "order_remark": order.order_remark,
+                }
+                for order in open_orders
+            ],
+        }
 
     @staticmethod
     def _miniqmt_reconciliation_strategy_scope(
@@ -3533,12 +3683,17 @@ class SimulationLifecycleScheduler:
             return "TAIL_HANDLED" if tail_result.get("success") else "TAIL_HANDLING_FAILED"
         if reconciliation is not None:
             run = reconciliation.get("run") if isinstance(reconciliation.get("run"), dict) else {}
+            submit_result_gate = (
+                reconciliation.get("submit_result_gate")
+                if isinstance(reconciliation.get("submit_result_gate"), dict)
+                else {}
+            )
             run_status_gate = (
                 reconciliation.get("run_status_gate")
                 if isinstance(reconciliation.get("run_status_gate"), dict)
                 else {}
             )
-            status = run_status_gate.get("status") or run.get("status")
+            status = submit_result_gate.get("status") or run_status_gate.get("status") or run.get("status")
             if execution_status not in {"SUBMITTED", "RECOVERED"}:
                 return "BROKER_SUBMIT_FAILED_RECONCILED" if status == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
             return "RECONCILED" if status == "SUCCEEDED" else "RECONCILIATION_WARNING"

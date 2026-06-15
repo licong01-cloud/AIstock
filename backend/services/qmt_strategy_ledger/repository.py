@@ -720,6 +720,50 @@ class QmtStrategyLedgerRepository:
                 )
         return order
 
+    def list_order_ledger(
+        self,
+        *,
+        account_id: str | None = None,
+        trade_date: date | None = None,
+        strategy_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[OrderLedgerRecord]:
+        joins = []
+        where = []
+        params: list[Any] = []
+        if account_id is not None:
+            where.append("ledger.account_id = %s")
+            params.append(account_id)
+        if trade_date is not None:
+            where.append("ledger.trade_date = %s")
+            params.append(trade_date)
+        if strategy_id is not None:
+            where.append("ledger.strategy_id = %s")
+            params.append(strategy_id)
+        if batch_id is not None:
+            joins.append("JOIN qmt_strategy.order_intent intent ON intent.intent_id = ledger.intent_id")
+            where.append("intent.batch_id = %s")
+            params.append(batch_id)
+        query = """
+            SELECT ledger.intent_id, ledger.strategy_id, ledger.strategy_name,
+                   ledger.qmt_order_id, ledger.qmt_order_sysid, ledger.symbol,
+                   ledger.order_type, ledger.order_volume, ledger.traded_volume,
+                   ledger.order_status, ledger.account_id, ledger.trade_date,
+                   ledger.price_type, ledger.price, ledger.traded_price,
+                   ledger.status_msg, ledger.order_remark, ledger.raw_json,
+                   ledger.last_synced_at
+            FROM qmt_strategy.order_ledger ledger
+        """
+        if joins:
+            query += "\n" + "\n".join(joins)
+        if where:
+            query += "\nWHERE " + " AND ".join(where)
+        query += "\nORDER BY ledger.trade_date, ledger.qmt_order_id"
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(query, tuple(params))
+                return [_row_to_order_ledger(dict(row)) for row in cur.fetchall()]
+
     def append_order_status_event(self, event: OrderStatusEventRecord) -> OrderStatusEventRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1634,6 +1678,30 @@ class InMemoryQmtStrategyLedgerRepository:
         self._order_ledgers[(order.account_id, order.qmt_order_id)] = order
         return order
 
+    def list_order_ledger(
+        self,
+        *,
+        account_id: str | None = None,
+        trade_date: date | None = None,
+        strategy_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[OrderLedgerRecord]:
+        records = list(self._order_ledgers.values())
+        if account_id is not None:
+            records = [record for record in records if record.account_id == account_id]
+        if trade_date is not None:
+            records = [record for record in records if record.trade_date == trade_date]
+        if strategy_id is not None:
+            records = [record for record in records if record.strategy_id == strategy_id]
+        if batch_id is not None:
+            intent_ids = {
+                intent.intent_id
+                for intent in self._order_intents.values()
+                if intent.batch_id == batch_id
+            }
+            records = [record for record in records if record.intent_id in intent_ids]
+        return sorted(records, key=lambda record: (record.trade_date, record.qmt_order_id))
+
     def append_order_status_event(self, event: OrderStatusEventRecord) -> OrderStatusEventRecord:
         self._order_status_events.setdefault(event.event_id, event)
         return event
@@ -2191,6 +2259,30 @@ def _row_to_order_intent(row: dict[str, Any]) -> OrderIntentRecord:
         created_at=row["created_at"],
         submitted_at=row["submitted_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_order_ledger(row: dict[str, Any]) -> OrderLedgerRecord:
+    return OrderLedgerRecord(
+        intent_id=row["intent_id"],
+        strategy_id=row["strategy_id"],
+        strategy_name=row["strategy_name"],
+        qmt_order_id=row["qmt_order_id"],
+        qmt_order_sysid=row["qmt_order_sysid"],
+        symbol=row["symbol"],
+        order_type=row["order_type"],
+        order_volume=row["order_volume"],
+        traded_volume=row["traded_volume"],
+        order_status=row["order_status"],
+        account_id=row["account_id"],
+        trade_date=row["trade_date"],
+        price_type=row["price_type"],
+        price=row["price"],
+        traded_price=row["traded_price"],
+        status_msg=row["status_msg"] or "",
+        order_remark=row["order_remark"] or "",
+        raw_json=row["raw_json"] or {},
+        last_synced_at=row["last_synced_at"],
     )
 
 
