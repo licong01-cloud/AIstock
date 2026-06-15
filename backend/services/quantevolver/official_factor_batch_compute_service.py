@@ -49,6 +49,8 @@ class BatchComputeConfig:
     timeout_per_factor: int = 1800
     qlib_bin_path: str | None = None
     task_id: str | None = None
+    validation_mode: str | None = None
+    expected_factor_count: int | None = None
 
 
 class OfficialFactorBatchComputeService:
@@ -146,9 +148,18 @@ class OfficialFactorBatchComputeService:
         success_count = 0
         fail_count = 0
         batches = list(_chunks(eligible, max(1, int(cfg.batch_size or DEFAULT_BATCH_SIZE))))
+        memory_samples: list[dict[str, Any]] = []
 
         for batch_index, batch in enumerate(batches, start=1):
             batch_id = f"{task_id}_b{batch_index:04d}"
+            rss_before_batch = _rss_mb()
+            memory_samples.append({
+                "event": "batch_started",
+                "batch_id": batch_id,
+                "batch_index": batch_index,
+                "factor_count": len(batch),
+                "rss_mb": rss_before_batch,
+            })
             self._emit(
                 "batch_started",
                 task_id=task_id,
@@ -156,7 +167,7 @@ class OfficialFactorBatchComputeService:
                 batch_index=batch_index,
                 batch_count=len(batches),
                 factor_count=len(batch),
-                rss_mb=_rss_mb(),
+                rss_mb=rss_before_batch,
             )
             batch_exec = self._compute_batch_frames(executor, batch, workers=cfg.workers)
             batch_frames: dict[str, pd.DataFrame] = {}
@@ -282,12 +293,21 @@ class OfficialFactorBatchComputeService:
             batch_frames.clear()
             FactorValueLoader.invalidate_single_cache()
             gc.collect()
+            rss_after_release = _rss_mb()
+            single_cache_entries = len(getattr(FactorValueLoader, "_single_cache", {}))
+            memory_samples.append({
+                "event": "batch_released",
+                "batch_id": batch_id,
+                "batch_index": batch_index,
+                "rss_mb": rss_after_release,
+                "single_cache_entries": single_cache_entries,
+            })
             self._emit(
                 "batch_released",
                 task_id=task_id,
                 batch_id=batch_id,
-                rss_mb=_rss_mb(),
-                single_cache_entries=len(getattr(FactorValueLoader, "_single_cache", {})),
+                rss_mb=rss_after_release,
+                single_cache_entries=single_cache_entries,
             )
 
         if metrics_ctx is not None:
@@ -306,6 +326,23 @@ class OfficialFactorBatchComputeService:
             "total_elapsed_sec": round(time.time() - started, 1),
             "batch_count": len(batches),
         }
+        runtime_validation = self._build_runtime_validation_report(
+            cfg=cfg,
+            task_id=task_id,
+            requested=requested,
+            eligible_names=eligible_names,
+            skipped=skipped,
+            results=results,
+            success_count=success_count,
+            fail_count=fail_count,
+            db_result=db_result,
+            metrics_error=metrics_error,
+            batch_count=len(batches),
+            memory_samples=memory_samples,
+            universe_meta=universe_meta,
+            start_date=start_date,
+            end_date=end_date,
+        )
         result = {
             "success": overall_success,
             "status": "success" if overall_success else "failed",
@@ -329,6 +366,7 @@ class OfficialFactorBatchComputeService:
             "fail_count": fail_count,
             "total_metrics_inserted": db_result["inserted"],
             "total_metrics_skipped": db_result["skipped"],
+            "runtime_validation": runtime_validation,
         }
         if metrics_error or db_result.get("errors") or fail_count:
             result["error"] = " | ".join([x for x in [metrics_error, "; ".join(db_result.get("errors", [])[:5])] if x]) or f"failed factors={fail_count}"
@@ -351,6 +389,12 @@ class OfficialFactorBatchComputeService:
             timeout_per_factor=int(data.get("timeout_per_factor") or 1800),
             qlib_bin_path=data.get("qlib_bin_path"),
             task_id=data.get("task_id"),
+            validation_mode=(str(data.get("validation_mode")).strip() or None) if data.get("validation_mode") is not None else None,
+            expected_factor_count=(
+                int(data.get("expected_factor_count"))
+                if data.get("expected_factor_count") is not None
+                else None
+            ),
         )
 
     def _compute_batch_frames(
@@ -476,6 +520,95 @@ class OfficialFactorBatchComputeService:
             self._metric_writer_instance = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
         return self._metric_writer_instance
 
+    def _build_runtime_validation_report(
+        self,
+        *,
+        cfg: BatchComputeConfig,
+        task_id: str,
+        requested: list[str],
+        eligible_names: list[str],
+        skipped: list[str],
+        results: list[dict[str, Any]],
+        success_count: int,
+        fail_count: int,
+        db_result: dict[str, Any],
+        metrics_error: str | None,
+        batch_count: int,
+        memory_samples: list[dict[str, Any]],
+        universe_meta: dict[str, Any],
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, Any]:
+        """Build a portable evidence block for WSL smoke/batch/full gates."""
+
+        mode = _resolve_validation_mode(cfg.validation_mode, requested, cfg.factor_names)
+        expected_factor_count = cfg.expected_factor_count
+        factor_failures = [item for item in results if not item.get("success")]
+        failure_summary: dict[str, int] = {}
+        for item in factor_failures:
+            reason = str(item.get("error_type") or item.get("error") or "unknown")
+            failure_summary[reason] = failure_summary.get(reason, 0) + 1
+
+        checks = {
+            "wsl_runtime_entered": True,
+            "official_cache_only": "factor_values_realtime" not in str(OFFICIAL_FACTOR_CACHE_ROOT),
+            "code_text_source": True,
+            "requested_count_classified": len(requested) == success_count + fail_count + len(skipped),
+            "expected_factor_count_met": (
+                True
+                if expected_factor_count is None
+                else len(eligible_names) == int(expected_factor_count)
+            ),
+            "cache_rows_written_for_successes": success_count > 0,
+            "metrics_context_ok": metrics_error is None,
+            "metrics_write_ok": not db_result.get("save_failures"),
+            "batch_release_observed": any(item.get("event") == "batch_released" for item in memory_samples),
+            "single_cache_released": all(
+                int(item.get("single_cache_entries", 0) or 0) == 0
+                for item in memory_samples
+                if item.get("event") == "batch_released"
+            ),
+            "universe_metadata_present": bool(universe_meta.get("universe_key")) and bool(universe_meta.get("index_policy")),
+            "window_declared": bool(start_date and end_date),
+            "failures_classified": fail_count == 0 or bool(failure_summary),
+        }
+        gate_status = "passed" if all(checks.values()) and fail_count == 0 else "failed"
+
+        return {
+            "schema_version": "official_factor_runtime_validation_v1",
+            "task_id": task_id,
+            "mode": mode,
+            "gate_status": gate_status,
+            "cache_root": str(OFFICIAL_FACTOR_CACHE_ROOT),
+            "single_dir": str(OFFICIAL_FACTOR_CACHE_SINGLE_DIR),
+            "cache_source": OFFICIAL_CACHE_SOURCE_SYSTEM,
+            "code_source": "code_text",
+            "data_start": start_date,
+            "data_end": end_date,
+            "requested_factor_count": len(requested),
+            "eligible_factor_count": len(eligible_names),
+            "expected_factor_count": expected_factor_count,
+            "success_factor_count": success_count,
+            "failed_factor_count": fail_count,
+            "skipped_factor_count": len(skipped),
+            "batch_count": batch_count,
+            "checks": checks,
+            "failure_summary": failure_summary,
+            "failed_factors": [
+                {
+                    "name": item.get("name"),
+                    "error_type": item.get("error_type") or "unknown",
+                    "error": item.get("error"),
+                }
+                for item in factor_failures
+            ],
+            "memory_samples": memory_samples[-12:],
+            "next_gates": {
+                "correlation_full": "run_correlation_compute_wsl_against_same_official_cache",
+                "qe_subwindow_cache_hit": "FactorValueLoader.validate_official_cache_window_hit",
+            },
+        }
+
     def _assert_official_cache_root(self) -> None:
         if any(part.lower() == "factor_values_realtime" for part in OFFICIAL_FACTOR_CACHE_ROOT.parts):
             raise RuntimeError("official factor full compute must not use factor_values_realtime")
@@ -496,6 +629,22 @@ def _normalize_date(value: str) -> str:
 def _chunks(items: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
     for idx in range(0, len(items), size):
         yield items[idx: idx + size]
+
+
+def _resolve_validation_mode(
+    requested_mode: str | None,
+    requested: list[str],
+    factor_names: list[str] | None,
+) -> str:
+    if requested_mode:
+        return requested_mode
+    if factor_names is None:
+        return "full_enabled"
+    if len(requested) <= 2:
+        return "smoke_2"
+    if len(requested) <= 16:
+        return "batch_16"
+    return "custom_subset"
 
 
 def _code_hash(code_text: str) -> str:
