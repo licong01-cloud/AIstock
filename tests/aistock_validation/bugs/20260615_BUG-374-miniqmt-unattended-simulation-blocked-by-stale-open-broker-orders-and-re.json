@@ -1,0 +1,72 @@
+{
+  "actual": "API evidence 2026-06-15: /simulation-runtime/runs active_run_count=2 with 2026-06-03 PLANNING_EXECUTION and today runs FAILED_RETRYABLE; L2 preflight primary DUPLICATE_ORDER_REMARK plus insufficient lot; L16 PARTIAL with failed intents; /qmt/orders has order_status=50 rows 1090522856, 1090532707, 1090533228.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/lifecycle.py",
+    "tests/aistock_validation/bugs/20260615_BUG-374-miniqmt-unattended-simulation-blocked-by-stale-open-broker-orders-and-re.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-374",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T13:17:09.976491Z",
+  "description": "API evidence 2026-06-15: /simulation-runtime/runs active_run_count=2 with 2026-06-03 PLANNING_EXECUTION and today runs FAILED_RETRYABLE; L2 preflight primary DUPLICATE_ORDER_REMARK plus insufficient lot; L16 PARTIAL with failed intents; /qmt/orders has order_status=50 rows 1090522856, 1090532707, 1090533228.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-cfc55533bf76",
+      "timestamp": "2026-06-15T13:17:09.976487Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-15 production read-only APIs: /api/v1/simulation-runtime/runs?limit=80, /api/v1/qmt/orders, /api/v1/qmt/status connected SIM account 62266303"
+  ],
+  "expected": "Before the next unattended trading day, MiniQMT simulation runtime must reconcile broker order/trade state, terminalize or safely retry historical runs, avoid duplicate order remark replay, and expose a readiness state with no stale active runs or open-like broker blockers.",
+  "first_seen_at": "2026-06-15T13:17:09.976491Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1108,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1108",
+  "last_seen_at": "2026-06-15T13:17:09.976491Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python debug_tools/paper_v2/readiness_probe.py --backend-url http://127.0.0.1:8001 --checks simulation-runtime-runs,qmt-orders,qmt-virtual-strategies",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT unattended simulation blocked by stale open broker orders and retryable daily runs",
+  "trigger_condition": {
+    "fingerprint": "cfc55533bf769ce7ed008ed5",
+    "source_event_id": "FE-20260615-cfc55533bf76"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
