@@ -733,11 +733,23 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             _latest_result = result
             _correlation_progress.advance(done=1)
             records = result.to_db_records(threshold=0)
+            no_valid_pair_factors = sorted(result.get_no_valid_pair_factors())
             phase2_elapsed = round(time.time() - phase2_t0, 1)
             _correlation_logs.append(
                 f"阶段2完成: {len(result.factor_names)} 因子矩阵, "
                 f"{len(records)} 对相关性记录, 耗时 {phase2_elapsed}s"
             )
+            if no_valid_pair_factors:
+                _correlation_logs.append(
+                    f"[classification] excluded {len(no_valid_pair_factors)} factors with no valid "
+                    f"off-diagonal correlation pairs: {no_valid_pair_factors[:10]}"
+                    + (f"... total {len(no_valid_pair_factors)}" if len(no_valid_pair_factors) > 10 else ""),
+                    "WARN",
+                )
+
+            result.metadata["num_pair_valid_factors"] = len(result.factor_names) - len(no_valid_pair_factors)
+            result.metadata["no_valid_pair_factors"] = list(no_valid_pair_factors)
+
             if hasattr(result, 'high_corr_pairs'):
                 high_pairs = [p for p in (result.high_corr_pairs or []) if abs(p.get('correlation', 0)) > 0.7]
                 if high_pairs:
@@ -765,15 +777,19 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             # 2) degenerate_nan: Phase 2 engine 内部剔除 (NaN 覆盖率 > 20%)
             #    通过 compute_factors (Phase 1 后) - result.factor_names (Phase 2 后) 反推
             _requested_count = len(factor_names)
-            _success_factor_names = list(result.factor_names)
+            _no_valid_pair_factors = sorted(set(no_valid_pair_factors))
+            _no_valid_pair_set = set(_no_valid_pair_factors)
+            _matrix_factor_names = set(result.factor_names)
+            _success_factor_names = [name for name in result.factor_names if name not in _no_valid_pair_set]
             _success_count = len(_success_factor_names)
-            _degenerate_factors = sorted(set(compute_factors) - set(_success_factor_names))
-            _failed_count = len(missing_factors) + len(_degenerate_factors)
-            # 强断言: 请求总数 == 成功 + 失败, 任何偏差立即暴露流程缺陷
+            _degenerate_factors = sorted(set(compute_factors) - _matrix_factor_names)
+            _failed_count = len(missing_factors) + len(_degenerate_factors) + len(_no_valid_pair_factors)
+            # Strong invariant: every requested factor is either pair-valid or classified as excluded.
             assert _requested_count == _success_count + _failed_count, (
-                f"因子计数不守恒: requested={_requested_count}, "
+                f"factor count mismatch: requested={_requested_count}, "
                 f"success={_success_count}, failed={_failed_count} "
-                f"(missing={len(missing_factors)}, degenerate={len(_degenerate_factors)})"
+                f"(missing={len(missing_factors)}, degenerate={len(_degenerate_factors)}, "
+                f"no_valid_pairs={len(_no_valid_pair_factors)})"
             )
 
             # --- 完整汇总日志 ---
@@ -792,6 +808,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             logger.info(
                 f"相关性计算完成: requested={_requested_count}, "
                 f"success={_success_count}, failed={_failed_count}, "
+                f"no_valid_pairs={len(_no_valid_pair_factors)}, "
                 f"records={len(records)}, elapsed={total_elapsed}s"
             )
             runtime_validation = _build_correlation_runtime_validation(
@@ -800,6 +817,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 failed_count=_failed_count,
                 missing_factors=missing_factors,
                 degenerate_factors=_degenerate_factors,
+                no_valid_pair_factors=_no_valid_pair_factors,
                 record_count=len(records),
                 as_of_date=as_of_date,
                 cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
@@ -815,6 +833,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 "excluded_factors": {
                     "missing_from_cache": missing_factors,
                     "degenerate_nan": _degenerate_factors,
+                    "no_valid_pairs": _no_valid_pair_factors,
                 },
                 "success_factors": _success_factor_names,
                 "record_count": len(records),
@@ -1011,7 +1030,7 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
                     created_at = NOW()
             """, (
                 result.as_of_date,
-                len(result.factor_names),
+                int(result.metadata.get("num_pair_valid_factors", len(result.factor_names))),
                 result.metadata.get("num_high_corr_07", 0),
                 float(result.metadata.get("avg_correlation", 0)),
                 result.computation_time_sec,
@@ -1058,16 +1077,28 @@ def _build_correlation_runtime_validation(
     cache_root: Path,
     integrity: dict[str, Any],
     universe_metadata: dict[str, Any],
+    no_valid_pair_factors: list[str] | None = None,
 ) -> dict[str, Any]:
+    include_no_valid_pair_summary = no_valid_pair_factors is not None
+    no_valid_pair_factors = no_valid_pair_factors or []
     checks = {
         "official_cache_only": "factor_values_realtime" not in str(cache_root),
         "factor_count_reconciled": requested_count == success_count + failed_count,
-        "excluded_factors_classified": failed_count == len(missing_factors) + len(degenerate_factors),
+        "excluded_factors_classified": (
+            failed_count == len(missing_factors) + len(degenerate_factors) + len(no_valid_pair_factors)
+        ),
         "enough_success_factors": success_count >= 2,
         "records_generated": record_count >= 0,
         "cache_integrity_visible": isinstance(integrity, dict),
         "universe_metadata_present": bool(universe_metadata.get("universe_key")),
     }
+    excluded_summary = {
+        "missing_from_cache": len(missing_factors),
+        "degenerate_nan": len(degenerate_factors),
+    }
+    if include_no_valid_pair_summary:
+        excluded_summary["no_valid_pairs"] = len(no_valid_pair_factors)
+
     gate_status = "passed" if all(checks.values()) else "failed"
     return {
         "schema_version": "official_factor_correlation_runtime_validation_v1",
@@ -1080,8 +1111,5 @@ def _build_correlation_runtime_validation(
         "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
         "cache_root": str(cache_root),
         "checks": checks,
-        "excluded_summary": {
-            "missing_from_cache": len(missing_factors),
-            "degenerate_nan": len(degenerate_factors),
-        },
+        "excluded_summary": excluded_summary,
     }
