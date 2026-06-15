@@ -198,6 +198,22 @@ def test_bug_357_qe_business_queries_route_without_diagnostic_defaults() -> None
         assert route["side_effect"] == side_effect
 
 
+def test_bug_376_qe_archive_return_rank_questions_route_to_leaderboard() -> None:
+    cases = [
+        "目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？",
+        "已入仓 QE run 里谁最赚钱？",
+        "数仓里 CAGR 最高的是哪个实验？",
+        "回测收益第一名是哪条？",
+    ]
+    for message in cases:
+        route = route_request(message)
+        assert route["domain"] == "qe_warehouse"
+        assert route["server_key"] == "aistock-qe"
+        assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+        assert route["side_effect"] == "read_only"
+        assert "qe_run_leaderboard_intent" in route["matched_terms"]
+
+
 def test_bug_359_specific_mcp_business_intents_route_to_expected_domains() -> None:
     cases = {
         "\u770b\u4e00\u4e0b QE seed \u7a33\u5b9a\u6027\uff0c\u54ea\u4e9b\u6a21\u578b\u66f4\u7a33\uff1f": ("qe_warehouse", "aistock-qe", "qe_archive_query_seed_robustness", "read_only"),

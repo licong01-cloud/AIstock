@@ -99,6 +99,66 @@ LOCAL_DATA_ANCHOR_TERMS = (
 )
 QE_SEED_STABILITY_TERMS = ("seed robustness", "seed stable", "seed stability", "seed", "\u79cd\u5b50\u9c81\u68d2\u6027", "\u79cd\u5b50\u7a33\u5b9a\u6027", "\u79cd\u5b50")
 QE_RUN_HISTORY_TERMS = ("failed run", "failed runs", "recent failed", "list runs", "recent runs", "run status", "failed", "\u6700\u8fd1\u5931\u8d25", "\u5931\u8d25")
+QE_RUN_SCOPE_TERMS = (
+    "qe",
+    "run",
+    "runs",
+    "experiment",
+    "experiments",
+    "backtest",
+    "backtests",
+    "warehouse",
+    "archive",
+    "archived",
+    "data warehouse",
+    "数仓",
+    "入仓",
+    "已入仓",
+    "归档",
+    "实验",
+    "回测",
+)
+QE_RETURN_METRIC_TERMS = (
+    "return",
+    "returns",
+    "profit",
+    "cagr",
+    "annualized return",
+    "performance",
+    "pnl",
+    "收益",
+    "年化",
+    "年化收益",
+    "赚钱",
+    "盈利",
+    "回测收益",
+    "回测效果",
+    "效果",
+    "表现",
+)
+QE_RANK_INTENT_TERMS = (
+    "best",
+    "top",
+    "highest",
+    "rank",
+    "ranking",
+    "leader",
+    "leaderboard",
+    "first",
+    "no.1",
+    "number one",
+    "最好",
+    "最高",
+    "最强",
+    "第一",
+    "第一名",
+    "排名",
+    "排行",
+    "排行榜",
+    "哪个",
+    "哪条",
+    "谁",
+)
 EXTERNAL_RESEARCH_INTENT_TERMS = ("paper", "papers", "academic", "literature", "research clue", "research lead", "\u8bba\u6587", "\u6587\u732e", "\u5b66\u672f", "\u7ebf\u7d22")
 EXTERNAL_RESEARCH_SEARCH_TERMS = SEARCH_TERMS + ("retrieve", "look up", "\u68c0\u7d22", "\u641c\u7d22", "\u67e5\u627e")
 STRATEGY_COLLECTION_TERMS = ("which", "list", "all", "candidate", "candidates", "available", "\u54ea\u4e9b", "\u5217\u51fa", "\u5168\u90e8", "\u5019\u9009", "\u53ef\u4ee5")
@@ -180,6 +240,16 @@ def _has_explicit_strategy_package_id(text: str) -> bool:
     return re.search(r"(?<![a-z0-9_])(?:spkg|pkg|strategy_pkg)[-_][a-z0-9][a-z0-9_-]*(?![a-z0-9_])", text) is not None
 
 
+def _is_qe_run_leaderboard_intent(text: str) -> bool:
+    """Detect business meaning: QE/archive run + return metric + rank/best question."""
+    has_run_scope = _contains_any(text, QE_RUN_SCOPE_TERMS)
+    has_return_metric = _contains_any(text, QE_RETURN_METRIC_TERMS)
+    has_rank_question = _contains_any(text, QE_RANK_INTENT_TERMS)
+    has_backtest_return = _contains_any(text, ("backtest", "回测")) and has_return_metric
+    has_cagr_rank = _term_in_text("cagr", text) and has_rank_question
+    return has_rank_question and (has_cagr_rank or (has_return_metric and (has_run_scope or has_backtest_return)))
+
+
 def score_domains(message: str) -> list[dict[str, Any]]:
     lower = _norm(message)
     scores: list[dict[str, Any]] = []
@@ -194,6 +264,9 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             score += 8
         if spec.domain == McpDomain.QE_WAREHOUSE and "qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS + QE_RUN_HISTORY_TERMS):
             score += 14
+        if spec.domain == McpDomain.QE_WAREHOUSE and _is_qe_run_leaderboard_intent(lower):
+            score += 18
+            matched.append("qe_run_leaderboard_intent")
         if spec.domain == McpDomain.QE_WAREHOUSE and any(
             token in lower
             for token in (
@@ -317,6 +390,8 @@ def select_tool(domain: McpDomain, message: str) -> str:
         if _contains_any(lower, ("草案", "draft", "template", "设计", "方案")) and _contains_any(lower, ("先不要执行", "不要执行", "不执行", "draft", "草案", "设计")):
             return "qe_template_create"
     if domain == McpDomain.QE_WAREHOUSE:
+        if _is_qe_run_leaderboard_intent(lower):
+            return "qe_archive_query_run_leaderboard"
         if "qe" in lower and _contains_any(lower, QE_RUN_HISTORY_TERMS):
             return "qe_archive_list_runs"
         for hint_domain, terms, tool in TOOL_HINTS:

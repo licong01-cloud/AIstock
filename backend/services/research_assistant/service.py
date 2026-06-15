@@ -4347,6 +4347,75 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "，".join(bits)
 
     @staticmethod
+    def _format_numeric_metric(value: Any, *, as_percent: bool = False) -> str:
+        if value is None or value == "":
+            return "-"
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if as_percent:
+            return f"{numeric * 100:.2f}%"
+        return f"{numeric:.4g}"
+
+    @staticmethod
+    def _qe_leaderboard_display_name(item: dict[str, Any]) -> str:
+        for key in ("experiment_id", "run_id", "task_id"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return "unknown"
+
+    @staticmethod
+    def _render_qe_run_leaderboard_reply(items: list[Any], summary: dict[str, Any], as_of: str) -> str:
+        total = summary.get("total")
+        total_count = total if isinstance(total, int) else len(items)
+        lines = [
+            "已按 QE 数仓 leaderboard 查询回测收益排行。",
+            f"口径：只读查询已入仓 QE run，默认按年化收益/CAGR 降序；汇总时间：{as_of}。",
+        ]
+        dict_items = [item for item in items if isinstance(item, dict)]
+        if not dict_items:
+            lines.append("结论：当前没有可展示的已入仓 QE run 收益排行记录。")
+            return "\n".join(lines)
+
+        best = dict_items[0]
+        best_name = ResearchAssistantService._qe_leaderboard_display_name(best)
+        best_cagr = ResearchAssistantService._format_numeric_metric(best.get("cagr"), as_percent=True)
+        best_model = str(best.get("model_type") or "-")
+        best_run = str(best.get("run_id") or "-")
+        lines.append(
+            f"结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一的是 {best_name}，CAGR={best_cagr}；run={best_run}，模型={best_model}。"
+        )
+        lines.append(f"本次展示 {len(dict_items[:20])} 条，匹配总数 {total_count} 条。")
+        lines.append("| 排名 | 年化收益/CAGR | Run | 实验 | Task | Loop | 模型 | Sharpe | IR | 最大回撤 | IC/ICIR | 完成时间 |")
+        lines.append("|---:|---:|---|---|---|---:|---|---:|---:|---:|---|---|")
+        for index, item in enumerate(dict_items[:20], start=1):
+            ic_bits = []
+            if item.get("ic") is not None:
+                ic_bits.append(f"IC={ResearchAssistantService._format_numeric_metric(item.get('ic'))}")
+            if item.get("icir") is not None:
+                ic_bits.append(f"ICIR={ResearchAssistantService._format_numeric_metric(item.get('icir'))}")
+            row = [
+                str(index),
+                ResearchAssistantService._format_numeric_metric(item.get("cagr"), as_percent=True),
+                str(item.get("run_id") or "-"),
+                str(item.get("experiment_id") or "-"),
+                str(item.get("task_id") or "-"),
+                str(item.get("loop_index") if item.get("loop_index") is not None else "-"),
+                str(item.get("model_type") or "-"),
+                ResearchAssistantService._format_numeric_metric(item.get("sharpe")),
+                ResearchAssistantService._format_numeric_metric(item.get("information_ratio")),
+                ResearchAssistantService._format_numeric_metric(item.get("max_drawdown"), as_percent=True),
+                "；".join(ic_bits) if ic_bits else "-",
+                str(item.get("completed_at") or "-"),
+            ]
+            lines.append("| " + " | ".join(row) + " |")
+        if len(dict_items) > 20:
+            lines.append(f"另有 {len(dict_items) - 20} 条未在主回复展开，可继续指定模型、task 或过滤条件查看。")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_qe_experiment_status_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
         del execution
         items = summary.get("items") if isinstance(summary.get("items"), list) else []
@@ -4453,11 +4522,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         health = summary.get("health_summary") if isinstance(summary.get("health_summary"), dict) else {}
         summary_kind = str(summary.get("summary_kind") or "warehouse")
         as_of = str(summary.get("as_of") or utc_now().isoformat())
+        if summary_kind == "query_run_leaderboard":
+            lines = [ResearchAssistantService._render_qe_run_leaderboard_reply(items, summary, as_of)]
+            partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+            if partial_errors:
+                rendered_errors = "; ".join(
+                    f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+                )
+                lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+            lines.append("本轮未执行 backfill、重跑、写库或任何高风险 QE 操作。")
+            return "\n".join(lines)
         title_by_kind = {
             "health": "QE 数仓健康汇总如下。",
             "list_outbox": "QE 数仓 outbox / 漏入库处理项汇总如下。",
             "query_analytics_view_status": "QE 数仓分析视图状态如下。",
-            "query_run_leaderboard": "QE run leaderboard 汇总如下。",
             "query_seed_robustness": "QE 种子鲁棒性汇总如下。",
             "query_overfit_flags": "QE 过拟合红旗汇总如下。",
             "query_promotion_candidates": "QE 晋升候选汇总如下。",
@@ -4491,10 +4569,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if not items:
             lines.append("明细列表：暂无需要展示的数仓记录或处理项。")
         else:
-            if summary_kind == "query_run_leaderboard":
-                best = items[0] if isinstance(items[0], dict) else {}
-                if best:
-                    lines.append("当前列表首位：" + ResearchAssistantService._render_compact_business_item(best, max_fields=10) + "。")
             lines.append("明细列表：")
             for item in items[:20]:
                 if isinstance(item, dict):

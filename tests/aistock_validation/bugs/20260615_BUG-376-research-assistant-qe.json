@@ -1,6 +1,12 @@
 {
   "actual": "用户询问“目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？”时，Research Assistant 应理解为已入仓 QE run 的收益排行查询，默认 research_valid=true，调用 qe_archive_query_run_leaderboard(order_by=cagr) 并以结论优先/中文表格回答；当前实际回复为 QE 数仓健康汇总或实验状态清单，未回答最高收益和对应实验。此前 Phase 7 已完成，说明自然语言语义路由能力未达到既有设计验收目标，需按 BUG 修复而不是继续补关键词。修复应覆盖语义意图解析、工具选择理由、参数规划和拟人化业务回复，不应只针对固定短语做硬编码。",
   "allowed_write_scope": [
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_service.py",
+    "docs/process/research_assistant_baseline_verification_20260531.md",
     "tests/aistock_validation/bugs/20260615_BUG-376-research-assistant-qe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +26,26 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260615-e7564c31b557",
       "timestamp": "2026-06-15T14:13:29.726792Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "timestamp": "2026-06-15T14:16:26.154594+00:00",
+      "old_scope": [
+        "tests/aistock_validation/bugs/20260615_BUG-376-research-assistant-qe.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "new_scope": [
+        "backend/services/research_assistant/tool_router.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_service.py",
+        "docs/process/research_assistant_baseline_verification_20260531.md",
+        "tests/aistock_validation/bugs/20260615_BUG-376-research-assistant-qe.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "note": "BUG-376 root cause is Research Assistant natural-language routing and QE warehouse business reply rendering; scope expanded from registry-only intake to focused RA router/service/execution and tests before code changes. Added baseline verification report to repair a stale Phase 7 line-number assertion blocking validation."
     }
   ],
   "evidence_uris": [],
@@ -43,7 +69,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -94,5 +121,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
