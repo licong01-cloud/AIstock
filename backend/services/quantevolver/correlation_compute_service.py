@@ -27,6 +27,7 @@ from .factor_universe_mask_service import (
 )
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_value_loader import FactorValueLoader
+from .wsl_runtime_guard import assert_wsl_runtime
 
 logger = logging.getLogger("aistock.quantevolver.correlation_compute_service")
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -416,6 +417,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     每次计算前清空所有历史相关性数据，使用离线研究/回测 single/*.parquet 缓存全量重算。
     data_date 仅保留为兼容字段；相关性计算不得切换到 realtime/snapshot cache。
     """
+    assert_wsl_runtime("correlation_compute_local")
     universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
     if as_of_date:
         # Correlation reuses the offline research cache; its universe metadata must match the ST PIT state.

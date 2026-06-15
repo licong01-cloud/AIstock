@@ -3862,196 +3862,112 @@ class FactorCacheRemoteSyncRequest(BaseModel):
     upload_workers: int = Field(4, ge=1, le=16, description="流式上传并发度；默认 4，避免串行单因子同步占不满局域网")
 
 
-@router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
+@router.post("/factor-cache/compute", summary="Submit official offline factor full compute via WSL dispatch")
 def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: BackgroundTasks):
-    """触发 WSL 端因子值计算。使用原始 code_text + subprocess（与回测 prepare_factors.py 一致）。"""
+    """Submit official offline factor cache + metrics compute to WSL/compute-node dispatch.
+
+    Windows FastAPI is a control plane only: no local WSL shell-out and no
+    legacy backfill_factor_cache.py execution. The worker consumes catalog
+    code_text plus factor_data_dir/qlib/ST-PIT data and writes the single
+    official cache under rdagent_assets/factor_values.
+    """
     if req.workers < 1 or req.workers > 10:
-        raise HTTPException(400, "workers 必须为 1~10")
+        raise HTTPException(400, "workers must be 1~10")
 
     from ..services.quantevolver.config_composer import ConfigComposer
+    from ..services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
 
     cc = ConfigComposer()
-    exp_record = None
     node_id = None
-    factor_data_dir = None
     resolved_start = req.start_date.strip()
     resolved_end = req.end_date.strip()
 
     if req.experiment_id:
         exp_record = cc._get_experiment_record(req.experiment_id)
         if not exp_record:
-            raise HTTPException(404, f"实验 {req.experiment_id} 不存在")
+            raise HTTPException(404, f"experiment {req.experiment_id} not found")
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
     factor_data_dir = rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
     if req.strict_backtest_data and not factor_data_dir:
-        raise HTTPException(400, "无法解析 QE 默认 factor_data_dir")
+        raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
-        raise HTTPException(400, "start_date/end_date 必须由 UI 显式传入")
+        raise HTTPException(400, "start_date/end_date must be provided by UI")
     try:
         datetime.strptime(resolved_start, "%Y-%m-%d")
         datetime.strptime(resolved_end, "%Y-%m-%d")
     except ValueError as e:
-        raise HTTPException(400, "start_date/end_date 必须为 YYYY-MM-DD 格式") from e
+        raise HTTPException(400, "start_date/end_date must be YYYY-MM-DD") from e
     if resolved_start > resolved_end:
-        raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
+        raise HTTPException(400, f"invalid cache window: {resolved_start} > {resolved_end}")
+    if req.resume_task_id or req.retry_failed_only or req.incremental:
+        raise HTTPException(400, "official full compute no longer supports legacy backfill resume/incremental; resubmit dispatch with force or factor_names")
+
+    task_id = f"official_factor_full_{int(time.time() * 1000)}_{os.getpid()}"
     try:
-        wsl_db_env = _collect_factor_cache_wsl_db_env()
-    except RuntimeError as e:
+        dispatch_result = OfficialFactorFullComputeDispatchService().submit(
+            factor_names=req.factor_names,
+            factor_data_dir=str(factor_data_dir or ""),
+            start_date=resolved_start,
+            end_date=resolved_end,
+            include_disabled=False,
+            batch_size=max(1, min(int(req.workers or 1) * 4, 32)),
+            workers=req.workers,
+            timeout_per_factor=req.timeout_per_factor,
+            force=req.force,
+            qlib_bin_path=qlib_bin_path,
+            node_id=node_id,
+            task_id=task_id,
+        )
+    except Exception as e:
+        logger.exception("failed to submit official factor full-compute dispatch")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # ── 从因子库获取 QE 回测权威 code_text ──
-    if req.factor_names:
-        factors_info = cc._get_factors_info(req.factor_names)
-    else:
-        factors_info = _get_all_factors_with_code_text()
-
-    factors_code = {}
-    for f in factors_info:
-        ct = f.get("code_text")
-        if ct:
-            factors_code[f["factor_name"]] = ct
-    if not factors_code and not req.resume_task_id:
-        raise HTTPException(400, "未找到任何有 code_text 的因子")
-
-    # ── 写入 code manifest JSON 文件 ──
-    task_id = f"cache_{int(time.time() * 1000)}_{os.getpid()}"
-    manifest_path = FACTOR_CACHE_TASK_DIR / f"{task_id}_manifest.json"
-    FACTOR_CACHE_TASK_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(factors_code, ensure_ascii=False), encoding="utf-8"
-    )
-
-    result_path = Path(tempfile.gettempdir()) / f"{task_id}_result.json"
-    log_path = Path(tempfile.gettempdir()) / f"{task_id}.log"
-
-    factors_arg = ",".join(req.factor_names) if req.factor_names else ""
-    project_root_wsl = _win_to_wsl(str(AISTOCK_PROJECT_ROOT))
-    backfill_args = [
-        BACKFILL_SCRIPT_WSL,
-        "--task-id",
-        task_id,
-        "--code-manifest",
-        _win_to_wsl(str(manifest_path)),
-        "--window-train-start",
-        resolved_start,
-        "--window-backtest-end",
-        resolved_end,
-    ]
-    if req.experiment_id:
-        backfill_args.extend(["--experiment-id", req.experiment_id])
-    if factor_data_dir:
-        backfill_args.extend(["--factor-data-dir", factor_data_dir])
-    if req.strict_backtest_data:
-        backfill_args.append("--strict-backtest-data")
-    backfill_args.extend(
-        [
-            "--workers",
-            str(req.workers),
-            "--timeout",
-            str(req.timeout_per_factor),
-            "--json-output",
-            _win_to_wsl(str(result_path)),
-        ]
-    )
-    if factors_arg:
-        backfill_args.extend(["--factors", factors_arg])
-    if req.force:
-        backfill_args.append("--force")
-    if req.incremental:
-        backfill_args.append("--incremental")
-    if req.resume_task_id:
-        backfill_args.extend(["--resume-task-id", req.resume_task_id])
-    if req.retry_failed_only:
-        backfill_args.append("--retry-failed-only")
-
-    cmd_parts = [
-        "wsl",
-        "bash",
-        "-lc",
-        _build_factor_cache_wsl_shell_command(
-            project_root_wsl=project_root_wsl,
-            backfill_args=backfill_args,
-            log_path_wsl=_win_to_wsl(str(log_path)),
-        ),
-    ]
-    proc_env = _build_factor_cache_wsl_process_env(os.environ, wsl_db_env)
-
-    _active_cache_tasks[task_id] = {
-        "task_id": task_id,
-        "status": "running",
+    dispatch_task_id = dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or task_id
+    _active_cache_tasks[str(dispatch_task_id)] = {
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "status": dispatch_result.get("status", "queued"),
         "started_at": datetime.now().isoformat(),
         "workers": req.workers,
-        "factor_count": len(req.factor_names) if req.factor_names else "all",
-        "incremental": req.incremental,
-        "resume_task_id": req.resume_task_id,
-        "retry_failed_only": req.retry_failed_only,
-        "auto_sync_remote": req.auto_sync_remote,
+        "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
+        "factor_count": len(req.factor_names) if req.factor_names else "all_enabled_code_text",
         "experiment_id": req.experiment_id,
         "strict_backtest_data": req.strict_backtest_data,
-        "data_source_mode": "backtest_factor_data_dir" if req.strict_backtest_data else "unspecified",
+        "data_source_mode": "official_offline_backtest_factor_data",
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
         "factor_data_dir": factor_data_dir,
+        "qlib_bin_path": qlib_bin_path,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
-        "log_path": str(log_path),
-        "result_path": str(result_path),
-        "task_state_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.json"),
-        "failed_log_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.failed.ndjson"),
-        "start": resolved_start,
-        "end": resolved_end,
+        "cache_root": dispatch_result.get("cache_root"),
+        "dispatch_payload": dispatch_result.get("payload"),
     }
-
-    import subprocess
-    def _run():
-        try:
-            proc = subprocess.Popen(
-                cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=0x08000000 if sys.platform == "win32" else 0,
-                env=proc_env,
-            )
-            _active_cache_tasks[task_id]["pid"] = proc.pid
-            proc.wait()
-            _active_cache_tasks[task_id]["returncode"] = proc.returncode
-            _active_cache_tasks[task_id]["status"] = "completed" if proc.returncode == 0 else "failed"
-            _active_cache_tasks[task_id]["finished_at"] = datetime.now().isoformat()
-            _invalidate_cache_meta()
-            if proc.returncode == 0 and req.auto_sync_remote:
-                try:
-                    from ..services.quantevolver.factor_cache_remote_sync_service import (
-                        FactorCacheRemoteSyncService,
-                    )
-
-                    sync_factors = list(req.factor_names or factors_code.keys())
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "running"
-                    sync_result = FactorCacheRemoteSyncService().sync_to_all_remote_nodes(
-                        sync_factors,
-                        force=req.force,
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_status"] = (
-                        "completed" if sync_result.get("ok") else "failed"
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_result"] = sync_result
-                except Exception as sync_exc:
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "failed"
-                    _active_cache_tasks[task_id]["remote_sync_error"] = str(sync_exc)
-                    logger.exception("远端因子缓存自动同步失败 task_id=%s", task_id)
-        except Exception as e:
-            _active_cache_tasks[task_id]["status"] = "error"
-            _active_cache_tasks[task_id]["error"] = str(e)
-            logger.exception(f"缓存计算任务失败 {task_id}")
-
-    background_tasks.add_task(_run)
+    _invalidate_cache_meta()
     return {
-        "ok": True,
-        "task_id": task_id,
-        "status": "queued",
+        "ok": bool(dispatch_result.get("ok", True)),
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "status": dispatch_result.get("status", "queued"),
         "experiment_id": req.experiment_id,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "factor_data_dir": factor_data_dir,
-        "auto_sync_remote": req.auto_sync_remote,
+        "qlib_bin_path": qlib_bin_path,
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
+        "cache_root": dispatch_result.get("cache_root"),
+        "message": "submitted official offline factor full-compute task to WSL/compute-node dispatch; Windows control plane does not execute local recompute.",
     }
 
 

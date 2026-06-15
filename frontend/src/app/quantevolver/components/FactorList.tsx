@@ -7,7 +7,7 @@ import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const FACTOR_CACHE_DEFAULT_START = "2018-08-01";
-const FACTOR_CACHE_DEFAULT_END = "2026-04-28";
+const FACTOR_CACHE_DEFAULT_END = "2026-04-30";
 const FACTOR_CACHE_WARMUP_TOLERANCE_DAYS = 60;
 
 type FactorCacheCoverageInput = {
@@ -446,15 +446,22 @@ export default function FactorList({
     started_at?: string;
     finished_at?: string;
     workers?: number;
+    batch_size?: number;
     factor_count?: number | string;
     incremental?: boolean;
     start?: string;
     end?: string;
     error?: string;
+    dispatch_task_id?: string | null;
+    remote_task_id?: string | null;
+    node_id?: string | null;
     experiment_id?: string | null;
     strict_backtest_data?: boolean;
+    cache_source?: string | null;
+    code_source?: string | null;
     data_source_mode?: string | null;
     factor_data_dir?: string | null;
+    qlib_bin_path?: string | null;
     window_train_start?: string | null;
     window_backtest_end?: string | null;
   };
@@ -592,7 +599,6 @@ export default function FactorList({
   const triggerCacheCompute = useCallback(async (
     factorNames?: string[],
     force = false,
-    options?: { resumeTaskId?: string; retryFailedOnly?: boolean }
   ) => {
     if (!cacheStartDate || !cacheEndDate) {
       alert("请先选择开始/结束日期");
@@ -610,19 +616,16 @@ export default function FactorList({
         force,
         start_date: cacheStartDate,
         end_date: cacheEndDate,
-        incremental: !force,
         strict_backtest_data: true,
       };
       if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
-      if (options?.resumeTaskId) body.resume_task_id = options.resumeTaskId;
-      if (options?.retryFailedOnly) body.retry_failed_only = true;
       if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
       const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
       if (d.ok) {
         setSelectedCacheTaskId(d.task_id);
         await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
-        alert(`计算任务已提交 (task_id: ${d.task_id})`);
+        alert(`Official offline factor compute submitted (task_id: ${d.task_id})`);
       }
       else alert(d.detail || "提交失败");
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
@@ -2182,35 +2185,29 @@ export default function FactorList({
               </select>
               <button onClick={() => triggerCacheCompute()} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                {cacheBusy ? "提交中..." : "仅补缺失"}
+                {cacheBusy ? "Submitting..." : "Official full compute"}
               </button>
               <button onClick={() => triggerCacheCompute(undefined, true)} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                全量重算
+                Force recompute
               </button>
-              {selectedCacheTaskId && (
-                <button onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTaskId, retryFailedOnly: true })} disabled={cacheBusy}
-                  style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                  重试失败
-                </button>
-              )}
               {actualSelectedFactors.size > 0 && (
                 <button onClick={() => triggerCacheCompute(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={cacheBusy}
                   style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0284c7", background: "#f0f9ff", color: "#0284c7", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                  计算选中 ({actualSelectedFactors.size})
+                  Compute selected ({actualSelectedFactors.size})
                 </button>
               )}
               {actualSelectedFactors.size > 0 && remoteStats?.remote_nodes?.length ? (
                 <button onClick={() => triggerRemoteSync(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={remoteSyncBusy}
                   style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0f766e", background: "#f0fdfa", color: "#0f766e", fontWeight: 600, cursor: "pointer", opacity: remoteSyncBusy ? 0.5 : 1 }}>
-                  同步选中
+                  Sync selected
                 </button>
               ) : null}
               <button onClick={clearAllCache}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
-                一键清空
+                Clear all
               </button>
-              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
+              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>Refresh</button>
             </div>
           </div>
           {cacheTasks.length > 0 && (
@@ -2242,35 +2239,19 @@ export default function FactorList({
               {selectedCacheTask && (
                 <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
                   <div style={{ fontSize: 12, color: "#475569", marginBottom: 6, lineHeight: 1.6 }}>
-                    任务 {selectedCacheTask.task_id} | 状态 {selectedCacheTask.status} | 区间 {selectedCacheTask.start} ~ {selectedCacheTask.end} | workers={selectedCacheTask.workers}
-                    {selectedCacheTask.incremental ? " | incremental" : ""}
+                    Task {selectedCacheTask.task_id} | status {selectedCacheTask.status} | window {selectedCacheTask.window_train_start || selectedCacheTask.start || "-"} ~ {selectedCacheTask.window_backtest_end || selectedCacheTask.end || "-"} | workers={selectedCacheTask.workers || "-"} | batch={selectedCacheTask.batch_size || "-"}
                     {selectedCacheTask.error ? ` | error: ${selectedCacheTask.error}` : ""}
                   </div>
                   <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
-                    experiment={selectedCacheTask.experiment_id || cacheContext?.experimentId || "-"} |
-                    window={selectedCacheTask.window_train_start || selectedCacheTask.start || "-"} ~ {selectedCacheTask.window_backtest_end || selectedCacheTask.end || "-"} |
-                    source={selectedCacheTask.data_source_mode || "-"}
+                    official offline | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
                   </div>
                   {selectedCacheTask.factor_data_dir && (
                     <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, wordBreak: "break-all" }}>
                       factor_data_dir: {selectedCacheTask.factor_data_dir}
                     </div>
                   )}
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                    <button
-                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id })}
-                      disabled={cacheBusy}
-                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
-                    >
-                      恢复未完成
-                    </button>
-                    <button
-                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id, retryFailedOnly: true })}
-                      disabled={cacheBusy}
-                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
-                    >
-                      仅重试失败
-                    </button>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+                    Official path uses WSL dispatch only; legacy resume/backfill is disabled. Retry failed factors by resubmitting selected factor_names or force recompute.
                   </div>
                   {selectedCacheTask.task_state && (
                     <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>

@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from backend.services.quantevolver.config_composer import ConfigComposer  # noqa: E402
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window  # noqa: E402
 from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult  # noqa: E402
+from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -700,7 +701,10 @@ def run_plan_action(
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    assert_wsl_runtime("legacy_backfill_factor_cache")
+    ap = argparse.ArgumentParser(
+        description="Legacy/manual migration tool only. Official full factor compute must use official_factor_full_compute dispatch."
+    )
     ap.add_argument("--factor", help="只回填指定因子（用于测试）")
     ap.add_argument("--factors", help="逗号分隔的因子名列表（替代 --factor）")
     ap.add_argument("--experiment-id", help="实验 ID，用于解析回测窗口和数据目录")
