@@ -243,6 +243,45 @@ def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_eviden
     assert payload["llm_gate"] == "ready"
 
 
+def test_nightly_adaptive_scheduler_includes_code_intelligence_refs_in_public_artifact(
+    tmp_path: Path,
+) -> None:
+    code_refs = tmp_path / "code-intelligence-summary.json"
+    code_refs.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_code_intelligence_summary_v1",
+                "context_ref": "tmp/validation/code-intelligence/9005/codegraph-context.md",
+                "affected_tests_ref": "tmp/validation/code-intelligence/9005/affected-tests.json",
+                "affected_tests_count": 3,
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/9005/ua-validation-summary.md",
+                "understand_anything_status": "available",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "scheduler.json"
+
+    exit_code = scheduler.main(
+        [
+            "--provider",
+            "deterministic",
+            "--codegraph-freshness",
+            "fresh",
+            "--code-intelligence-json",
+            str(code_refs),
+            "--output",
+            str(output),
+            "--json",
+        ]
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert payload["input_refs"]["code_intelligence_refs"]["affected_tests_count"] == 3
+    assert payload["public_artifact"] is True
+
+
 def test_collect_changed_files_filters_diff_headers_and_bom(tmp_path: Path) -> None:
     changed_files_file = tmp_path / "changed.txt"
     changed_files_file.write_text(
@@ -268,10 +307,12 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
+    assert "Build compact code intelligence refs for LLM advice" in workflow
     assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
+    assert "--code-intelligence-json" in workflow
     assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow

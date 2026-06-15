@@ -347,6 +347,35 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
+      - name: Build compact code intelligence refs for LLM advice
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $changedFile = "$outDir/nightly-changed-files.txt"
+          $changedFiles = @()
+          try {
+            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $changedFiles = @()
+              $global:LASTEXITCODE = 0
+            }
+          } catch {
+            $changedFiles = @()
+          }
+          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
+            --language zh `
+            --output "$outDir/ua-configure.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
+            --output-dir $outDir `
+            --output "$outDir/ua-summary-manifest.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py summary `
+            --item-id "nightly-${{ github.run_id }}" `
+            --query "Nightly validation LLM scheduling impact context" `
+            --changed-files-file $changedFile `
+            --module validation `
+            --output "$outDir/code-intelligence-summary.json" `
+            --output-md "$outDir/code-intelligence-summary.md"
       - name: Build LLM triage quality smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -368,6 +397,7 @@ jobs:
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
             --module validation.runner `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/llm-test-plan-advice.json"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "LLM test-plan advisor failed; retrying deterministic fallback."
@@ -377,6 +407,7 @@ jobs:
               --changed-file scripts/llm_provider_adapter.py `
               --changed-file scripts/ci_failure_issue_summary.py `
               --module validation.runner `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --output "$outDir/llm-test-plan-advice.json"
           }
 
@@ -393,6 +424,7 @@ jobs:
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
             --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
           if ($LASTEXITCODE -ne 0) {
@@ -403,6 +435,7 @@ jobs:
               --changed-file scripts/llm_provider_adapter.py `
               --recent-failure-module validation.runner `
               --codegraph-freshness fresh `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --resource-budget-seconds 900 `
               --output "$outDir/llm-nightly-scheduler-advice.json"
           }
@@ -431,6 +464,7 @@ jobs:
             --invoke-llm `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-adaptive-scheduler.json" `
             --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -441,6 +475,7 @@ jobs:
               --provider deterministic `
               --changed-files-file $changedFile `
               --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --resource-budget-seconds 900 `
               --output "$outDir/llm-nightly-adaptive-scheduler.json" `
               --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -472,17 +507,6 @@ jobs:
       - name: Validate CI/Nightly issue workflow automation
         run: |
           conda run -n AIstock python -m nox -s validation_workflow_automation
-
-      - name: Build Understand Anything readiness summaries
-        run: |
-          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
-            --language zh `
-            --output "$outDir/ua-configure.stdout.json"
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
-            --output-dir $outDir `
-            --output "$outDir/ua-summary-manifest.stdout.json"
 
       - name: Print code intelligence graph summary manifest
         if: always()
@@ -531,6 +555,14 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download code intelligence refs
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: code-intelligence-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}
+        continue-on-error: true
 
       - name: Compose nightly summary
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
@@ -619,6 +651,7 @@ jobs:
             --context-output tmp/validation/nightly_failure_issue/context-pack.json \
             --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
             --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
+            --code-intelligence-json tmp/validation/code-intelligence/${{ github.run_id }}/code-intelligence-summary.json \
             --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
             "${LLM_ARGS[@]}" \
             --stdout-format compact

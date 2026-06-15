@@ -800,6 +800,7 @@ def build_context_pack(
         "failure_event": event,
         "agent_handoff": handoff,
         "llm_triage_advice": summary.get("llm_triage_advice"),
+        "code_intelligence_refs": summary.get("code_intelligence_refs") or {},
         "llm_guarded_rollout_gate": summary.get("llm_guarded_rollout_gate"),
         "reproduce_command": summary.get("reproduce_command") or "Inspect the linked CI run log.",
         "allowed_write_scope": handoff["allowed_write_scope"],
@@ -820,7 +821,7 @@ def _llm_triage_lines(payload: dict[str, Any]) -> list[str]:
     if not payload:
         return []
     evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
-    return [
+    lines = [
         "",
         "## LLM Triage Advice",
         "",
@@ -830,6 +831,16 @@ def _llm_triage_lines(payload: dict[str, Any]) -> list[str]:
         f"- invoked: `{evidence.get('invoked')}`",
         f"- input_policy: `{evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
     ]
+    refs = payload.get("code_intelligence_refs") if isinstance(payload.get("code_intelligence_refs"), dict) else {}
+    if refs:
+        lines.extend(
+            [
+                f"- code_intelligence_context_ref: `{refs.get('context_ref') or 'not_available'}`",
+                f"- code_intelligence_affected_tests_ref: `{refs.get('affected_tests_ref') or 'not_available'}`",
+                f"- code_intelligence_ua_summary_ref: `{refs.get('understand_anything_summary_ref') or 'not_available'}`",
+            ]
+        )
+    return lines
 
 
 def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
@@ -862,6 +873,24 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
     lines.append(f"- handoff_mode: `{handoff.get('handoff_mode') or 'bug_promotion'}`")
     lines.append(f"- needs_bug_json: `{handoff.get('needs_bug_json')}`")
     lines.extend(_llm_triage_lines(context_pack.get("llm_triage_advice") if isinstance(context_pack.get("llm_triage_advice"), dict) else {}))
+    code_intelligence_refs = (
+        context_pack.get("code_intelligence_refs")
+        if isinstance(context_pack.get("code_intelligence_refs"), dict)
+        else {}
+    )
+    if code_intelligence_refs:
+        lines.extend(
+            [
+                "",
+                "## Code Intelligence Refs",
+                "",
+                f"- context_ref: `{code_intelligence_refs.get('context_ref') or 'not_available'}`",
+                f"- affected_tests_ref: `{code_intelligence_refs.get('affected_tests_ref') or 'not_available'}`",
+                f"- affected_tests_count: `{code_intelligence_refs.get('affected_tests_count') if code_intelligence_refs.get('affected_tests_count') is not None else 'unknown'}`",
+                f"- understand_anything_summary_ref: `{code_intelligence_refs.get('understand_anything_summary_ref') or 'not_available'}`",
+                f"- understand_anything_status: `{code_intelligence_refs.get('understand_anything_status') or 'unknown'}`",
+            ]
+        )
     if infra_action:
         lines.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
     for command in handoff.get("next_commands") or []:
@@ -1121,12 +1150,16 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
         from scripts import llm_provider_adapter
 
         config = llm_provider_adapter.load_config()
+        code_intelligence_refs = (
+            summary.get("code_intelligence_refs") if isinstance(summary.get("code_intelligence_refs"), dict) else {}
+        )
         advice = llm_provider_adapter.build_triage_quality_smoke(provider, config)
         test_plan_advice = llm_provider_adapter.build_test_plan_advice(
             provider,
             config,
             changed_files=list(summary.get("suspected_files") or []),
             module=(summary.get("suspected_modules") or [None])[0],
+            code_intelligence_refs=code_intelligence_refs,
         )
     except Exception as exc:
         return {
@@ -1155,6 +1188,7 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
         "full_repo_scan_allowed": False,
         "full_logs_included": False,
     }
+    advice["code_intelligence_refs"] = code_intelligence_refs
     advice["test_plan_advice_gate"] = {
         "schema_version": test_plan_advice["schema_version"],
         "workflow_gate": test_plan_advice["deterministic_gate"]["workflow_gate"],
@@ -1415,6 +1449,15 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
                 f"- input_policy: `{llm_evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
             ]
         )
+        code_intelligence_refs = llm_advice.get("code_intelligence_refs") if isinstance(llm_advice.get("code_intelligence_refs"), dict) else {}
+        if code_intelligence_refs:
+            lines.extend(
+                [
+                    f"- code_intelligence_context_ref: `{code_intelligence_refs.get('context_ref') or 'not_available'}`",
+                    f"- code_intelligence_affected_tests_ref: `{code_intelligence_refs.get('affected_tests_ref') or 'not_available'}`",
+                    f"- code_intelligence_ua_summary_ref: `{code_intelligence_refs.get('understand_anything_summary_ref') or 'not_available'}`",
+                ]
+            )
     rollout_gate = summary.get("llm_guarded_rollout_gate") if isinstance(summary.get("llm_guarded_rollout_gate"), dict) else {}
     if rollout_gate:
         lines.extend(
@@ -1550,6 +1593,24 @@ def _write_text(path: str | None, text: str) -> None:
     target.write_text(text, encoding="utf-8")
 
 
+def _code_intelligence_refs_from_file(path: str | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    try:
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from scripts import llm_provider_adapter
+
+        return llm_provider_adapter.code_intelligence_refs_from_file(path)
+    except Exception as exc:
+        return {
+            "status": "warning",
+            "warning": "code_intelligence_refs_unavailable",
+            "load_error": str(exc)[:240],
+        }
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -1681,6 +1742,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-output")
     parser.add_argument("--context-markdown-output")
     parser.add_argument("--github-issue-payload-output")
+    parser.add_argument("--code-intelligence-json")
     parser.add_argument("--llm-triage-mode", choices=["off", "warning_only", "opt_in_auto_file"])
     parser.add_argument("--llm-auto-file-opt-in", action="store_true", default=None)
     parser.add_argument(
@@ -1799,6 +1861,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
+    summary["code_intelligence_refs"] = _code_intelligence_refs_from_file(args.code_intelligence_json)
+    if summary["code_intelligence_refs"]:
+        summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
     if "llm_guarded_rollout_gate" not in summary or args.llm_triage_mode or args.llm_auto_file_opt_in:
         summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(
             summary,

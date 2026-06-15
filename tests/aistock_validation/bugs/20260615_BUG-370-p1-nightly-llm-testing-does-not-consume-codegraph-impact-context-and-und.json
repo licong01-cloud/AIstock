@@ -1,8 +1,14 @@
 {
   "actual": "CodeGraph and Understand Anything artifacts are fresh and available, but Nightly/PR LLM test planning mostly consumes changed files, catalog context, and CodeGraph freshness only. Understand Anything summaries are built after LLM scheduler/advisor steps, so DeepSeek cannot use module graph summaries to guide tests. Failure issue drafts also do not consistently include CodeGraph affected nodes/tests and UA summary refs. Expected: graph intelligence should be generated before LLM advice, LLM prompt payloads should include compact CodeGraph impact refs and UA module summary refs, and failure issue drafts should hand off these refs without dumping large JSON.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260615_BUG-370-p1-nightly-llm-testing-does-not-consume-codegraph-impact-context-and-und.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260615_BUG-370-p1-nightly-llm-testing-does-not-consume-codegraph-impact-context-and-und.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-370",
@@ -23,7 +29,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Nightly and CI failure intake should pass compact CodeGraph context refs, affected-tests refs, and Understand Anything summary refs into DeepSeek advisory prompts and generated Context Packs without inlining large graph JSON.",
   "first_seen_at": "2026-06-15T10:07:52.153823Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -41,7 +47,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_center_backend",
+    "validation_workflow_automation"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

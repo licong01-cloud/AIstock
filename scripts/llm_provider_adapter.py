@@ -90,6 +90,21 @@ DEFAULT_PROMPT_PACK_ROOT = ROOT / "prompt_packs" / "validation_llm"
 DEFAULT_EVALUATION_CASES = DEFAULT_PROMPT_PACK_ROOT / "evaluation_cases" / "historical_failure_fixtures.json"
 EVALUATION_BLOCKING_PATH_PREFIXES = ("prompt_packs/validation_llm/", "configs/validation/llm_triage.yaml")
 EVALUATION_BLOCKING_FILES = ("scripts/llm_provider_adapter.py",)
+CODE_INTELLIGENCE_REF_FIELDS = (
+    "status",
+    "latest_freshness",
+    "latest_freshness_ref",
+    "context_ref",
+    "manifest_ref",
+    "affected_tests_ref",
+    "affected_tests_count",
+    "affected_quality",
+    "understand_anything_summary_ref",
+    "understand_anything_status",
+    "understand_anything_freshness",
+    "fallback_used",
+    "stale_metadata_warning",
+)
 
 
 class ProviderAdapterError(RuntimeError):
@@ -102,6 +117,44 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ProviderAdapterError("llm triage config must be a mapping")
     return config
+
+
+def _try_read_json_object(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return {
+            "status": "warning",
+            "warning": "code_intelligence_refs_unavailable",
+            "load_error": str(exc)[:240],
+        }
+    return payload if isinstance(payload, dict) else {}
+
+
+def _compact_code_intelligence_refs(refs: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only small artifact refs and status fields for LLM prompts."""
+
+    source = refs if isinstance(refs, dict) else {}
+    result = {
+        field: source.get(field)
+        for field in CODE_INTELLIGENCE_REF_FIELDS
+        if source.get(field) not in (None, "", [])
+    }
+    ua = source.get("understand_anything")
+    if isinstance(ua, dict):
+        result.setdefault("understand_anything_status", ua.get("status"))
+        result.setdefault("understand_anything_freshness", ua.get("freshness"))
+    ua_summary = source.get("understand_anything_summary")
+    if isinstance(ua_summary, dict):
+        result.setdefault("understand_anything_status", ua_summary.get("status"))
+        result.setdefault("understand_anything_summary_ref", ua_summary.get("summary_ref"))
+    return {key: value for key, value in result.items() if value not in (None, "", [])}
+
+
+def code_intelligence_refs_from_file(path: str | Path | None) -> dict[str, Any]:
+    return _compact_code_intelligence_refs(_try_read_json_object(Path(path)) if path else {})
 
 
 def _candidate_deepseek_env_files() -> list[Path]:
@@ -1152,6 +1205,7 @@ def build_test_plan_advice(
     plan_keys: list[str] | None = None,
     changed_files: list[str] | None = None,
     module: str | None = None,
+    code_intelligence_refs: dict[str, Any] | None = None,
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
@@ -1164,6 +1218,7 @@ def build_test_plan_advice(
     validate_config(config)
     provider_summary = _provider_model_summary(config, provider)
     changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
+    compact_code_refs = _compact_code_intelligence_refs(code_intelligence_refs)
     advised_keys = [str(key) for key in (plan_keys or _default_advised_plan_keys(changed_files, module))]
     plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     selection = _issue_flow_validation_select(changed_files, module)
@@ -1188,11 +1243,12 @@ def build_test_plan_advice(
                 "recommended_plans": (selection or {}).get("recommended_plans") or [],
             },
             "workspace_path_allowed": workspace["allowed"],
+            "code_intelligence_refs": compact_code_refs,
         },
         allowed_plan_keys=set(plans_by_key),
         invoke_llm=invoke_llm,
         fallback_on_error=fallback_on_llm_error,
-        input_policy="plan_key_intent_plus_catalog_context_only",
+        input_policy="plan_key_intent_catalog_plus_code_intelligence_refs_only",
     )
     advice = {
         "schema_version": TEST_PLAN_ADVICE_SCHEMA_VERSION,
@@ -1203,6 +1259,7 @@ def build_test_plan_advice(
         "llm_gate": "ready" if llm_evidence["invoked"] else "degraded",
         "module": module,
         "changed_files": changed_files,
+        "code_intelligence_refs": compact_code_refs,
         "test_plan_advice": plan_results,
         "deterministic_plan_keys": advised_keys,
         "advised_plan_keys": (llm_advice or {}).get("suggested_plan_keys") or [],
@@ -1267,6 +1324,7 @@ def build_nightly_scheduler_advice(
     recent_failure_modules: list[str] | None = None,
     recent_failure_plan_keys: list[str] | None = None,
     codegraph_freshness: str = "unknown",
+    code_intelligence_refs: dict[str, Any] | None = None,
     resource_budget_seconds: int | None = None,
     workspace_path: str | None = None,
     root: Path = ROOT,
@@ -1283,6 +1341,7 @@ def build_nightly_scheduler_advice(
     recent_failure_modules = [str(item) for item in recent_failure_modules or [] if str(item).strip()]
     recent_failure_plan_keys = [str(item) for item in recent_failure_plan_keys or [] if str(item).strip()]
     freshness = codegraph_freshness if codegraph_freshness in CODEGRAPH_FRESHNESS_VALUES else "unknown"
+    compact_code_refs = _compact_code_intelligence_refs(code_intelligence_refs)
     budget = int(resource_budget_seconds) if resource_budget_seconds is not None else 900
     budget = max(0, budget)
     intents = _nightly_scheduler_intents(
@@ -1299,6 +1358,7 @@ def build_nightly_scheduler_advice(
         plan_keys=plan_keys,
         changed_files=[],
         module=None,
+        code_intelligence_refs=compact_code_refs,
         workspace_path=workspace_path,
         root=root,
         catalog_path=catalog_path,
@@ -1345,6 +1405,7 @@ def build_nightly_scheduler_advice(
             "recent_failure_modules": recent_failure_modules[:20],
             "recent_failure_plan_keys": recent_failure_plan_keys[:20],
             "codegraph_freshness": freshness,
+            "code_intelligence_refs": compact_code_refs,
             "resource_budget_seconds": budget,
             "deterministic_queue": [
                 {
@@ -1359,7 +1420,7 @@ def build_nightly_scheduler_advice(
         allowed_plan_keys=set(plans_by_key),
         invoke_llm=invoke_llm,
         fallback_on_error=fallback_on_llm_error,
-        input_policy="changed_files_recent_failures_codegraph_freshness_catalog_only",
+        input_policy="changed_files_recent_failures_codegraph_ua_refs_catalog_only",
     )
     advice = {
         "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
@@ -1378,6 +1439,7 @@ def build_nightly_scheduler_advice(
             "warning_only": codegraph_warning,
             "warning": "codegraph_freshness_not_fresh" if codegraph_warning else None,
         },
+        "code_intelligence_refs": compact_code_refs,
         "resource_budget_seconds": budget,
         "queue": queue,
         "deterministic_plan_keys": [item["plan_key"] for item in queue],
@@ -1932,6 +1994,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "llm_gate": payload.get("llm_gate"),
             "module": payload.get("module"),
             "changed_files": payload.get("changed_files") or [],
+            "code_intelligence_refs": payload.get("code_intelligence_refs") or {},
             "test_plan_advice": payload.get("test_plan_advice") or [],
             "deterministic_plan_keys": payload.get("deterministic_plan_keys") or [],
             "advised_plan_keys": payload.get("advised_plan_keys") or [],
@@ -1954,6 +2017,7 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "changed_files": payload.get("changed_files") or [],
             "recent_failures": payload.get("recent_failures") or {},
             "codegraph": payload.get("codegraph") or {},
+            "code_intelligence_refs": payload.get("code_intelligence_refs") or {},
             "resource_budget_seconds": payload.get("resource_budget_seconds"),
             "queue": payload.get("queue") or [],
             "deterministic_plan_keys": payload.get("deterministic_plan_keys") or [],
@@ -2100,6 +2164,7 @@ def cmd_test_plan_advice(args: argparse.Namespace) -> int:
         plan_keys=_split_csv(args.plan_key),
         changed_files=_split_csv(args.changed_file),
         module=args.module,
+        code_intelligence_refs=code_intelligence_refs_from_file(args.code_intelligence_json),
         workspace_path=args.workspace_path,
         invoke_llm=args.invoke_llm,
         fallback_on_llm_error=not args.fail_on_llm_error,
@@ -2133,6 +2198,7 @@ def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
         recent_failure_modules=_split_csv(args.recent_failure_module),
         recent_failure_plan_keys=_split_csv(args.recent_failure_plan_key),
         codegraph_freshness=args.codegraph_freshness,
+        code_intelligence_refs=code_intelligence_refs_from_file(args.code_intelligence_json),
         resource_budget_seconds=args.resource_budget_seconds,
         workspace_path=args.workspace_path,
         invoke_llm=args.invoke_llm,
@@ -2260,6 +2326,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--plan-key", action="append", default=None, help="Plan key intent; may be repeated or comma-separated.")
     plan.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
     plan.add_argument("--module", default=None)
+    plan.add_argument("--code-intelligence-json", default=None)
     plan.add_argument("--workspace-path", default=None)
     plan.add_argument(
         "--invoke-llm",
@@ -2291,6 +2358,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recent failed plan_key; may be repeated or comma-separated.",
     )
     scheduler.add_argument("--codegraph-freshness", choices=sorted(CODEGRAPH_FRESHNESS_VALUES), default="unknown")
+    scheduler.add_argument("--code-intelligence-json", default=None)
     scheduler.add_argument("--resource-budget-seconds", type=int, default=900)
     scheduler.add_argument("--workspace-path", default=None)
     scheduler.add_argument(
