@@ -91,6 +91,17 @@ _MINIQMT_CAPACITY_RESIDUAL_RETRY_ERROR_CODES = frozenset(
 _MINIQMT_RETRYABLE_BUY_RESIDUAL_ERROR_CODES = (
     _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES | _MINIQMT_CAPACITY_RESIDUAL_RETRY_ERROR_CODES
 )
+_MINIQMT_STALE_ACTIVE_STATUSES = (
+    SimulationDailyRunStatus.CREATED,
+    SimulationDailyRunStatus.PRECHECKING,
+    SimulationDailyRunStatus.SIGNAL_GENERATING,
+    SimulationDailyRunStatus.TARGET_GENERATING,
+    SimulationDailyRunStatus.PLANNING_EXECUTION,
+    SimulationDailyRunStatus.SUBMITTING,
+    SimulationDailyRunStatus.INTRADAY_RUNNING,
+    SimulationDailyRunStatus.TAIL_HANDLING,
+    SimulationDailyRunStatus.RECONCILING,
+)
 
 _LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
 _MINIQMT_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.miniqmt_roll_forward"
@@ -1511,6 +1522,7 @@ class SimulationSchedulerRunOnceResult:
     submit: bool
     total_bindings: int
     results: tuple[SimulationSchedulerBindingResult, ...]
+    stale_run_results: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     as_of_time: datetime | None = None
     schedule_windows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
@@ -1540,6 +1552,10 @@ class SimulationSchedulerRunOnceResult:
     @property
     def failed_count(self) -> int:
         return sum(1 for item in self.results if item.error is not None)
+
+    @property
+    def stale_terminalized_count(self) -> int:
+        return len(self.stale_run_results)
 
 
 class SimulationLifecycleScheduler:
@@ -1600,6 +1616,12 @@ class SimulationLifecycleScheduler:
     ) -> SimulationSchedulerRunOnceResult:
         if limit <= 0:
             raise ValueError("limit must be positive")
+        stale_run_results = self._terminalize_stale_miniqmt_active_runs(
+            trade_date=trade_date,
+            broker_backend=broker_backend,
+            strategy_id=strategy_id,
+            limit=limit,
+        )
         bindings = self.repository.list_simulation_release_bindings(
             strategy_id=strategy_id,
             release_id=release_id,
@@ -1665,9 +1687,72 @@ class SimulationLifecycleScheduler:
             submit=submit,
             total_bindings=len(bindings),
             results=tuple(results),
+            stale_run_results=tuple(stale_run_results),
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
+
+    def _terminalize_stale_miniqmt_active_runs(
+        self,
+        *,
+        trade_date: date,
+        broker_backend: SimulationBrokerBackend | str | None,
+        strategy_id: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.MINIQMT_SIM:
+            return []
+        terminalized: list[dict[str, Any]] = []
+        seen_run_ids: set[str] = set()
+        for status in _MINIQMT_STALE_ACTIVE_STATUSES:
+            for run in self.repository.list_simulation_daily_runs(
+                broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+                strategy_id=strategy_id,
+                status=status,
+                limit=limit,
+            ):
+                if run.run_id in seen_run_ids or run.trade_date >= trade_date:
+                    continue
+                seen_run_ids.add(run.run_id)
+                had_side_effect = bool(run.run_payload_json.get("broker_called") or run.run_payload_json.get("qmt_batch_id"))
+                next_status = (
+                    SimulationDailyRunStatus.FAILED_RETRYABLE
+                    if had_side_effect
+                    else SimulationDailyRunStatus.CANCELLED
+                )
+                evidence = {
+                    "schema_version": "miniqmt_stale_active_run_terminalization_v1",
+                    "reason": (
+                        "stale_historical_miniqmt_run_with_broker_side_effect"
+                        if had_side_effect
+                        else "stale_historical_miniqmt_run_without_broker_side_effect"
+                    ),
+                    "scheduler_trade_date": trade_date.isoformat(),
+                    "stale_trade_date": run.trade_date.isoformat(),
+                    "previous_status": run.status.value,
+                    "had_broker_side_effect": had_side_effect,
+                    "terminalized_at": datetime.now(UTC).isoformat(),
+                }
+                updated = self.repository.update_simulation_daily_run(
+                    run.run_id,
+                    status=next_status,
+                    payload_patch={
+                        "last_stage": next_status.value,
+                        "stale_active_terminalization": evidence,
+                        "broker_called": bool(run.run_payload_json.get("broker_called")),
+                    },
+                )
+                terminalized.append(
+                    {
+                        "run_id": updated.run_id,
+                        "trade_date": updated.trade_date.isoformat(),
+                        "strategy_id": updated.strategy_id,
+                        "previous_status": run.status.value,
+                        "status": updated.status.value,
+                        "reason": evidence["reason"],
+                    }
+                )
+        return terminalized[:limit]
 
     def _with_unattended_roll_forward_bindings(
         self,
@@ -2446,6 +2531,10 @@ class SimulationLifecycleScheduler:
     def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:
         if bool(payload.get("broker_called")):
             return False
+        if SimulationLifecycleScheduler._mini_qmt_batch_has_broker_side_effect_evidence(payload):
+            return False
+        if SimulationLifecycleScheduler._mini_qmt_batch_has_duplicate_order_remark(payload):
+            return False
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
         if status not in {"PREFLIGHT_FAILED", "FAILED", "PARTIAL"}:
@@ -2956,6 +3045,15 @@ class SimulationLifecycleScheduler:
                 and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
                 and SimulationLifecycleScheduler._mini_qmt_batch_has_deferred_dependent_buy(run.run_payload_json)
             )
+        if (
+            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+            and (
+                SimulationLifecycleScheduler._mini_qmt_batch_has_broker_side_effect_evidence(run.run_payload_json)
+                or SimulationLifecycleScheduler._mini_qmt_batch_has_duplicate_order_remark(run.run_payload_json)
+            )
+        ):
+            return False
         statuses = {
             SimulationDailyRunStatus.CREATED,
             SimulationDailyRunStatus.PRECHECKING,
@@ -3003,7 +3101,7 @@ class SimulationLifecycleScheduler:
         return (
             submit
             and binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
-            and bool(run.run_payload_json.get("broker_called"))
+            and SimulationLifecycleScheduler._mini_qmt_batch_has_broker_side_effect_evidence(run.run_payload_json)
             and run.status
             in {
                 SimulationDailyRunStatus.SUBMITTING,
@@ -3039,6 +3137,46 @@ class SimulationLifecycleScheduler:
     def _mini_qmt_batch_has_noncompensating_residual(payload: dict[str, Any]) -> bool:
         summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(payload)
         return bool(summary.get("noncompensating_residual"))
+
+    @staticmethod
+    def _mini_qmt_batch_has_broker_side_effect_evidence(payload: dict[str, Any]) -> bool:
+        if bool(payload.get("broker_called")):
+            return True
+        for container_key in ("reconcile_after_submit", "sync_after_submit", "sync_before_submit"):
+            container = payload.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            side_effect_evidence = container.get("side_effect_evidence")
+            if (
+                isinstance(side_effect_evidence, dict)
+                and int(side_effect_evidence.get("broker_side_effect_count") or 0) > 0
+            ):
+                return True
+            open_order_evidence = container.get("open_order_evidence")
+            if (
+                isinstance(open_order_evidence, dict)
+                and int(open_order_evidence.get("open_order_count") or 0) > 0
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _mini_qmt_batch_has_duplicate_order_remark(payload: dict[str, Any]) -> bool:
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        results = batch.get("results")
+        if not isinstance(results, list):
+            return False
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+            errors = preflight.get("errors")
+            if not isinstance(errors, list):
+                continue
+            for error in errors:
+                if isinstance(error, dict) and str(error.get("code") or "").upper() == "DUPLICATE_ORDER_REMARK":
+                    return True
+        return False
 
     @staticmethod
     def _mini_qmt_batch_has_terminal_capacity_residual(payload: dict[str, Any]) -> bool:
@@ -3237,11 +3375,17 @@ class SimulationLifecycleScheduler:
             run=run,
             context=context,
         )
+        side_effect_evidence = self._miniqmt_side_effect_evidence(
+            binding=binding,
+            run=run,
+            context=context,
+        )
         submit_result_gate = self._miniqmt_submit_result_gate(
             run=run,
             run_status_gate=run_status_gate,
             batch_residual_summary=batch_residual_summary,
             open_order_evidence=open_order_evidence,
+            side_effect_evidence=side_effect_evidence,
         )
         payload = {
             **payload,
@@ -3250,6 +3394,7 @@ class SimulationLifecycleScheduler:
             "submit_result_gate": submit_result_gate,
             "qmt_batch_residual_summary": batch_residual_summary,
             "open_order_evidence": open_order_evidence,
+            "side_effect_evidence": side_effect_evidence,
         }
         if submit_result_gate["status"] == "SUCCEEDED":
             next_status = SimulationDailyRunStatus.SUCCEEDED
@@ -3273,6 +3418,7 @@ class SimulationLifecycleScheduler:
         run_status_gate: dict[str, Any],
         batch_residual_summary: dict[str, Any],
         open_order_evidence: dict[str, Any],
+        side_effect_evidence: dict[str, Any],
     ) -> dict[str, Any]:
         batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
         terminal_capacity_residual = (
@@ -3281,6 +3427,7 @@ class SimulationLifecycleScheduler:
             and int(batch_residual_summary.get("dependent_buy_count") or 0) == 0
         )
         open_order_count = int(open_order_evidence.get("open_order_count") or 0)
+        broker_side_effect_count = int(side_effect_evidence.get("broker_side_effect_count") or 0)
         if run_status_gate.get("status") != "SUCCEEDED":
             status = "blocked"
             reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
@@ -3293,6 +3440,9 @@ class SimulationLifecycleScheduler:
         elif terminal_capacity_residual:
             status = "SUCCEEDED"
             reason = "miniqmt_capacity_residual_skipped_and_reconciled"
+        elif broker_side_effect_count > 0:
+            status = "blocked"
+            reason = "miniqmt_broker_side_effect_requires_explicit_reconciliation"
         else:
             status = "blocked"
             reason = "MiniQMT reconciliation cannot mark a run successful when submit batch did not succeed"
@@ -3305,6 +3455,7 @@ class SimulationLifecycleScheduler:
             "batch_succeeded": batch_succeeded,
             "terminal_capacity_residual": terminal_capacity_residual,
             "open_order_count": open_order_count,
+            "broker_side_effect_count": broker_side_effect_count,
         }
 
     @staticmethod
@@ -3351,6 +3502,36 @@ class SimulationLifecycleScheduler:
                 }
                 for order in open_orders
             ],
+        }
+
+    @staticmethod
+    def _miniqmt_side_effect_evidence(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+    ) -> dict[str, Any]:
+        repository = getattr(context, "qmt_ledger_repository", None)
+        list_order_ledger = getattr(repository, "list_order_ledger", None)
+        orders = []
+        if callable(list_order_ledger):
+            orders = list_order_ledger(
+                account_id=binding.broker_account_id,
+                trade_date=run.trade_date,
+                strategy_id=binding.strategy_id,
+                batch_id=run.run_payload_json.get("qmt_batch_id"),
+            )
+        order_count = len(orders)
+        return {
+            "schema_version": "miniqmt_broker_side_effect_evidence_v1",
+            "source": "qmt_strategy.order_ledger",
+            "account_id": binding.broker_account_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": run.trade_date.isoformat(),
+            "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+            "broker_called": bool(run.run_payload_json.get("broker_called")),
+            "order_ledger_count": order_count,
+            "broker_side_effect_count": order_count,
         }
 
     @staticmethod

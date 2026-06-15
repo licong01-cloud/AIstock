@@ -1,7 +1,9 @@
 {
   "actual": "API evidence 2026-06-15: /simulation-runtime/runs active_run_count=2 with 2026-06-03 PLANNING_EXECUTION and today runs FAILED_RETRYABLE; L2 preflight primary DUPLICATE_ORDER_REMARK plus insufficient lot; L16 PARTIAL with failed intents; /qmt/orders has order_status=50 rows 1090522856, 1090532707, 1090533228.",
   "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/lifecycle.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260615_BUG-374-miniqmt-unattended-simulation-blocked-by-stale-open-broker-orders-and-re.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -21,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260615-cfc55533bf76",
       "timestamp": "2026-06-15T13:17:09.976487Z"
+    },
+    {
+      "action": "expand_allowed_scope_for_current_code_fix",
+      "actor": "codex",
+      "note": "Current-code audit found BUG-374 retry and stale-run behavior is owned by simulation_runtime.scheduler, with lifecycle_scheduler regression coverage required; lifecycle.py alone is insufficient.",
+      "timestamp": "2026-06-15T14:12:00Z"
     }
   ],
   "evidence_uris": [
@@ -43,7 +51,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python debug_tools/paper_v2/readiness_probe.py --backend-url http://127.0.0.1:8001 --checks simulation-runtime-runs,qmt-orders,qmt-virtual-strategies",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
