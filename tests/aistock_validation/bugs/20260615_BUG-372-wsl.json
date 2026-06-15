@@ -1,0 +1,77 @@
+{
+  "actual": "当前 BUG-371 只完成代码主链路和本地/CI 测试，真实 WSL 2/16/575 因子计算、相关性全量、QE 子窗口 cache-hit 尚无统一脚本和门禁证据。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "tests/aistock_validation/history/qe",
+    "backend/tests/quantevolver",
+    "tests/aistock_validation/bugs/20260615_BUG-372-wsl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-372",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T12:34:30.712252Z",
+  "description": "当前 BUG-371 只完成代码主链路和本地/CI 测试，真实 WSL 2/16/575 因子计算、相关性全量、QE 子窗口 cache-hit 尚无统一脚本和门禁证据。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-ec1104c962ba",
+      "timestamp": "2026-06-15T12:34:30.712248Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md"
+  ],
+  "expected": "提供标准化 WSL runtime validation 入口，能在不重启生产服务的前提下执行 2/16/full 因子计算验收、相关性 official cache 验收、QE 子窗口 cache-hit 验收，并输出结构化 JSON/Markdown 证据；验收失败必须分类显示 missing cache、schema、metadata、coverage、memory、correlation excluded、QE cache miss 等原因。",
+  "first_seen_at": "2026-06-15T12:34:30.712252Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1104,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1104",
+  "last_seen_at": "2026-06-15T12:34:30.712252Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python backend/scripts/run_official_factor_full_compute_wsl.py --help; rg -n 'G12|575|WSL smoke|cache hit' docs/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md backend/scripts scripts tests/aistock_validation",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方离线因子全量计算缺少可重复的 WSL 真实验收门禁",
+  "trigger_condition": {
+    "fingerprint": "ec1104c962ba08dfa5ed95f7",
+    "source_event_id": "FE-20260615-ec1104c962ba"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
