@@ -6,7 +6,9 @@
     "backend/services/qmt_strategy_ledger/order_service.py",
     "backend/services/qmt_strategy_ledger/reconciliation.py",
     "tests/aistock_validation/bugs/20260615_BUG-369-p0-miniqmt-simulationruntime-end-of-day-partial-miniqmt-runs-remain-subm.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-369",
@@ -24,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260615-fca5a3faac09",
       "timestamp": "2026-06-15T08:29:15.017512Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add qmt_strategy_ledger repository read accessor for synced order-ledger evidence and simulation runtime lifecycle regression tests for BUG-369 end-of-day partial MiniQMT terminalization.",
+      "timestamp": "2026-06-15T08:44:58.918682Z"
     }
   ],
   "evidence_uris": [
