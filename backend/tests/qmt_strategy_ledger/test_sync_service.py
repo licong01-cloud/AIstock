@@ -312,6 +312,8 @@ def test_sync_service_skips_stale_previous_day_broker_orders_and_trades() -> Non
     assert summary.unattributed_trades == 0
     assert summary.cash_entries_appended == 0
     assert summary.lots_created == 0
+    assert summary.stale_orders_terminalized == 0
+    assert summary.stale_buy_freeze_released_amount == Decimal("0")
     assert summary.stale_orders_skipped == 1
     assert summary.stale_trades_skipped == 1
     assert summary.stale_broker_snapshot is True
@@ -325,6 +327,197 @@ def test_sync_service_skips_stale_previous_day_broker_orders_and_trades() -> Non
     assert repo.list_unattributed_trades(account_id=ACCOUNT_ID, trade_date=NEXT_TRADE_DATE) == []
     assert repo.list_position_lots("strat_a", symbol="300604.SZ") == []
     assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("10250.000000")
+
+
+def test_sync_service_terminalizes_stale_unfilled_buy_and_releases_virtual_freeze_once() -> None:
+    repo = _repo_with_strategy()
+    _apply_buy_freeze(repo, amount=Decimal("10250"))
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_stale_open_buy",
+                "order_sysid": "sys_stale_open_buy",
+                "stock_code": "300604.SZ",
+                "order_time_iso": "2026-05-18T14:50:00+08:00",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10.25,
+                "traded_volume": 0,
+                "traded_price": 0,
+                "order_status": 50,
+                "status_msg": "open-like from previous day",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_a",
+            }
+        ],
+        trades=[],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_seen == 1
+    assert summary.orders_upserted == 0
+    assert summary.stale_orders_skipped == 1
+    assert summary.stale_trades_skipped == 0
+    assert summary.stale_orders_terminalized == 1
+    assert summary.cash_entries_appended == 1
+    assert summary.buy_freeze_released_amount == Decimal("10250.000000")
+    assert summary.stale_buy_freeze_released_amount == Decimal("10250.000000")
+    assert summary.status_events_appended == 1
+    assert repo._order_ledgers == {}
+    assert repo._trade_ledgers == {}
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10000000.000000")
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
+    assert [entry.entry_type for entry in repo.list_cash_entries("strat_a")] == [
+        CashEntryType.FREEZE_BUY,
+        CashEntryType.UNFREEZE_CANCEL,
+    ]
+    assert repo.list_cash_entries("strat_a")[1].reason == "STALE_BUY_ORDER_EXPIRED"
+    assert repo.get_order_intent("intent_a").submit_status == IntentSubmitStatus.CANCELLED
+    assert list(repo._order_status_events.values())[0].event_type == "STALE_ORDER_ROLLOVER"
+
+    idempotent = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    assert idempotent.stale_orders_terminalized == 1
+    assert idempotent.cash_entries_appended == 0
+    assert idempotent.buy_freeze_released_amount == Decimal("0")
+    assert idempotent.stale_buy_freeze_released_amount == Decimal("0")
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10000000.000000")
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
+    assert [entry.entry_type for entry in repo.list_cash_entries("strat_a")] == [
+        CashEntryType.FREEZE_BUY,
+        CashEntryType.UNFREEZE_CANCEL,
+    ]
+    assert len(repo._order_status_events) == 1
+
+
+def test_sync_service_terminalizes_stale_unfilled_sell_without_cash_mutation() -> None:
+    repo = _repo_with_strategy()
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id="intent_sell_stale",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            symbol="300604.SZ",
+            side="SELL",
+            order_type=SELL_ORDER_TYPE,
+            quantity=1000,
+            price_type=5,
+            order_remark="remark_sell_stale",
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+        )
+    )
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_stale_open_sell",
+                "order_sysid": "sys_stale_open_sell",
+                "stock_code": "300604.SZ",
+                "order_time_iso": "2026-05-18T14:50:00+08:00",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10.25,
+                "traded_volume": 0,
+                "traded_price": 0,
+                "order_status": 50,
+                "status_msg": "open-like from previous day",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell_stale",
+            }
+        ],
+        trades=[],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_upserted == 0
+    assert summary.stale_orders_skipped == 1
+    assert summary.stale_orders_terminalized == 1
+    assert summary.cash_entries_appended == 0
+    assert summary.buy_freeze_released_amount == Decimal("0")
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10000000")
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0")
+    assert repo.get_order_intent("intent_sell_stale").submit_status == IntentSubmitStatus.CANCELLED
+    assert list(repo._order_status_events.values())[0].event_type == "STALE_ORDER_ROLLOVER"
+
+
+def test_sync_service_does_not_release_stale_buy_when_intent_trade_date_mismatches_payload() -> None:
+    repo = _repo_with_strategy()
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id="intent_today_same_remark",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            symbol="300604.SZ",
+            side="BUY",
+            order_type=BUY_ORDER_TYPE,
+            quantity=1000,
+            price_type=5,
+            order_remark="remark_today_same",
+            account_id=ACCOUNT_ID,
+            trade_date=NEXT_TRADE_DATE,
+        )
+    )
+    _apply_buy_freeze(repo, amount=Decimal("10250"), intent_id="intent_today_same_remark")
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_stale_date_mismatch",
+                "order_sysid": "sys_stale_date_mismatch",
+                "stock_code": "300604.SZ",
+                "order_time_iso": "2026-05-18T14:50:00+08:00",
+                "order_type": BUY_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 10.25,
+                "traded_volume": 0,
+                "traded_price": 0,
+                "order_status": 50,
+                "status_msg": "open-like from previous day",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_today_same",
+            }
+        ],
+        trades=[],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.stale_orders_skipped == 1
+    assert summary.stale_orders_terminalized == 0
+    assert summary.cash_entries_appended == 0
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("10250.000000")
+    assert repo.get_order_intent("intent_today_same_remark").submit_status == IntentSubmitStatus.CREATED
+    assert repo._order_status_events == {}
 
 
 def test_sync_service_skips_trade_with_explicit_mismatched_broker_trade_date() -> None:
