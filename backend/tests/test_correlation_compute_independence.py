@@ -112,6 +112,7 @@ def test_correlation_cache_status_reports_offline_orphan_parquets(monkeypatch, t
         def get_computable_factors(self):
             return [{"factor_name": "factor_a"}]
 
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", cache_root)
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
 
@@ -214,6 +215,7 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
             )
 
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", cache_root)
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
@@ -317,6 +319,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
                 },
             )
 
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())

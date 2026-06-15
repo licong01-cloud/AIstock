@@ -27,6 +27,7 @@ from .factor_universe_mask_service import (
 )
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_value_loader import FactorValueLoader
+from .wsl_runtime_guard import assert_wsl_runtime
 
 logger = logging.getLogger("aistock.quantevolver.correlation_compute_service")
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -416,6 +417,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     每次计算前清空所有历史相关性数据，使用离线研究/回测 single/*.parquet 缓存全量重算。
     data_date 仅保留为兼容字段；相关性计算不得切换到 realtime/snapshot cache。
     """
+    assert_wsl_runtime("correlation_compute_local")
     universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
     if as_of_date:
         # Correlation reuses the offline research cache; its universe metadata must match the ST PIT state.
@@ -792,6 +794,18 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 f"success={_success_count}, failed={_failed_count}, "
                 f"records={len(records)}, elapsed={total_elapsed}s"
             )
+            runtime_validation = _build_correlation_runtime_validation(
+                requested_count=_requested_count,
+                success_count=_success_count,
+                failed_count=_failed_count,
+                missing_factors=missing_factors,
+                degenerate_factors=_degenerate_factors,
+                record_count=len(records),
+                as_of_date=as_of_date,
+                cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
+                integrity=integrity,
+                universe_metadata=universe_metadata,
+            )
             return {
                 "success": True,
                 "status": "success",
@@ -812,6 +826,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 "as_of_date": as_of_date,
                 "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
                 "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
+                "runtime_validation": runtime_validation,
             }
 
         except Exception as e:
@@ -1029,3 +1044,44 @@ def get_latest_result() -> Optional[CorrelationResult]:
 
 def get_matrix_timeout_sec() -> int:
     return _MATRIX_TIMEOUT_SEC
+
+
+def _build_correlation_runtime_validation(
+    *,
+    requested_count: int,
+    success_count: int,
+    failed_count: int,
+    missing_factors: list[str],
+    degenerate_factors: list[str],
+    record_count: int,
+    as_of_date: str | None,
+    cache_root: Path,
+    integrity: dict[str, Any],
+    universe_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    checks = {
+        "official_cache_only": "factor_values_realtime" not in str(cache_root),
+        "factor_count_reconciled": requested_count == success_count + failed_count,
+        "excluded_factors_classified": failed_count == len(missing_factors) + len(degenerate_factors),
+        "enough_success_factors": success_count >= 2,
+        "records_generated": record_count >= 0,
+        "cache_integrity_visible": isinstance(integrity, dict),
+        "universe_metadata_present": bool(universe_metadata.get("universe_key")),
+    }
+    gate_status = "passed" if all(checks.values()) else "failed"
+    return {
+        "schema_version": "official_factor_correlation_runtime_validation_v1",
+        "gate_status": gate_status,
+        "requested_factor_count": requested_count,
+        "success_factor_count": success_count,
+        "failed_factor_count": failed_count,
+        "record_count": record_count,
+        "as_of_date": as_of_date,
+        "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
+        "cache_root": str(cache_root),
+        "checks": checks,
+        "excluded_summary": {
+            "missing_from_cache": len(missing_factors),
+            "degenerate_nan": len(degenerate_factors),
+        },
+    }

@@ -20,6 +20,7 @@ class TestBug013DisabledFactorEligibility:
             "SUCCESS",        # transformation_status
             False,            # is_available (disabled)
             "factors/test.py", # qe_code_path
+            "def compute(): pass", # code_text
             None,             # correlation_computed_at
         )
         mock_conn = MagicMock()
@@ -45,6 +46,7 @@ class TestBug013DisabledFactorEligibility:
             "SUCCESS",
             True,
             "factors/active.py",
+            "def compute(): pass",
             None,
         )
         mock_conn = MagicMock()
@@ -62,13 +64,14 @@ class TestBug013DisabledFactorEligibility:
 
     @patch("backend.services.quantevolver.factor_eligibility_service.get_conn")
     def test_transformation_not_success_still_blocked(self, mock_get_conn):
-        """Regression: non-SUCCESS transformation should still block."""
+        """Regression: non-SUCCESS transformation should still block realtime-transformed mode."""
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = (
             "bad_factor",
             "FAILED",
             True,
             "factors/bad.py",
+            "def compute(): pass",
             None,
         )
         mock_conn = MagicMock()
@@ -78,7 +81,7 @@ class TestBug013DisabledFactorEligibility:
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
         mock_get_conn.return_value = mock_conn
 
-        result = self._make_service().get_factor_eligibility("bad_factor")
+        result = self._make_service().get_factor_eligibility("bad_factor", source_mode="realtime_transformed")
 
         assert result["eligible"] is False
         assert result["reason"] == "transformation_not_success"
