@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,12 +17,14 @@ COVERAGE_SCHEMA = "aistock_validation_coverage_snapshot_v1"
 EVIDENCE_SCHEMA = "aistock_validation_evidence_manifest_v1"
 CODE_INTELLIGENCE_SCHEMAS = {
     "aistock_codegraph_freshness_v1": "codegraph_freshness",
+    "aistock_codegraph_latest_freshness_v1": "codegraph_latest_freshness",
     "aistock_code_intelligence_summary_v1": "code_intelligence_summary",
     "aistock_code_intelligence_context_v1": "codegraph_context",
     "aistock_codegraph_affected_tests_v1": "codegraph_affected_tests",
     "aistock_understand_anything_summary_v1": "understand_anything_summary",
     "aistock_understand_anything_summary_manifest_v1": "understand_anything_manifest",
 }
+CODEGRAPH_ARTIFACT_TYPES = {"codegraph_freshness", "codegraph_latest_freshness"}
 CODE_INTELLIGENCE_ARTIFACT_ROOTS = (
     Path("tmp") / "validation" / "code-intelligence",
     Path("tests") / "aistock_validation" / "history" / "code-intelligence",
@@ -215,9 +218,10 @@ class ValidationHistoryStore:
     def code_intelligence_summary(self) -> dict[str, Any]:
         artifacts = self.list_code_intelligence_artifacts(limit=10000)["items"]
         latest_codegraph = next(
-            (item for item in artifacts if item.get("artifact_type") == "codegraph_freshness"),
+            (item for item in artifacts if item.get("artifact_type") in CODEGRAPH_ARTIFACT_TYPES),
             None,
         )
+        latest_codegraph = self._codegraph_with_repo_metadata(latest_codegraph)
         latest_manifest = next(
             (item for item in artifacts if item.get("artifact_type") == "understand_anything_manifest"),
             None,
@@ -230,8 +234,12 @@ class ValidationHistoryStore:
             warnings.append("No code-intelligence artifacts found under tmp/validation/code-intelligence.")
         if latest_codegraph is None:
             warnings.append("CodeGraph freshness artifact is missing.")
-        elif latest_codegraph.get("freshness") != "fresh":
-            warnings.append(f"CodeGraph freshness is {latest_codegraph.get('freshness') or 'unknown'}.")
+        else:
+            codegraph_freshness = latest_codegraph.get("effective_freshness") or latest_codegraph.get("freshness")
+            if codegraph_freshness != "fresh":
+                warnings.append(f"CodeGraph freshness is {codegraph_freshness or 'unknown'}.")
+            elif latest_codegraph.get("stale_metadata_warning"):
+                warnings.append("CodeGraph metadata is stale but effective freshness is fresh.")
         if latest_manifest is None and not ua_summaries:
             warnings.append("Understand Anything summary artifacts are missing; this is non-blocking.")
         data_state = "complete" if artifacts and latest_codegraph else ("partial" if artifacts else "missing")
@@ -507,31 +515,100 @@ class ValidationHistoryStore:
         artifact_type: str,
     ) -> dict[str, Any]:
         stat = path.stat()
-        summary_ref = payload.get("summary_ref")
+        effective = payload.get("effective") if isinstance(payload.get("effective"), dict) else {}
+        latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else {}
+        source_payload = effective if artifact_type == "codegraph_latest_freshness" and effective else payload
+        summary_ref = source_payload.get("summary_ref") or payload.get("summary_ref")
         summary_path = self.repo_root / str(summary_ref) if summary_ref else None
+        freshness = (
+            source_payload.get("freshness")
+            or payload.get("effective_freshness")
+            or payload.get("freshness")
+        )
+        status = (
+            source_payload.get("status")
+            or source_payload.get("workflow_gate")
+            or payload.get("status")
+            or payload.get("workflow_gate")
+        )
+        effective_status = source_payload.get("status") or source_payload.get("workflow_gate")
         return {
             "artifact_id": self._id_for_repo_path(path),
             "schema_version": payload.get("schema_version"),
             "artifact_type": artifact_type,
-            "provider": payload.get("provider") or payload.get("graph_provider"),
-            "status": payload.get("status") or payload.get("workflow_gate"),
-            "freshness": payload.get("freshness"),
-            "module": payload.get("module"),
-            "generated_at": payload.get("generated_at"),
-            "git_commit": payload.get("git_commit") or payload.get("graph_commit"),
+            "provider": source_payload.get("provider") or payload.get("provider") or payload.get("graph_provider"),
+            "status": status,
+            "freshness": freshness,
+            "effective_freshness": freshness,
+            "effective_status": effective_status,
+            "effective_source": payload.get("effective_source") or payload.get("persisted_from"),
+            "stale_metadata_warning": bool(payload.get("stale_metadata_warning")),
+            "freshness_basis": source_payload.get("freshness_basis") or payload.get("freshness_basis"),
+            "current_git_commit": payload.get("current_git_commit"),
+            "latest_git_commit": latest.get("git_commit") if latest else None,
+            "module": source_payload.get("module") or payload.get("module"),
+            "generated_at": source_payload.get("generated_at") or payload.get("generated_at"),
+            "git_commit": source_payload.get("git_commit") or payload.get("git_commit") or payload.get("graph_commit"),
             "artifact_path": self._repo_path(path),
             "summary_ref": str(summary_ref) if summary_ref else None,
             "summary_exists": bool(summary_path and summary_path.exists()),
-            "blocking_for_issue_workflow": bool(payload.get("blocking_for_issue_workflow")),
-            "warnings": payload.get("warnings") or [],
-            "index_summary": payload.get("index_summary") or {},
-            "summary_refs": payload.get("summary_refs") or [],
-            "node_count": payload.get("node_count"),
-            "edge_count": payload.get("edge_count"),
-            "nodes_used": payload.get("nodes_used"),
-            "edges_used": payload.get("edges_used"),
+            "blocking_for_issue_workflow": bool(
+                payload.get("blocking_for_issue_workflow") or source_payload.get("blocking_for_issue_workflow")
+            ),
+            "warnings": payload.get("warnings") or source_payload.get("warnings") or [],
+            "notes": payload.get("notes") or source_payload.get("notes") or [],
+            "index_summary": source_payload.get("index_summary") or payload.get("index_summary") or {},
+            "summary_refs": source_payload.get("summary_refs") or payload.get("summary_refs") or [],
+            "node_count": source_payload.get("node_count") or payload.get("node_count"),
+            "edge_count": source_payload.get("edge_count") or payload.get("edge_count"),
+            "nodes_used": source_payload.get("nodes_used") or payload.get("nodes_used"),
+            "edges_used": source_payload.get("edges_used") or payload.get("edges_used"),
             "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(timespec="seconds"),
         }
+
+    def _codegraph_with_repo_metadata(self, item: dict[str, Any] | None) -> dict[str, Any] | None:
+        if item is None:
+            return None
+        enriched = dict(item)
+        current_commit = enriched.get("current_git_commit") or self._current_git_commit()
+        latest_commit = enriched.get("latest_git_commit") or enriched.get("git_commit")
+        if current_commit:
+            enriched["current_git_commit"] = current_commit
+        if latest_commit:
+            enriched["latest_git_commit"] = latest_commit
+        index_summary = enriched.get("index_summary") if isinstance(enriched.get("index_summary"), dict) else {}
+        stale_but_usable = bool(
+            current_commit
+            and latest_commit
+            and str(current_commit) != str(latest_commit)
+            and enriched.get("freshness") == "fresh"
+            and (
+                index_summary.get("up_to_date") is True
+                or enriched.get("freshness_basis") == "live_codegraph_status"
+                or enriched.get("effective_source")
+            )
+        )
+        if stale_but_usable:
+            enriched["stale_metadata_warning"] = True
+            enriched.setdefault("effective_source", "artifact_metadata_stale")
+            enriched.setdefault("effective_freshness", "fresh")
+        return enriched
+
+    def _current_git_commit(self) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
 
     def _id_for_path(self, path: Path) -> str:
         relative = self._relative_to_history(path)
