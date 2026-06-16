@@ -1551,7 +1551,7 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
 
 
-def test_scheduler_keeps_miniqmt_capacity_residual_retryable_when_open_orders_remain() -> None:
+def test_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_remain() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -1655,12 +1655,25 @@ def test_scheduler_keeps_miniqmt_capacity_residual_retryable_when_open_orders_re
     latest = repo.get_simulation_daily_run(run.run_id)
     reconciliation = latest.run_payload_json["reconcile_after_submit"]
 
-    assert reconciled.results[0].status == "RECONCILIATION_WARNING"
-    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
-    assert reconciliation["submit_result_gate"]["status"] == "blocked"
-    assert reconciliation["submit_result_gate"]["reason"] == "miniqmt_open_orders_remain_after_reconciliation"
+    assert reconciled.results[0].status == "RECONCILIATION_PENDING_OPEN_ORDERS"
+    assert latest.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert reconciliation["submit_result_gate"]["status"] == "PENDING"
+    assert reconciliation["submit_result_gate"]["reason"] == "miniqmt_open_orders_pending_after_reconciliation"
+    assert reconciliation["submit_result_gate"]["pending_open_orders"] is True
     assert reconciliation["open_order_evidence"]["open_order_count"] == 1
     assert reconciliation["open_order_evidence"]["open_orders"][0]["order_status"] == STATUS_OPEN_LIKE
+    assert len(broker.place_order_payloads) == 1
+
+    polled = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    still_pending = repo.get_simulation_daily_run(run.run_id)
+
+    assert polled.results[0].status == "RECONCILIATION_PENDING_OPEN_ORDERS"
+    assert still_pending.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert len(broker.place_order_payloads) == 1
 
 
