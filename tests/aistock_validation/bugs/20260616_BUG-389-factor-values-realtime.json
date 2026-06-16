@@ -49,22 +49,22 @@
       "timestamp": "2026-06-16T09:36:21.799163Z"
     },
     {
-      "timestamp": "2026-06-16T10:05:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "扩展范围以覆盖 factor_values_realtime 残留清理、统一官方缓存、后端测试和历史迁移脚本。"
+      "actor": "codex",
+      "note": "扩展范围以覆盖 factor_values_realtime 残留清理、统一官方缓存、后端测试和历史迁移脚本。",
+      "timestamp": "2026-06-16T10:05:00Z"
     },
     {
-      "timestamp": "2026-06-16T11:34:21.029823Z",
-      "actor": "codex",
       "action": "cleanup_legacy_realtime_cache_paths",
-      "note": "删除旧 /factor-values* 路由、DataSnapshotManager、factor_values_realtime 业务引用和 snapshot 注入逻辑；FactorCacheComputeRequest 禁止 legacy resume_task_id 额外字段。"
+      "actor": "codex",
+      "note": "删除旧 /factor-values* 路由、DataSnapshotManager、factor_values_realtime 业务引用和 snapshot 注入逻辑；FactorCacheComputeRequest 禁止 legacy resume_task_id 额外字段。",
+      "timestamp": "2026-06-16T11:34:21.029823Z"
     },
     {
-      "timestamp": "2026-06-16T11:34:21.029823Z",
-      "actor": "codex",
       "action": "record_validation",
-      "note": "记录 py_compile、ruff、targeted pytest、frontend tsc、源码扫描、live API 与 nox l0/validation_module_registry_l0/qe_read_l3 验证结果。"
+      "actor": "codex",
+      "note": "记录 py_compile、ruff、targeted pytest、frontend tsc、源码扫描、live API 与 nox l0/validation_module_registry_l0/qe_read_l3 验证结果。",
+      "timestamp": "2026-06-16T11:34:21.029823Z"
     }
   ],
   "evidence_uris": [
@@ -74,8 +74,8 @@
   "expected": "源码和 UI 不再包含 factor_values_realtime 业务路径；旧 /factor-values* API 从代码中删除而不是保留 410 兼容；DataSnapshotManager 删除；RealtimeFactorDataLoader 不再支持 snapshot 注入；官方独立指标、因子相关性和 QE 回测统一使用 rdagent_assets/factor_values。",
   "first_seen_at": "2026-06-16T09:36:21.799166Z",
   "fix_branch": "bug/BUG-389-factor-values-realtime-20260616",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9c0574509ae694b4168d3259f12d8eee311db412",
+  "fixed_at": "2026-06-16T13:33:00.579310Z",
   "github_issue_number": 1161,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1161",
   "last_seen_at": "2026-06-16T09:36:21.799166Z",
@@ -83,6 +83,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1175",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,7 +96,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -137,6 +138,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1175 CI checks -> all required checks passed after BUG-395 PR Quality fix",
+    "python -m pytest backend/tests/test_factor_cache_wsl_env.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_runtime_validation.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 40 passed after latest origin/main",
+    "changed Python ruff check with diff-filter ACMRT -> passed",
+    "git diff --check origin/main...HEAD -> passed",
+    "rg legacy realtime cache keywords under backend/routers backend/services backend/data_service frontend/src/app/quantevolver scripts -> no matches",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s l0 validation_module_registry_l0 qe_read_l3 -> passed; qe_read_backend 14 passed",
+    "python -m nox -s paper_v2_backend -> 622 passed, 1 skipped, 2 xfailed"
+  ],
   "verification_run_id": "tests/aistock_validation/history/qe/20260616_bug389_realtime_cache_removal.md",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -149,17 +159,5 @@
       "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "validation_evidence": [
-    "python -m py_compile $(changed Python files) -> passed",
-    "python -m ruff check $(changed Python files) -> passed",
-    "git diff --check -> passed",
-    "rg legacy realtime cache keywords under backend/routers backend/services backend/data_service frontend/src/app/quantevolver scripts -> no matches",
-    "python -m pytest backend/tests/test_factor_cache_wsl_env.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_runtime_validation.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 40 passed",
-    "npx tsc targeted changed Quantevolver TS/TSX files -> passed after npm ci in task worktree",
-    "GET /api/v1/quantevolver/evolution/correlations/overview on live 8001 -> 200, factor_stats enabled correlation_cached=575 correlation_computed=574, official_cache_window cache_root=F:\\Dev\\AIstock\\rdagent_assets\\factor_values",
-    "GET /api/v1/quantevolver/evolution/correlations/status on live 8001 -> 200, db_correlation_count=164429, latest_computation num_factors=574",
-    "GET /openapi.json on live 8001 -> still lists old /factor-values* routes, confirming production backend is running stale pre-cleanup code despite user restart",
-    "QE_READ_L3_SKIP_UI=1 python -m nox -s l0 validation_module_registry_l0 qe_read_l3 -> passed; qe_read_backend 14 passed"
-  ]
+  }
 }
