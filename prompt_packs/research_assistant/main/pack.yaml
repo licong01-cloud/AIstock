@@ -358,6 +358,16 @@ nodes:
     trigger_json:
       explicit_intents: [validation_issue_request]
     prompt_file: nodes/domain.validation_issue.md
+  - prompt_key: domain.stock_analysis
+    title: Stock analysis MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/stock_analysis
+    parent_key: intent.planning
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      explicit_intents: [stock_analysis_request]
+    prompt_file: nodes/domain.stock_analysis.md
   - prompt_key: tool_guard.mcp_payload_budget
     title: MCP payload budget guard
     category: tool_guard

@@ -67,6 +67,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
         "aistock-paper-v2-monitor",
         "aistock-paper-v2-stable",
         "aistock-external-research",
+        "aistock-stock-analysis",
     }
     assert canonicalize_server_key("aistock-qe-archive") == "aistock-qe"
     assert canonicalize_server_key("aistock-factor-library") == "aistock-factor"
@@ -84,6 +85,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert servers["aistock-paper-v2-stable"]["health_json"]["display_name_zh"] == "模拟盘稳定能力"
     assert "策略包管理" in servers["aistock-paper-v2-stable"]["health_json"]["business_aliases_zh"]
     assert servers["aistock-external-research"]["health_json"]["display_name_zh"] == "External Research"
+    assert servers["aistock-stock-analysis"]["health_json"]["domain"] == "stock_analysis"
 
     tools = default_mcp_tools()
     catalog_tools = [tool for tool in tools if tool["server_key"] == "aistock-gateway-lite"]
@@ -134,6 +136,10 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     save_evidence = next(tool for tool in external_tools if tool["tool_name"] == "external_research_save_evidence")
     assert save_evidence["side_effect_level"] == "draft_only"
     assert save_evidence["requires_approval"] is True
+    stock_analysis_tools = [tool for tool in tools if tool["server_key"] == "aistock-stock-analysis"]
+    assert len(stock_analysis_tools) == len(MODULE_TOOL_NAMES["stock_analysis"])
+    assert {tool["tool_name"] for tool in stock_analysis_tools} == set(MODULE_TOOL_NAMES["stock_analysis"])
+    assert all(tool["side_effect_level"] == "read_only" for tool in stock_analysis_tools)
     assert all("gateway_manifest" in tool["preflight_schema_json"] for tool in tools)
     assert next(tool for tool in catalog_tools if tool["tool_name"] == "mcp_gateway_health")["preflight_schema_json"]["gateway_manifest"]["risk_level"] == "catalog"
 
@@ -154,6 +160,7 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     assert any(tool["server_key"] == "aistock-paper-v2-monitor" and tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in tools)
     assert any(tool["server_key"] == "aistock-paper-v2-stable" and tool["tool_name"] == "strategy_packages_list" for tool in tools)
     assert any(tool["server_key"] == "aistock-external-research" and tool["tool_name"] == "external_research_search_web" for tool in tools)
+    assert any(tool["server_key"] == "aistock-stock-analysis" and tool["tool_name"] == "stock_analysis_get_quote" for tool in tools)
     assert not any(tool["server_key"] == "aistock-qe-archive" for tool in tools)
     assert not any(tool["server_key"] == "aistock-factor-library" for tool in tools)
     mcp_capability = svc.repository.find_one("capabilities", {"capability_key": "mcp_capability.mcp_orchestration"})

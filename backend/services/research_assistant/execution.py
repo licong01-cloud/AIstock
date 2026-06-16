@@ -724,10 +724,299 @@ class ResearchAssistantExecutionMixin:
             "provider",
             "url",
             "max_chars",
+            "symbol",
+            "ts_code",
+            "analysis_date",
+            "period",
         ):
             if key in payload and key not in args:
                 args[key] = payload[key]
         return args
+
+    def _stock_analysis_facade(self) -> Any:
+        factory = getattr(self, "stock_analysis_facade_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services import analysis_service
+
+        return analysis_service
+
+    def _external_research_provider(self) -> Any:
+        factory = getattr(self, "external_research_provider_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.routers.external_research import get_external_research_provider
+
+        return get_external_research_provider()
+
+    @staticmethod
+    def _stock_symbol_from_args(args: dict[str, Any]) -> str | None:
+        for key in ("symbol", "ts_code", "stock_code"):
+            value = str(args.get(key) or "").strip()
+            if value:
+                return value
+        return None
+
+    @staticmethod
+    def _first_non_empty(*values: Any) -> str | None:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _unique_strings(values: list[Any]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                result.append(text)
+        return result
+
+    @classmethod
+    def _stock_degraded_section(cls, *, dataset: str, symbol: str | None, reason_code: str, warning: str) -> dict[str, Any]:
+        as_of = utc_now().isoformat()
+        return {
+            "dataset": dataset,
+            "symbol": symbol,
+            "status": "degraded",
+            "summary": warning,
+            "source": "stock_analysis_read_adapter",
+            "source_refs": [f"stock-analysis:degraded:{dataset}:{symbol or 'unknown'}:{reason_code}"],
+            "as_of": as_of,
+            "reason_codes": [reason_code],
+            "warnings": [{"reason_code": reason_code, "warning": warning}],
+            "total": 0,
+            "items": [],
+        }
+
+    @classmethod
+    def _stock_section_from_envelope(cls, dataset: str, payload: dict[str, Any]) -> dict[str, Any]:
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        source_refs = payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+        reason_codes = payload.get("reason_codes") if isinstance(payload.get("reason_codes"), list) else []
+        return {
+            "dataset": str(payload.get("dataset") or dataset),
+            "symbol": payload.get("symbol"),
+            "status": str(payload.get("status") or ("ok" if items else "degraded")),
+            "summary": str(payload.get("summary") or ""),
+            "source": str(payload.get("source") or ""),
+            "source_refs": cls._unique_strings(source_refs),
+            "as_of": payload.get("as_of"),
+            "reason_codes": [str(item) for item in reason_codes if str(item)],
+            "warnings": [dict(item) for item in warnings[:5] if isinstance(item, dict)],
+            "total": int(payload.get("total") or len(items)),
+            "items": [dict(item) for item in items[:3] if isinstance(item, dict)],
+        }
+
+    @classmethod
+    def _stock_latest_as_of(cls, sections: list[dict[str, Any]]) -> str:
+        values = [str(section.get("as_of") or "") for section in sections if section.get("as_of")]
+        return sorted(values)[-1] if values else utc_now().isoformat()
+
+    def _stock_fundamental_section(self, *, symbol: str, limit: int) -> dict[str, Any]:
+        provider = self._external_research_provider()
+        query = f"{symbol} 主营业务 行业地位 竞争格局 发展趋势"
+        try:
+            raw_items = provider.search_web(query, locale="zh-CN", limit=min(max(limit, 1), 3))
+        except Exception as exc:  # noqa: BLE001
+            return self._stock_degraded_section(
+                dataset="fundamentals",
+                symbol=symbol,
+                reason_code="stock_external_research_search_failed",
+                warning=f"联网基本面检索失败：{type(exc).__name__}: {exc}",
+            )
+        items: list[dict[str, Any]] = []
+        for raw in raw_items or []:
+            compact = raw.compact() if hasattr(raw, "compact") else raw
+            if isinstance(compact, dict):
+                items.append(dict(compact))
+        source_refs = self._unique_strings([item.get("evidence_ref") or item.get("url") for item in items])
+        warnings: list[dict[str, str]] = []
+        reason_codes: list[str] = []
+        extracts: list[dict[str, Any]] = []
+        if items:
+            first_url = str(items[0].get("url") or "").strip()
+            if first_url:
+                try:
+                    extract = provider.fetch_extract(first_url, max_chars=1200)
+                    compact_extract = extract.compact(max_preview_chars=800) if hasattr(extract, "compact") else extract
+                    if isinstance(compact_extract, dict):
+                        extracts.append(dict(compact_extract))
+                        ref = compact_extract.get("evidence_ref") or compact_extract.get("url")
+                        if ref:
+                            source_refs = self._unique_strings([*source_refs, ref])
+                except Exception as exc:  # noqa: BLE001
+                    reason_codes.append("stock_external_research_fetch_failed")
+                    warnings.append(
+                        {
+                            "reason_code": "stock_external_research_fetch_failed",
+                            "warning": f"联网基本面正文抽取失败：{type(exc).__name__}: {exc}",
+                        }
+                    )
+        if not items:
+            return self._stock_degraded_section(
+                dataset="fundamentals",
+                symbol=symbol,
+                reason_code="stock_external_research_empty",
+                warning="联网基本面检索未返回可用网页证据。",
+            )
+        as_of = self._first_non_empty(*(item.get("as_of") for item in items), *(item.get("as_of") for item in extracts)) or utc_now().date().isoformat()
+        return {
+            "dataset": "fundamentals",
+            "symbol": symbol,
+            "status": "ok" if not reason_codes else "degraded",
+            "summary": f"{symbol} 联网基本面证据，覆盖主营业务、行业地位、竞争格局和发展趋势检索线索。",
+            "source": "external_research_provider",
+            "source_refs": source_refs,
+            "as_of": as_of,
+            "reason_codes": reason_codes,
+            "warnings": warnings,
+            "total": len(items) + len(extracts),
+            "items": [*items[:3], *extracts[:1]],
+        }
+
+    def _execute_stock_analysis_summary_read_tool(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-stock-analysis")
+        tool_name = str(tool.get("tool_name") or "stock_analysis_get_quote")
+        symbol = self._stock_symbol_from_args(args)
+        limit = int(args.get("limit") or 20)
+        period = str(args.get("period") or "1y")
+        analysis_date = str(args.get("analysis_date") or "").strip() or None
+        if not symbol:
+            section = self._stock_degraded_section(
+                dataset="request_scope",
+                symbol=None,
+                reason_code="stock_symbol_missing",
+                warning="未能从语义工具计划中取得明确股票代码或 symbol，未调用个股数据源。",
+            )
+            sections = [section]
+        else:
+            facade = self._stock_analysis_facade()
+            call_specs = [
+                ("quote", "get_stock_quote_evidence", {"symbol": symbol}),
+                ("kline", "get_stock_kline_evidence", {"symbol": symbol, "period": period, "analysis_date": analysis_date}),
+                ("financials", "get_stock_financials_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("quarterly", "get_stock_quarterly_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("margin_financing", "get_stock_margin_financing_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("fund_flow", "get_stock_fund_flow_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("technicals", "get_stock_technicals_evidence", {"symbol": symbol, "period": period, "analysis_date": analysis_date}),
+            ]
+            sections = []
+            for dataset, method_name, call_kwargs in call_specs:
+                func = getattr(facade, method_name, None)
+                if not callable(func):
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_facade_missing",
+                            warning=f"个股只读 facade 缺少 {method_name}，该数据集已降级。",
+                        )
+                    )
+                    continue
+                try:
+                    payload_json = func(**call_kwargs)
+                except Exception as exc:  # noqa: BLE001
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_read_failed",
+                            warning=f"{dataset} 数据源读取失败：{type(exc).__name__}: {exc}",
+                        )
+                    )
+                    continue
+                if isinstance(payload_json, dict):
+                    sections.append(self._stock_section_from_envelope(dataset, payload_json))
+                else:
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_invalid_payload",
+                            warning=f"{dataset} 数据源返回了非 JSON 对象，已降级。",
+                        )
+                    )
+            sections.append(self._stock_fundamental_section(symbol=symbol, limit=limit))
+
+        source_refs = self._unique_strings([ref for section in sections for ref in (section.get("source_refs") or [])])
+        reason_codes = self._unique_strings([code for section in sections for code in (section.get("reason_codes") or [])])
+        warnings = [warning for section in sections for warning in (section.get("warnings") or []) if isinstance(warning, dict)]
+        as_of = self._stock_latest_as_of(sections)
+        ok_sections = sum(1 for section in sections if str(section.get("status") or "") == "ok")
+        status = "ok" if ok_sections == len(sections) else "degraded" if ok_sections else "blocked"
+        items = [
+            {
+                "dataset": section.get("dataset"),
+                "status": section.get("status"),
+                "summary": section.get("summary"),
+                "source": section.get("source"),
+                "as_of": section.get("as_of"),
+                "source_refs": list(section.get("source_refs") or [])[:3],
+                "reason_codes": list(section.get("reason_codes") or [])[:3],
+                "preview": list(section.get("items") or [])[:2],
+            }
+            for section in sections
+        ]
+        result_json = summary_envelope(
+            domain="stock_analysis",
+            items=items,
+            total=len(items),
+            limit=min(max(limit, 1), 20),
+            offset=0,
+            omitted_sections=["raw_payload", "full_kline_dataframe", "database_rows", "full_text", "raw_html"],
+            detail_tool=f"{server_key}/{tool_name}",
+            detail_args_hint={"symbol": symbol or "<symbol>", "period": period, "analysis_date": analysis_date},
+            artifact_refs=[
+                artifact_ref(
+                    "stock_analysis_evidence_card",
+                    f"stock-analysis:{symbol or 'unknown'}",
+                    {"symbol": symbol, "as_of": as_of, "status": status, "section_count": len(sections)},
+                )
+            ],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "stock_analysis_evidence_card",
+                "evidence_card": True,
+                "symbol": symbol,
+                "status": status,
+                "source": "stock_analysis_read_adapter",
+                "source_refs": source_refs,
+                "as_of": as_of,
+                "sections": sections,
+                "fundamentals": next((section for section in sections if section.get("dataset") == "fundamentals"), {}),
+                "reason_codes": reason_codes,
+                "warnings": warnings,
+                "live_backend_called": True,
+                "next_step": "Use the evidence card to synthesize observations; do not convert it into buy/sell advice.",
+            },
+        )
+        assert_summary_payload(result_json)
+        card = {
+            "title": f"{symbol or '未指定股票'} 个股证据卡",
+            "summary": f"已生成个股证据卡：{ok_sections}/{len(sections)} 个板块有可用证据。",
+            "route": f"{server_key}/{tool_name}",
+            "summary_first": True,
+            "response_mode": "stock_analysis_evidence_card",
+            "status": status,
+            "next_step": result_json["next_step"],
+        }
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [card],
+            "artifact_refs": result_json.get("artifact_refs") or [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "stock_analysis_facade_read_adapter",
+        }
 
     @staticmethod
     def _should_use_local_data_daily_status_adapter(tool_name: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
@@ -1135,6 +1424,8 @@ class ResearchAssistantExecutionMixin:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         args = self._summary_adapter_args(payload)
+        if server_key == "aistock-stock-analysis":
+            return self._execute_stock_analysis_summary_read_tool(tool, payload, args)
         if server_key == "aistock-local-data" and self._should_use_local_data_daily_status_adapter(tool_name, args, payload):
             return self._execute_local_data_daily_status_read(tool, payload, args)
         if server_key == "aistock-qe":

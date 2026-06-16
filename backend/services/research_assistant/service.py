@@ -296,7 +296,13 @@ class _ServiceReactMcpProvider:
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
-        payload.setdefault("selected_tool", {"server_key": call.server_key, "tool_name": call.tool_name})
+        payload["server_key"] = call.server_key
+        payload["tool_name"] = call.tool_name
+        payload["selected_tool"] = {
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "domain": route.get("domain") or "",
+        }
         payload.update(self.service._mcp_route_tool_args(route))
         payload.setdefault("limit", self.service._mcp_route_limit(route))
         capability_key = self.service._capability_key_for_tool(call, route)
@@ -373,6 +379,13 @@ class _ServiceReactMcpProvider:
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
+        payload["server_key"] = call.server_key
+        payload["tool_name"] = call.tool_name
+        payload["selected_tool"] = {
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "domain": route.get("domain") or "",
+        }
         payload.update(self.service._mcp_route_tool_args(route))
         capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
@@ -537,6 +550,7 @@ class DialogueIntent(str, Enum):
     STRATEGY_GOVERNANCE_REQUEST = "strategy_governance_request"
     EXECUTION_POLICY_REQUEST = "execution_policy_request"
     EXTERNAL_RESEARCH_REQUEST = "external_research_request"
+    STOCK_ANALYSIS_REQUEST = "stock_analysis_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
     AUDIT_REQUEST = "audit_request"
@@ -2076,6 +2090,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
             DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
+            DialogueIntent.STOCK_ANALYSIS_REQUEST,
         }:
             mode = DialogueMode.PLANNING
             reason = "explicit_task_request"
@@ -2984,6 +2999,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         normalized = {str(key): value for key, value in args.items() if value not in (None, "", [], {})}
         if route.get("limit") not in (None, "", [], {}) and "limit" not in normalized:
             normalized["limit"] = route["limit"]
+        for key in ("symbol", "ts_code", "analysis_date", "period"):
+            if route.get(key) not in (None, "", [], {}) and key not in normalized:
+                normalized[key] = route[key]
         return {"tool_args": normalized, **normalized} if normalized else {}
 
     @staticmethod
@@ -3880,6 +3898,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _should_finish_with_business_summary_tool(self, call: McpToolCall, cards: dict[str, Any]) -> bool:
         route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
         domain = str(route.get("domain") or "")
+        if domain == "stock_analysis":
+            return call.server_key == "aistock-stock-analysis" and str(route.get("side_effect") or "read_only") == "read_only"
         if domain not in {"qe_experiment", "qe_warehouse"}:
             return False
         if domain == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
@@ -3989,6 +4009,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
         source = summary_result.get("source") or tool_event.get("transport") or tool_event.get("tool_event_id") or "mcp_tool_event"
         refs = [str(source)] if source else []
+        source_refs = summary_result.get("source_refs") if isinstance(summary_result.get("source_refs"), list) else []
+        for item in source_refs:
+            ref = str(item)
+            if ref and ref not in refs:
+                refs.append(ref)
         evidence_sources = summary_result.get("evidence_sources") if isinstance(summary_result.get("evidence_sources"), list) else []
         for item in evidence_sources:
             ref = str(item)
@@ -4115,7 +4140,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {"eligible": False, "reason": "qe_draft_creation_uses_plan_reply"}
         if str(route.get("side_effect") or "read_only") != "read_only":
             return {"eligible": False, "reason": "route_not_read_only"}
-        if mode_decision.allowed_tool_side_effect == "none":
+        semantic_read_only_route = route.get("planner_source") == "llm_semantic_tool_planner" and str(route.get("side_effect") or "read_only") == "read_only"
+        if mode_decision.allowed_tool_side_effect == "none" and not semantic_read_only_route:
             return {"eligible": False, "reason": "dialogue_mode_disallows_tools"}
         try:
             tool, _server = self._resolve_mcp_catalog_tool(str(route["server_key"]), str(route["tool_name"]))
@@ -4272,6 +4298,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return True
         if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
             return True
+        if summary.get("response_mode") == "stock_analysis_evidence_card":
+            return True
         if summary.get("response_mode") == "summary":
             return True
         return not react_active
@@ -4284,6 +4312,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return ResearchAssistantService._render_qe_experiment_status_reply(execution, summary)
         if summary.get("response_mode") == "qe_warehouse_business_summary":
             return ResearchAssistantService._render_qe_warehouse_business_reply(execution, summary)
+        if summary.get("response_mode") == "stock_analysis_evidence_card":
+            return ResearchAssistantService._render_stock_analysis_evidence_card_reply(execution, summary)
         return ResearchAssistantService._render_generic_mcp_business_reply(execution, summary)
 
     @staticmethod
@@ -4417,6 +4447,96 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 if len(bits) >= max_fields:
                     break
         return f"{title}\uff1a" + ("\uff1b".join(bits) if bits else "\u6682\u65e0\u53ef\u5c55\u793a\u7684\u5173\u952e\u5b57\u6bb5")
+
+    @staticmethod
+    def _render_stock_analysis_evidence_card_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        symbol = str(summary.get("symbol") or "未指定股票")
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        status = str(summary.get("status") or "unknown")
+        sections = summary.get("sections") if isinstance(summary.get("sections"), list) else []
+        source_refs = [str(item) for item in (summary.get("source_refs") or []) if str(item)]
+        reason_codes = [str(item) for item in (summary.get("reason_codes") or []) if str(item)]
+        warnings = [item for item in (summary.get("warnings") or []) if isinstance(item, dict)]
+        label_by_dataset = {
+            "quote": "行情",
+            "kline": "K线",
+            "financials": "财务摘要",
+            "quarterly": "季度数据",
+            "margin_financing": "融资融券",
+            "fund_flow": "资金流向",
+            "technicals": "技术指标",
+            "fundamentals": "联网基本面",
+            "request_scope": "请求范围",
+        }
+
+        def render_preview(item: dict[str, Any]) -> str:
+            preferred = (
+                "name",
+                "current_price",
+                "change_percent",
+                "date",
+                "trade_date",
+                "statement",
+                "revenue",
+                "net_profit",
+                "main_net_inflow",
+                "indicator_date",
+                "title",
+                "summary",
+                "url",
+            )
+            parts: list[str] = []
+            for key in preferred:
+                value = item.get(key)
+                if value in (None, "", [], {}):
+                    continue
+                text = str(value)
+                if ResearchAssistantService._contains_mcp_business_forbidden_marker(text):
+                    continue
+                parts.append(f"{ResearchAssistantService._friendly_field_label(key)}={text}")
+                if len(parts) >= 4:
+                    break
+            return "；".join(parts)
+
+        lines = [
+            f"{symbol} 个股证据卡（只读证据）。",
+            f"截至：{as_of}；证据状态：{status}；本轮未调用多智能体 POST 分析、未写库、未执行交易动作。",
+        ]
+        if source_refs:
+            lines.append("总来源引用：" + "；".join(source_refs[:6]) + ("；…" if len(source_refs) > 6 else ""))
+        if not sections:
+            lines.append("没有可展示的证据板块；请检查股票代码或数据源可用性。")
+        else:
+            lines.append("证据板块：")
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                dataset = str(section.get("dataset") or "unknown")
+                label = label_by_dataset.get(dataset, ResearchAssistantService._humanize_business_identifier(dataset))
+                section_status = str(section.get("status") or "unknown")
+                section_as_of = str(section.get("as_of") or "未知")
+                section_summary = str(section.get("summary") or "")
+                lines.append(f"- {label}：{section_status}；截至：{section_as_of}；{section_summary}")
+                refs = [str(item) for item in (section.get("source_refs") or []) if str(item)]
+                if refs:
+                    lines.append("  来源引用：" + "；".join(refs[:3]))
+                previews = [item for item in (section.get("items") or []) if isinstance(item, dict)]
+                rendered_previews = [render_preview(item) for item in previews[:2]]
+                rendered_previews = [item for item in rendered_previews if item]
+                if rendered_previews:
+                    lines.append("  摘要字段：" + " / ".join(rendered_previews))
+                section_warnings = [item for item in (section.get("warnings") or []) if isinstance(item, dict)]
+                for warning in section_warnings[:2]:
+                    lines.append(f"  降级说明：reason_code={warning.get('reason_code')}；warning={warning.get('warning')}")
+        if warnings and not any("降级说明" in line for line in lines):
+            lines.append("降级说明：")
+            for warning in warnings[:5]:
+                lines.append(f"- reason_code={warning.get('reason_code')}；warning={warning.get('warning')}")
+        elif reason_codes:
+            lines.append("降级 reason_code：" + "；".join(reason_codes[:8]))
+        lines.append("结论边界：以上是证据卡，不是买卖建议；无来源的主营、行业、竞争或趋势判断不会写入结论。")
+        return "\n".join(lines)
 
     @staticmethod
     def _render_generic_mcp_business_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -4848,6 +4968,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
             DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
+            DialogueIntent.STOCK_ANALYSIS_REQUEST,
             DialogueIntent.QE_WAREHOUSE_REQUEST,
             DialogueIntent.RESEARCH_PIPELINE_REQUEST,
         }
