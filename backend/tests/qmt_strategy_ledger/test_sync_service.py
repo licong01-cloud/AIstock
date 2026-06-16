@@ -10,9 +10,12 @@ from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingC
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
+    STATUS_CANCELLED,
+    STATUS_OPEN_LIKE,
     CashEntryType,
     IntentSubmitStatus,
     OrderIntentRecord,
+    OrderLedgerRecord,
     PositionLotRecord,
     PositionLotStatus,
     UnattributedOrderRecord,
@@ -100,6 +103,7 @@ def _sell_intent(
     symbol: str = "300604.SZ",
     quantity: int = 1000,
     order_remark: str = "remark_sell",
+    trade_date: date = NEXT_TRADE_DATE,
 ) -> None:
     repo.create_order_intent(
         OrderIntentRecord(
@@ -113,7 +117,7 @@ def _sell_intent(
             price_type=5,
             order_remark=order_remark,
             account_id=ACCOUNT_ID,
-            trade_date=NEXT_TRADE_DATE,
+            trade_date=trade_date,
         )
     )
 
@@ -252,6 +256,90 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
     assert idempotent.lots_created == 0
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
+
+
+def test_sync_service_reconciles_open_order_ledger_from_late_broker_trades() -> None:
+    repo = _repo_with_strategy()
+    _position_lot(repo, lot_id="lot_sell_late_trade", quantity=1000, avg_cost=Decimal("10"))
+    _sell_intent(repo, trade_date=TRADE_DATE)
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_late_trade",
+                "order_sysid": "sys_late_trade",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 12,
+                "traded_volume": 0,
+                "traded_price": 0,
+                "order_status": 50,
+                "status_msg": "accepted but broker order row has not refreshed yet",
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_late_1",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "101530",
+                "traded_price": 12,
+                "traded_volume": 400,
+                "traded_amount": 4800,
+                "order_id": "order_late_trade",
+                "order_sysid": "sys_late_trade",
+                "commission": 0,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            },
+            {
+                "traded_id": "trade_late_2",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "101531",
+                "traded_price": 12,
+                "traded_volume": 600,
+                "traded_amount": 7200,
+                "order_id": "order_late_trade",
+                "order_sysid": "sys_late_trade",
+                "commission": 0,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            },
+        ],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.trades_inserted == 2
+    assert summary.orders_trade_reconciled == 1
+    ledger = repo.list_order_ledger(account_id=ACCOUNT_ID, trade_date=TRADE_DATE)[0]
+    assert ledger.traded_volume == 1000
+    assert ledger.order_status == 56
+    assert ledger.raw_json["trade_reconciled"]["trade_aggregated_volume"] == 1000
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10012000.000000")
+
+    idempotent = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    assert idempotent.trades_inserted == 0
+    assert idempotent.trades_existing == 2
+    assert idempotent.orders_trade_reconciled == 1
+    assert repo.list_order_ledger(account_id=ACCOUNT_ID, trade_date=TRADE_DATE)[0].traded_volume == 1000
 
 
 def test_sync_service_skips_stale_previous_day_broker_orders_and_trades() -> None:
@@ -401,6 +489,76 @@ def test_sync_service_terminalizes_stale_unfilled_buy_and_releases_virtual_freez
         CashEntryType.FREEZE_BUY,
         CashEntryType.UNFREEZE_CANCEL,
     ]
+    assert len(repo._order_status_events) == 1
+
+
+def test_sync_service_terminalizes_broker_absent_historical_open_buy_and_releases_virtual_freeze_once() -> None:
+    repo = _repo_with_strategy()
+    _apply_buy_freeze(repo, amount=Decimal("10250"))
+    repo.upsert_order_ledger(
+        OrderLedgerRecord(
+            intent_id="intent_a",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            qmt_order_id="order_absent_open_buy",
+            qmt_order_sysid="sys_absent_open_buy",
+            symbol="300604.SZ",
+            order_type=BUY_ORDER_TYPE,
+            order_volume=1000,
+            traded_volume=0,
+            order_status=STATUS_OPEN_LIKE,
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            price_type=5,
+            price=Decimal("10.25"),
+            traded_price=Decimal("0"),
+            status_msg="previous-day open-like order",
+            order_remark="remark_a",
+            raw_json={"order_id": "order_absent_open_buy"},
+        )
+    )
+    client = FakeReadOnlyQmtClient(orders=[], trades=[], positions=[])
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.orders_seen == 0
+    assert summary.trades_seen == 0
+    assert summary.orphan_orders_terminalized == 1
+    assert summary.orphan_buy_freeze_released_amount == Decimal("10250.000000")
+    assert summary.cash_entries_appended == 1
+    assert summary.buy_freeze_released_amount == Decimal("10250.000000")
+    assert summary.status_events_appended == 1
+    ledger = repo.get_order_ledger(ACCOUNT_ID, "order_absent_open_buy")
+    assert ledger is not None
+    assert ledger.order_status == STATUS_CANCELLED
+    assert ledger.raw_json["terminalized"]["reason"] == "BROKER_ORDER_ABSENT_ON_NEXT_TRADING_DAY"
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10000000.000000")
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
+    assert repo.get_order_intent("intent_a").submit_status == IntentSubmitStatus.CANCELLED
+    assert [entry.entry_type for entry in repo.list_cash_entries("strat_a")] == [
+        CashEntryType.FREEZE_BUY,
+        CashEntryType.UNFREEZE_CANCEL,
+    ]
+    assert list(repo._order_status_events.values())[0].event_type == "STALE_ORDER_ROLLOVER"
+
+    idempotent = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    assert idempotent.orphan_orders_terminalized == 0
+    assert idempotent.cash_entries_appended == 0
+    assert idempotent.buy_freeze_released_amount == Decimal("0")
+    assert repo.get_virtual_account("strat_a").cash == Decimal("10000000.000000")
+    assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
     assert len(repo._order_status_events) == 1
 
 
