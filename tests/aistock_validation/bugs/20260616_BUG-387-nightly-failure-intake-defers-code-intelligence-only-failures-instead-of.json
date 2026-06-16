@@ -1,0 +1,73 @@
+{
+  "actual": "Evidence: GitHub scheduled Nightly run 27578573848 failed in job `Code intelligence weekly graph summary`, but the Nightly failure intake path treats code_intelligence-only failures as `defer_issue_creation` / `diagnostics_not_actionable`. This hides a real workflow failure and prevents a high-quality issue draft.\n\nExpected:\n- A real code-intelligence job failure must create an actionable Nightly issue payload/draft, not be marked diagnostics_not_actionable.\n- The payload must include failed stage `code_intelligence`, run URL, reproduce command, suspected module `validation.runner`, and code-intelligence refs when available.\n- Warning-only LLM behavior remains guarded: no automatic GitHub issue creation unless the workflow mode and opt-in allow it.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. A unit test for code_intelligence-only Nightly status proves `issue_creation_policy.allowed == true` and no diagnostics_not_actionable reason.\n2. Existing tests for logs-not-ready and partial unactionable CI failures still pass.\n3. Nightly issue workflow smoke remains clean and does not write tracked root files.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260616_BUG-387-nightly-failure-intake-defers-code-intelligence-only-failures-instead-of.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-387",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T06:00:33.073523Z",
+  "description": "Evidence: GitHub scheduled Nightly run 27578573848 failed in job `Code intelligence weekly graph summary`, but the Nightly failure intake path treats code_intelligence-only failures as `defer_issue_creation` / `diagnostics_not_actionable`. This hides a real workflow failure and prevents a high-quality issue draft.\n\nExpected:\n- A real code-intelligence job failure must create an actionable Nightly issue payload/draft, not be marked diagnostics_not_actionable.\n- The payload must include failed stage `code_intelligence`, run URL, reproduce command, suspected module `validation.runner`, and code-intelligence refs when available.\n- Warning-only LLM behavior remains guarded: no automatic GitHub issue creation unless the workflow mode and opt-in allow it.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. A unit test for code_intelligence-only Nightly status proves `issue_creation_policy.allowed == true` and no diagnostics_not_actionable reason.\n2. Existing tests for logs-not-ready and partial unactionable CI failures still pass.\n3. Nightly issue workflow smoke remains clean and does not write tracked root files.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-c6efc3b2dcd6",
+      "timestamp": "2026-06-16T06:00:33.073519Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-16T06:00:33.073523Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1148,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1148",
+  "last_seen_at": "2026-06-16T06:00:33.073523Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly failure intake defers code-intelligence-only failures instead of actionable issue draft",
+  "trigger_condition": {
+    "fingerprint": "c6efc3b2dcd6daeb253f7391",
+    "source_event_id": "FE-20260616-c6efc3b2dcd6"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
