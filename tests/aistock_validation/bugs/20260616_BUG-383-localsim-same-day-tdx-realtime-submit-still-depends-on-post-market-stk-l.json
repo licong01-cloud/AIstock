@@ -1,0 +1,78 @@
+{
+  "actual": "Both LocalSim daily runs reached FAILED_RETRYABLE at submit with missing limit price rows in market.stk_limit for symbols 001210.SZ and 002138.SZ, even though source was TDX_REALTIME.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260616_BUG-383-localsim-same-day-tdx-realtime-submit-still-depends-on-post-market-stk-l.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-383",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T02:10:26.118408Z",
+  "description": "Both LocalSim daily runs reached FAILED_RETRYABLE at submit with missing limit price rows in market.stk_limit for symbols 001210.SZ and 002138.SZ, even though source was TDX_REALTIME.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-139980d7e26e",
+      "timestamp": "2026-06-16T02:10:26.118408Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-16 09:45 live SIM read-only check: LocalSim runs simrun_88ba92d3f4432db4 and simrun_80f9e080749d4c9c failed with missing limit price rows in market.stk_limit"
+  ],
+  "expected": "LocalSim same-day simulation-runtime should use TDX_REALTIME-compatible market data for minute bars plus required limit/pre_close semantics, or fail at pre-open readiness with actionable missing realtime-source diagnostics before generating submit failures. It must not depend on same-day post-market market.stk_limit DB rows during trading hours.",
+  "first_seen_at": "2026-06-16T02:10:26.118408Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1137,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1137",
+  "last_seen_at": "2026-06-16T02:10:26.118408Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only live check: GET /api/v1/simulation-runtime/runs?trade_date=2026-06-16&limit=100 and query paper_v2.simulation_daily_run.submit_failure for local_sim runs; observe context cause missing limit price rows in market.stk_limit with source TDX_REALTIME.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "LocalSim same-day TDX_REALTIME submit still depends on post-market stk_limit rows",
+  "trigger_condition": {
+    "fingerprint": "139980d7e26ef3232183361d",
+    "source_event_id": "FE-20260616-139980d7e26e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
