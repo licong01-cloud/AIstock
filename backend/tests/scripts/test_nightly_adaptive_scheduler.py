@@ -316,6 +316,10 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "--code-intelligence-json" in workflow
     assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
+    assert "llm-value-summary" in workflow
+    assert "llm-value-summary.md" in workflow
+    assert "LLM + Code Intelligence Value" in workflow
+    assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
 
 
 def test_nightly_workflow_always_materializes_changed_files_handoff() -> None:
