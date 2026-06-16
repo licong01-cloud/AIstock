@@ -22,6 +22,7 @@ HARD_PASS_DAI_PREFIXES = (
 )
 HARD_PASS_DAI_IDS = {"DAI-DRIFT-001"}
 PHASE8_HARD_PASS_DAI_IDS = {"DAI-CODE-001", "DAI-CODE-002"}
+PHASE9_HARD_PASS_DAI_IDS = {"DAI-REPORT-001"}
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,8 @@ def _assert_dai_classification(rows: list[DaiRow], expected: Mapping[str, Any]) 
             raise AssertionError(f"Phase 7 hard DAI cannot be downgraded: {row.dai_id} -> {status}")
         if row.dai_id in PHASE8_HARD_PASS_DAI_IDS and status == "future_phase_pending":
             raise AssertionError(f"Phase 8 code intelligence DAI cannot remain pending: {row.dai_id}")
+        if row.dai_id in PHASE9_HARD_PASS_DAI_IDS and status == "future_phase_pending":
+            raise AssertionError(f"Phase 9 proactive report DAI cannot remain pending: {row.dai_id}")
 
 
 def assert_phase0_6_anchors(expected: Mapping[str, Any], actual_text: str) -> None:

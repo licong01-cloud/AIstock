@@ -77,6 +77,13 @@ TABLES: dict[str, dict[str, Any]] = {
         "search": {"code_ref_id", "task_id", "query_scope", "source"},
         "no_updated_at": True,
     },
+    "proactive_reports": {
+        "table": "assistant_proactive_reports",
+        "id": "report_id",
+        "json": {"sections_json", "source_refs_json"},
+        "search": {"report_id", "report_type", "report_date", "status"},
+        "no_updated_at": True,
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",

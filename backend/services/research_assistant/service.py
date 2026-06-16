@@ -68,6 +68,12 @@ from .models import (
     sha256_json,
     utc_now,
 )
+from .proactive_reports import (
+    ProactiveReportContext,
+    ProactiveReportProviderRegistry,
+    build_default_proactive_report_registry,
+    generate_proactive_report,
+)
 from .react_grounding import (
     McpToolCall,
     McpToolResult,
@@ -5823,18 +5829,58 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         candidates = self.repository.list_records("issue_candidates", filters={"status": "needs_review"}, limit=self.configured_limit("validation_issue_candidates"))
         return {"latest_reports": reports["items"], "candidate_issues_needing_review": candidates["items"], "generated_at": utc_now().isoformat()}
 
+    def generate_scheduled_proactive_report(
+        self,
+        *,
+        report_date: date | None = None,
+        report_type: str = "morning_brief",
+        registry: ProactiveReportProviderRegistry | None = None,
+        cheap_worker: Any | None = None,
+    ) -> dict[str, Any]:
+        """Generate the L3 scheduled morning report from read-only providers."""
+
+        context = ProactiveReportContext(
+            repository=self.repository,
+            report_date=report_date or date.today(),
+            report_type=report_type,
+            max_items_per_section=self.configured_limit("validation_reports"),
+        )
+        report = generate_proactive_report(
+            context=context,
+            registry=registry or build_default_proactive_report_registry(),
+            report_id_factory=lambda prefix: f"{prefix}_{context.report_type}_{context.report_date.isoformat()}",
+            cheap_worker=cheap_worker,
+        )
+        return self.repository.create_record(
+            "proactive_reports",
+            {
+                "report_id": report["report_id"],
+                "report_type": report["report_type"],
+                "report_date": report["report_date"],
+                "summary_md": report["summary_md"],
+                "sections_json": report["sections_json"],
+                "source_refs_json": report["source_refs_json"],
+                "status": report["status"],
+            },
+        )
+
     def _ensure_default_reports_and_notifications(self, seeded: dict[str, int]) -> None:
         if not self.repository.list_records("reports", limit=1)["items"]:
+            proactive_report = generate_proactive_report(
+                context=ProactiveReportContext(repository=self.repository, report_date=date.today(), report_type="morning_brief"),
+                registry=build_default_proactive_report_registry(),
+                report_id_factory=lambda prefix: f"{prefix}_morning_brief_{date.today().isoformat()}",
+            )
             self.repository.create_record(
                 "reports",
                 {
                     "report_id": "report_research_assistant_phase1_morning",
                     "report_type": "morning",
-                    "title": "研究助理晨报模板",
-                    "body_md": "阶段一提供真实报告数据结构，夜间自动任务将在后续阶段写入具体晨报。",
-                    "summary_json": {"phase": "phase1", "source": "seed"},
-                    "evidence_refs": [],
-                    "status": "draft",
+                    "title": "研究助理晨报",
+                    "body_md": proactive_report["summary_md"],
+                    "summary_json": proactive_report["sections_json"],
+                    "evidence_refs": proactive_report["source_refs_json"],
+                    "status": proactive_report["status"],
                 },
             )
             seeded["reports"] += 1
