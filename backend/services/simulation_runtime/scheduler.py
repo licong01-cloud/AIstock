@@ -3113,6 +3113,10 @@ class SimulationLifecycleScheduler:
             and (
                 SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
                 or SimulationLifecycleScheduler._mini_qmt_batch_has_terminal_capacity_residual(run.run_payload_json)
+                or (
+                    run.status != SimulationDailyRunStatus.FAILED_RETRYABLE
+                    and SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(run.run_payload_json)
+                )
             )
         )
 
