@@ -1,0 +1,110 @@
+{
+  "actual": "旧 factor_values_realtime 兼容代码仍存在，虽然默认 410 隔离，但用户要求不需要保留。",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/factor_value_pipeline.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/page.tsx",
+    "tests/aistock_validation/history/qe/20260616_bug386_realtime_cache_removal.md",
+    "tests/aistock_validation/bugs/20260616_BUG-389-factor-values-realtime.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-389",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T09:36:21.799166Z",
+  "description": "旧 factor_values_realtime 兼容代码仍存在，虽然默认 410 隔离，但用户要求不需要保留。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-fd0c9759ce9b",
+      "timestamp": "2026-06-16T09:36:21.799163Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "代码和 UI 不再包含 factor_values_realtime 业务路径；旧 /factor-values* API 被删除而不是 410 兼容；官方独立指标、相关性、QE 回测只使用 rdagent_assets/factor_values；验证确认后端已重启后的接口和 UI 仍可用。",
+  "first_seen_at": "2026-06-16T09:36:21.799166Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1161,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1161",
+  "last_seen_at": "2026-06-16T09:36:21.799166Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n factor_values_realtime|/factor-values|DataSnapshotManager|AISTOCK_ENABLE_LEGACY_REALTIME_FACTOR_CACHE backend frontend/src/app/quantevolver",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "移除旧 factor_values_realtime 因子缓存兼容代码",
+  "trigger_condition": {
+    "fingerprint": "fd0c9759ce9b242421936b7a",
+    "source_event_id": "FE-20260616-fd0c9759ce9b"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/factor_value_pipeline.py",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/page.tsx",
+      "tests/aistock_validation/history/qe/20260616_bug386_realtime_cache_removal.md"
+    ],
+    "ui_issue": true,
+    "ui_route": "/factor_values",
+    "ui_routes": [
+      "/factor_values"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
