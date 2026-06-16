@@ -188,4 +188,28 @@ MCP `qe_experiment_get_enhanced_metrics` 返回的 enhanced_metrics 实际含：
 
 ---
 
-*落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`。Step-1 已坐实数据语义+阈值(§12)：Tier-1 后端从 run_position/回测步算（非 MCP enhanced_metrics）；回填需先验 run_position；Tier-2 待 P2。实施前复核所有 file:line。*
+---
+
+## 13. Task0 核验裁决（2026-06-16，Codex 执行 + strategy session 评审）
+
+**Task0 实测结论（Codex，带 file:line）：`run_position` 表全空——0/616 run 有 position 行**；归档写入链路从不写 run_position（schema `init_qe_archive_schema.py:473` / 写入 `archive_service.py:94` / extract payload 无 positions 字段 `payload_extractor.py:36`）；但回测 artifact 阶段 `read_exp_res.py:309` **已有 pred.pkl 的 score/rank 逻辑**。存量 616 全无、时间分布 2026-04/05/06 均 0。Codex 荐路径 **B（需 pred.pkl/重跑，不能纯 SQL 回填）**。
+
+### 裁决（据此重构，**绕开 run_position**）：
+1. **Tier-1 算法位置改定**：**直接在回测 `read_exp_res.py:309` 那一步算**（pred 分数 + 已实现收益都 live）→ 写 `enhanced_metrics.prediction_diagnostics`（topk_return@20/50、hit_rate、decay、within_portfolio_rankic、dispersion）。`payload_extractor` 仅把这些已算好的值**透传**进 `run_metric`。**§2/§3/§5 里"从 run_position/run_symbol_summary 算"作废，run_position 不再是依赖**（其全空对前向路径无影响）。
+2. **不做存量 616 mass 回填**：pred.pkl 多已随 workspace 清理 → 真预测 top-K 无法重建。**前向 only**。
+3. **晋升门 null-tolerant 分级（关键，让 refactor 立即可上)**：
+   - **硬门(现在即可，全 run 都有 Tier-0)**：`cagr_mean≥0.60 AND |max_drawdown_mean|≤0.20 AND cagr_cv<0.15`，IC/ICIR 退诊断。
+   - **软门(topk_return_20)**：present 才参与；**null → 排除出门判定，不用 0 冒充**（遵禁 silent error）。待新 run 累积 top-K 后再升为硬门。
+4. **目标腿定向重跑(strategy session 任务,非 Codex)**：T1 上线后,对 ~5-7 个 alpha 腿代表配置定向重跑(确定性 seed,成本小)拿其 top-K;或并入下一 Line A 轮次。R21(b6af/f858)跑在旧码、本身无 top-K。
+5. **run_position 填充**降级为**可选未来增强**(若日后要 per-position 明细)；本 refactor 不需要。
+
+### 对 §3/§5/§8/§10 的净影响：
+- 数据源：Tier-1 = 回测 read_exp_res 步(in-process pred)→ enhanced_metrics → run_metric;**删 run_position 路径**。
+- T2(payload_extractor)：从"算"改"透传 enhanced_metrics 里已算的 topk_*"。
+- 回填工具 `qe_archive_backfill_topk_confirmed`：**本期不建**(无源可回填);留待 P2/重跑后。
+- 验收：以**新 run**(T1 上线后跑的)验 topk 指标 + 门;存量用 Tier-0(CAGR/MDD)即可。
+- MCP `qe_archive_query_topk_quality`、UI topk 卡、门改造、order_by 扩展、loop/is_sota re-point：**不变,照做**。
+
+---
+
+*落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`。§12 数据语义+阈值;§13 Task0 裁决：run_position 全空→Tier-1 改在回测 read_exp_res.py:309 步算(绕开 run_position)、前向 only 不 mass 回填、门 null-tolerant 分级、腿定向重跑。Tier-2 待 P2。实施前复核 file:line。*
