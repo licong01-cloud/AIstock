@@ -29,3 +29,9 @@ def test_phase7_crosscheck_manifest_classifies_dai_defects_and_phase_anchors() -
     assert result["status"] == "passed"
     assert result["defect_classifications"] == 13
     assert result["phase_anchor_count"] == 7
+
+
+def test_phase8_code_intelligence_dai_is_no_longer_future_pending() -> None:
+    result = run_crosscheck(BLUEPRINT, EXPECTED, fail_on_drift=False)
+
+    assert result["status"] == "passed"

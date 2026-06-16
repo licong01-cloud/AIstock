@@ -543,6 +543,13 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/code-intelligence-run-manifest.md") {
             Get-Content -LiteralPath "$outDir/code-intelligence-run-manifest.md"
           }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py llm-value-summary `
+            --artifact-dir $outDir `
+            --output "$outDir/llm-value-summary.stdout.json" `
+            --output-md "$outDir/llm-value-summary.md"
+          if (Test-Path -LiteralPath "$outDir/llm-value-summary.md") {
+            Get-Content -LiteralPath "$outDir/llm-value-summary.md"
+          }
 
       - name: Upload code intelligence artifacts
         if: always()
@@ -613,6 +620,19 @@ jobs:
 
           Run: ${RUN_URL}
           EOF
+          LLM_VALUE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-value-summary.md"
+          if [ -f "${LLM_VALUE_MD}" ]; then
+            cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          else
+            cat <<EOF >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+          ## LLM + Code Intelligence Value
+
+          - workflow_gate: \`warning\`
+          - reason: \`code intelligence artifact not downloaded\`
+
+          EOF
+          fi
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context

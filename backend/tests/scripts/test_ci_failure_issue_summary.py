@@ -863,15 +863,19 @@ def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
         branch="main",
         commit="abcdef1234567890",
     )
+    issue_payload = summary.build_github_issue_payload(payload)
 
     assert payload["nightly_failed_stages"] == ["code_intelligence"]
-    assert payload["diagnostic_status"] == "deferred"
-    assert payload["issue_creation_policy"]["allowed"] is False
-    assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
-    assert payload["agent_handoff"]["needs_bug_json"] is False
+    assert payload["diagnostic_status"] == "complete"
+    assert payload["issue_creation_policy"]["allowed"] is True
+    assert payload["issue_creation_policy"]["reason"] == "ready"
+    assert payload["agent_handoff"]["handoff_mode"] == "bug_promotion"
+    assert payload["agent_handoff"]["needs_bug_json"] is True
+    assert payload["suspected_modules"] == ["validation.runner"]
+    assert "module:validation.runner" in issue_payload["labels"]
     assert "code=failure" in payload["issue_title"]
-    with pytest.raises(ValueError, match="not actionable yet"):
-        summary.build_github_issue_payload(payload)
+    assert "- code_intelligence: `failure`" in issue_payload["body"]
+    assert "diagnostics_not_actionable" not in json.dumps(issue_payload)
 
 
 def test_nightly_status_summary_keeps_payload_when_code_intelligence_fails_with_actionable_stage() -> None:

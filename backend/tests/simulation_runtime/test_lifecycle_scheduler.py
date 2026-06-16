@@ -1118,6 +1118,146 @@ def test_scheduler_fails_localsim_submit_without_durable_execution_snapshot() ->
     assert runs[0].run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_PERSISTENCE_SNAPSHOT_MISSING"
 
 
+def test_scheduler_localsim_cash_fit_runs_sells_before_buys_and_skips_cash_residual() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    positions = {
+        "000003.SZ": PositionLot(
+            portfolio_id="portfolio_cash_fit",
+            symbol="000003.SZ",
+            quantity=1200,
+            available_quantity=1200,
+            avg_cost=10.0,
+            trade_date=TRADE_DATE - timedelta(days=1),
+        )
+    }
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_context_with_real_broker(
+        portfolio_id="portfolio_cash_fit",
+        release=release,
+        cash=50.0,
+        positions=positions,
+        paper_repository=paper_repo,
+    )
+    context = replace(context, top_k=2)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    payload = latest_run.run_payload_json["local_sim_cash_fit"]
+    submitted = result.results[0].execution_plan.intents
+    assert result.results[0].status == "LOCALSIM_CAPACITY_RESIDUAL_TERMINAL"
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert latest_run.run_payload_json["last_stage"] == "FAILED_TERMINAL"
+    assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_CAPACITY_RESIDUAL"
+    assert payload["status"] == "CAPACITY_RESIDUAL_SKIPPED"
+    assert payload["sell_intent_count"] == 1
+    assert payload["submitted_buy_count"] == 1
+    assert payload["skipped_buy_count"] == 1
+    assert [intent.side for intent in submitted] == [OrderSide.SELL, OrderSide.BUY]
+    assert submitted[0].symbol == "000003.SZ"
+    assert paper_repo.list_fills_for_run(latest_run.run_id)
+    assert "000003.SZ" not in context.local_broker.query_positions()
+
+
+def test_scheduler_rebuilds_localsim_insufficient_cash_failure_with_fresh_context() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    initial_context = _local_sim_context_with_real_broker(
+        portfolio_id="portfolio_rebuild_cash_fit",
+        release=release,
+        cash=50.0,
+        positions={
+            "000003.SZ": PositionLot(
+                portfolio_id="portfolio_rebuild_cash_fit",
+                symbol="000003.SZ",
+                quantity=1200,
+                available_quantity=0,
+                avg_cost=10.0,
+                trade_date=TRADE_DATE,
+            )
+        },
+    )
+    initial_context = replace(initial_context, top_k=2)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: initial_context}),
+    )
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    planned_run = planned.results[0].run
+    failed_run = repo.update_simulation_daily_run(
+        planned_run.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "FAILED_RETRYABLE",
+            "submit_failure": {
+                "stage": "LOCAL_SIM_SUBMIT_FAILED",
+                "type": "BrokerRejectedError",
+                "message": "LocalSim ledger rejected the order",
+                "context": {"cause": "insufficient cash for buy fill", "cause_code": "RISK_RULE_ERROR"},
+            },
+            "broker_called": False,
+        },
+    )
+
+    paper_repo = InMemoryPaperTradingV2Repository()
+    recovered_context = _local_sim_context_with_real_broker(
+        portfolio_id="portfolio_rebuild_cash_fit",
+        release=release,
+        cash=50.0,
+        positions={
+            "000003.SZ": PositionLot(
+                portfolio_id="portfolio_rebuild_cash_fit",
+                symbol="000003.SZ",
+                quantity=1200,
+                available_quantity=1200,
+                avg_cost=10.0,
+                trade_date=TRADE_DATE - timedelta(days=1),
+            )
+        },
+        paper_repository=paper_repo,
+    )
+    recovered_context = replace(recovered_context, top_k=2)
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: recovered_context}
+    )
+
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered.results[0].status == "LOCALSIM_CAPACITY_RESIDUAL_TERMINAL"
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert latest_run.execution_plan_id != failed_run.execution_plan_id
+    assert latest_run.run_payload_json["rebuilt_failure_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
+    assert latest_run.run_payload_json["local_sim_cash_fit"]["status"] == "CAPACITY_RESIDUAL_SKIPPED"
+    assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_CAPACITY_RESIDUAL"
+    assert len(fake_selection.calls) == 2
+    assert paper_repo.list_fills_for_run(latest_run.run_id)
+
+
 def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -3166,6 +3306,58 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     assert ctx.market_data_source == MinuteDataSource.DB_HISTORICAL.value
     assert ctx.local_broker.query_account().cash == Decimal("980000")
     assert ctx.local_broker.query_positions()["000001.SZ"].quantity == 1000
+    assert ctx.local_broker.query_positions()["000001.SZ"].available_quantity == 1000
+    assert ctx.context_diagnostics["localsim_tplus1_settlement"]["settled_position_count"] == 0
+
+
+def test_production_context_provider_settles_localsim_tplus1_positions_for_trade_date():
+    """LocalSim unattended context must unlock prior-day Paper v2 lots before rebalance planning."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim prod context",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_close_price",
+            "policy_sha256": "policy_sha256",
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
+        },
+    )
+    positions = {
+        "000001.SZ": PositionLot(
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            quantity=1000,
+            available_quantity=0,
+            avg_cost=10.0,
+            trade_date=TRADE_DATE - timedelta(days=1),
+        )
+    }
+    paper_repo = FakePaperRepository(portfolio, positions=positions, cash=980_000)
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    assert ctx.current_positions["000001.SZ"].available_quantity == 1000
+    assert ctx.local_broker.query_positions()["000001.SZ"].available_quantity == 1000
+    settlement = ctx.context_diagnostics["localsim_tplus1_settlement"]
+    assert settlement["settled_position_count"] == 1
+    assert settlement["settled_positions"][0]["previous_available_quantity"] == 0
 
 
 def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -> None:
