@@ -362,7 +362,12 @@ jobs:
           } catch {
             $changedFiles = @()
           }
-          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          New-Item -ItemType File -Force -Path $changedFile | Out-Null
+          if (@($changedFiles).Count -gt 0) {
+            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          } else {
+            Clear-Content -Path $changedFile
+          }
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
             --language zh `
             --output "$outDir/ua-configure.stdout.json"
@@ -455,7 +460,12 @@ jobs:
           } catch {
             $changedFiles = @()
           }
-          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          New-Item -ItemType File -Force -Path $changedFile | Out-Null
+          if (@($changedFiles).Count -gt 0) {
+            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          } else {
+            Clear-Content -Path $changedFile
+          }
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
             --provider deepseek_api `
             --require-api-key

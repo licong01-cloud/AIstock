@@ -316,3 +316,14 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "--code-intelligence-json" in workflow
     assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
+
+
+def test_nightly_workflow_always_materializes_changed_files_handoff() -> None:
+    workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+    blocks = [block for block in workflow.split("      - name: ") if "nightly-changed-files.txt" in block]
+
+    assert len(blocks) == 2
+    for block in blocks:
+        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" in block
+        assert "if (@($changedFiles).Count -gt 0)" in block
+        assert "Clear-Content -Path $changedFile" in block
