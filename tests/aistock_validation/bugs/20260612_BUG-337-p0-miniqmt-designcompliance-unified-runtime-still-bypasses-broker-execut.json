@@ -1,0 +1,82 @@
+{
+  "actual": "backend/services/miniqmt_execution_runtime/client.py:400 calls managed_order_service.submit_batch(list(build.requests)) after runtime only generated managed requests; backend/services/miniqmt_execution_runtime/client.py:828-875 documents that broker call still happens later through QmtManagedOrderService; backend/services/simulation_runtime/bridges.py:310 calls submit_managed_vnpy_order_requests. This is a transitional adapter shape, not the final runtime-owned broker execution required by the design.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+    "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+    "tests/aistock_validation/bugs/20260612_BUG-337-p0-miniqmt-designcompliance-unified-runtime-still-bypasses-broker-execut.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-337",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T07:27:25.712837Z",
+  "description": "backend/services/miniqmt_execution_runtime/client.py:400 calls managed_order_service.submit_batch(list(build.requests)) after runtime only generated managed requests; backend/services/miniqmt_execution_runtime/client.py:828-875 documents that broker call still happens later through QmtManagedOrderService; backend/services/simulation_runtime/bridges.py:310 calls submit_managed_vnpy_order_requests. This is a transitional adapter shape, not the final runtime-owned broker execution required by the design.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-ca9c624036d6",
+      "timestamp": "2026-06-12T07:27:25.712833Z"
+    }
+  ],
+  "evidence_uris": [
+    "design://miniqmt_unified_vnpy_execution_runtime_design_20260608#phase4; code://backend/services/miniqmt_execution_runtime/client.py:400"
+  ],
+  "expected": "Paper v2 N=1, simulation_runtime N>1, and operator commands all execute through MiniQMTExecutionRuntime as the single owner; product paths do not directly or indirectly use QmtManagedOrderService.submit_batch as the execution owner; runtime gateway owns submit/cancel/order/trade events and persists OMS child-order facts with broker raw packets. PR closure must include design-compliance matrix mapping design sections 4.1, 5.2, 10.8, 11, 14 to code refs and tests.",
+  "first_seen_at": "2026-06-12T07:27:25.712837Z",
+  "fix_branch": null,
+  "fix_commit": "2a2787f4e8bdd4f370177f293c582d856a432b44",
+  "fixed_at": "2026-06-16T10:38:49.165955Z",
+  "github_issue_number": 1008,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1008",
+  "last_seen_at": "2026-06-12T07:27:25.712837Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1020",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608 Phase 4/acceptance; inspect backend/services/miniqmt_execution_runtime/client.py:371-413 and backend/services/miniqmt_execution_runtime/client.py:828-875; verify product simulation runtime still delegates broker execution to QmtManagedOrderService.submit_batch.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] unified runtime still bypasses broker execution through managed submit_batch",
+  "trigger_condition": {
+    "fingerprint": "ca9c624036d675e6e82fcd1a",
+    "source_event_id": "FE-20260612-ca9c624036d6"
+  },
+  "validation_evidence": [
+    "GitHub PR #1020 merged at 2026-06-16T10:36:52Z; GitHub checks all success/skipped; local targeted pytest 7 passed; ruff passed; git diff --check passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

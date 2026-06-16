@@ -13,12 +13,47 @@ def test_llm_triage_config_defaults_are_safe():
     adapter.validate_config(config)
 
     assert config["default_provider"] == "github_models"
-    assert config["providers"]["deepseek_api"]["enabled"] is False
+    assert config["providers"]["deepseek_api"]["enabled"] is True
     assert config["providers"]["deepseek_api"]["model"] == "deepseek-v4-pro"
     selector = config["providers"]["github_models"]["model_selector"]
     assert selector["required_model_family"] == "deepseek-r1"
     assert selector["preferred_models"] == ["deepseek/deepseek-r1"]
     assert selector["allow_lower_tier_fallback"] is False
+
+
+def test_parse_json_response_extracts_fenced_or_prose_wrapped_object():
+    payload = adapter.parse_json_response('Here is the answer:\n```json\n{"summary":"ok","suggested_plan_keys":["l0"]}\n```')
+
+    assert payload["summary"] == "ok"
+    assert payload["suggested_plan_keys"] == ["l0"]
+
+
+def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
+    config = adapter.load_config()
+    config["providers"]["deepseek_api"]["enabled"] = True
+
+    adapter.validate_config(config)
+
+    config["providers"]["deepseek_api"]["model"] = "deepseek-v3"
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_config(config)
+
+
+def test_validate_deepseek_provider_bootstraps_from_canonical_env_file(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'DEEPSEEK_API_KEY="env-file-secret"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.setenv("AISTOCK_LLM_ENV_FILE", str(env_file))
+
+    payload = adapter.validate_deepseek_provider(adapter.load_config(), require_api_key=True)
+
+    assert payload["has_api_key"] is True
+    assert payload["credential_source"] == "env:DEEPSEEK_API_KEY"
+    assert payload["base_url"] == "https://api.deepseek.com/v1"
 
 
 def test_github_model_catalog_selects_deepseek_r1():
@@ -341,6 +376,46 @@ def test_invoke_provider_json_posts_github_models_chat_request(monkeypatch):
     assert payload["credential_source"] == "GITHUB_TOKEN"
 
 
+def test_invoke_provider_json_retries_schema_invalid_once(monkeypatch):
+    config = adapter.load_config()
+    calls = 0
+
+    class FakeResponse:
+        def __init__(self, content: str):
+            self.content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": self.content}}], "usage": {"total_tokens": 1}}
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=45):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeResponse("not json")
+        return FakeResponse('{"summary":"fixed","suggested_plan_keys":["l0"]}')
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-test-token")
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    payload = adapter.invoke_provider_json(
+        "github_models",
+        config,
+        purpose="test_plan_advice",
+        messages=[{"role": "user", "content": "{}"}],
+    )
+
+    assert calls == 2
+    assert payload["payload"]["summary"] == "fixed"
+
+
 def test_test_plan_advice_can_invoke_llm_but_keeps_deterministic_gate(monkeypatch):
     def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
         return {
@@ -392,6 +467,51 @@ def test_test_plan_advice_live_llm_error_falls_back_without_blocking(monkeypatch
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
     assert "ghp_secret" not in payload["llm_invocation_evidence"]["error"]
+    assert [item["provider"] for item in payload["llm_invocation_evidence"]["provider_chain"]] == [
+        "github_models",
+        "deepseek_api",
+    ]
+
+
+def test_test_plan_advice_falls_back_from_github_models_to_deepseek_api(monkeypatch):
+    calls: list[str] = []
+
+    def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
+        calls.append(provider)
+        if provider == "github_models":
+            raise adapter.ProviderAdapterError("github_models inference request failed status=429")
+        return {
+            "provider": provider,
+            "model": "deepseek-v4-pro",
+            "purpose": purpose,
+            "payload": {
+                "summary": "deepseek fallback",
+                "rationale": "github throttled",
+                "risk": "medium",
+                "suggested_plan_keys": ["l0"],
+                "confidence": 0.8,
+            },
+            "credential_source": "env:DEEPSEEK_API_KEY",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+        }
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+
+    payload = adapter.build_test_plan_advice(
+        "github_models",
+        adapter.load_config(),
+        plan_keys=["l0"],
+        invoke_llm=True,
+    )
+
+    assert calls == ["github_models", "deepseek_api"]
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["llm_invocation_evidence"]["fallback_used"] is True
+    assert payload["llm_invocation_evidence"]["provider_chain"][0]["status"] == "failed"
+    assert payload["llm_invocation_evidence"]["provider_chain"][1]["status"] == "invoked"
+    assert payload["llm_advice"]["suggested_plan_keys"] == ["l0"]
+    assert payload["advice_consumption"]["advice_consumed"] is True
 
 
 def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_path):
@@ -425,6 +545,41 @@ def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_p
     assert artifact["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_failed_fallback"
     assert "status=429" in artifact["llm_invocation_evidence"]["error"]
     assert "ghp_secret" not in json.dumps(artifact)
+    assert artifact["llm_invoked"] is False
+    assert "provider_chain" in artifact["llm_invocation_evidence"]
+
+
+def test_test_plan_advice_includes_compact_code_intelligence_refs(tmp_path):
+    code_refs = tmp_path / "code-intelligence-summary.json"
+    code_refs.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_code_intelligence_summary_v1",
+                "context_ref": "tmp/validation/code-intelligence/1/codegraph-context.md",
+                "affected_tests_ref": "tmp/validation/code-intelligence/1/affected-tests.json",
+                "affected_tests_count": 2,
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/1/ua-validation-summary.md",
+                "understand_anything": {"status": "available", "freshness": "base_current"},
+                "context": {"large_payload": "x" * 1000},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_test_plan_advice(
+        "deterministic",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        module="validation.runner",
+        code_intelligence_refs=adapter.code_intelligence_refs_from_file(code_refs),
+    )
+
+    refs = payload["code_intelligence_refs"]
+    assert refs["context_ref"].endswith("codegraph-context.md")
+    assert refs["affected_tests_count"] == 2
+    assert refs["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert "context" not in refs
+    assert payload["llm_invocation_evidence"]["input_policy"] == "plan_key_intent_catalog_plus_code_intelligence_refs_only"
 
 
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
@@ -484,6 +639,29 @@ def test_nightly_scheduler_advice_codegraph_missing_is_warning_only():
     assert payload["deterministic_gate"]["allowed_plan_count"] >= 1
 
 
+def test_nightly_scheduler_advice_includes_codegraph_and_ua_refs():
+    payload = adapter.build_nightly_scheduler_advice(
+        "deterministic",
+        adapter.load_config(),
+        changed_files=["scripts/nightly_adaptive_scheduler.py"],
+        codegraph_freshness="fresh",
+        code_intelligence_refs={
+            "context_ref": "tmp/validation/code-intelligence/1/codegraph-context.md",
+            "affected_tests_ref": "tmp/validation/code-intelligence/1/affected-tests.json",
+            "affected_tests_count": 1,
+            "understand_anything_summary_ref": "tmp/validation/code-intelligence/1/ua-validation-summary.md",
+            "understand_anything_status": "available",
+        },
+    )
+
+    refs = payload["code_intelligence_refs"]
+    assert refs["context_ref"].endswith("codegraph-context.md")
+    assert refs["affected_tests_ref"].endswith("affected-tests.json")
+    assert refs["understand_anything_summary_ref"].endswith("ua-validation-summary.md")
+    assert payload["test_plan_advice_gate"]["workflow_gate"] in {"ready", "blocked"}
+    assert payload["llm_invocation_evidence"]["input_policy"] == "changed_files_recent_failures_codegraph_ua_refs_catalog_only"
+
+
 def test_nightly_scheduler_advice_rejects_live_trading_or_business_state_plans():
     payload = adapter.build_nightly_scheduler_advice(
         "deterministic",
@@ -512,6 +690,94 @@ def test_nightly_scheduler_advice_rejects_shell_command_fields():
                 },
             }
         )
+
+
+def test_nightly_scheduler_advice_normalizes_deepseek_queue_shape(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "id": "deepseek-queue-shape",
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "run validation plans",
+                                    "queue": [
+                                        {"plan_key": "validation_catalog_integrity", "reason": "workflow changed"},
+                                        {"planKey": "validation_center_backend"},
+                                    ],
+                                    "confidence": "0.82",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 6, "total_tokens": 16},
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_scheduler_advice(
+        "deepseek_api",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        recent_failure_modules=["validation.runner"],
+        codegraph_freshness="fresh",
+        resource_budget_seconds=900,
+        invoke_llm=True,
+    )
+
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["llm_advice"]["suggested_plan_keys"] == [
+        "validation_catalog_integrity",
+        "validation_center_backend",
+    ]
+    assert payload["advice_consumption"]["advice_consumed"] is True
+
+
+def test_nightly_scheduler_advice_normalization_rejects_shell_commands(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "unsafe",
+                                    "queue": [{"plan_key": "l0", "command": "python -m nox -s l0"}],
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_scheduler_advice(
+        "deepseek_api",
+        adapter.load_config(),
+        changed_files=["scripts/llm_provider_adapter.py"],
+        codegraph_freshness="fresh",
+        invoke_llm=True,
+    )
+
+    assert payload["llm_gate"] == "degraded"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert "provider advice must not contain shell command fields" in payload["llm_invocation_evidence"]["error"]
+    assert payload["advised_plan_keys"] == []
 
 
 def test_nightly_scheduler_advice_cli_uses_compact_success_output(capsys, tmp_path):
@@ -577,6 +843,8 @@ def test_nightly_scheduler_public_artifact_keeps_safe_fallback_reason(monkeypatc
     assert artifact["llm_invocation_evidence"]["reason"] == "nightly_scheduler_advice_live_provider_failed_fallback"
     assert "status=429" in artifact["llm_invocation_evidence"]["error"]
     assert "ghp_secret" not in json.dumps(artifact)
+    assert artifact["advised_plan_keys"] == []
+    assert artifact["executed_plan_keys"]
 
 
 def test_prompt_evaluation_has_20_fixtures_and_compact_metrics():

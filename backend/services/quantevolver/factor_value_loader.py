@@ -19,7 +19,7 @@ import os
 import threading
 import time as _time
 from datetime import datetime
-from typing import ClassVar, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,7 +36,7 @@ _DEFAULT_PARQUET = os.path.join(
 _DEFAULT_PIPELINE_DIR = os.path.join(
     os.path.dirname(__file__),
     "..", "..", "..",
-    "rdagent_assets", "factor_values_realtime",
+    "rdagent_assets", "factor_values",
 )
 
 
@@ -54,8 +54,8 @@ class FactorValueLoader:
 
     # ── 类级别单因子 DataFrame 缓存 ──
     # 所有实例共享，避免 pair 端点每次请求重新加载 parquet
-    # 格式: {factor_name: (DataFrame, loaded_timestamp)}
-    _single_cache: ClassVar[Dict[str, Tuple[pd.DataFrame, float]]] = {}
+    # 格式: {(single_dir, factor_name): (DataFrame, loaded_timestamp)}
+    _single_cache: ClassVar[Dict[Tuple[str, str], Tuple[pd.DataFrame, float]]] = {}
     _single_cache_lock: ClassVar[threading.Lock] = threading.Lock()
     _SINGLE_CACHE_TTL: ClassVar[int] = 3600  # 1 小时过期
 
@@ -64,7 +64,9 @@ class FactorValueLoader:
         """手动清除单因子缓存。factor_name=None 时清除全部。"""
         with cls._single_cache_lock:
             if factor_name:
-                cls._single_cache.pop(factor_name, None)
+                for key in list(cls._single_cache.keys()):
+                    if key[1] == factor_name:
+                        cls._single_cache.pop(key, None)
             else:
                 cls._single_cache.clear()
 
@@ -230,6 +232,113 @@ class FactorValueLoader:
         dates = dates[(dates >= sd) & (dates <= ed)]
         return [d.strftime("%Y-%m-%d") for d in sorted(dates)]
 
+    def validate_official_cache_window_hit(
+        self,
+        factor_names: List[str],
+        start_date: str,
+        end_date: str,
+        expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
+        expected_code_hashes: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Validate QE sub-window cache-hit eligibility for official single cache."""
+        requested = [str(name).strip() for name in factor_names if str(name).strip()]
+        cache_root = os.path.normpath(self._pipeline_dir)
+        single_dir = os.path.normpath(self._single_dir)
+        meta_path = os.path.join(cache_root, "_meta.json")
+        miss_reasons: Dict[str, List[str]] = {
+            "missing_from_cache": [],
+            "missing_meta": [],
+            "as_of_date_mismatch": [],
+            "window_not_covered": [],
+            "universe_mismatch": [],
+            "index_policy_mismatch": [],
+            "hash_mismatch": [],
+            "schema_invalid": [],
+        }
+        top_level_errors: List[str] = []
+
+        if self._source != "single":
+            top_level_errors.append("source_must_be_single")
+        if any(part.lower() == "factor_values_realtime" for part in cache_root.split(os.sep)):
+            top_level_errors.append("realtime_cache_forbidden")
+        if not requested:
+            top_level_errors.append("no_factors_requested")
+        if not os.path.isfile(meta_path):
+            top_level_errors.append("meta_missing")
+            meta: Dict[str, Any] = {"factors": {}}
+        else:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+
+        factors_meta = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        requested_start = pd.Timestamp(start_date)
+        requested_end = pd.Timestamp(end_date)
+        if requested_start > requested_end:
+            top_level_errors.append("invalid_window")
+
+        for factor_name in requested:
+            single_path = os.path.join(single_dir, f"{factor_name}.parquet")
+            if not os.path.isfile(single_path):
+                miss_reasons["missing_from_cache"].append(factor_name)
+                continue
+            entry = factors_meta.get(factor_name)
+            if not isinstance(entry, dict):
+                miss_reasons["missing_meta"].append(factor_name)
+                continue
+            if expected_as_of_date and str(entry.get("as_of_date") or meta.get("as_of_date")) != expected_as_of_date:
+                miss_reasons["as_of_date_mismatch"].append(factor_name)
+            covered_start, covered_end = _extract_cache_date_window(entry, meta)
+            if covered_start is None or covered_end is None:
+                miss_reasons["schema_invalid"].append(factor_name)
+            elif requested_start < covered_start or requested_end > covered_end:
+                miss_reasons["window_not_covered"].append(factor_name)
+            if expected_universe_key and str(entry.get("universe_key") or meta.get("universe_key")) != expected_universe_key:
+                miss_reasons["universe_mismatch"].append(factor_name)
+            if (
+                expected_universe_fingerprint_sha256
+                and str(
+                    entry.get("universe_fingerprint_sha256")
+                    or meta.get("universe_fingerprint_sha256")
+                )
+                != expected_universe_fingerprint_sha256
+            ):
+                miss_reasons["universe_mismatch"].append(factor_name)
+            if expected_index_policy and str(entry.get("index_policy") or meta.get("index_policy")) != expected_index_policy:
+                miss_reasons["index_policy_mismatch"].append(factor_name)
+            expected_hash = (expected_code_hashes or {}).get(factor_name)
+            cached_hash = entry.get("source_hash_raw") or entry.get("code_hash")
+            if expected_hash and cached_hash != expected_hash:
+                miss_reasons["hash_mismatch"].append(factor_name)
+
+        miss_factor_names = sorted({name for names in miss_reasons.values() for name in names})
+        hit_factor_names = [name for name in requested if name not in miss_factor_names]
+        gate_status = "passed" if not top_level_errors and not miss_factor_names else "failed"
+        return {
+            "schema_version": "official_factor_cache_hit_validation_v1",
+            "gate_status": gate_status,
+            "official_cache_hit": gate_status == "passed",
+            "cache_source": meta.get("source_system") or meta.get("data_source_mode"),
+            "cache_root": cache_root,
+            "single_dir": single_dir,
+            "meta_path": meta_path,
+            "source": self._source,
+            "start_date": start_date,
+            "end_date": end_date,
+            "expected_as_of_date": expected_as_of_date,
+            "as_of_date": meta.get("as_of_date"),
+            "expected_code_hashes": expected_code_hashes or {},
+            "requested_factor_count": len(requested),
+            "hit_factor_count": len(hit_factor_names),
+            "miss_factor_count": len(miss_factor_names),
+            "hit_factors": hit_factor_names,
+            "miss_factors": miss_factor_names,
+            "miss_reasons": miss_reasons,
+            "top_level_errors": top_level_errors,
+        }
+
     def load_single_factor(
         self,
         factor_name: str,
@@ -244,10 +353,11 @@ class FactorValueLoader:
             MultiIndex(datetime, instrument), column=[factor_name]
         """
         now = _time.time()
+        cache_key = (os.path.normcase(os.path.abspath(os.path.normpath(self._single_dir))), factor_name)
 
         # 1) 尝试从缓存读取完整 DataFrame
         with self._single_cache_lock:
-            cached = self._single_cache.get(factor_name)
+            cached = self._single_cache.get(cache_key)
             if cached is not None:
                 cached_df, cached_at = cached
                 if now - cached_at < self._SINGLE_CACHE_TTL:
@@ -264,7 +374,7 @@ class FactorValueLoader:
                     return df
                 else:
                     # TTL 过期
-                    del self._single_cache[factor_name]
+                    del self._single_cache[cache_key]
 
         # 2) 缓存未命中，从 parquet 加载
         fpath = os.path.join(self._single_dir, f"{factor_name}.parquet")
@@ -284,7 +394,7 @@ class FactorValueLoader:
 
         # 3) 存入缓存（存完整 DataFrame，不含日期过滤）
         with self._single_cache_lock:
-            self._single_cache[factor_name] = (df, now)
+            self._single_cache[cache_key] = (df, now)
 
         # 4) 按日期范围过滤后返回
         if start_date or end_date:
@@ -787,3 +897,30 @@ class FactorValueLoader:
             reverse=True,
         )
         return os.path.join(self._pipeline_dir, files[0]) if files else None
+
+
+def _extract_cache_date_window(
+    entry: Dict[str, Any],
+    meta: Dict[str, Any],
+) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+    raw_range = entry.get("date_range") or meta.get("date_range")
+    if isinstance(raw_range, str) and "~" in raw_range:
+        left, right = raw_range.split("~", 1)
+        return pd.Timestamp(left), pd.Timestamp(right)
+    start = (
+        entry.get("data_start")
+        or entry.get("window_train_start")
+        or meta.get("data_start")
+        or meta.get("window_train_start")
+    )
+    end = (
+        entry.get("data_end")
+        or entry.get("window_backtest_end")
+        or entry.get("as_of_date")
+        or meta.get("data_end")
+        or meta.get("window_backtest_end")
+        or meta.get("as_of_date")
+    )
+    if not start or not end:
+        return None, None
+    return pd.Timestamp(start), pd.Timestamp(end)

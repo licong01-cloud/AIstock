@@ -1,0 +1,115 @@
+{
+  "actual": "live 问答中，用户询问已入仓 QE 实验里回测收益最好/最赚钱的是哪个实验及收益时，答复可能路由到 qe_archive_health 或状态汇总，未稳定选择 qe_archive_query_run_leaderboard，也不会在人类可读结论中直接给出排名第一实验和收益。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/semantic_tool_planner.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-379",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T18:13:00.350484Z",
+  "description": "Research Assistant 对自然语言业务问题仍依赖固定词语/短句路由，遇到 QE archive 中收益最佳、效果最好等语义查询时容易返回健康汇总或状态列表，不能像 Codex/Claude Code 一样先理解真实意图再匹配 MCP 工具。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-27cd8cc874a1",
+      "timestamp": "2026-06-15T18:13:00.350479Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "backend/services/research_assistant/tool_router.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/semantic_tool_planner.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_service.py"
+      ],
+      "note": "Expanded scope from registry-only intake to Research Assistant semantic MCP planning, service integration, legacy fallback router, and focused regression tests. The fix must not add phrase/synonym routing; it must use an LLM-derived structured intent plan before tool execution.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260616_BUG-379-p1-research-assistant-mcp-llm.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-15T18:19:49.090818Z"
+    },
+    {
+      "action": "implement_fix",
+      "actor": "codex",
+      "note": "Implemented an LLM semantic MCP planner that selects audited tools from business meaning and catalog context before legacy fallback; added service regression tests for semantic leaderboard routing and metric clarification without adding new phrase/synonym route rules.",
+      "timestamp": "2026-06-15T19:44:14.490882Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant 应先由 LLM 基于用户真实意图、业务域和已审计 MCP 工具目录生成结构化工具计划；明确的收益排行问题应选择只读 qe_archive_query_run_leaderboard 并传递安全查询参数，口径不清的“哪个最好”应先追问比较指标，而不是新增特定词语/短句/synonym 路由规则。",
+  "first_seen_at": "2026-06-15T18:13:00.350484Z",
+  "fix_branch": null,
+  "fix_commit": "dd77964305009c9ad596e0e5fdf7595ae2740437",
+  "fixed_at": "2026-06-16T01:32:56.169944Z",
+  "github_issue_number": 1127,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1127",
+  "last_seen_at": "2026-06-15T18:13:00.350484Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1134",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/research-assistant/chat/turn with natural-language QE business questions; verify mcp_route_decision and assistant_message.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "P1: Research Assistant MCP 路由未基于 LLM 语义理解选择工具",
+  "trigger_condition": {
+    "fingerprint": "27cd8cc874a14e6f31e71509",
+    "source_event_id": "FE-20260616-27cd8cc874a1"
+  },
+  "validation_evidence": [
+    "python -m compileall backend/services/research_assistant/semantic_tool_planner.py backend/services/research_assistant/service.py -> passed",
+    "python -m ruff check backend/services/research_assistant/semantic_tool_planner.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed",
+    "python -m pytest backend/tests/research_assistant/test_service.py::test_bug_379_semantic_planner_overrides_legacy_route_without_new_phrase_rules backend/tests/research_assistant/test_service.py::test_bug_379_semantic_planner_asks_metric_clarification_for_underspecified_best -q -> 2 passed",
+    "python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -> 79 passed",
+    "python -m nox -s l0 validation_module_registry_l0 research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful",
+    "python -m nox -s research_assistant_backend --no-error-on-missing-interpreters -> 212 passed",
+    "python -m nox -s ra_phase7_full_accept --no-error-on-missing-interpreters -> backend 212 passed, frontend lint/build passed with existing warnings, Playwright 12 passed, phase7 crosscheck passed",
+    "gh pr checks 1134 -> 17 passed, 0 failed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_ready"
+}

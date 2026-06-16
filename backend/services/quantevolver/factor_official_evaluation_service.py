@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,15 +20,18 @@ from .factor_universe_mask_service import (
     FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
-from .factor_value_pipeline import FactorValuePipeline
+from .factor_value_loader import FactorValueLoader
+from .wsl_runtime_guard import assert_wsl_runtime
 
 logger = logging.getLogger("aistock.quantevolver.factor_official_evaluation")
 
 CALC_ENGINE = "qe_eval_v2"
 PIPELINE_VERSION = "qe_eval_v2"
-CODE_SOURCE = "qe_code_path"
+CODE_SOURCE = "code_text"
 _DEFAULT_QLIB_BIN = Path(__file__).resolve().parents[3] / "qlib_bin" / "qlib_bin_20260311"
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
+_OFFICIAL_FACTOR_VALUE_CACHE_DIR = Path(__file__).resolve().parents[3] / "rdagent_assets" / "factor_values"
+_OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
 
 # T15 — factor.recompute.completed emit hook (dw-foundation FactorValueArchiveHandler consumer)
 FACTOR_RECOMPUTE_EVENT_TYPE = "factor.recompute.completed"
@@ -399,14 +403,37 @@ def _prepare_monthly_ic_rows(monthly_series: list) -> list[Dict[str, Any]]:
     return rows
 
 
+
+
+def _normalize_official_window_date(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    return raw
+
+
 class FactorOfficialEvaluationService:
     """官方独立指标执行/读取服务。"""
 
     def __init__(self) -> None:
         self._eligibility_service = FactorEligibilityService()
         self._universe_service = FactorUniverseMaskService()
-        self._pipeline = FactorValuePipeline()
+        self._factor_value_loader = self._build_official_factor_value_loader()
         self._dispatch_service = None
+
+    @staticmethod
+    def _build_official_factor_value_loader() -> FactorValueLoader:
+        cache_dir = _OFFICIAL_FACTOR_VALUE_CACHE_DIR
+        if any(part.lower() == "factor_values_realtime" for part in cache_dir.parts):
+            raise RuntimeError("official evaluation must not use factor_values_realtime")
+        return FactorValueLoader(source="single", pipeline_dir=str(cache_dir))
+
+    def _get_official_factor_value_loader(self) -> FactorValueLoader:
+        loader = getattr(self, "_factor_value_loader", None)
+        if loader is None:
+            loader = self._build_official_factor_value_loader()
+            self._factor_value_loader = loader
+        return loader
 
     def compute(
         self,
@@ -415,6 +442,12 @@ class FactorOfficialEvaluationService:
         include_disabled: bool = True,
         max_workers: int = 4,
         timeout_per_factor: int = 600,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        force: bool = False,
+        factor_data_dir: str | None = None,
+        qlib_bin_path: str | None = None,
+        node_id: str | None = None,
     ) -> Dict[str, Any]:
         try:
             return self._compute_via_dispatch(
@@ -423,9 +456,15 @@ class FactorOfficialEvaluationService:
                 include_disabled=include_disabled,
                 max_workers=max_workers,
                 timeout_per_factor=timeout_per_factor,
+                start_date=start_date,
+                end_date=end_date,
+                force=force,
+                factor_data_dir=factor_data_dir,
+                qlib_bin_path=qlib_bin_path,
+                node_id=node_id,
             )
         except Exception as exc:
-            logger.error("official evaluation compute 失败: %s", exc, exc_info=True)
+            logger.error("official evaluation compute failed: %s", exc, exc_info=True)
             return {
                 "success": False,
                 "error": str(exc),
@@ -439,161 +478,73 @@ class FactorOfficialEvaluationService:
         include_disabled: bool,
         max_workers: int,
         timeout_per_factor: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        force: bool = False,
+        factor_data_dir: str | None = None,
+        qlib_bin_path: str | None = None,
+        node_id: str | None = None,
     ) -> Dict[str, Any]:
-        import asyncio
-        import time
-
-        from ...services.dispatch_service import DispatchService
-
-        if not data_date:
-            raise ValueError("data_date 参数必填")
+        from .config_composer import ConfigComposer
+        from .official_factor_batch_compute_service import (
+            OFFICIAL_FACTOR_WINDOW_END,
+            OFFICIAL_FACTOR_WINDOW_START,
+        )
+        from .official_factor_full_compute_dispatch_service import (
+            OfficialFactorFullComputeDispatchService,
+        )
 
         requested = factor_names or []
-        dispatch_service = self._dispatch_service or DispatchService()
-        eligible = self._eligibility_service.list_eligible_factors(
+        resolved_start = _normalize_official_window_date(start_date or OFFICIAL_FACTOR_WINDOW_START)
+        resolved_end = _normalize_official_window_date(end_date or data_date or OFFICIAL_FACTOR_WINDOW_END)
+        if not resolved_start or not resolved_end:
+            raise ValueError("official factor compute requires start_date/end_date")
+        if resolved_start > resolved_end:
+            raise ValueError(f"invalid official factor window: {resolved_start} > {resolved_end}")
+
+        cfg = ConfigComposer()._fetch_workspace_config(node_id)
+        resolved_factor_data_dir = factor_data_dir or cfg.get("factor_data_dir")
+        resolved_qlib_bin_path = qlib_bin_path or cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+        if not resolved_factor_data_dir:
+            raise ValueError("failed to resolve QE factor_data_dir for official full compute")
+
+        submitter = OfficialFactorFullComputeDispatchService(self._dispatch_service)
+        result = submitter.submit(
             factor_names=factor_names,
+            factor_data_dir=str(resolved_factor_data_dir),
+            start_date=resolved_start,
+            end_date=resolved_end,
             include_disabled=include_disabled,
+            batch_size=max(1, min(int(max_workers or 1) * 4, 32)),
+            workers=max_workers,
+            timeout_per_factor=timeout_per_factor,
+            force=force,
+            qlib_bin_path=str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
+            node_id=node_id or _DEFAULT_DISPATCH_NODE_ID,
         )
-        eligible_names = [row["factor_name"] for row in eligible]
-        skipped = sorted(set(requested) - set(eligible_names)) if requested else []
-
-        if not eligible_names:
-            return {
-                "success": False,
-                "error": "无满足 official evaluation 准入条件的因子",
-                "requested_factors": requested,
-                "eligible_factors": [],
-                "skipped_factors": skipped,
-            }
-
-        payload = {
-            "factor_names": eligible_names,
-            "data_date": data_date,
-            "include_disabled": include_disabled,
-            "max_workers": max_workers,
-            "timeout_per_factor": timeout_per_factor,
-        }
-        created = asyncio.run(dispatch_service.create_and_submit_task({
-            "task_name": f"official_evaluation_{data_date}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            "task_type": "official_evaluation",
-            "node_id": _DEFAULT_DISPATCH_NODE_ID,
-            "payload": payload,
-        }))
-        task_id = created["task_id"]
-
-        snapshot_date = self._snapshot_date_from_data_date(data_date)
-        created_at = created.get("created_at")
-        deadline = time.time() + max(timeout_per_factor * max(len(eligible_names), 1), 600)
-        sync_failure_grace = max(300, min(timeout_per_factor + 120, 1800))
-        last_activity_at = time.time()
-        last_metric_rows = 0
-        last_task = created
-        while time.time() < deadline:
-            asyncio.run(dispatch_service.sync_running_tasks())
-            last_task = dispatch_service.get_task(task_id) or last_task
-            status = last_task.get("status")
-            coverage = self._get_metrics_coverage(
-                eligible_names,
-                snapshot_date=snapshot_date,
-                calculated_after=created_at,
-            )
-            metric_rows = int(coverage.get("metric_rows") or 0)
-            if metric_rows > last_metric_rows:
-                last_metric_rows = metric_rows
-                last_activity_at = time.time()
-            if coverage.get("complete"):
-                self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
-                return self._build_recovered_metrics_result(
-                    requested=requested or eligible_names,
-                    eligible_names=eligible_names,
-                    skipped=skipped,
-                    snapshot_date=snapshot_date,
-                    coverage=coverage,
-                    task_id=task_id,
-                    remote_task_id=last_task.get("remote_task_id"),
-                    dispatch_status=last_task.get("status"),
-                    reason="db_metrics_complete",
-                )
-            if status in {"success", "failed", "canceled"}:
-                if status == "failed" and self._is_sync_unreachable_failure(last_task):
-                    if time.time() - last_activity_at <= sync_failure_grace:
-                        logger.warning(
-                            "official evaluation dispatch %s marked failed by sync, "
-                            "but metrics are still progressing (%s/%s factors); waiting",
-                            task_id,
-                            coverage.get("complete_factor_count"),
-                            len(eligible_names),
-                        )
-                        time.sleep(5)
-                        continue
-                break
-            time.sleep(2)
-        else:
-            raise TimeoutError(f"official evaluation dispatch task timeout: {task_id}")
-
-        result_bundle = asyncio.run(dispatch_service.get_task_results(task_id))
-        latest_result = result_bundle.get("latest_result") or {}
-        latest_result.setdefault("requested_factors", requested or eligible_names)
-        latest_result.setdefault("eligible_factors", eligible_names)
-        latest_result.setdefault("skipped_factors", skipped)
-        latest_result.setdefault("dispatch_task_id", task_id)
-        latest_result.setdefault("remote_task_id", last_task.get("remote_task_id"))
-        if latest_result.get("success") is True:
-            self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
-            latest_result.setdefault("dispatch_status", last_task.get("status"))
-            latest_result.setdefault("recovered_from_dispatch_status", last_task.get("status"))
-            return latest_result
-        if last_task.get("status") == "success":
-            latest_result.setdefault("success", True)
-            return latest_result
-
-        log_excerpt: list[str] = []
-        try:
-            log_file = dispatch_service.get_log_file_path(task_id)
-            if log_file and log_file.exists():
-                content = log_file.read_text(encoding="utf-8", errors="replace")
-                if content.strip():
-                    log_excerpt = content.splitlines()[-80:]
-                else:
-                    log_excerpt = ["[日志文件为空 — 节点可能未开始执行或启动即崩溃]"]
-            else:
-                log_excerpt = ["[日志文件不存在]"]
-        except Exception as log_exc:
-            logger.warning("读取 official evaluation dispatch 日志失败 (task=%s): %s", task_id, log_exc)
-
-        # 构建有用的错误信息
-        dispatch_error = last_task.get("error_message") or ""
-        node_status = last_task.get("status", "unknown")
-        error_parts = []
-        if dispatch_error:
-            error_parts.append(dispatch_error)
-        # 从 latest_result 中提取 pipeline_summary 的逐因子错误
-        pipeline_summary = latest_result.get("pipeline_summary") or {}
-        factor_errors = pipeline_summary.get("factor_results", [])
-        failed_factors = [f for f in factor_errors if f.get("error")]
-        if failed_factors:
-            sample = failed_factors[:3]
-            error_parts.append(
-                f"因子失败示例({len(failed_factors)}个): "
-                + "; ".join(f"{f.get('name','?')}: {f.get('error','?')[:100]}" for f in sample)
-            )
-        if not error_parts:
-            error_parts.append(f"dispatch task {node_status}, 无详细错误信息（检查节点日志）")
-
-        latest_result.setdefault("success", False)
-        latest_result.setdefault("dispatch_status", node_status)
-        latest_result.setdefault("error", " | ".join(error_parts))
-        if log_excerpt:
-            latest_result.setdefault("logs", log_excerpt)
-        latest_result.setdefault(
-            "metrics_coverage",
-            self._get_metrics_coverage(
-                eligible_names,
-                snapshot_date=snapshot_date,
-                calculated_after=created_at,
+        ok = bool(result.get("ok", True))
+        return {
+            **result,
+            "ok": ok,
+            "success": ok,
+            "status": result.get("status", "queued"),
+            "requested_factors": requested or "all_enabled_code_text",
+            "data_start": resolved_start,
+            "data_end": resolved_end,
+            "snapshot_date": resolved_end,
+            "as_of_date": resolved_end,
+            "factor_data_dir": str(resolved_factor_data_dir),
+            "qlib_bin_path": str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
+            "cache_source": "official_offline_backtest_factor_data",
+            "data_source_mode": "official_offline_backtest_factor_data",
+            "code_source": "code_text",
+            "task_type": "official_factor_full_compute",
+            "legacy_compatibility": "official_evaluation_compute_forwarded_to_official_factor_full_compute",
+            "message": (
+                "submitted official_factor_full_compute; official independent metrics are "
+                "computed from the same offline cache generated from backtest factor_data_dir/qlib data"
             ),
-        )
-        return latest_result
+        }
 
     @staticmethod
     def _snapshot_date_from_data_date(data_date: str) -> str:
@@ -736,6 +687,7 @@ class FactorOfficialEvaluationService:
         max_workers: int = 4,
         timeout_per_factor: int = 600,
     ) -> Dict[str, Any]:
+        assert_wsl_runtime("official_evaluation_local_compute")
         if not data_date:
             raise ValueError("data_date 参数必填")
 
@@ -743,6 +695,7 @@ class FactorOfficialEvaluationService:
         eligible = self._eligibility_service.list_eligible_factors(
             factor_names=factor_names,
             include_disabled=include_disabled,
+            source_mode="official_offline",
         )
         eligible_names = [row["factor_name"] for row in eligible]
         skipped = sorted(set(requested) - set(eligible_names)) if requested else []
@@ -757,26 +710,27 @@ class FactorOfficialEvaluationService:
             }
 
         as_of_date = f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
-        from .data_snapshot_manager import DataSnapshotManager
-
-        snap_meta = DataSnapshotManager().load_meta(data_date)
+        start_date = _OFFICIAL_FACTOR_WINDOW_START
+        end_date = as_of_date
         universe_meta = self._universe_service.metadata(
-            start_date=snap_meta["start_date"],
-            end_date=snap_meta["end_date"],
+            start_date=start_date,
+            end_date=end_date,
         )
         universe_count = len(
             self._universe_service.get_window_union_instruments(
-                start_date=snap_meta["start_date"],
-                end_date=snap_meta["end_date"],
+                start_date=start_date,
+                end_date=end_date,
                 ensure=False,
             )
         )
+        factor_value_loader = self._get_official_factor_value_loader()
+        available_cache_names = set(factor_value_loader.get_available_factors())
 
         # ── 准备指标计算共享上下文（在因子计算之前，只准备一次）──
         # save_failures: factor names whose _save_metrics call raised (incl. emit
         # failures). Round-1 fix: surface these at service-level so partial
         # success no longer reports overall success=True (Codex Lane B P1.2).
-        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": []}
+        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": [], "cache_failures": []}
         metrics_error = None
         metrics_ctx = None
         calc_batch_id = str(__import__("uuid").uuid4())
@@ -789,8 +743,8 @@ class FactorOfficialEvaluationService:
             qlib_bin_path = self._resolve_qlib_bin_path()
             metrics_ctx = prepare_shared_context(
                 qlib_bin_path=qlib_bin_path,
-                start_date=snap_meta["start_date"],
-                end_date=snap_meta["end_date"],
+                start_date=start_date,
+                end_date=end_date,
             )
             logger.info("指标计算共享上下文准备完成")
         except Exception as e:
@@ -861,25 +815,98 @@ class FactorOfficialEvaluationService:
                 db_result["errors"].append(f"{factor_name}: {e}")
                 db_result["save_failures"].append(factor_name)
 
-        # ── 执行因子计算（每个因子成功后通过回调立即入库）──
-        pipeline_result = self._pipeline.compute_factor_values(
-            factor_names=eligible_names,
-            instruments=None,
-            data_date=data_date,
-            max_workers=max_workers,
-            timeout_per_factor=timeout_per_factor,
-            save_parquet=True,
-            on_factor_success=_on_factor_success,
-        )
+        # ── 读取回测口径因子值缓存（每个因子成功后通过回调立即入库）──
+        factor_results = []
+        success_count = 0
+        failed_count = 0
+        t_values = time.time()
+        single_dir = _OFFICIAL_FACTOR_VALUE_CACHE_DIR / "single"
+
+        for factor_name in eligible_names:
+            factor_t0 = time.time()
+            single_path = single_dir / f"{factor_name}.parquet"
+            if factor_name not in available_cache_names:
+                failed_count += 1
+                cache_error = (
+                    f"official offline factor cache is missing: {single_path}; "
+                    "run official full factor compute from Factor Library UI before metrics/correlation."
+                )
+                db_result["errors"].append(f"{factor_name}: {cache_error}")
+                db_result["cache_failures"].append(factor_name)
+                factor_results.append({
+                    "name": factor_name,
+                    "success": False,
+                    "rows": 0,
+                    "nan_rate": "0.0%",
+                    "time": "0.0s",
+                    "error": cache_error,
+                })
+                continue
+
+            try:
+                factor_df = factor_value_loader.load_single_factor(
+                    factor_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                if factor_df is None or factor_df.empty:
+                    raise ValueError(f"离线回测因子值缓存为空: {start_date}~{end_date}")
+                date_index = factor_df.index.get_level_values(0)
+                date_min = date_index.min()
+                date_max = date_index.max()
+                if date_min.strftime("%Y-%m-%d") > start_date:
+                    raise ValueError(
+                        f"离线回测因子值缓存未覆盖起始日: cache_start={date_min.strftime('%Y-%m-%d')}, "
+                        f"required_start={start_date}"
+                    )
+                if date_max.strftime("%Y-%m-%d") < end_date:
+                    raise ValueError(
+                        f"离线回测因子值缓存未覆盖截止日: cache_end={date_max.strftime('%Y-%m-%d')}, "
+                        f"required_end={end_date}"
+                    )
+                value_col = factor_df.columns[0]
+                nan_rate = float(factor_df[value_col].isna().mean()) if len(factor_df) else 0.0
+                _on_factor_success(factor_name, str(single_path), factor_df)
+                elapsed = time.time() - factor_t0
+                success_count += 1
+                factor_results.append({
+                    "name": factor_name,
+                    "success": True,
+                    "rows": len(factor_df),
+                    "nan_rate": f"{nan_rate:.1%}",
+                    "time": f"{elapsed:.1f}s",
+                    "error": None,
+                })
+                del factor_df
+            except Exception as e:
+                failed_count += 1
+                error = str(e)
+                db_result["errors"].append(f"{factor_name}: {error}")
+                db_result["cache_failures"].append(factor_name)
+                factor_results.append({
+                    "name": factor_name,
+                    "success": False,
+                    "rows": 0,
+                    "nan_rate": "0.0%",
+                    "time": f"{time.time() - factor_t0:.1f}s",
+                    "error": error,
+                })
 
         # 释放指标计算上下文
         if metrics_ctx is not None:
             del metrics_ctx
             gc.collect()
 
-        summary = pipeline_result.summary()
-        success_count = pipeline_result.success
-        failed_count = pipeline_result.failed
+        summary = {
+            "total": len(factor_results),
+            "success": success_count,
+            "failed": failed_count,
+            "success_rate": f"{success_count / len(factor_results) * 100:.1f}%" if factor_results else "0%",
+            "output_path": str(single_dir) if success_count else None,
+            "merged_shape": None,
+            "total_elapsed_sec": round(time.time() - t_values, 1),
+            "factor_results": factor_results,
+        }
 
         # 构建错误信息（如果有失败因子）
         error_detail = None
@@ -899,10 +926,12 @@ class FactorOfficialEvaluationService:
         # round-1 fix (Codex Lane B P1.2): save_failures 非空时不再报 success。
         has_db_errors = bool(db_result["errors"])
         save_failures = db_result.get("save_failures", [])
+        cache_failures = db_result.get("cache_failures", [])
         overall_success = (
             db_result["inserted"] > 0
             and not metrics_error
             and not save_failures
+            and not cache_failures
         )
         if success_count > 0 and db_result["inserted"] == 0:
             # 因子计算成功但入库全部失败 — 这是严重错误
@@ -920,6 +949,16 @@ class FactorOfficialEvaluationService:
                 f"指标/事件入库失败 {len(save_failures)} 个因子: "
                 + ", ".join(save_failures[:5])
                 + (" ..." if len(save_failures) > 5 else "")
+            )
+        if cache_failures:
+            if not error_detail:
+                error_detail = ""
+            else:
+                error_detail += " | "
+            error_detail += (
+                f"离线回测因子值缓存读取失败 {len(cache_failures)} 个因子: "
+                + ", ".join(cache_failures[:5])
+                + (" ..." if len(cache_failures) > 5 else "")
             )
 
         result = {
@@ -1323,15 +1362,15 @@ class FactorOfficialEvaluationService:
                 if not tx_committed:
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as rollback_exc:
+                        logger.error("official metric save rollback failed: %s", rollback_exc, exc_info=True)
                 raise
             finally:
                 if prev_autocommit is not None:
                     try:
                         conn.autocommit = prev_autocommit
-                    except Exception:
-                        pass
+                    except Exception as autocommit_exc:
+                        logger.error("failed to restore official metric connection autocommit: %s", autocommit_exc, exc_info=True)
 
         return {
             "inserted": inserted,

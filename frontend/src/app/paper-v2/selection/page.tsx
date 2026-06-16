@@ -303,7 +303,8 @@ export default function PaperV2SelectionPage() {
     setTdxSyncResult(null);
     setError(null);
     try {
-      const catName = watchlistCategoryName || watchlistResult.category_name;
+      const catName = watchlistCategoryName || String((watchlistResult as JsonObject).category_name || "");
+      if (!catName) throw new Error("缺少自选股票池分类名称，无法同步通达信自选。");
       const result = await advisoryApi.tdxSyncFromCategory(catName);
       setTdxSyncResult({ display_name: result.display_name, count: result.count });
     } catch (exc) {

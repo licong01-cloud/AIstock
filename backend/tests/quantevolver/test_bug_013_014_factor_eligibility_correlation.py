@@ -20,6 +20,7 @@ class TestBug013DisabledFactorEligibility:
             "SUCCESS",        # transformation_status
             False,            # is_available (disabled)
             "factors/test.py", # qe_code_path
+            "def compute(): pass", # code_text
             None,             # correlation_computed_at
         )
         mock_conn = MagicMock()
@@ -45,6 +46,7 @@ class TestBug013DisabledFactorEligibility:
             "SUCCESS",
             True,
             "factors/active.py",
+            "def compute(): pass",
             None,
         )
         mock_conn = MagicMock()
@@ -62,13 +64,14 @@ class TestBug013DisabledFactorEligibility:
 
     @patch("backend.services.quantevolver.factor_eligibility_service.get_conn")
     def test_transformation_not_success_still_blocked(self, mock_get_conn):
-        """Regression: non-SUCCESS transformation should still block."""
+        """Regression: non-SUCCESS transformation should still block realtime-transformed mode."""
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = (
             "bad_factor",
             "FAILED",
             True,
             "factors/bad.py",
+            "def compute(): pass",
             None,
         )
         mock_conn = MagicMock()
@@ -78,7 +81,7 @@ class TestBug013DisabledFactorEligibility:
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
         mock_get_conn.return_value = mock_conn
 
-        result = self._make_service().get_factor_eligibility("bad_factor")
+        result = self._make_service().get_factor_eligibility("bad_factor", source_mode="realtime_transformed")
 
         assert result["eligible"] is False
         assert result["reason"] == "transformation_not_success"
@@ -99,6 +102,9 @@ class TestBug013DisabledFactorEligibility:
         import inspect
         sig = inspect.signature(FactorOfficialEvaluationService.compute)
         assert sig.parameters["include_disabled"].default is True
+        assert sig.parameters["data_date"].default == ""
+        assert sig.parameters["start_date"].default is None
+        assert sig.parameters["end_date"].default is None
 
 
 # BUG-014: Correlation should give clear error when no standalone metrics cache exists
@@ -108,18 +114,24 @@ class TestBug014CorrelationCacheDependency:
 
     def test_all_missing_cache_returns_hint(self):
         """BUG-014: When ALL factors lack cache, the error message must guide users to run
-        official evaluation first. We test this by verifying the code path exists in the source."""
+        offline factor cache backfill first. We test this by verifying the code path exists in the source."""
         import inspect
         from backend.services.quantevolver.correlation_compute_service import (
             _run_correlation_compute_local,
         )
         source = inspect.getsource(_run_correlation_compute_local)
         # Verify the new early-exit for all-missing-cache case
-        assert "official-evaluation/compute" in source, (
-            "BUG-014: correlation compute must reference official-evaluation API in error message"
+        assert "CORRELATION_FACTOR_VALUE_CACHE_DIR" in source, (
+            "BUG-014: correlation compute must reference the offline research/backtest cache"
         )
-        assert "run_official_evaluation_first" in source, (
-            "BUG-014: correlation compute must include hint for missing cache"
+        assert "run_offline_factor_cache_backfill_first" in source, (
+            "BUG-014: correlation compute must include offline cache backfill hint for missing cache"
+        )
+        assert "official-evaluation/compute" not in source, (
+            "BUG-362: correlation compute must not direct users to realtime/official snapshot cache"
+        )
+        assert "run_official_evaluation_first" not in source, (
+            "BUG-362: correlation compute must not use official evaluation as cache authority"
         )
         # Verify the condition checks missing_factors == factor_names (all missing)
         assert "len(missing_factors) == len(factor_names)" in source, (

@@ -14,6 +14,22 @@ If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items.
 
 For small or unclear scope, run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context strategy and selected validation before loading additional files.
 
+## Documentation fast path
+
+When the task is a normal documentation change, use the docs fast path:
+
+- `docs-fast-update`: update an existing ordinary doc under `docs/architecture/`, `docs/analysis/`, `docs/design/`, `docs/handoff/`, `docs/operations/`, `docs/operations_*.md`, or `README.md`
+- `docs-fast-new`: create a new doc in the same ordinary documentation set
+- `docs-controlled`: any change under `docs/standards/`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/`, or `.claude/`
+
+Docs fast path rules:
+
+- create or reuse an isolated worktree
+- keep only a version/date and 1-3 bullet change summary in the document
+- run `git diff --check` only
+- do not run backend, frontend, nox, pytest, CodeGraph, or UA validation for ordinary docs
+- if the change is `docs-controlled`, fall back to the full issue workflow instead of docs fast path
+
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 
 Use graph-first context before broad searches. After `run --mode plan`, read the task card's Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg` or source reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise treat UA as warning-only and continue with CodeGraph plus allowed scope.

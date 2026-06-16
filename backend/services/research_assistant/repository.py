@@ -70,6 +70,20 @@ TABLES: dict[str, dict[str, Any]] = {
         },
         "search": {"context_pack_id", "task_id", "agent_id", "model_profile", "pack_summary"},
     },
+    "code_context_refs": {
+        "table": "assistant_code_context_refs",
+        "id": "code_ref_id",
+        "json": {"manifest_json", "provenance_json"},
+        "search": {"code_ref_id", "task_id", "query_scope", "source"},
+        "no_updated_at": True,
+    },
+    "proactive_reports": {
+        "table": "assistant_proactive_reports",
+        "id": "report_id",
+        "json": {"sections_json", "source_refs_json"},
+        "search": {"report_id", "report_type", "report_date", "status"},
+        "no_updated_at": True,
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",
@@ -347,7 +361,8 @@ class DatabaseResearchAssistantRepository:
                 try:
                     cur.execute(f"SELECT COUNT(*) FROM {table} {where}", params)
                     total = int(cur.fetchone()[0])
-                    cur.execute(f"SELECT * FROM {table} {where} ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT %s OFFSET %s", [*params, limit, offset])
+                    order_by = "created_at DESC" if meta.get("no_updated_at") else "updated_at DESC NULLS LAST, created_at DESC NULLS LAST"
+                    cur.execute(f"SELECT * FROM {table} {where} ORDER BY {order_by} LIMIT %s OFFSET %s", [*params, limit, offset])
                     items = self._rows(cur)
                 except SCHEMA_ERROR_TYPES as exc:
                     raise ResearchAssistantSchemaMissingError(f"Research Assistant schema is missing or out of date for table {table}; apply backend.db.init_research_assistant_schema_20260521") from exc
@@ -379,7 +394,10 @@ class DatabaseResearchAssistantRepository:
             raise ValueError("create row must not be empty")
         values = [self._adapt(meta, column, data[column]) for column in columns]
         update_columns = [column for column in columns if column != meta["id"]]
-        conflict = f"ON CONFLICT ({meta['id']}) DO UPDATE SET " + ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns) + ", updated_at = NOW()"
+        conflict_update = ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
+        if update_columns and not meta.get("no_updated_at"):
+            conflict_update = conflict_update + ", updated_at = NOW()"
+        conflict = f"ON CONFLICT ({meta['id']}) DO UPDATE SET " + conflict_update
         if not update_columns:
             conflict = f"ON CONFLICT ({meta['id']}) DO NOTHING"
         with self._connection_provider() as conn:
@@ -406,11 +424,13 @@ class DatabaseResearchAssistantRepository:
                 raise KeyError(f"{kind} not found: {record_id}")
             return existing
         set_sql = ", ".join(f"{column} = %s" for column in data)
+        if not meta.get("no_updated_at"):
+            set_sql = f"{set_sql}, updated_at = NOW()"
         values = [self._adapt(meta, column, data[column]) for column in data]
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 try:
-                    cur.execute(f"UPDATE {table} SET {set_sql}, updated_at = NOW() WHERE {id_col} = %s RETURNING *", [*values, record_id])
+                    cur.execute(f"UPDATE {table} SET {set_sql} WHERE {id_col} = %s RETURNING *", [*values, record_id])
                     if cur.rowcount == 0:
                         raise KeyError(f"{kind} not found: {record_id}")
                     return self._row(cur)
@@ -531,10 +551,12 @@ class InMemoryResearchAssistantRepository:
             raise ValueError(f"{id_col} is required")
         now = _now_iso()
         data.setdefault("created_at", now)
-        data.setdefault("updated_at", now)
+        if not meta.get("no_updated_at"):
+            data.setdefault("updated_at", now)
         existing = self.data[kind].get(str(data[id_col]), {})
         existing.update(copy.deepcopy(data))
-        existing["updated_at"] = now
+        if not meta.get("no_updated_at"):
+            existing["updated_at"] = now
         self.data[kind][str(data[id_col])] = existing
         return copy.deepcopy(existing)
 

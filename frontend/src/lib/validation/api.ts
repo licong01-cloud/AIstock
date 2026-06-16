@@ -169,10 +169,17 @@ export type ValidationCodeIntelligenceSummary = JsonObject & {
   codegraph?: (JsonObject & {
     status?: string;
     freshness?: string;
+    effective_freshness?: string;
+    effective_status?: string;
+    effective_source?: string;
+    stale_metadata_warning?: boolean;
+    current_git_commit?: string;
+    latest_git_commit?: string;
     generated_at?: string;
     artifact_path?: string;
     summary_ref?: string | null;
     warnings?: string[];
+    notes?: string[];
     index_summary?: JsonObject;
   }) | null;
   understand_anything?: JsonObject & {

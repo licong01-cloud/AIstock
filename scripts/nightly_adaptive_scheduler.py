@@ -31,6 +31,7 @@ STATUS_FAILURE_MODULES = {
     "paper_v2_live": ["paper_v2_live"],
     "code_intelligence": ["validation.runner"],
 }
+DIFF_HEADER_PREFIXES = ("--- ", "+++ ", "@@")
 
 
 def _split_csv(values: list[str] | None) -> list[str]:
@@ -41,7 +42,7 @@ def _split_csv(values: list[str] | None) -> list[str]:
 
 
 def _normalize_path(value: str) -> str:
-    text = str(value or "").strip().replace("\\", "/")
+    text = str(value or "").strip().lstrip("\ufeff").replace("\\", "/")
     while text.startswith("./"):
         text = text[2:]
     return text
@@ -56,6 +57,23 @@ def _unique(values: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _is_probable_repo_path(value: str) -> bool:
+    if not value or "\x00" in value:
+        return False
+    lowered = value.lower()
+    if lowered.startswith(("http://", "https://")):
+        return False
+    if any(value.startswith(prefix) for prefix in DIFF_HEADER_PREFIXES):
+        return False
+    if value in {"--- Changes ---", "Changes", "Files"}:
+        return False
+    if ":" in value.split("/", 1)[0]:
+        return False
+    if value.startswith(("/", "\\")):
+        return False
+    return bool(Path(value).suffix or "/" in value)
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -94,9 +112,9 @@ def collect_changed_files(
 ) -> list[str]:
     collected = [_normalize_path(item) for item in _split_csv(changed_files)]
     if changed_files_file and changed_files_file.exists():
-        collected.extend(_normalize_path(line) for line in changed_files_file.read_text(encoding="utf-8").splitlines())
+        collected.extend(_normalize_path(line) for line in changed_files_file.read_text(encoding="utf-8-sig").splitlines())
     collected.extend(_git_changed_files(base_ref, root=root))
-    return _unique([item for item in collected if item])
+    return _unique([item for item in collected if _is_probable_repo_path(item)])
 
 
 def _canonical_status_key(raw_key: str) -> str | None:
@@ -156,6 +174,10 @@ def codegraph_freshness_from_artifact(path: Path | None, explicit: str | None) -
     }
 
 
+def code_intelligence_refs_from_artifact(path: Path | None) -> dict[str, Any]:
+    return llm_provider_adapter.code_intelligence_refs_from_file(path)
+
+
 def build_report(
     *,
     provider: str,
@@ -163,6 +185,7 @@ def build_report(
     changed_files: list[str],
     statuses: dict[str, str],
     codegraph: dict[str, Any],
+    code_intelligence_refs: dict[str, Any] | None = None,
     resource_budget_seconds: int,
     workspace_path: str | None = None,
     invoke_llm: bool = False,
@@ -176,6 +199,7 @@ def build_report(
         changed_files=changed_files,
         recent_failure_modules=recent_failure_modules,
         codegraph_freshness=str(codegraph["freshness"]),
+        code_intelligence_refs=code_intelligence_refs,
         resource_budget_seconds=resource_budget_seconds,
         workspace_path=workspace_path,
         invoke_llm=invoke_llm,
@@ -184,11 +208,16 @@ def build_report(
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
     deferred = [item for item in advice["queue"] if not item.get("allowed")]
+    llm_evidence = llm_provider_adapter.llm_invocation_public_summary(advice.get("llm_invocation_evidence"))
+    llm_gate = "ready" if llm_evidence.get("invoked") else "degraded"
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "workflow_gate": gate["workflow_gate"],
+        "llm_gate": llm_gate,
         "provider": advice["provider"],
         "model": advice["model"],
+        "effective_provider": advice.get("effective_provider"),
+        "effective_model": advice.get("effective_model"),
         "execution_mode": "warning_only_advice",
         "execute": False,
         "input_refs": {
@@ -196,6 +225,7 @@ def build_report(
             "nightly_statuses": statuses,
             "recent_failure_modules": recent_failure_modules,
             "codegraph": codegraph,
+            "code_intelligence_refs": code_intelligence_refs or {},
         },
         "queue_summary": {
             "queue_count": len(advice["queue"]),
@@ -209,7 +239,12 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
-        "llm_invoked": bool((advice.get("llm_advice") or {}).get("advisory_only")),
+        "deterministic_plan_keys": advice.get("deterministic_plan_keys") or [],
+        "advised_plan_keys": advice.get("advised_plan_keys") or [],
+        "executed_plan_keys": advice.get("executed_plan_keys") or [str(item["plan_key"]) for item in allowed],
+        "advice_consumption": advice.get("advice_consumption") or {},
+        "llm_invoked": bool(llm_evidence.get("invoked")),
+        "llm_invocation_evidence": llm_evidence,
         "issue_creation_policy": {
             "allowed": False,
             "reason": "adaptive_scheduler_warning_mode_never_creates_issue",
@@ -223,12 +258,20 @@ def build_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
+    llm_evidence = report.get("llm_invocation_evidence") if isinstance(report.get("llm_invocation_evidence"), dict) else {}
+    consumption = report.get("advice_consumption") if isinstance(report.get("advice_consumption"), dict) else {}
     lines = [
         "# Nightly Adaptive Scheduler",
         "",
-        "- workflow_gate: `generated`",
+        f"- workflow_gate: `{report.get('workflow_gate') or 'unknown'}`",
+        f"- llm_gate: `{report.get('llm_gate') or 'unknown'}`",
         "- execution_mode: `warning_only_advice`",
-        "- artifact_detail: `compact_status_only`",
+        f"- provider: `{report.get('effective_provider') or report.get('provider') or 'unknown'}`",
+        f"- llm_invoked: `{bool(report.get('llm_invoked'))}`",
+        f"- fallback_used: `{bool(llm_evidence.get('fallback_used'))}`",
+        f"- allowed_plan_keys: `{','.join(queue.get('allowed_plan_keys') or []) or 'none'}`",
+        f"- advice_consumed: `{bool(consumption.get('advice_consumed'))}`",
         "- issue_creation: `disabled_warning_mode`",
         "",
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
@@ -243,13 +286,17 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": report.get("schema_version"),
         "workflow_gate": report.get("workflow_gate"),
+        "llm_gate": report.get("llm_gate"),
         "execution_mode": report.get("execution_mode"),
         "provider": report.get("provider"),
         "model": report.get("model"),
+        "effective_provider": report.get("effective_provider"),
+        "effective_model": report.get("effective_model"),
         "input_refs": {
             "changed_files": input_refs.get("changed_files") or [],
-            "statuses": input_refs.get("statuses") or {},
+            "statuses": input_refs.get("nightly_statuses") or input_refs.get("statuses") or {},
             "codegraph": input_refs.get("codegraph") or {},
+            "code_intelligence_refs": input_refs.get("code_intelligence_refs") or {},
         },
         "queue_summary": {
             "queue_count": queue.get("queue_count", 0),
@@ -259,7 +306,12 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "resource_budget_seconds": queue.get("resource_budget_seconds"),
         },
         "queue": report.get("queue") or [],
+        "deterministic_plan_keys": report.get("deterministic_plan_keys") or [],
+        "advised_plan_keys": report.get("advised_plan_keys") or [],
+        "executed_plan_keys": report.get("executed_plan_keys") or [],
+        "advice_consumption": report.get("advice_consumption") or {},
         "llm_invoked": bool(report.get("llm_invoked")),
+        "llm_invocation_evidence": report.get("llm_invocation_evidence") or {},
         "issue_creation_policy": report.get("issue_creation_policy") or {},
         "test_plan_advice_gate": report.get("test_plan_advice_gate") or {},
         "workspace_gate": report.get("workspace_gate") or {},
@@ -274,17 +326,10 @@ def _write_json(path: Path | None, public_report: dict[str, Any]) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(
-        {
-            "schema_version": "aistock_public_scheduler_status_v1",
-            "workflow_gate": "generated",
-            "execution_mode": "warning_only_advice",
-            "public_artifact": True,
-        },
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    payload = dict(public_report)
+    payload["schema_version"] = "aistock_public_scheduler_status_v1"
+    payload["public_artifact"] = True
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     path.write_text(serialized, encoding="utf-8")
 
 
@@ -296,10 +341,14 @@ def _write_text(path: Path | None, public_markdown: str) -> None:
 
 
 def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None) -> None:
+    queue = report.get("queue_summary") if isinstance(report.get("queue_summary"), dict) else {}
     compact = {
         "check": "nightly-adaptive-scheduler",
-        "workflow_gate": "generated",
+        "workflow_gate": report.get("workflow_gate") or "generated",
+        "llm_gate": report.get("llm_gate") or "unknown",
         "execution_mode": "warning_only_advice",
+        "llm_invoked": bool(report.get("llm_invoked")),
+        "allowed_plan_count": len(queue.get("allowed_plan_keys") or []),
         "artifact": str(output) if output else None,
     }
     if as_json:
@@ -308,6 +357,7 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
     print(
         "nightly-adaptive-scheduler: "
         f"workflow_gate={compact['workflow_gate']} "
+        f"llm_gate={compact['llm_gate']} "
         f"execution_mode={compact['execution_mode']} "
         f"artifact={compact['artifact'] or 'none'}"
     )
@@ -324,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--status", action="append", default=None, help="Nightly status as key=value; may be repeated.")
     parser.add_argument("--codegraph-freshness-json")
     parser.add_argument("--codegraph-freshness")
+    parser.add_argument("--code-intelligence-json")
     parser.add_argument("--resource-budget-seconds", type=int, default=900)
     parser.add_argument("--workspace-path")
     parser.add_argument(
@@ -364,12 +415,16 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.codegraph_freshness_json) if args.codegraph_freshness_json else None,
             args.codegraph_freshness,
         )
+        code_intelligence_refs = code_intelligence_refs_from_artifact(
+            Path(args.code_intelligence_json) if args.code_intelligence_json else None
+        )
         report = build_report(
             provider=provider,
             config_path=Path(args.config),
             changed_files=changed_files,
             statuses=statuses,
             codegraph=codegraph,
+            code_intelligence_refs=code_intelligence_refs,
             resource_budget_seconds=args.resource_budget_seconds,
             workspace_path=args.workspace_path,
             invoke_llm=args.invoke_llm,
@@ -379,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         report = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "workflow_gate": "blocked",
+            "llm_gate": "degraded",
             "execution_mode": "warning_only_advice",
             "error": llm_provider_adapter.redact_secret_text(str(exc)) if hasattr(llm_provider_adapter, "redact_secret_text") else str(exc),
             "queue_summary": {

@@ -1,0 +1,84 @@
+{
+  "actual": "Research Assistant 在 ReAct grounding 路径耗尽工具迭代，向用户返回 Insufficient evidence: max tool iterations reached without reliable evidence。",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260612_BUG-346-research-assistant-local-data-daily-sync-status-react-grounding-returns.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-346",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T12:38:22.144048Z",
+  "description": "Research Assistant 在 ReAct grounding 路径耗尽工具迭代，向用户返回 Insufficient evidence: max tool iterations reached without reliable evidence。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-66e9aa235517",
+      "timestamp": "2026-06-12T12:38:22.144045Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "本地数据同步状态问题命中 local_data daily status 汇总路径，直接输出按状态分组的可读业务汇总。",
+  "first_seen_at": "2026-06-12T12:38:22.144048Z",
+  "fix_branch": null,
+  "fix_commit": "36b49f4833db0f71039a9e3cc5223de7a1296a20",
+  "fixed_at": "2026-06-12T13:43:26.634718Z",
+  "github_issue_number": 1028,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1028",
+  "last_seen_at": "2026-06-12T12:38:22.144048Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1031",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant local-data daily sync status ReAct grounding returns max tool iterations",
+  "trigger_condition": {
+    "fingerprint": "66e9aa2355172247e08186a4",
+    "source_event_id": "FE-20260612-66e9aa235517"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/research_assistant/test_service.py::test_bug_343_chat_turn_renders_local_data_daily_status_groups backend/tests/research_assistant/test_service.py::test_bug_346_local_data_daily_status_stops_after_seeded_summary backend/tests/research_assistant/test_service.py::test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion -q -> 3 passed",
+    "python -m pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_tool_catalog_gate.py backend/tests/research_assistant/test_reflexion_retry.py backend/tests/research_assistant/test_evidence_guard.py -q -> 9 passed",
+    "python -m compileall -q backend/services/research_assistant/service.py backend/services/research_assistant/react_grounding.py backend/tests/research_assistant/test_service.py -> passed",
+    "python -m ruff check backend/services/research_assistant/react_grounding.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

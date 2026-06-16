@@ -1,4 +1,4 @@
-﻿"""
+"""
 QuantEvolver 后端API路由
 
 路由前缀: /quantevolver (在main.py中通过prefix="/api/v1"注册，最终路径为/api/v1/quantevolver/...)
@@ -36,9 +36,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
-import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -66,109 +63,6 @@ from ..services.quantevolver.seed_contract import normalize_single_experiment_se
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _win_to_wsl(path: str) -> str:
-    """Convert a Windows path to a WSL mount path."""
-    p = str(path).replace("\\", "/")
-    if len(p) >= 2 and p[1] == ":":
-        drive = p[0].lower()
-        return f"/mnt/{drive}{p[2:]}"
-    return p
-
-
-_FACTOR_CACHE_DB_ENV_KEYS = (
-    "TDX_DB_HOST",
-    "TDX_DB_PORT",
-    "TDX_DB_NAME",
-    "TDX_DB_USER",
-    "TDX_DB_PASSWORD",
-)
-_FACTOR_CACHE_PG_ALIASES = {
-    "PGHOST": "TDX_DB_HOST",
-    "PGPORT": "TDX_DB_PORT",
-    "PGDATABASE": "TDX_DB_NAME",
-    "PGUSER": "TDX_DB_USER",
-    "PGPASSWORD": "TDX_DB_PASSWORD",
-}
-
-
-def _quote_shell_arg(value: Any) -> str:
-    """Quote a value for the WSL bash command line."""
-    return shlex.quote(str(value))
-
-
-def _collect_factor_cache_wsl_db_env(source_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """Collect DB env vars that must cross the Windows -> WSL process boundary."""
-    env_source = source_env if source_env is not None else os.environ
-    db_env: Dict[str, str] = {}
-    missing: List[str] = []
-    for key in _FACTOR_CACHE_DB_ENV_KEYS:
-        value = env_source.get(key)
-        if value is None or str(value).strip() == "":
-            missing.append(key)
-        else:
-            db_env[key] = str(value)
-    if missing:
-        raise RuntimeError(
-            "Factor cache WSL task requires AIstock DB env vars: " + ", ".join(missing)
-        )
-
-    for pg_key, tdx_key in _FACTOR_CACHE_PG_ALIASES.items():
-        db_env[pg_key] = db_env[tdx_key]
-
-    statement_timeout = env_source.get("AISTOCK_PG_STATEMENT_TIMEOUT_MS")
-    if statement_timeout is not None and str(statement_timeout).strip():
-        db_env["AISTOCK_PG_STATEMENT_TIMEOUT_MS"] = str(statement_timeout)
-    return db_env
-
-
-def _build_factor_cache_wsl_process_env(
-    base_env: Optional[Mapping[str, str]],
-    db_env: Dict[str, str],
-) -> Dict[str, str]:
-    """Build a Popen env that lets WSL import selected DB vars without CLI secrets."""
-    env_source = os.environ if base_env is None else base_env
-    proc_env: Dict[str, str] = {str(k): str(v) for k, v in env_source.items()}
-    proc_env.update({str(k): str(v) for k, v in db_env.items()})
-
-    wslenv_parts = [part for part in proc_env.get("WSLENV", "").split(":") if part]
-    for key in db_env:
-        for idx, part in enumerate(wslenv_parts):
-            name, sep, flags = part.partition("/")
-            if name != key:
-                continue
-            if sep and "u" not in flags:
-                wslenv_parts[idx] = f"{name}/{flags}u"
-            break
-        else:
-            wslenv_parts.append(f"{key}/u")
-    proc_env["WSLENV"] = ":".join(wslenv_parts)
-    return proc_env
-
-
-def _build_factor_cache_wsl_shell_command(
-    *,
-    project_root_wsl: str,
-    backfill_args: List[str],
-    log_path_wsl: str,
-) -> str:
-    """Build the WSL bash script for factor-cache backfill."""
-    if not backfill_args:
-        raise ValueError("backfill_args is required")
-    python_cmd = "python " + " ".join(_quote_shell_arg(arg) for arg in backfill_args)
-    body = " ".join(
-        [
-            "set -e;",
-            f"cd {_quote_shell_arg(project_root_wsl)};",
-            'if [ -z "$TDX_DB_PASSWORD" ]; then '
-            "echo 'TDX_DB_PASSWORD is required for factor cache WSL task' >&2; exit 2; fi;",
-            'source "$HOME/miniconda3/etc/profile.d/conda.sh";',
-            "conda activate rdagent-gpu;",
-            python_cmd + ";",
-        ]
-    )
-    return f"{{ {body} }} > {_quote_shell_arg(log_path_wsl)} 2>&1"
 
 
 def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None = None) -> str:
@@ -262,7 +156,9 @@ class FullPipelineRequest(BaseModel):
     skip_completed: bool = True
     max_transform_retries: int = 3
     skip_transform: bool = False
-    data_date: Optional[str] = None
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class RecommendFactorsRequest(BaseModel):
@@ -876,7 +772,7 @@ def list_factors(
         # 前端自行决定展示优先级，不在后端覆盖
 
         # 合并 QE 回测因子值缓存信息。
-        # factor_values_realtime 属于快照/官方评估链路，不能作为 QE 回测缓存兜底。
+        # factor_values_realtime 是历史兼容/迁移目录，不能作为 QE 回测缓存兜底。
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
@@ -1252,10 +1148,10 @@ def delete_factor(
                 )
                 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 
-                # 两个独立缓存体系：
-                # - factor_values/        回测用 (code_text 生成, 读 bak_basic.h5)
-                # - factor_values_realtime/ 实盘+相关性用 (realtime_code_text 生成, 读 DB loader)
-                # 删除因子必须同时清理两个, 否则遗留孤儿 parquet / _meta 条目
+                # 官方共用缓存 + 历史兼容目录清理：
+                # - factor_values/        官方共用缓存 (独立指标 / 相关性 / QE 回测共用)
+                # - factor_values_realtime/ 仅历史迁移兼容清理，不再作为业务读取路径
+                # 删除因子时仍清理两个目录，避免旧孤儿 parquet / _meta 条目误导排查。
                 for _cache_subdir in ("factor_values", "factor_values_realtime"):
                     _cache_root = os.path.join(_project_root, "rdagent_assets", _cache_subdir)
 
@@ -1398,7 +1294,9 @@ class ManualFactorCreate(BaseModel):
     code_text: str = Field(..., description="因子 Python 代码")
     description: Optional[str] = Field(None, description="因子描述")
     expression: Optional[str] = Field(None, description="因子表达式（可选）")
-    data_date: Optional[str] = Field(None, description="?????????? (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class ManualFactorValidate(BaseModel):
@@ -1408,16 +1306,21 @@ class ManualFactorValidate(BaseModel):
 
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
-    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口，请使用 official-evaluation/compute")
-    data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
+    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口会转发到 official full-compute")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
-    data_date: str = Field(..., description="评估快照日期 (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: str = Field("2018-08-01", description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期；空时使用 data_date 或默认 2026-04-30")
     include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
+    force: bool = Field(False, description="强制重新生成 official cache 并计算指标")
 
 
 class DeletionAnalyzeRequest(BaseModel):
@@ -3466,16 +3369,12 @@ FACTOR_CACHE_META_PATH = FACTOR_CACHE_ROOT / "_meta.json"
 FACTOR_CACHE_SOURCE_SPECS: Tuple[Dict[str, Any], ...] = (
     {
         "key": "backtest",
-        "label": "QE回测缓存",
+        "label": "官方共用缓存",
         "single_dir": FACTOR_CACHE_SINGLE_DIR,
         "meta_path": FACTOR_CACHE_META_PATH,
     },
 )
 FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
-BACKFILL_SCRIPT_WSL = os.getenv(
-    "AISTOCK_FACTOR_CACHE_BACKFILL_WSL",
-    _win_to_wsl(str(AISTOCK_PROJECT_ROOT / "scripts" / "backfill_factor_cache.py")),
-)
 FACTOR_CACHE_TASK_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_tasks"
 
 
@@ -3586,11 +3485,11 @@ def _collect_factor_cache_candidates(
     factor_name: str,
     source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
 ) -> List[Dict[str, Any]]:
-    """Collect QE backtest cache candidates.
+    """Collect official shared factor-value cache candidates.
 
     factor_values_realtime is intentionally ignored even if a caller passes it
-    through source_specs. Missing QE backtest cache must recompute, not fallback
-    to snapshot/official caches.
+    through source_specs. Missing cache must be generated by official full compute,
+    not by falling back to legacy snapshot directories.
     """
     candidates: List[Dict[str, Any]] = []
     specs = source_specs or FACTOR_CACHE_SOURCE_SPECS
@@ -3831,7 +3730,7 @@ def factor_cache_stats():
             "disabled_total": total_disabled_factors,
             "disabled_cached": disabled_cached,
             "by_source": by_source,
-            "last_backfill": _load_cache_meta().get("_last_backfill"),
+            "last_generation": _load_cache_meta().get("generated_at"),
             "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
         }
     except Exception as e:
@@ -3841,15 +3740,13 @@ def factor_cache_stats():
 
 class FactorCacheComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="因子名列表；空/None = 全部可用因子")
+    include_disabled: bool = Field(False, description="仅在显式 factor_names 时允许计算 disabled 因子；全量默认只计算启用因子")
     experiment_id: Optional[str] = Field(None, description="实验 ID；仅用于继承节点/数据目录配置，不限制缓存作用域")
     start_date: str = Field(..., description="起始日期；必须由 UI 显式传入")
     end_date: str = Field(..., description="结束日期；必须由 UI 显式传入")
     workers: int = Field(4, description="并行度: 2/4/8/10")
     timeout_per_factor: int = Field(1200, description="单因子超时秒数")
-    incremental: bool = Field(False, description="增量模式: 优先仅补齐缺失后段")
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
-    resume_task_id: Optional[str] = Field(None, description="从历史任务恢复未完成因子")
-    retry_failed_only: bool = Field(False, description="恢复历史任务时仅重试失败因子")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
 
@@ -3862,196 +3759,111 @@ class FactorCacheRemoteSyncRequest(BaseModel):
     upload_workers: int = Field(4, ge=1, le=16, description="流式上传并发度；默认 4，避免串行单因子同步占不满局域网")
 
 
-@router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
+@router.post("/factor-cache/compute", summary="Submit official offline factor full compute via WSL dispatch")
 def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: BackgroundTasks):
-    """触发 WSL 端因子值计算。使用原始 code_text + subprocess（与回测 prepare_factors.py 一致）。"""
+    """Submit official offline factor cache + metrics compute to WSL/compute-node dispatch.
+
+    Windows FastAPI is a control plane only: no local WSL shell-out and no
+    obsolete local backfill execution. The worker consumes catalog
+    code_text plus factor_data_dir/qlib/ST-PIT data and writes the single
+    official cache under rdagent_assets/factor_values.
+    """
     if req.workers < 1 or req.workers > 10:
-        raise HTTPException(400, "workers 必须为 1~10")
+        raise HTTPException(400, "workers must be 1~10")
 
     from ..services.quantevolver.config_composer import ConfigComposer
+    from ..services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
 
     cc = ConfigComposer()
-    exp_record = None
     node_id = None
-    factor_data_dir = None
     resolved_start = req.start_date.strip()
     resolved_end = req.end_date.strip()
 
     if req.experiment_id:
         exp_record = cc._get_experiment_record(req.experiment_id)
         if not exp_record:
-            raise HTTPException(404, f"实验 {req.experiment_id} 不存在")
+            raise HTTPException(404, f"experiment {req.experiment_id} not found")
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
     factor_data_dir = rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
     if req.strict_backtest_data and not factor_data_dir:
-        raise HTTPException(400, "无法解析 QE 默认 factor_data_dir")
+        raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
-        raise HTTPException(400, "start_date/end_date 必须由 UI 显式传入")
+        raise HTTPException(400, "start_date/end_date must be provided by UI")
     try:
         datetime.strptime(resolved_start, "%Y-%m-%d")
         datetime.strptime(resolved_end, "%Y-%m-%d")
     except ValueError as e:
-        raise HTTPException(400, "start_date/end_date 必须为 YYYY-MM-DD 格式") from e
+        raise HTTPException(400, "start_date/end_date must be YYYY-MM-DD") from e
     if resolved_start > resolved_end:
-        raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
+        raise HTTPException(400, f"invalid cache window: {resolved_start} > {resolved_end}")
+    task_id = f"official_factor_full_{int(time.time() * 1000)}_{os.getpid()}"
     try:
-        wsl_db_env = _collect_factor_cache_wsl_db_env()
-    except RuntimeError as e:
+        dispatch_result = OfficialFactorFullComputeDispatchService().submit(
+            factor_names=req.factor_names,
+            factor_data_dir=str(factor_data_dir or ""),
+            start_date=resolved_start,
+            end_date=resolved_end,
+            include_disabled=bool(req.factor_names and req.include_disabled),
+            batch_size=max(1, min(int(req.workers or 1) * 4, 32)),
+            workers=req.workers,
+            timeout_per_factor=req.timeout_per_factor,
+            force=req.force,
+            qlib_bin_path=qlib_bin_path,
+            node_id=node_id,
+            task_id=task_id,
+        )
+    except Exception as e:
+        logger.exception("failed to submit official factor full-compute dispatch")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # ── 从因子库获取 QE 回测权威 code_text ──
-    if req.factor_names:
-        factors_info = cc._get_factors_info(req.factor_names)
-    else:
-        factors_info = _get_all_factors_with_code_text()
-
-    factors_code = {}
-    for f in factors_info:
-        ct = f.get("code_text")
-        if ct:
-            factors_code[f["factor_name"]] = ct
-    if not factors_code and not req.resume_task_id:
-        raise HTTPException(400, "未找到任何有 code_text 的因子")
-
-    # ── 写入 code manifest JSON 文件 ──
-    task_id = f"cache_{int(time.time() * 1000)}_{os.getpid()}"
-    manifest_path = FACTOR_CACHE_TASK_DIR / f"{task_id}_manifest.json"
-    FACTOR_CACHE_TASK_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(factors_code, ensure_ascii=False), encoding="utf-8"
-    )
-
-    result_path = Path(tempfile.gettempdir()) / f"{task_id}_result.json"
-    log_path = Path(tempfile.gettempdir()) / f"{task_id}.log"
-
-    factors_arg = ",".join(req.factor_names) if req.factor_names else ""
-    project_root_wsl = _win_to_wsl(str(AISTOCK_PROJECT_ROOT))
-    backfill_args = [
-        BACKFILL_SCRIPT_WSL,
-        "--task-id",
-        task_id,
-        "--code-manifest",
-        _win_to_wsl(str(manifest_path)),
-        "--window-train-start",
-        resolved_start,
-        "--window-backtest-end",
-        resolved_end,
-    ]
-    if req.experiment_id:
-        backfill_args.extend(["--experiment-id", req.experiment_id])
-    if factor_data_dir:
-        backfill_args.extend(["--factor-data-dir", factor_data_dir])
-    if req.strict_backtest_data:
-        backfill_args.append("--strict-backtest-data")
-    backfill_args.extend(
-        [
-            "--workers",
-            str(req.workers),
-            "--timeout",
-            str(req.timeout_per_factor),
-            "--json-output",
-            _win_to_wsl(str(result_path)),
-        ]
-    )
-    if factors_arg:
-        backfill_args.extend(["--factors", factors_arg])
-    if req.force:
-        backfill_args.append("--force")
-    if req.incremental:
-        backfill_args.append("--incremental")
-    if req.resume_task_id:
-        backfill_args.extend(["--resume-task-id", req.resume_task_id])
-    if req.retry_failed_only:
-        backfill_args.append("--retry-failed-only")
-
-    cmd_parts = [
-        "wsl",
-        "bash",
-        "-lc",
-        _build_factor_cache_wsl_shell_command(
-            project_root_wsl=project_root_wsl,
-            backfill_args=backfill_args,
-            log_path_wsl=_win_to_wsl(str(log_path)),
-        ),
-    ]
-    proc_env = _build_factor_cache_wsl_process_env(os.environ, wsl_db_env)
-
-    _active_cache_tasks[task_id] = {
-        "task_id": task_id,
-        "status": "running",
+    dispatch_task_id = dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or task_id
+    _active_cache_tasks[str(dispatch_task_id)] = {
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "status": dispatch_result.get("status", "queued"),
         "started_at": datetime.now().isoformat(),
         "workers": req.workers,
-        "factor_count": len(req.factor_names) if req.factor_names else "all",
-        "incremental": req.incremental,
-        "resume_task_id": req.resume_task_id,
-        "retry_failed_only": req.retry_failed_only,
-        "auto_sync_remote": req.auto_sync_remote,
+        "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
+        "factor_count": len(req.factor_names) if req.factor_names else "all_enabled_code_text",
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "experiment_id": req.experiment_id,
         "strict_backtest_data": req.strict_backtest_data,
-        "data_source_mode": "backtest_factor_data_dir" if req.strict_backtest_data else "unspecified",
+        "data_source_mode": "official_offline_backtest_factor_data",
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
         "factor_data_dir": factor_data_dir,
+        "qlib_bin_path": qlib_bin_path,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
-        "log_path": str(log_path),
-        "result_path": str(result_path),
-        "task_state_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.json"),
-        "failed_log_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.failed.ndjson"),
-        "start": resolved_start,
-        "end": resolved_end,
+        "cache_root": dispatch_result.get("cache_root"),
+        "dispatch_payload": dispatch_result.get("payload"),
     }
-
-    import subprocess
-    def _run():
-        try:
-            proc = subprocess.Popen(
-                cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=0x08000000 if sys.platform == "win32" else 0,
-                env=proc_env,
-            )
-            _active_cache_tasks[task_id]["pid"] = proc.pid
-            proc.wait()
-            _active_cache_tasks[task_id]["returncode"] = proc.returncode
-            _active_cache_tasks[task_id]["status"] = "completed" if proc.returncode == 0 else "failed"
-            _active_cache_tasks[task_id]["finished_at"] = datetime.now().isoformat()
-            _invalidate_cache_meta()
-            if proc.returncode == 0 and req.auto_sync_remote:
-                try:
-                    from ..services.quantevolver.factor_cache_remote_sync_service import (
-                        FactorCacheRemoteSyncService,
-                    )
-
-                    sync_factors = list(req.factor_names or factors_code.keys())
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "running"
-                    sync_result = FactorCacheRemoteSyncService().sync_to_all_remote_nodes(
-                        sync_factors,
-                        force=req.force,
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_status"] = (
-                        "completed" if sync_result.get("ok") else "failed"
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_result"] = sync_result
-                except Exception as sync_exc:
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "failed"
-                    _active_cache_tasks[task_id]["remote_sync_error"] = str(sync_exc)
-                    logger.exception("远端因子缓存自动同步失败 task_id=%s", task_id)
-        except Exception as e:
-            _active_cache_tasks[task_id]["status"] = "error"
-            _active_cache_tasks[task_id]["error"] = str(e)
-            logger.exception(f"缓存计算任务失败 {task_id}")
-
-    background_tasks.add_task(_run)
+    _invalidate_cache_meta()
     return {
-        "ok": True,
-        "task_id": task_id,
-        "status": "queued",
+        "ok": bool(dispatch_result.get("ok", True)),
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "status": dispatch_result.get("status", "queued"),
         "experiment_id": req.experiment_id,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "factor_data_dir": factor_data_dir,
-        "auto_sync_remote": req.auto_sync_remote,
+        "qlib_bin_path": qlib_bin_path,
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
+        "cache_root": dispatch_result.get("cache_root"),
+        "message": "submitted official offline factor full-compute task to WSL/compute-node dispatch; Windows control plane does not execute local recompute.",
     }
 
 
@@ -4241,7 +4053,9 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
         code_text=req.code_text,
         description=req.description,
         expression=req.expression,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return result
 
@@ -4249,19 +4063,15 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
 @router.post("/factors/batch-compute-metrics-unified", summary="统一批量独立指标计算")
 async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
     """Legacy 接口：转调 official evaluation writer。"""
-    if not req.data_date:
-        raise HTTPException(
-            400,
-            "必须指定 data_date（快照日期），确保所有因子使用相同数据计算，便于横向比对。"
-            "请在因子库页面选择或创建数据快照。"
-        )
     from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
     svc = FactorOfficialEvaluationService()
     result = await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.all_available,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return {
         **result,
@@ -4279,17 +4089,13 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
         return f"data: {json.dumps(data, ensure_ascii=False)}\\n\\n"
 
     async def event_generator():
-        if not req.data_date:
-            yield _sse({
-                "type": "error",
-                "error": "必须指定 data_date（快照日期），确保所有因子使用相同数据计算。",
-            })
-            return
         yield _sse({
             "type": "stream_start",
             "deprecated": True,
             "official_api": "/api/v1/quantevolver/official-evaluation/compute",
-            "data_date": req.data_date,
+            "data_date": req.data_date or req.end_date,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
         })
         try:
             from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
@@ -4297,8 +4103,10 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
             result = await asyncio.to_thread(
                 svc.compute,
                 factor_names=req.factor_names,
-                data_date=req.data_date,
+                data_date=req.data_date or req.end_date or "",
                 include_disabled=req.all_available,
+                start_date=req.start_date,
+                end_date=req.end_date,
             )
             yield _sse({"type": "stream_complete", **result, "deprecated": True})
         except Exception as e:
@@ -4319,10 +4127,13 @@ async def official_evaluation_compute(req: OfficialEvaluationComputeRequest):
     return await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.include_disabled,
         max_workers=req.max_workers,
         timeout_per_factor=req.timeout_per_factor,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        force=req.force,
     )
 
 
@@ -4570,6 +4381,8 @@ def full_pipeline_stream(req: FullPipelineRequest):
             "task_ids": task_ids,
             "factor_count": len(factor_names),
             "phases": phases,
+            "start_date": req.start_date,
+            "end_date": req.end_date or req.data_date,
         })
 
         # ── Phase 1: IC 指标计算（统一计算，不依赖 task） ──
@@ -4591,7 +4404,9 @@ def full_pipeline_stream(req: FullPipelineRequest):
                 result = await asyncio.to_thread(
                     svc_metrics.compute,
                     factor_names=batch,
-                    data_date=req.data_date,
+                    data_date=req.data_date or req.end_date or "",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
                 )
                 if result.get("success"):
                     db_res = result.get("db_result", {})
@@ -6976,7 +6791,7 @@ async def stream_experiment_logs(experiment_id: str):
                 qe_task_id, qe_loop_id, db_status, custom_params = row
 
         if not qe_task_id:
-            raise HTTPException(status_code=400, detail="?????????????")
+            raise HTTPException(status_code=400, detail="experiment has no QE task id")
 
         params = _parse_qe_custom_params(custom_params)
         node_id = params.get("execution_node_id") or params.get("node_id")

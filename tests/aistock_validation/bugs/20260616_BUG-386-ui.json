@@ -1,0 +1,142 @@
+{
+  "actual": "官方因子独立指标、因子相关性和 QE 回测缓存已经统一到 rdagent_assets/factor_values，但 UI/API 仍暴露 factor_values_realtime 快照和旧 factor-values compute 入口，容易误导用户认为相关性或回测需要实盘缓存。需要统一 UI 展示官方全量数据集时间段，允许手工配置离线窗口，移除或隔离不再需要的独立回测缓存/旧快照入口，并确保官方独立指标、相关性、QE 回测路径不得再消费旧实盘缓存目录。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260616_BUG-386-ui.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/factor_value_pipeline.py",
+    "backend/services/manual_factor_service.py",
+    "frontend/src/app/quantevolver/factor-correlation/page.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/components/ManualFactorDialog.tsx",
+    "frontend/src/app/quantevolver/components/FullPipelineDialog.tsx",
+    "tests/aistock_validation/history/qe/20260616_bug386_official_cache_ui_unification.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-386",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T05:45:39.109499Z",
+  "description": "官方因子独立指标、因子相关性和 QE 回测缓存已经统一到 rdagent_assets/factor_values，但 UI/API 仍暴露 factor_values_realtime 快照和旧 factor-values compute 入口，容易误导用户认为相关性或回测需要实盘缓存。需要统一 UI 展示官方全量数据集时间段，允许手工配置离线窗口，移除或隔离不再需要的独立回测缓存/旧快照入口，并确保官方独立指标、相关性、QE 回测路径不得再消费旧实盘缓存目录。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-b81ccf60c5f0",
+      "timestamp": "2026-06-16T05:45:39.109495Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope expanded to quantevolver backend/frontend cache UI and legacy realtime-cache isolation files for BUG-386 implementation.",
+      "timestamp": "2026-06-16T05:55:00Z"
+    },
+    {
+      "action": "implement_fix",
+      "actor": "codex",
+      "note": "统一因子库、相关性和官方独立指标 UI/API 到 rdagent_assets/factor_values；旧 factor_values_realtime 入口默认 410 隔离；FactorValuePipeline 无显式 output_dir 时 fail-fast。",
+      "timestamp": "2026-06-16T08:16:20Z"
+    },
+    {
+      "action": "record_validation",
+      "actor": "codex",
+      "note": "记录 py_compile、前端 build、定向 TypeScript、nox l0/validation_module_registry_l0/qe_read_l3 证据；qe_read_ui 因本地 8011/proxy 服务预检阻断。",
+      "timestamp": "2026-06-16T08:16:20Z"
+    },
+    {
+      "action": "record_validation",
+      "actor": "codex",
+      "note": "补充执行 QE_READ_L3_SKIP_UI=1 的 l0/registry/qe_read_l3 组合门禁并通过；qe_read_ui 服务预检在临时 8011 后端下通过，但被既有 research-assistant TypeScript 错误阻断。",
+      "timestamp": "2026-06-16T08:35:35Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "UI 只展示和提交官方离线共用缓存窗口；独立指标、因子相关性、QE 回测均使用 rdagent_assets/factor_values；旧 factor_values_realtime 仅作为历史兼容/迁移入口，默认不可作为业务入口消费。",
+  "first_seen_at": "2026-06-16T05:45:39.109499Z",
+  "fix_branch": null,
+  "fix_commit": "308c5f5a10975d32ec77ae52ee053ed3070f559c",
+  "fixed_at": "2026-06-16T09:03:19.716126Z",
+  "github_issue_number": 1147,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1147",
+  "last_seen_at": "2026-06-16T05:45:39.109499Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1159",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 /quantevolver 与 /quantevolver/factor-correlation，检查官方缓存窗口展示与提交参数；触发官方 full-compute/相关性计算，确认请求不再携带旧 snapshot/data_date/as_of_date 分支，且旧 factor-values/snapshots 入口不再作为 UI 业务入口。",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "统一官方因子缓存 UI 并隔离旧实盘缓存入口",
+  "trigger_condition": {
+    "fingerprint": "b81ccf60c5f0eaf65ab629c2",
+    "source_event_id": "FE-20260616-b81ccf60c5f0"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/factor_values",
+    "ui_routes": [
+      "/factor_values"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/routers/quantevolver_evolution.py backend/routers/quantevolver.py backend/services/quantevolver/factor_value_pipeline.py backend/services/manual_factor_service.py -> passed",
+    "python -m ruff check changed Python files -> passed",
+    "frontend targeted npx tsc on changed TS/TSX files -> passed",
+    "frontend npm run build -> passed with existing React hook warnings only",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s l0 validation_module_registry_l0 qe_read_l3 -> passed after origin/main merge",
+    "PR #1159 checks green: 20 passed, 0 failed, 0 pending"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_ready"
+}

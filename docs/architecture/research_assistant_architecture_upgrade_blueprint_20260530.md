@@ -803,8 +803,8 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 
 | 设计项 | 缺陷 | 实现文件 | 测试 |
 |---|---|---|---|
-| 代码智能接入 | DEF-10 | `code_intelligence_adapter.py`(复用)、façade、`build_context_pack`、`assistant_code_context_refs` | `test_code_intel_context_injection.py` |
-| 主动晨报 | DEF-11 | orchestrator 定时任务、`assistant_proactive_reports` | `test_proactive_report_generation.py` |
+| 代码智能接入 | DEF-10 | `scripts/code_intelligence_adapter.py`(复用)、`backend/services/research_assistant/code_intelligence.py`、`backend/services/research_assistant/service.py::build_context_pack`、`backend/db/migrations/ra_upgrade/004_code_intelligence.sql` / `assistant_code_context_refs` | `test_code_intel_context_injection.py` / `test_code_intel_decomposition.py` / `test_code_intel_ddl_contract.py` |
+| 主动晨报 | DEF-11 | `backend/services/research_assistant/proactive_reports.py`、`backend/services/research_assistant/service.py::generate_scheduled_proactive_report`、`backend/db/migrations/ra_upgrade/005_proactive_reports.sql` / `assistant_proactive_reports` | `backend/tests/research_assistant/test_proactive_report_generation.py` |
 | Reflection Card | DEF-12 | `assistant_reflection_cards`、curator | `test_reflection_card_loop.py` |
 | Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
 | 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
@@ -823,6 +823,10 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 | DAI-DRIFT-002 | 增补项无漂移 | §16.8/§16.9 | 矩阵无空行；消费/门禁断言存在 |
 
 > Phase 7 cross-check note: Section 16.10 DAI-CODE/REPORT/LEARN items are explicitly classified in `research_assistant_phase7_expected.yaml`; Phase 8-12 items are `future_phase_pending`, while `DAI-DRIFT-002` is hard_pass via `research-assistant_20260602_132401_l4_ra-phase7-full-accept_3f86ef03_runner-validation__05e64ce8f4`; Claude Tier2 `valjob_20260602_134327_93eea82d` independently rechecked the same final HEAD.
+
+> Phase 8 implementation note: DAI-CODE-001/002 and DEF-10 are implemented by query-scoped code context refs in `backend/services/research_assistant/code_intelligence.py`, injected into `build_context_pack` and Agent Teams decomposition in `backend/services/research_assistant/service.py`, persisted through `assistant_code_context_refs` in `backend/db/migrations/ra_upgrade/004_code_intelligence.sql`; validation is covered by `backend/tests/research_assistant/test_code_intel_context_injection.py`, `test_code_intel_decomposition.py`, and `test_code_intel_ddl_contract.py`. This implementation keeps `code_intelligence_context` as availability/freshness summary and adds `code_context_refs` only for concrete code queries; non-code or underspecified code turns degrade with explicit `reason_codes`.
+
+> Phase 9 implementation note: DAI-REPORT-001 and DEF-11 are implemented by the read-only provider registry and report framework in `backend/services/research_assistant/proactive_reports.py`, scheduled orchestrator entrypoint `ResearchAssistantService.generate_scheduled_proactive_report`, and persisted `assistant_proactive_reports` DDL in `backend/db/migrations/ra_upgrade/005_proactive_reports.sql`. The implementation keeps providers registered outside the core report loop, records `source_refs`, `reason_codes`, and `warnings`, and validates no placeholder tokens or high-risk action proposals through `backend/tests/research_assistant/test_proactive_report_generation.py`.
 
 ### 16.11 边界
 

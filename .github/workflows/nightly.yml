@@ -45,6 +45,7 @@ env:
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
+  AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
   contents: read
@@ -346,6 +347,40 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
+      - name: Build compact code intelligence refs for LLM advice
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $changedFile = "$outDir/nightly-changed-files.txt"
+          $changedFiles = @()
+          try {
+            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $changedFiles = @()
+              $global:LASTEXITCODE = 0
+            }
+          } catch {
+            $changedFiles = @()
+          }
+          New-Item -ItemType File -Force -Path $changedFile | Out-Null
+          if (@($changedFiles).Count -gt 0) {
+            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          } else {
+            Clear-Content -Path $changedFile
+          }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
+            --language zh `
+            --output "$outDir/ua-configure.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
+            --output-dir $outDir `
+            --output "$outDir/ua-summary-manifest.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py summary `
+            --item-id "nightly-${{ github.run_id }}" `
+            --query "Nightly validation LLM scheduling impact context" `
+            --changed-files-file $changedFile `
+            --module validation `
+            --output "$outDir/code-intelligence-summary.json" `
+            --output-md "$outDir/code-intelligence-summary.md"
       - name: Build LLM triage quality smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -358,12 +393,16 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
             --module validation.runner `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/llm-test-plan-advice.json"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "LLM test-plan advisor failed; retrying deterministic fallback."
@@ -373,6 +412,7 @@ jobs:
               --changed-file scripts/llm_provider_adapter.py `
               --changed-file scripts/ci_failure_issue_summary.py `
               --module validation.runner `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --output "$outDir/llm-test-plan-advice.json"
           }
 
@@ -380,12 +420,16 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
             --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
           if ($LASTEXITCODE -ne 0) {
@@ -396,6 +440,7 @@ jobs:
               --changed-file scripts/llm_provider_adapter.py `
               --recent-failure-module validation.runner `
               --codegraph-freshness fresh `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --resource-budget-seconds 900 `
               --output "$outDir/llm-nightly-scheduler-advice.json"
           }
@@ -415,12 +460,21 @@ jobs:
           } catch {
             $changedFiles = @()
           }
-          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          New-Item -ItemType File -Force -Path $changedFile | Out-Null
+          if (@($changedFiles).Count -gt 0) {
+            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          } else {
+            Clear-Content -Path $changedFile
+          }
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-adaptive-scheduler.json" `
             --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -431,6 +485,7 @@ jobs:
               --provider deterministic `
               --changed-files-file $changedFile `
               --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
               --resource-budget-seconds 900 `
               --output "$outDir/llm-nightly-adaptive-scheduler.json" `
               --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -463,17 +518,6 @@ jobs:
         run: |
           conda run -n AIstock python -m nox -s validation_workflow_automation
 
-      - name: Build Understand Anything readiness summaries
-        run: |
-          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
-            --language zh `
-            --output "$outDir/ua-configure.stdout.json"
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
-            --output-dir $outDir `
-            --output "$outDir/ua-summary-manifest.stdout.json"
-
       - name: Print code intelligence graph summary manifest
         if: always()
         run: |
@@ -499,6 +543,13 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/code-intelligence-run-manifest.md") {
             Get-Content -LiteralPath "$outDir/code-intelligence-run-manifest.md"
           }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py llm-value-summary `
+            --artifact-dir $outDir `
+            --output "$outDir/llm-value-summary.stdout.json" `
+            --output-md "$outDir/llm-value-summary.md"
+          if (Test-Path -LiteralPath "$outDir/llm-value-summary.md") {
+            Get-Content -LiteralPath "$outDir/llm-value-summary.md"
+          }
 
       - name: Upload code intelligence artifacts
         if: always()
@@ -521,6 +572,14 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download code intelligence refs
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: code-intelligence-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}
+        continue-on-error: true
 
       - name: Compose nightly summary
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
@@ -561,6 +620,19 @@ jobs:
 
           Run: ${RUN_URL}
           EOF
+          LLM_VALUE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-value-summary.md"
+          if [ -f "${LLM_VALUE_MD}" ]; then
+            cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          else
+            cat <<EOF >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+          ## LLM + Code Intelligence Value
+
+          - workflow_gate: \`warning\`
+          - reason: \`code intelligence artifact not downloaded\`
+
+          EOF
+          fi
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
@@ -609,6 +681,7 @@ jobs:
             --context-output tmp/validation/nightly_failure_issue/context-pack.json \
             --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
             --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
+            --code-intelligence-json tmp/validation/code-intelligence/${{ github.run_id }}/code-intelligence-summary.json \
             --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
             "${LLM_ARGS[@]}" \
             --stdout-format compact

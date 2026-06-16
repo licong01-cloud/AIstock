@@ -873,18 +873,32 @@ def test_finish_batch_scope_check_accepts_glob_scope(
     assert payload["scope_check"]["status"] == "passed"
 
 
-def test_fast_path_classifies_docs_only_as_t0(isolated_workflow_root: Path) -> None:
+def test_fast_path_classifies_ordinary_docs_as_docs_fast_t0(isolated_workflow_root: Path) -> None:
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=["docs/analysis/example.md"],
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_fast_path_v1"
+    assert payload["task_tier"] == "T0"
+    assert payload["validation"]["docs_fast_tier"] == "docs_fast_update"
+    assert payload["validation"]["required_plans"] == []
+    assert payload["context_strategy"]["max_initial_files"] == 4
+    assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert payload["required_commands"] == []
+
+
+def test_fast_path_classifies_controlled_docs_as_t1(isolated_workflow_root: Path) -> None:
     payload = workflow.build_fast_path_plan(
         bug_id=None,
         issue_json=None,
         changed_files=["docs/standards/aistock_issue_workflow_quickstart.md"],
     )
 
-    assert payload["schema_version"] == "aistock_issue_workflow_fast_path_v1"
-    assert payload["task_tier"] == "T0"
-    assert payload["context_strategy"]["max_initial_files"] == 4
-    assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
-    assert payload["production_gates"]["ddl"] == "noop"
+    assert payload["task_tier"] == "T1"
+    assert payload["validation"]["docs_controlled_required"] is True
     assert "python -m nox -s l0" in payload["required_commands"]
 
 
@@ -971,6 +985,36 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["finish"]["workflow_gate"] == "ready_for_pr"
     assert payload["postmortem_preview"]["stale_pr_check"] == "skipped_in_smoke_to_avoid_external_github_reads"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
+
+
+def test_workflow_smoke_isolates_synthetic_timing_from_stale_bug_000_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    events_path = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-000" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"timestamp": "2026-01-01T00:00:00Z", "event": "state:context_ready", "state": "context_ready"}),
+                json.dumps({"timestamp": "2026-06-01T00:00:00Z", "event": "state:validation_passed", "state": "validation_passed"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = workflow.build_workflow_smoke_plan(
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation.guardrails",
+    )
+
+    timing = payload["postmortem_preview"]["timing_summary"]
+    assert timing["event_count"] <= 1
+    assert timing["inferred_elapsed_seconds"] == 0.0
+    assert "isolated synthetic BUG-000" in payload["warnings"][0]
 
 
 def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
