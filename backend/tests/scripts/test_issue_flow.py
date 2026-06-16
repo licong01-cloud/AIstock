@@ -829,6 +829,22 @@ def test_pr_quality_semgrep_scans_changed_files_only() -> None:
     assert '"paths":{"scanned":[]}' in run
 
 
+def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    ruff_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Ruff changed Python files"
+    ]
+
+    assert len(ruff_steps) == 1
+    run = str(ruff_steps[0]["run"])
+    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "changed_python.txt" in run
+    assert "xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude" in run
+
+
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
