@@ -8433,6 +8433,144 @@ def _build_close_sync_cleanup_after_merge_plan(
     )
 
 
+def _cleanup_root_sync_deferred_payload(
+    plan: dict[str, Any] | None,
+    *,
+    phase: str,
+) -> dict[str, Any] | None:
+    if not plan or plan.get("workflow_gate") != "blocked":
+        return None
+    blocking = [str(item) for item in plan.get("blocking") or [] if str(item).strip()]
+    if not blocking or any("canonical root is dirty and not synced to origin/main" not in item for item in blocking):
+        return None
+    root = str(plan.get("canonical_root") or _canonical_root())
+    return {
+        "schema_version": "aistock_merge_finalizer_root_sync_deferred_v1",
+        "workflow_gate": "deferred",
+        "phase": phase,
+        "reason": "canonical_root_dirty_not_synced_to_origin_main",
+        "blocking": blocking,
+        "canonical_root": root,
+        "root_dirty_files": plan.get("root_dirty_files") or [],
+        "unrelated_root_dirty_files": plan.get("unrelated_root_dirty_files") or [],
+        "origin_equivalent_dirty_files": plan.get("origin_equivalent_dirty_files") or [],
+        "root_git": plan.get("root_git") or {},
+        "next_actions": ["resolve_or_commit_unrelated_root_dirty_files", "fast_forward_canonical_root_main"],
+        "next_commands": [
+            f'git -C "{root}" fetch origin --prune',
+            f'git -C "{root}" merge --ff-only origin/main',
+        ],
+    }
+
+
+def _build_cleanup_after_merge_plan_with_root_sync_deferral(
+    *,
+    phase: str,
+    branch: str,
+    bug_id: str,
+    worktree: str | None,
+    pr_url: str | None,
+    apply: bool,
+    sync_root: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    try:
+        plan = build_cleanup_after_merge_plan(
+            branch=branch,
+            bug_id=bug_id,
+            worktree=worktree,
+            pr_url=pr_url,
+            apply=apply,
+            sync_root=sync_root,
+        )
+    except WorkflowError as exc:
+        if not (apply and sync_root and "canonical root is dirty and not synced to origin/main" in str(exc)):
+            raise
+        plan = build_cleanup_after_merge_plan(
+            branch=branch,
+            bug_id=bug_id,
+            worktree=worktree,
+            pr_url=pr_url,
+            apply=False,
+            sync_root=sync_root,
+        )
+    deferred = _cleanup_root_sync_deferred_payload(plan, phase=phase) if sync_root else None
+    if not deferred:
+        return plan, None
+    retry = build_cleanup_after_merge_plan(
+        branch=branch,
+        bug_id=bug_id,
+        worktree=worktree,
+        pr_url=pr_url,
+        apply=apply,
+        sync_root=False,
+    )
+    retry.setdefault("warnings", []).append(
+        "canonical root sync deferred; cleanup retried without --sync-root to avoid blocking safe aftercare"
+    )
+    deferred["retry_without_root_sync"] = {
+        "workflow_gate": retry.get("workflow_gate"),
+        "branch": retry.get("branch"),
+        "worktree": retry.get("worktree"),
+        "sync_root": retry.get("sync_root"),
+        "blocking": retry.get("blocking") or [],
+    }
+    return retry, deferred
+
+
+def _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
+    *,
+    bug_id: str,
+    close_sync_commit: dict[str, Any],
+    close_sync_pr_merge: dict[str, Any],
+    cleanup: bool,
+    apply: bool,
+    sync_root: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    try:
+        plan = _build_close_sync_cleanup_after_merge_plan(
+            bug_id=bug_id,
+            close_sync_commit=close_sync_commit,
+            close_sync_pr_merge=close_sync_pr_merge,
+            cleanup=cleanup,
+            apply=apply,
+            sync_root=sync_root,
+        )
+    except WorkflowError as exc:
+        if not (apply and sync_root and "canonical root is dirty and not synced to origin/main" in str(exc)):
+            raise
+        plan = _build_close_sync_cleanup_after_merge_plan(
+            bug_id=bug_id,
+            close_sync_commit=close_sync_commit,
+            close_sync_pr_merge=close_sync_pr_merge,
+            cleanup=cleanup,
+            apply=False,
+            sync_root=sync_root,
+        )
+    deferred = _cleanup_root_sync_deferred_payload(plan, phase="close_sync_cleanup") if sync_root else None
+    if not deferred:
+        return plan, None
+    retry = _build_close_sync_cleanup_after_merge_plan(
+        bug_id=bug_id,
+        close_sync_commit=close_sync_commit,
+        close_sync_pr_merge=close_sync_pr_merge,
+        cleanup=cleanup,
+        apply=apply,
+        sync_root=False,
+    )
+    if retry:
+        retry.setdefault("warnings", []).append(
+            "canonical root sync deferred; close-sync cleanup retried without --sync-root"
+        )
+        deferred["retry_without_root_sync"] = {
+            "workflow_gate": retry.get("workflow_gate"),
+            "branch": retry.get("branch"),
+            "worktree": retry.get("worktree"),
+            "sync_root": retry.get("sync_root"),
+            "blocking": retry.get("blocking") or [],
+        }
+    return retry, deferred
+
+
 def build_merge_finalizer_plan(
     *,
     bug_id: str | list[str],
@@ -8467,6 +8605,7 @@ def build_merge_finalizer_plan(
         warnings.append("--source-worktree is missing; cleanup can delete branches but cannot remove the task worktree")
     source_cleanup_deferred = bool(cleanup and apply and source_worktree and _cwd_is_inside(source_worktree))
     cleanup_cwd_relocation = None
+    root_sync_deferrals: list[dict[str, Any]] = []
     if cleanup and apply:
         cleanup_cwd_relocation = _relocate_cwd_before_cleanup(source_worktree)
         if cleanup_cwd_relocation and not cleanup_cwd_relocation.get("relocated"):
@@ -8637,7 +8776,8 @@ def build_merge_finalizer_plan(
                 sync_root=sync_root,
             )
         else:
-            cleanup_plan = build_cleanup_after_merge_plan(
+            cleanup_plan, cleanup_root_sync_deferred = _build_cleanup_after_merge_plan_with_root_sync_deferral(
+                phase="source_cleanup",
                 branch=source_branch,
                 bug_id=canonical_bug_id,
                 worktree=source_worktree,
@@ -8645,6 +8785,8 @@ def build_merge_finalizer_plan(
                 apply=merge_close_sync_pr,
                 sync_root=sync_root,
             )
+            if cleanup_root_sync_deferred:
+                root_sync_deferrals.append(cleanup_root_sync_deferred)
     close_sync_cleanup_sync_root = bool(
         sync_root
         and close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
@@ -8654,7 +8796,7 @@ def build_merge_finalizer_plan(
             or not cleanup_plan.get("sync_root")
         )
     )
-    close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
+    close_sync_cleanup_plan, close_sync_root_sync_deferred = _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
         close_sync_pr_merge=close_sync_pr_merge,
@@ -8662,6 +8804,8 @@ def build_merge_finalizer_plan(
         apply=apply,
         sync_root=close_sync_cleanup_sync_root,
     )
+    if close_sync_root_sync_deferred:
+        root_sync_deferrals.append(close_sync_root_sync_deferred)
     try:
         postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
     except WorkflowError as exc:
@@ -8703,6 +8847,22 @@ def build_merge_finalizer_plan(
             "next_commands": [],
         }
     )
+    if root_sync_deferrals:
+        root_sync_deferred = {
+            "schema_version": "aistock_merge_finalizer_root_sync_deferred_v1",
+            "workflow_gate": "deferred",
+            "reason": "canonical_root_dirty_not_synced_to_origin_main",
+            "phases": root_sync_deferrals,
+            "canonical_root": root_sync_deferrals[0].get("canonical_root"),
+            "root_dirty_files": root_sync_deferrals[0].get("root_dirty_files") or [],
+            "unrelated_root_dirty_files": root_sync_deferrals[0].get("unrelated_root_dirty_files") or [],
+            "next_actions": root_sync_deferrals[0].get("next_actions") or [],
+            "next_commands": root_sync_deferrals[0].get("next_commands") or [],
+        }
+        payload["root_sync_deferred"] = root_sync_deferred
+        payload["warnings"].append(
+            "canonical root sync was deferred because unrelated dirty files made fast-forward unsafe"
+        )
     if close_sync_pr_merge.get("workflow_gate") == "ready_for_merge":
         payload["next_actions"].append("merge_close_sync_pr_after_checks_are_green")
     if cleanup_plan is None and source_branch:
@@ -8715,6 +8875,9 @@ def build_merge_finalizer_plan(
         payload["next_actions"].append("rerun_close_sync_cleanup_after_merge_with_apply")
         if close_sync_cleanup_plan.get("next_command"):
             payload["next_commands"].append(close_sync_cleanup_plan["next_command"])
+    if root_sync_deferrals:
+        payload["next_actions"].append("sync_root_after_unrelated_dirty_files_are_resolved")
+        payload["next_commands"].extend(payload["root_sync_deferred"].get("next_commands") or [])
     for state_bug_id in canonical_bug_ids:
         _write_state(
             state_bug_id,
