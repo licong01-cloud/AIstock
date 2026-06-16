@@ -1,0 +1,100 @@
+{
+  "actual": "Evidence: The Nightly code-intelligence job writes JSON artifacts for DeepSeek scheduler/test advice and GitHub Models guardrails, but the final Nightly summary and operator-facing logs do not consistently expose a compact human-readable view of whether LLM was invoked, which provider/model was used, whether CodeGraph/Understand Anything refs were consumed, fallback status, and what concrete value/advice was produced.\n\nExpected:\n- Nightly summary should include a compact Markdown section for LLM + code-intelligence value evidence.\n- The section should show provider/model, llm_invoked, fallback_used, CodeGraph freshness, Understand Anything availability, advice_consumed, allowed plan keys, issue creation mode, and artifact refs.\n- Success output must remain compact; do not dump raw JSON into chat/log summary.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. Unit tests cover human-readable summary generation from existing LLM/code-intelligence artifacts.\n2. Nightly workflow summary includes the compact LLM value evidence section when code-intelligence artifacts exist.\n3. Existing LLM workflow tests and nightly manual-dispatch tests still pass.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260616_BUG-388-nightly-summary-lacks-human-readable-llm-usage-and-value-evidence.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-388",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T07:04:14.647942Z",
+  "description": "Evidence: The Nightly code-intelligence job writes JSON artifacts for DeepSeek scheduler/test advice and GitHub Models guardrails, but the final Nightly summary and operator-facing logs do not consistently expose a compact human-readable view of whether LLM was invoked, which provider/model was used, whether CodeGraph/Understand Anything refs were consumed, fallback status, and what concrete value/advice was produced.\n\nExpected:\n- Nightly summary should include a compact Markdown section for LLM + code-intelligence value evidence.\n- The section should show provider/model, llm_invoked, fallback_used, CodeGraph freshness, Understand Anything availability, advice_consumed, allowed plan keys, issue creation mode, and artifact refs.\n- Success output must remain compact; do not dump raw JSON into chat/log summary.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. Unit tests cover human-readable summary generation from existing LLM/code-intelligence artifacts.\n2. Nightly workflow summary includes the compact LLM value evidence section when code-intelligence artifacts exist.\n3. Existing LLM workflow tests and nightly manual-dispatch tests still pass.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-11f4000bb939",
+      "timestamp": "2026-06-16T07:04:14.647936Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-16T07:04:14.647942Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1154,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1154",
+  "last_seen_at": "2026-06-16T07:04:14.647942Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly summary lacks human-readable LLM usage and value evidence",
+  "trigger_condition": {
+    "fingerprint": "11f4000bb939588e884a804f",
+    "source_event_id": "FE-20260616-11f4000bb939"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/test",
+    "ui_routes": [
+      "/test"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
