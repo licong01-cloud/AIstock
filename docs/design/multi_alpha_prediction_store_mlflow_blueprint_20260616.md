@@ -414,4 +414,116 @@ selection_score_artifact → advisory 多 Alpha 融合 → 买入清单 → Pape
 
 ---
 
-*本蓝图遵循 AIstock 文档规范（`docs/design/`，命名 `<主题>_<日期>`）。落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`，与 ma1 / phase0 分析同工作流。附录 A（2026-06-16 第二轮）回应基础设施 5 问。实施前所有 file:line 引用需复核当前代码。*
+---
+
+# 附录 B：闭环路线图 + 横切方向 + 前沿最佳实践（2026-06-16 第三轮）
+
+> 用户认可六阶段闭环划分，并补充 4 个横切方向（滚动再训练 / Top-K 目标对齐 / 制度感知 / 事件驱动），要求结合前沿论文与量化机构最佳实践更新。本附录据此固化路线图并补充建议。引用见 B7。
+
+## B1. 全流程闭环 · 六阶段路线图（已认可，固化）
+
+```
+P1 单Alpha演进 ──┐                                        ┌──→ P6 实盘(QMT)
+  (造零件,在跑)  │                                        │      ↑门控:paper长期达标+审批
+                 ▼                                        │
+P2 预测存储基础设施 ──→ P3 多Alpha离线组合验证 ──→ P4 荐股 ──→ P5 模拟盘
+  (MLflow+pred固化)     (组合回测器,验3.44落地)   (alpha级融合)  (真实摩擦验证)
+                 ▲                                                    │
+                 └──────────── 闭环反馈:衰减腿retire/重演进/重加权 ←──┘
+```
+
+| 阶段 | 目标 | 现状 | 新建/复用 | 门控→下一阶段 |
+|------|------|------|----------|--------------|
+| P1 单Alpha演进与固化 | custom_evo 找+夯实独立腿，按"均值+种子CV+passes_gate"准入，每腿→single-alpha 包 | ✅在跑(R21);C_FundVal已成包 | 复用 | n≥5/CV<15%/gate通过 |
+| P2 预测存储基础设施 | 中心化MLflow(复用PG+文件)+固化pred.pkl+数仓指针 | ⏳设计完;磁盘治理前置 | 新建(改造点①②③) | pred.pkl可按run_id拉取 |
+| P3 多Alpha离线组合验证 | 组合回测器:拉pred.pkl→截面融合→一次回测;验3.44落地+定权重 | ❌从未跑通(最大缺口) | 新建(最高杠杆) | 组合Sharpe显著>2.45+权重锁定 |
+| P4 荐股(alpha级融合) | advisory从"包级rank融合"升级"alpha级分数融合" | ⚠️现rank融合≠多alpha | 升级 | advisory-first达标 |
+| P5 模拟盘 | 多Alpha绑paper v2,测真实成本/滑点 | ✅paper v2已建 | 复用 | paper跟踪≈回测预期 |
+| P6 实盘(QMT) | 晋升live,Registry→Production,风控+渐进资金 | ✅QMT已铺(gated) | 复用-gated | 外部审批 |
+
+**关键路径 = P2→P3**（唯一真缺的一段）。**磁盘治理是 P2 隐形前置**（WSL 95% 危急）。P1∥P2 并行（算力 vs 工程）。**闭环反馈臂**：P5/P6 leaderboard → 衰减腿 retire / 重演进(回P1) / 重加权(回P3)，让闭环真闭合。**advisory-first 三级门控**：P4(非交易)→P5(paper)→P6(live)。
+
+---
+
+## B2. 横切方向①：MLflow 驱动的滚动再训练（Rolling Retraining）
+
+**用户洞察正确**——用最新数据滚动再训练，使预测最接近实盘。这是对抗 concept drift（市场非平稳）的标准量化实践（walk-forward / 增量再训练）。
+
+**MLflow 的角色（与信号边界一致）：治理而非产信号。** Model Registry 是滚动再训练的天然骨架：
+```
+定时(月/周)再训练(最新expanding/rolling窗) → 注册新model version
+   → walk-forward OOS验证(embargo+purge重叠label) → champion/challenger门
+   → 新版OOS top-K指标须超现役 → 晋升Production stage / 否则回滚
+```
+- **champion/challenger + 自动回滚**：新模型须在近期 OOS 上击败现役才上线，否则保留现役。MLflow stage 转换 ↔ StrategyPackage 生命周期。
+- **再训练超参当一等公民**：lookback 窗长 / 再训练频率 / 预测 horizon 都作为可调超参（best practice）。
+- **A股特化**：政策/制度切换频繁，滚动再训练比固定模型更贴近实盘。
+- 落地：扩展 P1 为"连续/滚动模式"，由 MLflow Registry 治理；服务 P4-P6 的模型新鲜度。**新增能力，纳入 P2(Registry)+P1(滚动)**。
+
+---
+
+## B3. 横切方向②：Top-K 目标对齐（荐股看 top-20，≠ 全局 RankIC）⭐
+
+**用户洞察被前沿论文直接证实，是真实且重要的目标错配。** LambdaRankIC（2026）明确："现有排序指标与目标无一与 Rank IC 对齐"——NDCG 用位置折扣**集中于头部**（top-heavy），pairwise(RankNet) 等权所有错序(近Kendall's τ)，而 **Rank IC 全截面等权**。有研究用同一模型分别按 NDCG@30 与 IC 训练，证实目标选择显著影响**集中度/稳定性/经济收益**。
+
+**对我们的含义（关键区分）：**
+- **组合层 CAGR/Sharpe/turnover 已 top-K 对齐**（策略只持 topk，回测指标反映头部）——这部分没问题。
+- **错配在信号/选模/组合权重层**：QE 现用 IC/RankIC/ICIR 作主指标做"选最佳loop / alpha腿排序 / 组合权重优化"——这些是**全局**指标，与"只部署 top-20"不对齐。
+- **改进（纳入 P3 + 评估框架）：**
+  1. qe_archive/eval **新增 top-K 指标**：precision@20、top20-fwd-return、NDCG@20、top-20 hit-rate、top-K 衰减曲线。
+  2. **P3 组合权重优化用 top-K 目标**（而非全局 IC）——直接优化"前20只是否更好"。
+  3. **选模/选腿改用 top-K 加权**（不再唯 IC）。
+  4. 排序模型可用 **LambdaMART（刚注册）/ LambdaRankIC 式目标**直接优化排序（注意 NDCG 非光滑，用 ApproxNDCG sigmoid 近似）。
+- **跨 backtest/paper/live 统一 top-K**：三者都只部署 top-K，评估口径应一致。这是方法论级精化。
+
+---
+
+## B4. 横切方向③：制度感知(HMM)与多 Alpha 结合
+
+**应结合，但重新定位 + 后置。** 前沿强烈支持制度条件因子/alpha 轮动（HMM 识别制度→选最适配该制度的因子组合，跑赢任何单一模型）。
+
+- **重新定位 HMM**：从现状"板块加减分 overlay"→ **"制度条件 alpha 加权 + risk-off 缩放"（组合层）**。不同 alpha 适配不同制度（动量→趋势市，价值/反转→震荡市）。
+- **用软后验加权（非离散态）**：权重 = f(制度后验概率)，平滑过渡、降换手（best practice）。"Liberation Day"2025抛售中制度框架动态降权益、转防御，显著抑制回撤。
+- **⚠️ 与 Phase0 的关键连接**：研究证实**分散收益/相关性是制度依赖的、会漂移**（2024中相关转正、2025转负）。Phase0 的 0.25 平均相关是**点估计**，制度切换时会上升 → 多 Alpha 组合**必须加滚动相关监控**，不能假设 0.25 恒定。
+- **时序**：静态多 Alpha 先跑通(P3/P4)，再加制度层(P3.5/P4.5)，**不早耦合**（先让base验证）。既有板块 HMM 可共存：制度→alpha权重(新) + 制度→板块倾斜(旧)。
+
+---
+
+## B5. 横切方向④：事件驱动信号
+
+**应持续完善，作并行信号源轨道。** 三种集成方式：
+1. **事件 α 腿**：事件驱动信号作为一条独立 alpha 腿，走同样的 custom_evo + 验证 + 成包流程，进多 Alpha 组合。
+2. **事件风险 overlay**：扩展现有 risk_policy（已处理 ST/停牌事件）到财报/公告/重大事件（财报前 block_buy、正向超预期加分）。
+3. **制度输入**：新闻/事件→制度判别（前沿 LLM agentic 框架：感知市场+新闻→推断制度→调目标/风险预算/仓位上限+摩擦感知执行，walk-forward Sharpe +0.373）。
+- **重启停滞的 event-signal 工作**，scoped 为"事件 α 腿 + 事件风险 overlay"，成熟后并入多 Alpha 组合。LLM agentic 事件信号是值得跟踪的前沿。
+
+---
+
+## B6. 其他前沿最佳实践改进建议（论文支撑）
+
+1. **走步严谨性（直接针对我们 96%CAGR 单期回测的过拟合风险）**：QE 回测应引入 **embargo + purge**（h20 标签重叠，必须 purge）+ **两段冻结 holdout**（DEV 调参/选阈/校准，FINAL 仅评一次、参数全冻结、不再迭代）。这是对抗"回测过拟合陷阱"的核心实践——尤其我们的高 CAGR 来自 2024-07~2026-04 单一强势期。
+2. **安全部署的两级不确定性**（《When Alpha Breaks》2026）：给 ranker 部署加**置信度/不确定性估计**，P5→P6 门控除收益外**加 OOS 稳定性 + 预测置信度**门槛。alpha 在制度切换时会断（论文实测 FINAL 期 60/90d RankIC 转负）。
+3. **因子拥挤监控**：我们的腿有共享因子（A_Flow↔MARG10 重叠6因子）；监控拥挤。前沿用 **GAN 合成因子 / 新颖性**避免拥挤、增分散。
+4. **容量/摩擦感知从一开始**（《Forecast-to-Fill》）：1.8 年 96% 在容量下不可持续；P3 组合回测器**必须含真实摩擦+容量+换手预算**（我们已有 turnover 指标，好）。
+5. **制度依赖相关性监控**（见 B4）：多 Alpha 组合加滚动相关序列监控，分散收益会随制度漂移。
+6. **alpha 挖掘前沿**：AlphaPROBE（检索+图上演化的 alpha 挖掘）可作 custom_evo 未来增强；VAE 降维 + 集成特征选择处理高维因子。
+7. **降维/合成**：高维因子用 VAE 学低维潜表示，避免维度灾难（多 Alpha 扩腿时参考）。
+
+---
+
+## B7. 参考文献（2025-2026 前沿，实施前需复核结论适用性）
+
+- LambdaRankIC: Directly Optimizing Rank IC for Financial Prediction — https://arxiv.org/html/2605.00501 （B3 核心：排序目标 vs Rank IC 错配）
+- When Alpha Breaks: Two-Level Uncertainty for Safe Deployment of Cross-Sectional Stock Rankers — https://arxiv.org/pdf/2603.13252 （B6 安全部署）
+- Explainable Regime Aware Investing (Wasserstein HMM) — https://arxiv.org/pdf/2603.04441 （B4 制度感知）
+- Regime-Based Portfolio Allocation Using HMMs and RL — https://arxiv.org/abs/2605.27848 （B4）
+- Unified Agentic Framework for Regime-Aware Portfolio Optimization with LLM Signals — https://link.springer.com/article/10.1007/s41060-026-01066-0 （B5 事件/新闻+制度）
+- Increase Alpha: Performance and Risk of an AI-Driven Trading Framework — https://arxiv.org/html/2509.16707v1 （B4 制度稳健性）
+- Forecast-to-Fill: Benchmark-Neutral Alpha and Capacity — https://arxiv.org/html/2511.08571v1 （B6 容量/摩擦）
+- AlphaPROBE: Alpha Mining via Principled Retrieval and On-graph biased evolution — https://arxiv.org/pdf/2602.11917 （B6 alpha挖掘）
+- Constructing long-short portfolio with listwise learn-to-rank — https://arxiv.org/pdf/2104.12484 （B3 LTR选股）
+- Walk-Forward Analysis: Production-Ready Comparison (Static/Rolling/Expanding) — https://medium.com/@NFS303/walk-forward-analysis-a-production-ready-comparison-of-three-validation-approaches-69cd25fc9fc7 （B2 走步）
+
+---
+
+*本蓝图遵循 AIstock 文档规范（`docs/design/`）。落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`。附录 A 回应基础设施 5 问；附录 B 固化六阶段闭环路线图 + 4 横切方向 + 前沿最佳实践。前沿论文结论需在我方数据/约束上复核后再采纳（external_evidence_only，非最终结论）。实施前所有 file:line 引用需复核当前代码。*
