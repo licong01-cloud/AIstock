@@ -92,6 +92,7 @@ from .mcp_catalog_sync import (
     server_key_for_module,
     workflow_capabilities as catalog_workflow_capabilities,
 )
+from .semantic_tool_planner import SemanticToolPlan, SemanticToolPlanner
 from .tool_router import route_request
 from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
 from .agent_teams.models import WorkerTask
@@ -276,7 +277,8 @@ class _ServiceReactMcpProvider:
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
         payload.setdefault("selected_tool", {"server_key": call.server_key, "tool_name": call.tool_name})
-        payload.setdefault("limit", 20)
+        payload.update(self.service._mcp_route_tool_args(route))
+        payload.setdefault("limit", self.service._mcp_route_limit(route))
         capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
@@ -351,6 +353,7 @@ class _ServiceReactMcpProvider:
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
+        payload.update(self.service._mcp_route_tool_args(route))
         capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
@@ -1040,6 +1043,9 @@ class ResearchAssistantLlmClient:
             raise RuntimeError("assistant LLM returned empty content")
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
 
+    def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
+        return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
+
 
 class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
@@ -1049,6 +1055,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def __init__(self, repository: Any | None = None, llm_client: Any | None = None, *, environment: str = DEFAULT_ENVIRONMENT) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
+        self.semantic_tool_planner = SemanticToolPlanner(self.llm_client)
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
 
@@ -2227,7 +2234,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
-        route_decision = self._canonicalize_mcp_route(dict(route_request(data.message)))
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -2236,6 +2242,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         model_profile = route.get("model_profile")
         if not model_profile:
             raise RuntimeError(f"no enabled primary model profile for risk={data.risk_level}: {route.get('route_status')}")
+        route_decision = self._semantic_or_legacy_route_decision(data.message, model_profile=model_profile)
         bundle = self.build_prompt_bundle(
             PromptBundleBuildRequest(
                 user_message=data.message,
@@ -2317,7 +2324,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             assembly_trace=assembly_trace,
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
-        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision, route_decision=route_decision)
         if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
             existing_route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
             route_card = dict(existing_route)
@@ -2334,6 +2341,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             route_card.setdefault("auto_execute", self._read_only_mcp_auto_execution_eligibility(route_card, mode_decision))
             cards["mcp_route_decision"] = route_card
+        elif isinstance(route_decision, dict) and route_decision.get("requires_clarification"):
+            cards["mcp_route_decision"] = route_decision
+            cards["clarification_card"] = {
+                "title": "需要先确认比较口径",
+                "questions": list(route_decision.get("clarification_questions") or []),
+                "default_collapsed": False,
+            }
         llm_result, messages, react_result = self._complete_chat_with_react_grounding(
             user_message=data.message,
             conversation_id=conversation_id,
@@ -2873,6 +2887,49 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             route["canonicalized_from"] = original_server_key
         return route
 
+    def _semantic_or_legacy_route_decision(self, user_message: str, *, model_profile: dict[str, Any]) -> dict[str, Any]:
+        semantic_plan = self._semantic_tool_plan(user_message, model_profile=model_profile)
+        if semantic_plan is not None:
+            route = semantic_plan.to_route()
+            if route.get("requires_clarification"):
+                return route
+            if route.get("semantic_status") == "no_tool":
+                return route
+            if route.get("server_key") and route.get("tool_name"):
+                return self._canonicalize_mcp_route(route)
+        return self._canonicalize_mcp_route(dict(route_request(user_message)))
+
+    def _semantic_tool_plan(self, user_message: str, *, model_profile: dict[str, Any]) -> SemanticToolPlan | None:
+        if not model_profile or not self.semantic_tool_planner.available():
+            return None
+        try:
+            return self.semantic_tool_planner.plan(
+                user_message=user_message,
+                model_profile=model_profile,
+                tool_catalog=self._manifest_mcp_catalog_records(),
+            )
+        except Exception:  # noqa: BLE001 - semantic planning is best-effort; legacy route keeps chat usable.
+            logger.exception("semantic MCP tool planner failed; falling back to legacy route")
+            return None
+
+    @staticmethod
+    def _mcp_route_tool_args(route: dict[str, Any]) -> dict[str, Any]:
+        args = route.get("tool_args") if isinstance(route.get("tool_args"), dict) else {}
+        normalized = {str(key): value for key, value in args.items() if value not in (None, "", [], {})}
+        if route.get("limit") not in (None, "", [], {}) and "limit" not in normalized:
+            normalized["limit"] = route["limit"]
+        return {"tool_args": normalized, **normalized} if normalized else {}
+
+    @staticmethod
+    def _mcp_route_limit(route: dict[str, Any]) -> int:
+        args = route.get("tool_args") if isinstance(route.get("tool_args"), dict) else {}
+        raw = route.get("limit", args.get("limit"))
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            limit = 20
+        return max(1, min(limit, 100))
+
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
         servers = [item for item in self._manifest_mcp_server_records() if str(item.get("status") or "") in {"ready", "enabled", "ok"}]
         tools = [item for item in self._manifest_mcp_catalog_records() if str(item.get("status") or "") in {"enabled", "ready", "approved"}]
@@ -3346,6 +3403,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route: dict[str, Any],
         dialogue_intent: DialogueIntent,
         mode_decision: ModeDecision,
+        route_decision: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del task
         intent_config = self._dialogue_intent_config()
@@ -3359,7 +3417,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        mcp_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
+        mcp_route = dict(route_decision) if isinstance(route_decision, dict) else self._semantic_or_legacy_route_decision(user_message, model_profile=route.get("model_profile") or {})
         route_domain = str(mcp_route.get("domain") or "general")
         is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
             route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
@@ -3371,7 +3429,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
         route_capability_keys = set()
-        if mcp_route.get("domain") and mcp_route.get("domain") != "general":
+        if mcp_route.get("domain") and mcp_route.get("domain") != "general" and not mcp_route.get("requires_clarification"):
             route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")
             side_effect = str(mcp_route.get("side_effect") or "read_only")
             mcp_route.update(
@@ -3497,6 +3555,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "questions": clarification_questions,
                 "default_collapsed": details_default_collapsed,
             }
+        if mcp_route.get("requires_clarification"):
+            cards["clarification_card"] = {
+                "title": "需要先确认比较口径",
+                "questions": list(mcp_route.get("clarification_questions") or []),
+                "default_collapsed": False,
+            }
         return cards
 
     def _maybe_auto_execute_read_only_mcp_route(
@@ -3523,7 +3587,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "request": user_message,
             "route": route,
             "mcp_route_decision": route,
-            "limit": 20,
+            **self._mcp_route_tool_args(route),
+            "limit": self._mcp_route_limit(route),
         }
         try:
             proposal = self.create_action_proposal(
@@ -3802,7 +3867,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return McpToolCall(
                 server_key=str(route["server_key"]),
                 tool_name=str(route["tool_name"]),
-                payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+                payload_json={
+                    "request": route.get("request") or "",
+                    "route": route,
+                    "mcp_route_decision": route,
+                    **self._mcp_route_tool_args(route),
+                    "limit": self._mcp_route_limit(route),
+                },
                 stable_call_id=f"route:{route['server_key']}:{route['tool_name']}",
                 reason=str(route.get("reason") or "route_seed"),
             )
@@ -3821,7 +3892,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return McpToolCall(
             server_key=str(route["server_key"]),
             tool_name=str(route["tool_name"]),
-            payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+            payload_json={
+                "request": route.get("request") or "",
+                "route": route,
+                "mcp_route_decision": route,
+                **self._mcp_route_tool_args(route),
+                "limit": self._mcp_route_limit(route),
+            },
             stable_call_id=f"fallback:{route['server_key']}:{route['tool_name']}",
             reason="evidence_guard_route_fallback",
         )
@@ -4093,6 +4170,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if isinstance(route, dict) and route.get("requires_clarification"):
+            return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
         if (
             isinstance(execution, dict)
             and execution.get("auto_executed")
@@ -4140,6 +4219,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if summary.get("response_mode") == "qe_warehouse_business_summary":
             return ResearchAssistantService._render_qe_warehouse_business_reply(execution, summary)
         return ResearchAssistantService._render_generic_mcp_business_reply(execution, summary)
+
+    @staticmethod
+    def _render_semantic_clarification_reply(route: dict[str, Any], cards: dict[str, Any]) -> str:
+        clarification = cards.get("clarification_card") if isinstance(cards.get("clarification_card"), dict) else {}
+        questions = clarification.get("questions") if isinstance(clarification.get("questions"), list) else route.get("clarification_questions")
+        clean_questions = [str(item).strip() for item in (questions or []) if str(item).strip()]
+        if not clean_questions:
+            clean_questions = ["你希望按哪个指标比较：收益、Sharpe/IR、稳定性，还是最新状态？"]
+        lines = [
+            "这个问题需要先确认比较口径，我不会直接按默认状态列表或健康检查来回答。",
+            "请先确认：" + clean_questions[0],
+        ]
+        if len(clean_questions) > 1:
+            lines.extend(f"- {question}" for question in clean_questions[1:3])
+        reason = str(route.get("reason") or "").strip()
+        if reason:
+            lines.append(f"原因：{reason}")
+        return "\n".join(lines)
 
     @staticmethod
     def _humanize_business_identifier(value: str) -> str:
