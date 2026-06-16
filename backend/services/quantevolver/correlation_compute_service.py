@@ -65,7 +65,7 @@ def get_correlation_factor_value_loader(source: str = "single") -> FactorValueLo
 
 
 def get_correlation_factor_cache_status() -> Dict[str, Any]:
-    """Return correlation cache status without falling back to realtime snapshot cache."""
+    """Return correlation cache status without falling back to non-official caches."""
     pipeline = get_correlation_factor_value_pipeline()
     single_dir = CORRELATION_FACTOR_VALUE_CACHE_DIR / "single"
     meta_path = CORRELATION_FACTOR_VALUE_CACHE_DIR / "_meta.json"
@@ -415,7 +415,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     """统一相关性计算入口 — 同步函数，在 ThreadPoolExecutor 中执行。
 
     每次计算前清空所有历史相关性数据，使用离线研究/回测 single/*.parquet 缓存全量重算。
-    data_date 仅保留为兼容字段；相关性计算不得切换到 realtime/snapshot cache。
+    data_date is scheduler metadata only; correlation never selects non-official caches.
     """
     assert_wsl_runtime("correlation_compute_local")
     universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
@@ -499,7 +499,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             _correlation_logs.append("[清空] 内存缓存已清除")
 
             # Phase 1: 检查独立指标缓存完整性
-            # 相关性计算强依赖离线研究/回测 single/ 缓存，不再读取 realtime/snapshot cache。
+            # Correlation requires offline research/backtest single/ cache and reads no non-official cache.
             pipeline = get_correlation_factor_value_pipeline()
             _correlation_logs.append(
                 f"[缓存源] 使用离线研究/回测因子缓存: {CORRELATION_FACTOR_VALUE_CACHE_DIR}"
@@ -507,7 +507,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # Phase 0: cache integrity visibility.
             # Offline research caches may have all single/*.parquet files but stale/incomplete
-            # _meta.json. Correlation must not fall back to realtime cache; it proceeds with
+            # _meta.json. Correlation must not fall back to non-official caches; it proceeds with
             # parquet as availability source and validates/infers metadata below.
             integrity = pipeline.validate_meta_integrity()
             if not integrity.get("ok"):
@@ -1082,7 +1082,7 @@ def _build_correlation_runtime_validation(
     include_no_valid_pair_summary = no_valid_pair_factors is not None
     no_valid_pair_factors = no_valid_pair_factors or []
     checks = {
-        "official_cache_only": "factor_values_realtime" not in str(cache_root),
+        "official_cache_only": Path(str(cache_root)).name == "factor_values",
         "factor_count_reconciled": requested_count == success_count + failed_count,
         "excluded_factors_classified": (
             failed_count == len(missing_factors) + len(degenerate_factors) + len(no_valid_pair_factors)

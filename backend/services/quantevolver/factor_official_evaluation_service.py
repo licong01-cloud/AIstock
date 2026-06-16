@@ -424,8 +424,6 @@ class FactorOfficialEvaluationService:
     @staticmethod
     def _build_official_factor_value_loader() -> FactorValueLoader:
         cache_dir = _OFFICIAL_FACTOR_VALUE_CACHE_DIR
-        if any(part.lower() == "factor_values_realtime" for part in cache_dir.parts):
-            raise RuntimeError("official evaluation must not use factor_values_realtime")
         return FactorValueLoader(source="single", pipeline_dir=str(cache_dir))
 
     def _get_official_factor_value_loader(self) -> FactorValueLoader:

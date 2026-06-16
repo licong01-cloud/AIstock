@@ -63,24 +63,6 @@ _PROJECT_ROOT = os.path.normpath(
 logger = logging.getLogger(__name__)
 
 
-LEGACY_REALTIME_FACTOR_CACHE_ROOT = os.path.join(
-    _PROJECT_ROOT, "rdagent_assets", "factor_values_realtime"
-)
-LEGACY_REALTIME_FACTOR_CACHE_ENABLED = os.getenv(
-    "AISTOCK_ENABLE_LEGACY_REALTIME_FACTOR_CACHE", ""
-).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _raise_legacy_realtime_factor_cache_disabled() -> None:
-    raise HTTPException(
-        status_code=410,
-        detail=(
-            "Legacy realtime factor cache APIs are disabled. "
-            "Official independent metrics, factor correlation, and QE backtests "
-            "must use rdagent_assets/factor_values generated from offline backtest data."
-        ),
-    )
-
 
 def _position_metric_missing(enhanced_metrics: Dict[str, Any]) -> bool:
     ar = enhanced_metrics.get("absolute_returns") if isinstance(enhanced_metrics, dict) else None
@@ -2486,7 +2468,7 @@ class CorrelationComputeRequest(BaseModel):
             "rdagent_assets/factor_values/_meta.json 的 as_of_date"
         ),
     )
-    data_date: Optional[str] = Field(None, description="兼容字段：不会选择 realtime/snapshot cache")
+    data_date: Optional[str] = Field(None, description="Scheduler metadata only; never selects non-official cache")
     factor_names: Optional[List[str]] = Field(None, description="指定因子列表，默认全部 official-eligible 因子")
     force_recompute: bool = Field(False, description="强制重新计算，忽略旧相关性结果")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
@@ -2612,9 +2594,8 @@ def get_cache_status():
 def get_correlation_overview(data_date: Optional[str] = None):
     """Return correlation page overview from the official offline cache only.
 
-    data_date is retained as a compatibility filter for official metric
-    snapshot_date. It never selects DataSnapshotManager or
-    factor_values_realtime.
+    data_date filters the official metric snapshot_date only; it never
+    changes the offline cache source used by correlation.
     """
     target_snapshot_date = None
     if data_date:
@@ -2774,11 +2755,8 @@ def get_correlation_overview(data_date: Optional[str] = None):
                 }
 
     return {
-        "snapshots": [],
         "metric_snapshots": metric_snapshots,
-        "current_snapshot": single_cache.get("as_of_date"),
         "target_snapshot_date": target_snapshot_date,
-        "legacy_realtime_snapshots_disabled": True,
         "official_cache_window": {
             "start": single_cache.get("window_train_start"),
             "end": single_cache.get("window_backtest_end") or single_cache.get("as_of_date"),
@@ -2892,8 +2870,6 @@ def get_correlation_status(include_disabled: bool = False):
             counts_bucket["high_corr_count_05"] = high_corr_count_05
     # else: computing 状态 — 跳过 DB 查询，使用缓存值
 
-    # Official correlation never exposes DataSnapshotManager snapshots.
-    available_snapshots = []
     official_cache_status = _correlation_compute_service.get_correlation_factor_cache_status()
 
     return {
@@ -2909,9 +2885,7 @@ def get_correlation_status(include_disabled: bool = False):
         "in_memory_result": _latest_result is not None,
         "active_dispatch_task_id": _active_dispatch_task_id,
         "refresh_errors": refresh_errors,
-        "available_snapshots": available_snapshots,
         "official_cache": official_cache_status,
-        "legacy_realtime_snapshots_disabled": True,
     }
 
 
@@ -3809,288 +3783,6 @@ def list_correlation_jobs(limit: int = 20):
         if isinstance(row.get("summary"), str):
             row["summary"] = json.loads(row["summary"])
     return {"items": rows}
-
-
-# ── 因子值计算 API ──────────────────────────────────────────
-
-_pipeline_instance = None
-_pipeline_computing = False
-_pipeline_last_error: Optional[str] = None
-
-
-def _get_pipeline():
-    global _pipeline_instance
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    if _pipeline_instance is None:
-        from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
-        _pipeline_instance = FactorValuePipeline(output_dir=LEGACY_REALTIME_FACTOR_CACHE_ROOT)
-    return _pipeline_instance
-
-
-@router.post("/factor-values/compute")
-async def compute_factor_values(
-    background_tasks: BackgroundTasks,
-    factor_names: Optional[List[str]] = Query(None),
-    start_date: str = Query(...),
-    end_date: str = Query(...),
-    max_workers: int = Query(1),
-    timeout_per_factor: int = Query(600),
-    data_date: Optional[str] = Query(None),
-):
-    """触发批量因子值计算。
-
-    - factor_names: 指定因子列表；为空则计算所有已改造因子
-    - start_date/end_date: 计算日期范围
-    - max_workers: 并发线程数（建议 1-3）
-    - data_date: 快照日期 (YYYYMMDD)，如 "20260403"。指定后使用磁盘快照数据，
-                 首次自动创建快照，后续从缓存读取。所有因子共享同一快照。
-    """
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    global _pipeline_computing
-    if _pipeline_computing:
-        raise HTTPException(409, "因子值计算正在进行中，请等待完成")
-
-    pipeline = _get_pipeline()
-
-    async def _run():
-        global _pipeline_computing, _pipeline_last_error
-        _pipeline_computing = True
-        _pipeline_last_error = None
-        try:
-            result = await asyncio.to_thread(
-                pipeline.compute_factor_values,
-                factor_names=factor_names,
-                max_workers=max_workers,
-                timeout_per_factor=timeout_per_factor,
-                data_date=data_date,
-                snapshot_start_date=start_date,
-            )
-            logger.info(
-                f"因子值计算完成: {result.success}/{result.total} 成功, "
-                f"耗时 {result.total_elapsed_sec}s"
-            )
-        except Exception as e:
-            _pipeline_last_error = f"因子值计算异常: {e}"
-            logger.error(_pipeline_last_error, exc_info=True)
-        finally:
-            _pipeline_computing = False
-
-    background_tasks.add_task(_run)
-    resp = {
-        "status": "started",
-        "message": "因子值计算已在后台启动",
-        "factor_count": len(factor_names) if factor_names else "all",
-        "date_range": f"{start_date}~{end_date}",
-    }
-    if data_date:
-        resp["data_date"] = data_date
-        resp["message"] = f"因子值计算已在后台启动（快照模式: {data_date}）"
-    return resp
-
-
-@router.get("/factor-values/status")
-def factor_values_status():
-    """查询因子值计算状态和可用缓存。"""
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    pipeline = _get_pipeline()
-    cached = pipeline.get_cached_parquets()
-    return {
-        "computing": _pipeline_computing,
-        "last_error": _pipeline_last_error,
-        "cached_files": cached,
-        "cache_count": len(cached),
-    }
-
-
-@router.get("/factor-values/time-estimate")
-def factor_values_time_estimate(
-    factor_count: Optional[int] = Query(None, description="要计算的因子数量；None 则用全部已改造因子数"),
-):
-    """基于历史执行耗时预估批量因子计算时间。
-
-    从 _meta.json 读取每个因子的历史 elapsed_sec，计算统计量，
-    给出总时间预估（含缓存预热）。
-    """
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    pipeline = _get_pipeline()
-    meta = pipeline._load_meta()
-    factors = meta.get("factors", {})
-
-    # 收集有 elapsed_sec 的因子
-    timings = []
-    for fname, info in factors.items():
-        if isinstance(info, dict) and info.get("elapsed_sec") is not None:
-            timings.append({
-                "factor_name": fname,
-                "elapsed_sec": info["elapsed_sec"],
-            })
-
-    if not timings:
-        return {
-            "has_history": False,
-            "message": "暂无历史耗时数据，需要先执行一次因子计算",
-            "default_estimate_per_factor_sec": 120,
-        }
-
-    elapsed_values = [t["elapsed_sec"] for t in timings]
-    avg_sec = sum(elapsed_values) / len(elapsed_values)
-    median_sec = sorted(elapsed_values)[len(elapsed_values) // 2]
-    max_sec = max(elapsed_values)
-    p90_sec = sorted(elapsed_values)[int(len(elapsed_values) * 0.9)]
-
-    # 预估
-    n = factor_count or len(factors)
-    # 缓存预热约 300s（首次快照）或 30s（已有快照）
-    warmup_estimate = 30
-    # 串行: n * avg; 并行(4线程): n * avg / 4
-    serial_estimate = n * avg_sec + warmup_estimate
-    parallel_estimate = n * avg_sec / 4 + warmup_estimate
-
-    # 找出最慢的 5 个因子
-    slowest = sorted(timings, key=lambda x: x["elapsed_sec"], reverse=True)[:5]
-
-    return {
-        "has_history": True,
-        "history_count": len(timings),
-        "stats": {
-            "avg_sec": round(avg_sec, 1),
-            "median_sec": round(median_sec, 1),
-            "p90_sec": round(p90_sec, 1),
-            "max_sec": round(max_sec, 1),
-        },
-        "estimate": {
-            "factor_count": n,
-            "serial_sec": round(serial_estimate, 0),
-            "serial_min": round(serial_estimate / 60, 1),
-            "parallel_4_sec": round(parallel_estimate, 0),
-            "parallel_4_min": round(parallel_estimate / 60, 1),
-            "warmup_sec": warmup_estimate,
-        },
-        "slowest_5": slowest,
-    }
-
-
-# ── 数据快照管理 ──
-
-@router.get("/factor-values/snapshots")
-def list_snapshots():
-    """列出所有数据快照及其元数据。"""
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
-    mgr = DataSnapshotManager()
-    snapshots = mgr.list_snapshots()
-    return {
-        "total": len(snapshots),
-        "snapshots": snapshots,
-    }
-
-
-_snapshot_creating = False
-_snapshot_last_error: Optional[str] = None
-
-
-@router.post("/factor-values/snapshots/create")
-async def create_snapshot_api(
-    background_tasks: BackgroundTasks,
-    data_date: str = Query(..., description="快照截止日期 (YYYYMMDD)"),
-    start_date: str = Query("2018-08-01", description="快照起始日期"),
-):
-    """创建基础数据快照（后台任务，不执行因子计算）。
-
-    快照包含 realtime_kline.parquet 和 static_factors.parquet，
-    后续因子计算直接读取快照，不再访问数据库。
-    """
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    global _snapshot_creating, _snapshot_last_error
-    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
-    mgr = DataSnapshotManager()
-
-    if mgr.snapshot_exists(data_date):
-        raise HTTPException(409, f"快照 {data_date} 已存在，如需重建请先删除")
-
-    if _snapshot_creating:
-        raise HTTPException(409, "已有快照正在创建中，请等待完成")
-
-    _snapshot_creating = True
-    _snapshot_last_error = None
-
-    async def _run():
-        global _snapshot_creating, _snapshot_last_error
-        try:
-            mgr.create_snapshot(data_date, instruments=None, start_date=start_date)
-            logger.info(f"快照创建成功: {data_date}")
-        except Exception as e:
-            _snapshot_last_error = f"快照创建失败: {e}"
-            logger.error(_snapshot_last_error, exc_info=True)
-        finally:
-            _snapshot_creating = False
-
-    background_tasks.add_task(_run)
-    return {
-        "status": "started",
-        "message": f"快照 {data_date} 创建已启动（起始: {start_date}），8 年数据约需 10-15 分钟",
-    }
-
-
-@router.get("/factor-values/snapshots/status")
-def snapshot_create_status():
-    """查询快照创建状态。"""
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    return {
-        "creating": _snapshot_creating,
-        "last_error": _snapshot_last_error,
-    }
-
-
-@router.delete("/factor-values/snapshots/{data_date}")
-def delete_snapshot(data_date: str):
-    """删除指定数据快照。
-
-    - data_date: 快照日期 (YYYYMMDD)，如 "20260403"
-    """
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
-
-    if _pipeline_computing:
-        raise HTTPException(409, "因子值计算正在进行中，不能删除快照")
-    if _snapshot_creating:
-        raise HTTPException(409, "快照正在创建中，不能删除")
-
-    mgr = DataSnapshotManager()
-    if not mgr.snapshot_exists(data_date):
-        raise HTTPException(404, f"快照 {data_date} 不存在")
-
-    mgr.delete_snapshot(data_date)
-    return {"status": "deleted", "data_date": data_date}
-
-
-@router.get("/factor-values/available")
-async def factor_values_available(
-    limit: Optional[int] = None,
-):
-    """查询所有可计算因子（已改造成功的 RDAgent 因子）。"""
-    if not LEGACY_REALTIME_FACTOR_CACHE_ENABLED:
-        _raise_legacy_realtime_factor_cache_disabled()
-    pipeline = _get_pipeline()
-    try:
-        factors = await asyncio.to_thread(
-            pipeline.get_computable_factors, limit=limit
-        )
-    except Exception as e:
-        raise HTTPException(500, f"查询可计算因子失败: {e}")
-
-    return {
-        "total": len(factors),
-        "factors": factors,
-    }
 
 
 @router.get("/system/logs", summary="读取后端日志文件末尾")

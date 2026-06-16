@@ -17,7 +17,8 @@ Round2 迁移脚本: 补处理 A 组漏网的 2 个 shift(20)/diff(20) 反模式
 import os
 import sys
 import json
-from datetime import datetime, timezone
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 import psycopg2
@@ -30,7 +31,6 @@ PROJECT_ROOT = Path("F:/Dev/AIstock")
 QE_CODE_DIR = PROJECT_ROOT / "rdagent_assets" / "qe_factors"
 CACHE_ROOTS = [
     PROJECT_ROOT / "rdagent_assets" / "factor_values",
-    PROJECT_ROOT / "rdagent_assets" / "factor_values_realtime",
 ]
 
 REFACTOR_FACTORS = [
@@ -297,7 +297,7 @@ def main(dry_run: bool = False):
             except Exception as e:
                 conn.rollback()
                 all_reports.append(("FAIL", cfg["name"], [f"  EXCEPTION: {e}"]))
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
     finally:
         conn.close()
 

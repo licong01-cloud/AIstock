@@ -45,7 +45,7 @@ def test_prepare_factors_generates_official_cache_hit_contract(monkeypatch) -> N
     assert "def _validate_official_cache_hit_contract" in script
     assert "hash_mismatch" in script
     assert "window_not_covered" in script
-    assert "realtime_cache_forbidden" in script
+    assert "non_official_cache_root" in script
     assert "cache contract" in script
 
 

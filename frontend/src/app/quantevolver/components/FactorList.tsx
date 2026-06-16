@@ -1897,7 +1897,7 @@ export default function FactorList({
             </div>
           </div>
           <div style={{ marginTop: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
-            官方路径: <code>rdagent_assets/factor_values</code>；当前窗口 {cacheStartDate || FACTOR_CACHE_DEFAULT_START} ~ {cacheEndDate || FACTOR_CACHE_DEFAULT_END}。该缓存由 official full compute 生成，独立指标、因子相关性和 QE 回测共用；旧 <code>factor_values_realtime</code> 快照入口已不再作为业务入口。
+            官方路径: <code>rdagent_assets/factor_values</code>；当前窗口 {cacheStartDate || FACTOR_CACHE_DEFAULT_START} ~ {cacheEndDate || FACTOR_CACHE_DEFAULT_END}。该缓存由 official full compute 生成，独立指标、因子相关性和 QE 回测共用。
           </div>
           {cacheTasks.length > 0 && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>

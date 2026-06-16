@@ -27,6 +27,7 @@ import tempfile
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -36,7 +37,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend.services.quantevolver.config_composer import ConfigComposer  # noqa: E402
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window  # noqa: E402
-from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult  # noqa: E402
 from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
 
 logging.basicConfig(
@@ -45,6 +45,22 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("backfill")
+
+
+@dataclass
+class FactorComputeResult:
+    factor_name: str
+    success: bool
+    num_rows: int = 0
+    nan_rate: float = 0.0
+    elapsed_sec: float = 0.0
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    error_short: Optional[str] = None
+    traceback_full: Optional[str] = None
+    date_range: Optional[str] = None
+    meta_entry: Optional[dict[str, Any]] = None
+    meta_as_of_date: Optional[str] = None
 
 CODE_DIR = REPO_ROOT / "rdagent_assets" / "qe_factors"
 CACHE_DIR = REPO_ROOT / "rdagent_assets" / "factor_values"

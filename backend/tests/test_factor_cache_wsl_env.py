@@ -11,80 +11,6 @@ from backend.services.quantevolver.config_composer import (
 from scripts import backfill_factor_cache
 
 
-def test_collect_factor_cache_wsl_db_env_maps_tdx_and_pg_aliases() -> None:
-    source_env = {
-        "TDX_DB_HOST": "172.20.1.1",
-        "TDX_DB_PORT": "5432",
-        "TDX_DB_NAME": "aistock",
-        "TDX_DB_USER": "postgres",
-        "TDX_DB_PASSWORD": "dummy-secret",
-        "AISTOCK_PG_STATEMENT_TIMEOUT_MS": "30000",
-    }
-
-    env = qe_router._collect_factor_cache_wsl_db_env(source_env)
-
-    assert env["TDX_DB_PASSWORD"] == "dummy-secret"
-    assert env["PGHOST"] == "172.20.1.1"
-    assert env["PGPORT"] == "5432"
-    assert env["PGDATABASE"] == "aistock"
-    assert env["PGUSER"] == "postgres"
-    assert env["PGPASSWORD"] == "dummy-secret"
-    assert env["AISTOCK_PG_STATEMENT_TIMEOUT_MS"] == "30000"
-
-
-def test_collect_factor_cache_wsl_db_env_fails_fast_when_password_missing() -> None:
-    source_env = {
-        "TDX_DB_HOST": "172.20.1.1",
-        "TDX_DB_PORT": "5432",
-        "TDX_DB_NAME": "aistock",
-        "TDX_DB_USER": "postgres",
-    }
-
-    with pytest.raises(RuntimeError, match="TDX_DB_PASSWORD"):
-        qe_router._collect_factor_cache_wsl_db_env(source_env)
-
-
-def test_build_factor_cache_wsl_process_env_uses_wslenv_without_cli_secret() -> None:
-    base_env = {"PATH": "/usr/bin", "WSLENV": "EXISTING/u:TDX_DB_USER/w"}
-    db_env = {
-        "TDX_DB_USER": "postgres",
-        "TDX_DB_PASSWORD": "dummy-secret",
-        "PGPASSWORD": "dummy-secret",
-    }
-
-    proc_env = qe_router._build_factor_cache_wsl_process_env(base_env, db_env)
-
-    assert proc_env["TDX_DB_PASSWORD"] == "dummy-secret"
-    assert proc_env["PGPASSWORD"] == "dummy-secret"
-    wslenv_parts = proc_env["WSLENV"].split(":")
-    assert "EXISTING/u" in wslenv_parts
-    assert "TDX_DB_USER/wu" in wslenv_parts
-    assert "TDX_DB_PASSWORD/u" in wslenv_parts
-    assert "PGPASSWORD/u" in wslenv_parts
-    assert base_env["WSLENV"] == "EXISTING/u:TDX_DB_USER/w"
-
-
-def test_build_factor_cache_wsl_shell_command_quotes_paths_and_omits_secret_values() -> None:
-    command = qe_router._build_factor_cache_wsl_shell_command(
-        project_root_wsl="/mnt/f/Dev/AI stock",
-        backfill_args=[
-            "/mnt/f/Dev/AI stock/scripts/backfill_factor_cache.py",
-            "--factor-data-dir",
-            "/data/factor dir",
-            "--task-id",
-            "cache_1",
-        ],
-        log_path_wsl="/tmp/cache log.log",
-    )
-
-    assert "'/mnt/f/Dev/AI stock'" in command
-    assert "'/data/factor dir'" in command
-    assert "> '/tmp/cache log.log' 2>&1" in command
-    assert "TDX_DB_PASSWORD" in command
-    assert "TDX_DB_PASSWORD=" not in command
-    assert "dummy-secret" not in command
-
-
 def test_qe_wsl_command_forces_backtest_cache_dir_over_inherited_env() -> None:
     composer = ConfigComposer()
     env_lines, _ = composer._build_auto_wsl_command_parts(
@@ -97,21 +23,21 @@ def test_qe_wsl_command_forces_backtest_cache_dir_over_inherited_env() -> None:
     factor_cache_exports = [line for line in env_lines if "FACTOR_CACHE_DIR" in line]
 
     assert len(factor_cache_exports) == 1
-    assert "factor_values_realtime" not in factor_cache_exports[0]
+    assert "factor_values_shadow" not in factor_cache_exports[0]
     assert "FACTOR_CACHE_DIR:-" not in factor_cache_exports[0]
     assert factor_cache_exports[0].startswith('export FACTOR_CACHE_DIR="')
 
 
-def test_qe_wsl_command_rejects_realtime_factor_cache_dir() -> None:
+def test_qe_wsl_command_rejects_non_official_factor_cache_dir() -> None:
     composer = ConfigComposer()
 
-    with pytest.raises(ValueError, match="factor_values_realtime"):
+    with pytest.raises(ValueError, match="official factor_values cache"):
         composer._build_auto_wsl_command_parts(
             "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
             has_custom_factors=True,
             use_custom_model=False,
             backtest_freq="1min",
-            factor_cache_dir="/mnt/f/Dev/AIstock/rdagent_assets/factor_values_realtime/single",
+            factor_cache_dir="/mnt/f/Dev/AIstock/rdagent_assets/factor_values_shadow/single",
         )
 
 
@@ -126,7 +52,7 @@ def _write_cache_meta(root, factors) -> None:
 
 def _cache_source_specs(tmp_path):
     backtest_root = tmp_path / "factor_values"
-    realtime_root = tmp_path / "factor_values_realtime"
+    shadow_root = tmp_path / "factor_values_shadow"
     return (
         {
             "key": "backtest",
@@ -135,19 +61,19 @@ def _cache_source_specs(tmp_path):
             "meta_path": backtest_root / "_meta.json",
         },
         {
-            "key": "realtime_snapshot",
+            "key": "shadow_cache",
             "label": "官方快照",
-            "single_dir": realtime_root / "single",
-            "meta_path": realtime_root / "_meta.json",
+            "single_dir": shadow_root / "single",
+            "meta_path": shadow_root / "_meta.json",
         },
     )
 
 
-def test_factor_cache_rejects_backtest_spec_pointing_to_realtime_root(tmp_path) -> None:
+def test_factor_cache_rejects_backtest_spec_pointing_to_non_official_root(tmp_path) -> None:
     qe_router._invalidate_cache_meta()
-    realtime_root = tmp_path / "factor_values_realtime"
+    shadow_root = tmp_path / "factor_values_shadow"
     _write_cache_meta(
-        realtime_root,
+        shadow_root,
         {
             "LeakFactor": {
                 "status": "ok",
@@ -156,13 +82,13 @@ def test_factor_cache_rejects_backtest_spec_pointing_to_realtime_root(tmp_path) 
             }
         },
     )
-    (realtime_root / "single" / "LeakFactor.parquet").write_bytes(b"PAR1")
+    (shadow_root / "single" / "LeakFactor.parquet").write_bytes(b"PAR1")
     specs = (
         {
             "key": "backtest",
             "label": "QE backtest",
-            "single_dir": realtime_root / "single",
-            "meta_path": realtime_root / "_meta.json",
+            "single_dir": shadow_root / "single",
+            "meta_path": shadow_root / "_meta.json",
         },
     )
 
@@ -171,11 +97,11 @@ def test_factor_cache_rejects_backtest_spec_pointing_to_realtime_root(tmp_path) 
     assert candidates == []
 
 
-def test_factor_cache_ignores_realtime_cache_even_when_backtest_error(tmp_path) -> None:
+def test_factor_cache_ignores_non_official_cache_even_when_backtest_error(tmp_path) -> None:
     qe_router._invalidate_cache_meta()
     specs = _cache_source_specs(tmp_path)
     backtest_root = tmp_path / "factor_values"
-    realtime_root = tmp_path / "factor_values_realtime"
+    shadow_root = tmp_path / "factor_values_shadow"
     _write_cache_meta(
         backtest_root,
         {
@@ -187,7 +113,7 @@ def test_factor_cache_ignores_realtime_cache_even_when_backtest_error(tmp_path) 
         },
     )
     _write_cache_meta(
-        realtime_root,
+        shadow_root,
         {
             "RESI5": {
                 "status": "ok",
@@ -199,7 +125,7 @@ def test_factor_cache_ignores_realtime_cache_even_when_backtest_error(tmp_path) 
             }
         },
     )
-    (realtime_root / "single" / "RESI5.parquet").write_bytes(b"PAR1")
+    (shadow_root / "single" / "RESI5.parquet").write_bytes(b"PAR1")
 
     selected = qe_router._choose_best_factor_cache_candidate(
         qe_router._collect_factor_cache_candidates("RESI5", source_specs=specs),
@@ -393,8 +319,9 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)" in script
     assert "os.fdopen(tmp_fd, 'w', encoding='utf-8')" in script
     assert "FACTOR_CACHE_EXPECTED_UNIVERSE_META" in script
-    assert "def _is_forbidden_factor_cache_path" in script
-    assert "factor_values_realtime" in script
+    assert "def _is_forbidden_factor_cache_path" not in script
+    assert "def _is_official_factor_cache_path_shape" in script
+    assert "factor_values_shadow" not in script
     assert "'data_source_mode': 'backtest_factor_data_dir'" in script
     assert "'universe_fingerprint_sha256': 'fp-test'" in script
     assert "_cache_universe_mismatch" in script
@@ -437,7 +364,7 @@ def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> No
     qe_router._invalidate_cache_meta()
     specs = _cache_source_specs(tmp_path)
     backtest_root = tmp_path / "factor_values"
-    realtime_root = tmp_path / "factor_values_realtime"
+    shadow_root = tmp_path / "factor_values_shadow"
     _write_cache_meta(
         backtest_root,
         {
@@ -448,7 +375,7 @@ def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> No
             }
         },
     )
-    _write_cache_meta(realtime_root, {})
+    _write_cache_meta(shadow_root, {})
 
     selected = qe_router._choose_best_factor_cache_candidate(
         qe_router._collect_factor_cache_candidates("KLEN", source_specs=specs)
