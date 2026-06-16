@@ -1221,6 +1221,87 @@ def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_p
     assert "Agent Consumption" in markdown
 
 
+def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "codegraph-freshness.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "status": "ok",
+                "index_summary": {"files": 12, "nodes": 34, "edges": 56},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "codegraph-freshness.md").write_text("## CodeGraph Freshness\n", encoding="utf-8")
+    (artifact_dir / "code-intelligence-summary.json").write_text(
+        json.dumps(
+            {
+                "understand_anything_status": "available",
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/12345/ua-validation-summary.md",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "ua-summary-manifest.json").write_text(
+        json.dumps({"summary_refs": [{"module": "validation"}, {"module": "issue_workflow"}]}),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-nightly-adaptive-scheduler.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "ready",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "queue_summary": {"allowed_plan_keys": ["l0", "validation_module_registry_l0"]},
+                "advice_consumption": {"advice_consumed": True},
+                "issue_creation_policy": {"mode": "warning_only_advice"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-prompt-evaluation.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "passed",
+                "case_count": 20,
+                "issue_body_completeness": 1.0,
+                "false_positive_auto_file_rate": 0.0,
+                "plan_recommendation_accuracy": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-guarded-rollout-gate.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "warning",
+                "mode": "warning_only",
+                "auto_file_allowed": False,
+                "llm_can_enhance_issue": True,
+                "llm_enhancement_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_llm_value_summary(root=tmp_path, artifact_dir=artifact_dir)
+    markdown = adapter.render_llm_value_summary_markdown(payload)
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["llm"]["llm_invoked"] is True
+    assert payload["llm"]["allowed_plan_keys"] == ["l0", "validation_module_registry_l0"]
+    assert payload["understand_anything"]["summary_count"] == 2
+    assert "LLM + Code Intelligence Value" in markdown
+    assert "llm_provider: `deepseek_api`" in markdown
+    assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
+    assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
+
+
 def test_code_intelligence_run_manifest_warns_without_freshness_json(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "missing"
     artifact_dir.mkdir(parents=True)

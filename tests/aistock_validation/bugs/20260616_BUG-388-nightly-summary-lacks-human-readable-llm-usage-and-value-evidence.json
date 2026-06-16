@@ -1,6 +1,10 @@
 {
-  "actual": "Evidence: The Nightly code-intelligence job writes JSON artifacts for DeepSeek scheduler/test advice and GitHub Models guardrails, but the final Nightly summary and operator-facing logs do not consistently expose a compact human-readable view of whether LLM was invoked, which provider/model was used, whether CodeGraph/Understand Anything refs were consumed, fallback status, and what concrete value/advice was produced.\n\nExpected:\n- Nightly summary should include a compact Markdown section for LLM + code-intelligence value evidence.\n- The section should show provider/model, llm_invoked, fallback_used, CodeGraph freshness, Understand Anything availability, advice_consumed, allowed plan keys, issue creation mode, and artifact refs.\n- Success output must remain compact; do not dump raw JSON into chat/log summary.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. Unit tests cover human-readable summary generation from existing LLM/code-intelligence artifacts.\n2. Nightly workflow summary includes the compact LLM value evidence section when code-intelligence artifacts exist.\n3. Existing LLM workflow tests and nightly manual-dispatch tests still pass.",
+  "actual": "Evidence: The Nightly code-intelligence job writes JSON artifacts for DeepSeek scheduler/test advice and GitHub Models guardrails, but the final Nightly summary and operator-facing logs do not consistently expose a compact human-readable view of whether LLM was invoked, which provider/model was used, whether CodeGraph/Understand Anything refs were consumed, fallback status, and what concrete value/advice was produced.\n\nExpected:\n- Nightly summary should include a compact Markdown section for LLM + code-intelligence value evidence.\n- The section should show provider/model, llm_invoked, fallback_used, CodeGraph freshness, Understand Anything availability, advice_consumed, allowed plan keys, issue creation mode, and artifact refs.\n- Success output must remain compact; do not dump raw JSON into chat/log summary.\n- No production runtime, DB, or DDL changes.\n\nAcceptance:\n1. Unit tests cover human-readable summary generation from existing LLM/code-intelligence artifacts.\n2. Nightly workflow summary includes the compact LLM value evidence section when code-intelligence artifacts exist.\n3. Existing LLM workflow tests and nightly manual-dispatch tests still pass.\n\nImplementation: Nightly now builds llm-value-summary.md and appends it to the final Nightly summary when code-intelligence artifacts are available.",
   "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "tests/aistock_validation/bugs/20260616_BUG-388-nightly-summary-lacks-human-readable-llm-usage-and-value-evidence.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -41,7 +45,10 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_center_backend",
+    "validation_module_registry_l0",
+    "validation_workflow_automation",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -96,5 +103,13 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_validated",
+  "validation_evidence": [
+    "targeted pytest code intelligence + nightly workflow tests -> 3 passed",
+    "ruff changed workflow scripts/tests -> passed",
+    "git diff --check -> passed",
+    "nox l0 validation_module_registry_l0 guardrail_changed_files validation_workflow_automation -> passed",
+    "nox validation_center_backend -> 435 passed, coverage gate passed",
+    "llm-value-summary smoke -> PASS, compact markdown generated without raw JSON inline"
+  ]
 }
