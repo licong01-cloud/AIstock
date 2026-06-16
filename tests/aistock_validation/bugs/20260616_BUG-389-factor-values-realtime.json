@@ -27,7 +27,9 @@
     "backend/tests/quantevolver/test_official_runtime_validation.py",
     "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
     "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "tests/aistock_validation/history/qe/20260616_201839_l3_qe-read-only-workspace-access-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-389",
