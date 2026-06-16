@@ -1,4 +1,4 @@
-﻿"""
+"""
 QuantEvolver 后端API路由
 
 路由前缀: /quantevolver (在main.py中通过prefix="/api/v1"注册，最终路径为/api/v1/quantevolver/...)
@@ -36,7 +36,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import time
 from datetime import datetime
 from pathlib import Path
@@ -64,109 +63,6 @@ from ..services.quantevolver.seed_contract import normalize_single_experiment_se
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _win_to_wsl(path: str) -> str:
-    """Convert a Windows path to a WSL mount path."""
-    p = str(path).replace("\\", "/")
-    if len(p) >= 2 and p[1] == ":":
-        drive = p[0].lower()
-        return f"/mnt/{drive}{p[2:]}"
-    return p
-
-
-_FACTOR_CACHE_DB_ENV_KEYS = (
-    "TDX_DB_HOST",
-    "TDX_DB_PORT",
-    "TDX_DB_NAME",
-    "TDX_DB_USER",
-    "TDX_DB_PASSWORD",
-)
-_FACTOR_CACHE_PG_ALIASES = {
-    "PGHOST": "TDX_DB_HOST",
-    "PGPORT": "TDX_DB_PORT",
-    "PGDATABASE": "TDX_DB_NAME",
-    "PGUSER": "TDX_DB_USER",
-    "PGPASSWORD": "TDX_DB_PASSWORD",
-}
-
-
-def _quote_shell_arg(value: Any) -> str:
-    """Quote a value for the WSL bash command line."""
-    return shlex.quote(str(value))
-
-
-def _collect_factor_cache_wsl_db_env(source_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """Collect DB env vars that must cross the Windows -> WSL process boundary."""
-    env_source = source_env if source_env is not None else os.environ
-    db_env: Dict[str, str] = {}
-    missing: List[str] = []
-    for key in _FACTOR_CACHE_DB_ENV_KEYS:
-        value = env_source.get(key)
-        if value is None or str(value).strip() == "":
-            missing.append(key)
-        else:
-            db_env[key] = str(value)
-    if missing:
-        raise RuntimeError(
-            "Factor cache WSL task requires AIstock DB env vars: " + ", ".join(missing)
-        )
-
-    for pg_key, tdx_key in _FACTOR_CACHE_PG_ALIASES.items():
-        db_env[pg_key] = db_env[tdx_key]
-
-    statement_timeout = env_source.get("AISTOCK_PG_STATEMENT_TIMEOUT_MS")
-    if statement_timeout is not None and str(statement_timeout).strip():
-        db_env["AISTOCK_PG_STATEMENT_TIMEOUT_MS"] = str(statement_timeout)
-    return db_env
-
-
-def _build_factor_cache_wsl_process_env(
-    base_env: Optional[Mapping[str, str]],
-    db_env: Dict[str, str],
-) -> Dict[str, str]:
-    """Build a Popen env that lets WSL import selected DB vars without CLI secrets."""
-    env_source = os.environ if base_env is None else base_env
-    proc_env: Dict[str, str] = {str(k): str(v) for k, v in env_source.items()}
-    proc_env.update({str(k): str(v) for k, v in db_env.items()})
-
-    wslenv_parts = [part for part in proc_env.get("WSLENV", "").split(":") if part]
-    for key in db_env:
-        for idx, part in enumerate(wslenv_parts):
-            name, sep, flags = part.partition("/")
-            if name != key:
-                continue
-            if sep and "u" not in flags:
-                wslenv_parts[idx] = f"{name}/{flags}u"
-            break
-        else:
-            wslenv_parts.append(f"{key}/u")
-    proc_env["WSLENV"] = ":".join(wslenv_parts)
-    return proc_env
-
-
-def _build_factor_cache_wsl_shell_command(
-    *,
-    project_root_wsl: str,
-    backfill_args: List[str],
-    log_path_wsl: str,
-) -> str:
-    """Build the WSL bash script for factor-cache backfill."""
-    if not backfill_args:
-        raise ValueError("backfill_args is required")
-    python_cmd = "python " + " ".join(_quote_shell_arg(arg) for arg in backfill_args)
-    body = " ".join(
-        [
-            "set -e;",
-            f"cd {_quote_shell_arg(project_root_wsl)};",
-            'if [ -z "$TDX_DB_PASSWORD" ]; then '
-            "echo 'TDX_DB_PASSWORD is required for factor cache WSL task' >&2; exit 2; fi;",
-            'source "$HOME/miniconda3/etc/profile.d/conda.sh";',
-            "conda activate rdagent-gpu;",
-            python_cmd + ";",
-        ]
-    )
-    return f"{{ {body} }} > {_quote_shell_arg(log_path_wsl)} 2>&1"
 
 
 def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None = None) -> str:
@@ -260,7 +156,9 @@ class FullPipelineRequest(BaseModel):
     skip_completed: bool = True
     max_transform_retries: int = 3
     skip_transform: bool = False
-    data_date: Optional[str] = None
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class RecommendFactorsRequest(BaseModel):
@@ -874,7 +772,7 @@ def list_factors(
         # 前端自行决定展示优先级，不在后端覆盖
 
         # 合并 QE 回测因子值缓存信息。
-        # factor_values_realtime 属于快照/官方评估链路，不能作为 QE 回测缓存兜底。
+        # factor_values_realtime 是历史兼容/迁移目录，不能作为 QE 回测缓存兜底。
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
@@ -1250,10 +1148,10 @@ def delete_factor(
                 )
                 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 
-                # 两个独立缓存体系：
-                # - factor_values/        回测用 (code_text 生成, 读 bak_basic.h5)
-                # - factor_values_realtime/ 实盘+相关性用 (realtime_code_text 生成, 读 DB loader)
-                # 删除因子必须同时清理两个, 否则遗留孤儿 parquet / _meta 条目
+                # 官方共用缓存 + 历史兼容目录清理：
+                # - factor_values/        官方共用缓存 (独立指标 / 相关性 / QE 回测共用)
+                # - factor_values_realtime/ 仅历史迁移兼容清理，不再作为业务读取路径
+                # 删除因子时仍清理两个目录，避免旧孤儿 parquet / _meta 条目误导排查。
                 for _cache_subdir in ("factor_values", "factor_values_realtime"):
                     _cache_root = os.path.join(_project_root, "rdagent_assets", _cache_subdir)
 
@@ -1396,7 +1294,9 @@ class ManualFactorCreate(BaseModel):
     code_text: str = Field(..., description="因子 Python 代码")
     description: Optional[str] = Field(None, description="因子描述")
     expression: Optional[str] = Field(None, description="因子表达式（可选）")
-    data_date: Optional[str] = Field(None, description="?????????? (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class ManualFactorValidate(BaseModel):
@@ -1408,6 +1308,8 @@ class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
     all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口会转发到 official full-compute")
     data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
@@ -3467,16 +3369,12 @@ FACTOR_CACHE_META_PATH = FACTOR_CACHE_ROOT / "_meta.json"
 FACTOR_CACHE_SOURCE_SPECS: Tuple[Dict[str, Any], ...] = (
     {
         "key": "backtest",
-        "label": "QE回测缓存",
+        "label": "官方共用缓存",
         "single_dir": FACTOR_CACHE_SINGLE_DIR,
         "meta_path": FACTOR_CACHE_META_PATH,
     },
 )
 FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
-BACKFILL_SCRIPT_WSL = os.getenv(
-    "AISTOCK_FACTOR_CACHE_BACKFILL_WSL",
-    _win_to_wsl(str(AISTOCK_PROJECT_ROOT / "scripts" / "backfill_factor_cache.py")),
-)
 FACTOR_CACHE_TASK_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_tasks"
 
 
@@ -3587,11 +3485,11 @@ def _collect_factor_cache_candidates(
     factor_name: str,
     source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
 ) -> List[Dict[str, Any]]:
-    """Collect QE backtest cache candidates.
+    """Collect official shared factor-value cache candidates.
 
     factor_values_realtime is intentionally ignored even if a caller passes it
-    through source_specs. Missing QE backtest cache must recompute, not fallback
-    to snapshot/official caches.
+    through source_specs. Missing cache must be generated by official full compute,
+    not by falling back to legacy snapshot directories.
     """
     candidates: List[Dict[str, Any]] = []
     specs = source_specs or FACTOR_CACHE_SOURCE_SPECS
@@ -3832,7 +3730,7 @@ def factor_cache_stats():
             "disabled_total": total_disabled_factors,
             "disabled_cached": disabled_cached,
             "by_source": by_source,
-            "last_backfill": _load_cache_meta().get("_last_backfill"),
+            "last_generation": _load_cache_meta().get("generated_at"),
             "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
         }
     except Exception as e:
@@ -3848,10 +3746,7 @@ class FactorCacheComputeRequest(BaseModel):
     end_date: str = Field(..., description="结束日期；必须由 UI 显式传入")
     workers: int = Field(4, description="并行度: 2/4/8/10")
     timeout_per_factor: int = Field(1200, description="单因子超时秒数")
-    incremental: bool = Field(False, description="增量模式: 优先仅补齐缺失后段")
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
-    resume_task_id: Optional[str] = Field(None, description="从历史任务恢复未完成因子")
-    retry_failed_only: bool = Field(False, description="恢复历史任务时仅重试失败因子")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
 
@@ -3869,7 +3764,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     """Submit official offline factor cache + metrics compute to WSL/compute-node dispatch.
 
     Windows FastAPI is a control plane only: no local WSL shell-out and no
-    legacy backfill_factor_cache.py execution. The worker consumes catalog
+    obsolete local backfill execution. The worker consumes catalog
     code_text plus factor_data_dir/qlib/ST-PIT data and writes the single
     official cache under rdagent_assets/factor_values.
     """
@@ -3907,9 +3802,6 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         raise HTTPException(400, "start_date/end_date must be YYYY-MM-DD") from e
     if resolved_start > resolved_end:
         raise HTTPException(400, f"invalid cache window: {resolved_start} > {resolved_end}")
-    if req.resume_task_id or req.retry_failed_only or req.incremental:
-        raise HTTPException(400, "official full compute no longer supports legacy backfill resume/incremental; resubmit dispatch with force or factor_names")
-
     task_id = f"official_factor_full_{int(time.time() * 1000)}_{os.getpid()}"
     try:
         dispatch_result = OfficialFactorFullComputeDispatchService().submit(
@@ -4161,7 +4053,9 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
         code_text=req.code_text,
         description=req.description,
         expression=req.expression,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return result
 
@@ -4174,8 +4068,10 @@ async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
     result = await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date or "",
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.all_available,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return {
         **result,
@@ -4197,7 +4093,9 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
             "type": "stream_start",
             "deprecated": True,
             "official_api": "/api/v1/quantevolver/official-evaluation/compute",
-            "data_date": req.data_date,
+            "data_date": req.data_date or req.end_date,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
         })
         try:
             from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
@@ -4205,8 +4103,10 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
             result = await asyncio.to_thread(
                 svc.compute,
                 factor_names=req.factor_names,
-                data_date=req.data_date or "",
+                data_date=req.data_date or req.end_date or "",
                 include_disabled=req.all_available,
+                start_date=req.start_date,
+                end_date=req.end_date,
             )
             yield _sse({"type": "stream_complete", **result, "deprecated": True})
         except Exception as e:
@@ -4481,6 +4381,8 @@ def full_pipeline_stream(req: FullPipelineRequest):
             "task_ids": task_ids,
             "factor_count": len(factor_names),
             "phases": phases,
+            "start_date": req.start_date,
+            "end_date": req.end_date or req.data_date,
         })
 
         # ── Phase 1: IC 指标计算（统一计算，不依赖 task） ──
@@ -4502,7 +4404,9 @@ def full_pipeline_stream(req: FullPipelineRequest):
                 result = await asyncio.to_thread(
                     svc_metrics.compute,
                     factor_names=batch,
-                    data_date=req.data_date,
+                    data_date=req.data_date or req.end_date or "",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
                 )
                 if result.get("success"):
                     db_res = result.get("db_result", {})
@@ -6887,7 +6791,7 @@ async def stream_experiment_logs(experiment_id: str):
                 qe_task_id, qe_loop_id, db_status, custom_params = row
 
         if not qe_task_id:
-            raise HTTPException(status_code=400, detail="?????????????")
+            raise HTTPException(status_code=400, detail="experiment has no QE task id")
 
         params = _parse_qe_custom_params(custom_params)
         node_id = params.get("execution_node_id") or params.get("node_id")

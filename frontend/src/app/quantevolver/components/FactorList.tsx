@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import FullPipelineDialog from "./FullPipelineDialog";
@@ -416,24 +416,6 @@ export default function FactorList({
   const [taskCalcDetail, setTaskCalcDetail] = useState<Record<string, CalcDetail>>({});
   const [calcDetailLoading, setCalcDetailLoading] = useState<Set<string>>(new Set());
 
-  // 数据快照管理
-  type Snapshot = { data_date: string; status: string; start_date?: string; end_date?: string; instruments_count?: number; created_at?: string; realtime_rows?: number; static_rows?: number; disk_size_mb?: number };
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [snapshotCreating, setSnapshotCreating] = useState(false);
-  const [snapshotDeleting, setSnapshotDeleting] = useState<string | null>(null);
-  const [activeSnapshot, setActiveSnapshot] = useState<string>("");
-  const [newSnapshotDate, setNewSnapshotDate] = useState("");
-  const [snapshotStartDate, setSnapshotStartDate] = useState("2018-08-01");
-  const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
-  const [timeEstimate, setTimeEstimate] = useState<{
-    has_history: boolean;
-    stats?: { avg_sec: number; median_sec: number; p90_sec: number; max_sec: number };
-    estimate?: { factor_count: number; serial_min: number; parallel_4_min: number };
-    slowest_5?: { factor_name: string; elapsed_sec: number }[];
-  } | null>(null);
-
-  // 排序状态
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
@@ -441,7 +423,7 @@ export default function FactorList({
   type CacheStats = {
     total_cached: number; total_code_factors: number; coverage_pct: number;
     total_size_mb: number; date_range_dominant: string; active_tasks: number;
-    last_backfill?: any;
+    last_generation?: string | null;
     hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
     disabled_total: number; disabled_cached: number;
     by_source?: Record<string, number>;
@@ -454,7 +436,6 @@ export default function FactorList({
     workers?: number;
     batch_size?: number;
     factor_count?: number | string;
-    incremental?: boolean;
     start?: string;
     end?: string;
     error?: string;
@@ -516,7 +497,6 @@ export default function FactorList({
   const [cacheStartDate, setCacheStartDate] = useState(FACTOR_CACHE_DEFAULT_START);
   const [cacheEndDate, setCacheEndDate] = useState(FACTOR_CACHE_DEFAULT_END);
   const [cacheCoverageFilter, setCacheCoverageFilter] = useState("all");
-  const [cacheIncremental, setCacheIncremental] = useState(false);
   const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
   const [cacheTaskLoading, setCacheTaskLoading] = useState(false);
   const [selectedCacheTaskId, setSelectedCacheTaskId] = useState<string | null>(null);
@@ -644,7 +624,7 @@ export default function FactorList({
     setCacheBusy(true);
     try {
       const d = await submitOfficialFullCompute(factorNames, force);
-      alert(`Official offline factor compute submitted (task_id: ${d.task_id})`);
+      alert(`官方共用因子缓存任务已提交 (task_id: ${d.task_id})`);
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
   }, [submitOfficialFullCompute]);
 
@@ -741,100 +721,6 @@ export default function FactorList({
       setLocalSelectedFactors(next);
     }
   }
-
-  // ── 数据快照管理 ──
-
-  const loadSnapshots = useCallback(async () => {
-    setSnapshotLoading(true);
-    try {
-      const [snapRes, estRes] = await Promise.all([
-        fetch(`${API}/quantevolver/evolution/factor-values/snapshots`),
-        fetch(`${API}/quantevolver/evolution/factor-values/time-estimate`),
-      ]);
-      if (snapRes.ok) {
-        const data = await snapRes.json();
-        setSnapshots(data.snapshots || []);
-      }
-      if (estRes.ok) {
-        setTimeEstimate(await estRes.json());
-      }
-    } catch (e: any) {
-      console.error("加载快照列表失败:", e);
-    } finally {
-      setSnapshotLoading(false);
-    }
-  }, []);
-
-  async function createSnapshot() {
-    if (!newSnapshotDate || newSnapshotDate.length !== 8) {
-      alert("请从日历选择日期");
-      return;
-    }
-    setSnapshotCreating(true);
-    try {
-      const params = new URLSearchParams({ data_date: newSnapshotDate, start_date: snapshotStartDate });
-      const res = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/create?${params}`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = err.detail;
-        const msg = typeof detail === "string" ? detail
-          : Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ")
-          : JSON.stringify(err) || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      setNewSnapshotDate("");
-      // 轮询快照创建状态
-      const poll = async () => {
-        while (true) {
-          await new Promise(r => setTimeout(r, 3000));
-          try {
-            const st = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/status`);
-            const data = await st.json();
-            if (!data.creating) {
-              await loadSnapshots();
-              if (data.last_error) {
-                alert(`快照创建失败: ${data.last_error}`);
-              } else {
-                alert("快照创建成功!");
-              }
-              return;
-            }
-          } catch { /* 网络抖动，继续轮询 */ }
-        }
-      };
-      poll().finally(() => setSnapshotCreating(false));
-    } catch (e: any) {
-      alert(`创建快照失败: ${e.message}`);
-      setSnapshotCreating(false);
-    }
-  }
-
-  async function deleteSnapshot(dataDate: string) {
-    if (!confirm(`确认删除快照 ${dataDate}？此操作不可恢复。`)) return;
-    setSnapshotDeleting(dataDate);
-    try {
-      const res = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/${dataDate}`, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = err.detail;
-        const msg = typeof detail === "string" ? detail
-          : Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ")
-          : JSON.stringify(err) || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      if (activeSnapshot === dataDate) setActiveSnapshot("");
-      await loadSnapshots();
-    } catch (e: any) {
-      alert(`删除快照失败: ${e.message}`);
-    } finally {
-      setSnapshotDeleting(null);
-    }
-  }
-
-  // 初始加载快照列表
-  useEffect(() => { loadSnapshots(); }, [loadSnapshots]);
 
   function toggleDescription(key: string, factorName?: string, source?: string) {
     setExpandedDescriptions(prev => {
@@ -1888,170 +1774,11 @@ export default function FactorList({
             </section>
           )}
 
-      {/* 数据快照管理 */}
-      {!isSelection && (
-        <section style={{ background: "#fff", borderRadius: 12, padding: "12px 16px", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>历史快照/兼容</span>
-
-            {/* 当前选中的快照 */}
-            <select
-              value={activeSnapshot}
-              onChange={e => setActiveSnapshot(e.target.value)}
-              style={{ padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", minWidth: 160 }}
-              title="历史兼容快照仅用于旧全流程；官方独立指标计算不使用快照"
-            >
-              <option value="">未选择历史快照</option>
-              {snapshots.filter(s => s.status === "ready").map(s => (
-                <option key={s.data_date} value={s.data_date}>
-                  {s.data_date} ({s.instruments_count || "?"}只 / {s.disk_size_mb || "?"}MB)
-                </option>
-              ))}
-            </select>
-
-            {activeSnapshot ? (
-              <span style={{ fontSize: 11, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 4 }}>
-                快照 {activeSnapshot} — 仅用于旧全流程；官方指标走离线缓存
-              </span>
-            ) : (
-              <span style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", padding: "2px 8px", borderRadius: 4 }}>
-                官方独立指标无需快照；请选择上方官方离线缓存窗口
-              </span>
-            )}
-
-            <button
-              onClick={() => setSnapshotPanelOpen(!snapshotPanelOpen)}
-              style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", background: snapshotPanelOpen ? "#f3f4f6" : "#fff", cursor: "pointer" }}
-            >
-              {snapshotPanelOpen ? "收起管理" : "管理快照"}
-            </button>
-
-            <button
-              onClick={loadSnapshots}
-              disabled={snapshotLoading}
-              style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", opacity: snapshotLoading ? 0.5 : 1 }}
-            >
-              {snapshotLoading ? "刷新中..." : "刷新"}
-            </button>
-          </div>
-
-          {/* 展开的快照管理面板 */}
-          {snapshotPanelOpen && (
-            <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
-              {/* 创建新快照 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>起始日期:</span>
-                <input
-                  type="date"
-                  value={snapshotStartDate}
-                  onChange={e => setSnapshotStartDate(e.target.value)}
-                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
-                />
-                <span style={{ fontSize: 12, color: "#6b7280" }}>截止日期:</span>
-                <input
-                  type="date"
-                  value={newSnapshotDate ? `${newSnapshotDate.slice(0,4)}-${newSnapshotDate.slice(4,6)}-${newSnapshotDate.slice(6,8)}` : ""}
-                  onChange={e => setNewSnapshotDate(e.target.value.replace(/-/g, ""))}
-                  max={new Date().toISOString().split("T")[0]}
-                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
-                />
-                <button
-                  onClick={createSnapshot}
-                  disabled={snapshotCreating || !newSnapshotDate}
-                  style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "none", background: "#8b5cf6", color: "#fff", cursor: "pointer", opacity: (snapshotCreating || !newSnapshotDate) ? 0.5 : 1 }}
-                >
-                  {snapshotCreating ? "创建中..." : "创建"}
-                </button>
-                <span style={{ fontSize: 11, color: "#9ca3af" }}>首次创建需从数据库加载，约 5-8 分钟</span>
-              </div>
-
-              {/* 时间预估 */}
-              {timeEstimate?.has_history && timeEstimate.stats && timeEstimate.estimate && (
-                <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 11, color: "#6b7280", flexWrap: "wrap" }}>
-                  <span>因子计算预估: <b>{timeEstimate.estimate.factor_count}</b> 个因子</span>
-                  <span>串行 ≈ <b>{timeEstimate.estimate.serial_min}</b> 分钟</span>
-                  <span>4线程 ≈ <b>{timeEstimate.estimate.parallel_4_min}</b> 分钟</span>
-                  <span>单因子均值 <b>{timeEstimate.stats.avg_sec.toFixed(1)}s</b> / P90 <b>{timeEstimate.stats.p90_sec.toFixed(1)}s</b> / 最慢 <b>{timeEstimate.stats.max_sec.toFixed(1)}s</b></span>
-                  {timeEstimate.slowest_5 && timeEstimate.slowest_5.length > 0 && (
-                    <span title={timeEstimate.slowest_5.map(s => `${s.factor_name}: ${s.elapsed_sec.toFixed(1)}s`).join("\n")}>
-                      最慢因子: {timeEstimate.slowest_5[0].factor_name} ({timeEstimate.slowest_5[0].elapsed_sec.toFixed(1)}s)
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* 快照列表 */}
-              {snapshots.length === 0 ? (
-                <p style={{ fontSize: 12, color: "#9ca3af", margin: 0 }}>暂无快照</p>
-              ) : (
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>日期</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>状态</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>股票数</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>行情行数</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>磁盘</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>创建时间</th>
-                      <th style={{ textAlign: "center", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {snapshots.map(s => (
-                      <tr key={s.data_date} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td style={{ padding: "6px 8px", fontWeight: activeSnapshot === s.data_date ? 600 : 400 }}>
-                          {s.data_date}
-                          {activeSnapshot === s.data_date && <span style={{ marginLeft: 6, color: "#059669", fontSize: 10 }}>当前</span>}
-                        </td>
-                        <td style={{ padding: "6px 8px" }}>
-                          <span style={{
-                            padding: "1px 6px", borderRadius: 4, fontSize: 11,
-                            background: s.status === "ready" ? "#ecfdf5" : s.status === "creating" ? "#fef3c7" : "#fef2f2",
-                            color: s.status === "ready" ? "#059669" : s.status === "creating" ? "#d97706" : "#dc2626",
-                          }}>
-                            {s.status === "ready" ? "就绪" : s.status === "creating" ? "创建中" : "异常"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.instruments_count?.toLocaleString() || "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.realtime_rows?.toLocaleString() || "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.disk_size_mb ? `${s.disk_size_mb} MB` : "-"}</td>
-                        <td style={{ padding: "6px 8px", fontSize: 11, color: "#6b7280" }}>{s.created_at ? new Date(s.created_at).toLocaleString("zh-CN") : "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "center" }}>
-                          {s.status === "ready" && (
-                            <>
-                              {activeSnapshot !== s.data_date && (
-                                <button
-                                  onClick={() => setActiveSnapshot(s.data_date)}
-                                  style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#fff", color: "#8b5cf6", cursor: "pointer", marginRight: 4 }}
-                                >
-                                  使用
-                                </button>
-                              )}
-                              <button
-                                onClick={() => deleteSnapshot(s.data_date)}
-                                disabled={snapshotDeleting === s.data_date}
-                                style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, border: "1px solid #ef4444", background: "#fff", color: "#ef4444", cursor: "pointer", opacity: snapshotDeleting === s.data_date ? 0.5 : 1 }}
-                              >
-                                {snapshotDeleting === s.data_date ? "删除中..." : "删除"}
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
       {/* 因子值缓存管理 */}
       {!isSelection && (
         <section style={{ background: "#fff", borderRadius: 12, padding: "10px 16px", marginBottom: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>因子值缓存</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>官方因子缓存（独立指标 / 相关性 / QE 回测共用）</span>
             {cacheStats ? (
               <>
                 <span style={{ fontSize: 12, color: "#6b7280" }}>
@@ -2064,7 +1791,7 @@ export default function FactorList({
                   {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
                   {" "}{cacheStats.date_range_dominant}
                   {cacheStats.by_source && (
-                    <> | QE回测{cacheStats.by_source.backtest || 0}</>
+                    <> | 官方缓存{cacheStats.by_source.backtest || 0}</>
                   )}
                 </span>
                 {cacheStats.disabled_total > 0 && (
@@ -2120,7 +1847,7 @@ export default function FactorList({
                   </button>
                 </>
               ) : null}
-              <span style={{ fontSize: 11, color: "#9ca3af" }}>区间:</span>
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>官方全量数据集区间:</span>
               <input type="date" value={cacheStartDate} onChange={e => setCacheStartDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
               <span style={{ fontSize: 11, color: "#9ca3af" }}>~</span>
               <input type="date" value={cacheEndDate} onChange={e => setCacheEndDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
@@ -2128,7 +1855,7 @@ export default function FactorList({
               <select
                 value={cacheCoverageFilter}
                 onChange={e => setCacheCoverageFilter(e.target.value)}
-                title="按所选回测区间筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
+                title="按所选官方离线缓存区间筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
                 style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}
               >
                 <option value="all">全部缓存状态</option>
@@ -2144,30 +1871,33 @@ export default function FactorList({
               </select>
               <button onClick={() => triggerCacheCompute()} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                {cacheBusy ? "Submitting..." : "Official full compute"}
+                {cacheBusy ? "提交中..." : "生成/更新官方共用缓存"}
               </button>
               <button onClick={() => triggerCacheCompute(undefined, true)} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                Force recompute
+                强制重算官方缓存
               </button>
               {actualSelectedFactors.size > 0 && (
                 <button onClick={() => triggerCacheCompute(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={cacheBusy}
                   style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0284c7", background: "#f0f9ff", color: "#0284c7", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                  Compute selected ({actualSelectedFactors.size})
+                  计算选中因子 ({actualSelectedFactors.size})
                 </button>
               )}
               {actualSelectedFactors.size > 0 && remoteStats?.remote_nodes?.length ? (
                 <button onClick={() => triggerRemoteSync(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={remoteSyncBusy}
                   style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0f766e", background: "#f0fdfa", color: "#0f766e", fontWeight: 600, cursor: "pointer", opacity: remoteSyncBusy ? 0.5 : 1 }}>
-                  Sync selected
+                  同步选中
                 </button>
               ) : null}
               <button onClick={clearAllCache}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
-                Clear all
+                清空缓存
               </button>
-              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>Refresh</button>
+              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
             </div>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
+            官方路径: <code>rdagent_assets/factor_values</code>；当前窗口 {cacheStartDate || FACTOR_CACHE_DEFAULT_START} ~ {cacheEndDate || FACTOR_CACHE_DEFAULT_END}。该缓存由 official full compute 生成，独立指标、因子相关性和 QE 回测共用；旧 <code>factor_values_realtime</code> 快照入口已不再作为业务入口。
           </div>
           {cacheTasks.length > 0 && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
@@ -2210,7 +1940,7 @@ export default function FactorList({
                     </div>
                   )}
                   <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-                    Official path uses WSL dispatch only; legacy resume/backfill is disabled. Retry failed factors by resubmitting selected factor_names or force recompute.
+                    官方路径仅通过 WSL/计算节点 dispatch 执行；旧手工 backfill/resume 不再作为业务入口。失败因子请重新提交选中因子或强制重算官方缓存。
                   </div>
                   {selectedCacheTask.task_state && (
                     <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
@@ -2373,7 +2103,6 @@ export default function FactorList({
 
               <button
                 onClick={() => {
-                  if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                   const names = Array.from(actualSelectedFactors).map(key => key.split("||")[0]);
                   setPipelineFactorNames(names);
                   setPipelineTaskIds([]);
@@ -2581,7 +2310,6 @@ export default function FactorList({
               onClick={() => {
                 const tasks = Array.from(selectedTasks);
                 if (tasks.length === 0) return;
-                if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                 setPipelineTaskIds(tasks);
                 setPipelineOpen(true);
               }}
@@ -2635,7 +2363,6 @@ export default function FactorList({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                         setPipelineTaskIds([t.task_id]);
                         setPipelineOpen(true);
                       }}
@@ -2827,7 +2554,7 @@ export default function FactorList({
                   return !best || Math.abs(value) > Math.abs(best.value) ? { label: item.label, value } : best;
                 }, null);
                 const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
-                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "QE回测缓存" : "");
+                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "官方共用缓存" : "");
                 const cacheTitleSuffix = [
                   cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
                   f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,
@@ -3668,7 +3395,8 @@ export default function FactorList({
           open={pipelineOpen}
           taskIds={pipelineTaskIds.length > 0 ? pipelineTaskIds : undefined}
           factorNames={pipelineFactorNames.length > 0 ? pipelineFactorNames : undefined}
-          dataDate={activeSnapshot || undefined}
+          cacheStartDate={cacheStartDate}
+          cacheEndDate={cacheEndDate}
           onClose={() => setPipelineOpen(false)}
           onComplete={() => {
             loadData();
@@ -3680,7 +3408,8 @@ export default function FactorList({
 
       <ManualFactorDialog
         open={manualDialogOpen}
-        dataDate={activeSnapshot || undefined}
+        cacheStartDate={cacheStartDate}
+        cacheEndDate={cacheEndDate}
         onClose={() => setManualDialogOpen(false)}
         onCreated={() => {
           loadData();
