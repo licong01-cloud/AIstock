@@ -30,8 +30,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-16T07:04:14.647942Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe3728ee6c6cb7253ffec5d5742c3d0ec7910d8b",
+  "fixed_at": "2026-06-16T07:40:41.338818Z",
   "github_issue_number": 1154,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1154",
   "last_seen_at": "2026-06-16T07:04:14.647942Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1156",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -88,6 +89,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1156 checks green: 14 completed, 0 failed; local validation evidence recorded -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
@@ -103,13 +107,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "fix_validated",
-  "validation_evidence": [
-    "targeted pytest code intelligence + nightly workflow tests -> 3 passed",
-    "ruff changed workflow scripts/tests -> passed",
-    "git diff --check -> passed",
-    "nox l0 validation_module_registry_l0 guardrail_changed_files validation_workflow_automation -> passed",
-    "nox validation_center_backend -> 435 passed, coverage gate passed",
-    "llm-value-summary smoke -> PASS, compact markdown generated without raw JSON inline"
-  ]
+  "workflow_gate": "fix_validated"
 }
