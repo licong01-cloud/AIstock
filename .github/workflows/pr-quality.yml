@@ -159,7 +159,7 @@ jobs:
         run: |
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
-          git diff --name-only "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
           if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
             xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
           else
