@@ -391,3 +391,82 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     assert "Summary By Scope" in summary
     assert "Top Runtime Or Pipeline Rules" in summary
     assert "ERR-FALLBACK-001" in summary
+
+
+def test_success_stdout_is_compact_when_details_are_artifacts(capsys) -> None:
+    scanner = _load_module()
+    finding = scanner.Finding(
+        rule_id="ARCH-WSL-001",
+        title="Historical WSL path reference",
+        severity="P2",
+        category="portability",
+        file="docs/architecture/legacy.md",
+        line=3,
+        message="Historical WSL path reference",
+        remediation="Classify before remediation.",
+        baseline_policy="block_new_only",
+        fingerprint="docs",
+        baseline_status="baseline",
+    )
+
+    scanner.print_stdout_summary(
+        findings=[finding],
+        blocked=[],
+        files_scanned=1,
+        mode="unit_test",
+        output_json="tmp/validation/guardrails/example.json",
+        summary_md="tmp/validation/guardrails/example.md",
+        verbose_findings=False,
+        max_stdout_findings=80,
+    )
+
+    stdout = capsys.readouterr().out
+    assert "ARCH-WSL-001 docs/architecture/legacy.md" not in stdout
+    assert "findings=1, blocking=0" in stdout
+    assert "details=tmp/validation/guardrails/example.json,tmp/validation/guardrails/example.md" in stdout
+
+
+def test_failure_stdout_prints_only_blocking_findings(capsys) -> None:
+    scanner = _load_module()
+    baseline = scanner.Finding(
+        rule_id="ARCH-WSL-001",
+        title="Historical WSL path reference",
+        severity="P2",
+        category="portability",
+        file="docs/architecture/legacy.md",
+        line=3,
+        message="Historical WSL path reference",
+        remediation="Classify before remediation.",
+        baseline_policy="block_new_only",
+        fingerprint="docs",
+        baseline_status="baseline",
+    )
+    blocking = scanner.Finding(
+        rule_id="ERR-FALLBACK-001",
+        title="Broad exception handlers must not return fake success or defaults",
+        severity="P0",
+        category="error_handling",
+        file="backend/services/example.py",
+        line=10,
+        message="Broad exception handlers must not return fake success or defaults",
+        remediation="Fail fast.",
+        baseline_policy="block_new_only",
+        fingerprint="runtime",
+        baseline_status="new",
+    )
+
+    scanner.print_stdout_summary(
+        findings=[baseline, blocking],
+        blocked=[blocking],
+        files_scanned=2,
+        mode="unit_test",
+        output_json=None,
+        summary_md=None,
+        verbose_findings=False,
+        max_stdout_findings=80,
+    )
+
+    stdout = capsys.readouterr().out
+    assert "ERR-FALLBACK-001 backend/services/example.py" in stdout
+    assert "ARCH-WSL-001 docs/architecture/legacy.md" not in stdout
+    assert "findings=2, blocking=1" in stdout

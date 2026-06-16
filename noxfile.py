@@ -443,6 +443,8 @@ def l0(session: nox.Session) -> None:
         *scan_paths,
         "--fail-on",
         "HIGH",
+        "--output-json",
+        "tmp/validation/guardrails/verify_skill_l0_paths.json",
         external=True,
     )
     session.run(

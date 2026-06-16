@@ -33,8 +33,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect docs-lite lane
-        id: docs_lite
+      - name: Detect PR quality lane
+        id: quality_lane
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -43,27 +43,18 @@ jobs:
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
-          DOCS_LITE=1
-          while IFS= read -r path; do
-            case "${path}" in
-              docs/architecture/*|docs/analysis/*|docs/operations/*|docs/operations_*.md|README.md)
-                ;;
-              docs/standards/*|docs/codex_project_memory.md|AGENTS.md|AGENTS.override.md|.codex/*|.claude/*)
-                DOCS_LITE=0
-                break
-                ;;
-              "")
-                ;;
-              *)
-                DOCS_LITE=0
-                break
-                ;;
-            esac
-          done < tmp/validation/pr_quality/changed_files.txt
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/pr_quality/changed_files.txt \
+            --output-json tmp/validation/pr_quality/change-classification.json
+          DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
+          REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
+          CLASSIFICATION=$(python -c "import json; print(json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['classification'])")
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
+          echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
+          echo "classification=${CLASSIFICATION}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Python 3.12
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -71,13 +62,13 @@ jobs:
           cache-dependency-path: .github/requirements/pr-quality.txt
 
       - name: Install quality tooling
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         run: |
           python -m pip install --upgrade pip
           python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
 
       - name: Build AIstock PR quality summary
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
@@ -102,7 +93,7 @@ jobs:
           cat tmp/validation/pr_quality/summary.md
 
       - name: Build docs-lite version record
-        if: steps.docs_lite.outputs.docs_lite == '1'
+        if: steps.quality_lane.outputs.docs_lite == '1'
         run: |
           mkdir -p tmp/validation/pr_quality
           {
@@ -121,8 +112,31 @@ jobs:
           printf '{"docs_lite":true,"validation":"version_change_record_only"}\n' > tmp/validation/pr_quality/summary.json
           cat tmp/validation/pr_quality/summary.md
 
+      - name: Build registry-sync quality record
+        if: steps.quality_lane.outputs.registry_sync == '1'
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          python scripts/bug_registry_metadata_check.py \
+            --changed-files-file tmp/validation/pr_quality/changed_files.txt \
+            --close-sync-only \
+            --output-json tmp/validation/pr_quality/bug-registry-metadata.json
+          {
+            echo "# Registry-sync PR quality record"
+            echo ""
+            echo "- classification: `${{ steps.quality_lane.outputs.classification }}`"
+            echo "- validation: BUG JSON schema/linkage/gates only"
+            echo "- code_validation: skipped"
+            echo "- code_intelligence: skipped"
+            echo "- semgrep: skipped"
+            echo ""
+            echo "## Changed files"
+            sed 's/^/- `/' tmp/validation/pr_quality/changed_files.txt | sed 's/$/`/'
+          } > tmp/validation/pr_quality/summary.md
+          printf '{"registry_sync":true,"validation":"bug_registry_metadata_only"}\n' > tmp/validation/pr_quality/summary.json
+          cat tmp/validation/pr_quality/summary.md
+
       - name: Build code intelligence PR artifact
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -139,7 +153,7 @@ jobs:
           cat tmp/validation/pr_quality/code-intelligence-summary.md
 
       - name: Ruff changed Python files
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -153,7 +167,7 @@ jobs:
           fi
 
       - name: Semgrep AIstock guardrails (report-only phase)
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         continue-on-error: true
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
@@ -185,7 +199,7 @@ jobs:
             let body = `${marker}\n${summary}`;
             if (docsLite) {
               body = `${marker}\n${docsLite}\n\n${summary}`;
-            } else {
+            } else if (fs.existsSync(codeIntelPath)) {
               body = `${marker}\n${summary}\n\n${codeIntel}`;
             }
             body = `${body}\n\n${compactFooter}`;

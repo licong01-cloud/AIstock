@@ -569,6 +569,50 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _format_finding_line(finding: Finding) -> str:
+    return (
+        f"{finding.severity} {finding.baseline_status} "
+        f"{finding.rule_id} {finding.file}:{finding.line} - {finding.title}"
+    )
+
+
+def _artifact_refs(*, output_json: str | None, summary_md: str | None) -> str:
+    refs = [item for item in (output_json, summary_md) if item]
+    return f", details={','.join(refs)}" if refs else ""
+
+
+def print_stdout_summary(
+    *,
+    findings: list[Finding],
+    blocked: list[Finding],
+    files_scanned: int,
+    mode: str,
+    output_json: str | None,
+    summary_md: str | None,
+    verbose_findings: bool,
+    max_stdout_findings: int,
+) -> None:
+    """Keep passing validation output compact while preserving failure details."""
+    if verbose_findings:
+        visible = findings[:max_stdout_findings]
+        for finding in visible:
+            print(_format_finding_line(finding))
+        if len(findings) > len(visible):
+            print(f"... omitted {len(findings) - len(visible)} finding(s); see artifact output for full details.")
+    elif blocked:
+        visible = blocked[:max_stdout_findings]
+        for finding in visible:
+            print(_format_finding_line(finding))
+        if len(blocked) > len(visible):
+            print(f"... omitted {len(blocked) - len(visible)} blocking finding(s); see artifact output for full details.")
+
+    print(
+        "Guardrail scan completed: "
+        f"mode={mode}, files={files_scanned}, findings={len(findings)}, blocking={len(blocked)}"
+        f"{_artifact_refs(output_json=output_json, summary_md=summary_md)}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan AIstock development guardrails.")
     parser.add_argument("paths", nargs="*", help="Files or directories to scan. Defaults to catalog roots.")
@@ -581,6 +625,17 @@ def main() -> int:
     parser.add_argument("--output-json", help="Write machine-readable result JSON.")
     parser.add_argument("--summary-md", help="Write human-readable summary Markdown.")
     parser.add_argument("--max-findings-md", type=int, default=200, help="Maximum findings to include in Markdown.")
+    parser.add_argument(
+        "--verbose-findings",
+        action="store_true",
+        help="Print findings to stdout even when the gate passes. Default success output is compact.",
+    )
+    parser.add_argument(
+        "--max-stdout-findings",
+        type=int,
+        default=80,
+        help="Maximum findings to print to stdout on failure or with --verbose-findings.",
+    )
     parser.add_argument("--fail-on-severity", choices=["P0", "P1", "P2", "P3", "NONE"], default="P0")
     args = parser.parse_args()
 
@@ -624,16 +679,6 @@ def main() -> int:
     findings = apply_baseline_status(findings, baseline_fingerprints)
     blocked = blocking_findings(findings, args.fail_on_severity, fail_new_only=args.fail_new_only)
 
-    for finding in findings:
-        print(
-            f"{finding.severity} {finding.baseline_status} "
-            f"{finding.rule_id} {finding.file}:{finding.line} - {finding.title}"
-        )
-    print(
-        "Guardrail scan completed: "
-        f"mode={mode}, files={len(files)}, findings={len(findings)}, blocking={len(blocked)}"
-    )
-
     if args.output_json:
         write_json(
             root / args.output_json,
@@ -646,6 +691,16 @@ def main() -> int:
         )
     if args.summary_md:
         write_summary_md(root / args.summary_md, findings=findings, files_scanned=len(files), mode=mode, max_findings=args.max_findings_md)
+    print_stdout_summary(
+        findings=findings,
+        blocked=blocked,
+        files_scanned=len(files),
+        mode=mode,
+        output_json=args.output_json,
+        summary_md=args.summary_md,
+        verbose_findings=args.verbose_findings,
+        max_stdout_findings=args.max_stdout_findings,
+    )
 
     return 1 if blocked else 0
 

@@ -102,22 +102,43 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      - name: Build registry changed-file list
+        if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/bug_registry
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/bug_registry/changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/bug_registry/changed_files.txt
+          fi
+
+      - name: BUG registry metadata check
+        if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
+        run: |
+          python scripts/bug_registry_metadata_check.py \
+            --changed-files-file tmp/validation/bug_registry/changed_files.txt \
+            --close-sync-only \
+            --output-json tmp/validation/guardrails/bug-registry-metadata.json
+
       - name: Install nox + light deps
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install nox httpx pyyaml pytest
 
       - name: nox -s l0
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         run: python -m nox -s l0
 
       - name: nox -s validation_module_registry_l0
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         run: python -m nox -s validation_module_registry_l0
 
       - name: nox -s validation_catalog_integrity
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
+        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         run: python -m nox -s validation_catalog_integrity
 
       - name: Upload guardrail evidence
