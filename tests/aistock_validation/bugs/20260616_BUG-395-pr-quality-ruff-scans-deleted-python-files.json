@@ -28,8 +28,8 @@
   "expected": "PR Quality Ruff step ignores deleted files and only lints added/copied/modified/renamed/type-changed Python files; deleting a Python module must not fail with Ruff E902.",
   "first_seen_at": "2026-06-16T12:57:44.179208Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "86efde3beb6b1b8ebfdc155c26773c2b3eb5029e",
+  "fixed_at": "2026-06-16T13:15:52.165330Z",
   "github_issue_number": 1176,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1176",
   "last_seen_at": "2026-06-16T12:57:44.179208Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1177",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,11 @@
     "fingerprint": "cde4a16d02273e6484b3d1ad",
     "source_event_id": "FE-20260616-cde4a16d0227"
   },
+  "validation_evidence": [
+    "PR #1177 CI checks -> all required checks passed",
+    "python -m pytest backend/tests/scripts/test_issue_flow.py -q -> 35 passed",
+    "python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 validation_center_backend -> passed; validation_center_backend 438 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
