@@ -987,6 +987,36 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
 
+def test_workflow_smoke_isolates_synthetic_timing_from_stale_bug_000_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    events_path = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-000" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"timestamp": "2026-01-01T00:00:00Z", "event": "state:context_ready", "state": "context_ready"}),
+                json.dumps({"timestamp": "2026-06-01T00:00:00Z", "event": "state:validation_passed", "state": "validation_passed"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = workflow.build_workflow_smoke_plan(
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation.guardrails",
+    )
+
+    timing = payload["postmortem_preview"]["timing_summary"]
+    assert timing["event_count"] <= 1
+    assert timing["inferred_elapsed_seconds"] == 0.0
+    assert "isolated synthetic BUG-000" in payload["warnings"][0]
+
+
 def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3738,6 +3768,116 @@ def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     assert payload["workflow_gate"] == "blocked"
     assert payload["close_sync_cleanup"]["workflow_gate"] == "blocked"
     assert payload["blocking"] == ["worktree is dirty"]
+
+
+def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    close_sync_root = isolated_workflow_root / "registry"
+    cleanup_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "workflow_gate": "close_synced",
+            "registry_root": str(close_sync_root),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "merge_commit": "merge123",
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+    )
+
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        cleanup_calls.append(kwargs)
+        if kwargs.get("sync_root") and kwargs.get("apply"):
+            raise workflow.WorkflowError(
+                f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"
+            )
+        if kwargs.get("sync_root"):
+            return {
+                "workflow_gate": "blocked",
+                "branch": kwargs["branch"],
+                "worktree": kwargs.get("worktree"),
+                "sync_root": True,
+                "canonical_root": str(isolated_workflow_root),
+                "root_dirty_files": ["CLAUDE.md"],
+                "unrelated_root_dirty_files": ["CLAUDE.md"],
+                "origin_equivalent_dirty_files": [],
+                "root_git": {"branch": "main", "dirty": True, "head": "old", "origin_main": "new"},
+                "blocking": [f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"],
+            }
+        return {
+            "workflow_gate": "cleanup_done",
+            "branch": kwargs["branch"],
+            "worktree": kwargs.get("worktree"),
+            "sync_root": False,
+        }
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "complete"
+    assert payload["blocking"] == []
+    assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["cleanup"]["sync_root"] is False
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"]["sync_root"] is False
+    assert payload["root_sync_deferred"]["workflow_gate"] == "deferred"
+    assert payload["root_sync_deferred"]["unrelated_root_dirty_files"] == ["CLAUDE.md"]
+    assert [item["phase"] for item in payload["root_sync_deferred"]["phases"]] == [
+        "source_cleanup",
+        "close_sync_cleanup",
+    ]
+    assert "sync_root_after_unrelated_dirty_files_are_resolved" in payload["next_actions"]
+    assert [(call["sync_root"], call["apply"]) for call in cleanup_calls] == [
+        (True, True),
+        (True, False),
+        (False, True),
+        (True, True),
+        (True, False),
+        (False, True),
+    ]
 
 
 def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(

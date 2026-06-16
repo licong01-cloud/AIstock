@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase8_code_intelligence_v1_20260616"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase9_proactive_reports_v1_20260616"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -240,6 +240,19 @@ BASE_DDL: list[str] = [
         provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         as_of TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_proactive_reports (
+        report_id TEXT PRIMARY KEY,
+        report_type TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        summary_md TEXT NOT NULL,
+        sections_json JSONB NOT NULL,
+        source_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status TEXT NOT NULL DEFAULT 'generated',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_apr UNIQUE (report_type, report_date)
     )
     """,
     """
@@ -942,6 +955,7 @@ TABLE_COMMENTS = {
     "research_memory_items": "Native long-term Memory Ledger; source of truth, not RAG chunks.",
     "assistant_context_packs": "Deterministic memory/context bundles used by models and external agents.",
     "assistant_code_context_refs": "Code-intelligence context references injected into Research Assistant Context Packs; AST deterministic, no embedding.",
+    "assistant_proactive_reports": "Proactive morning and experiment reports generated from read-only evidence providers.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
     "research_memory_relations": "Native lightweight knowledge graph relations with evidence references.",
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
@@ -1114,6 +1128,14 @@ COLUMN_COMMENTS = {
     "assistant_code_context_refs.provenance_json": "Required provenance including commit, file, symbol, and generated_at.",
     "assistant_code_context_refs.as_of": "Timestamp of the adapter artifact or graph snapshot used by this reference.",
     "assistant_code_context_refs.created_at": "Row creation timestamp.",
+    "assistant_proactive_reports.report_id": "Stable proactive report identifier.",
+    "assistant_proactive_reports.report_type": "Report type such as morning_brief or experiment_daily.",
+    "assistant_proactive_reports.report_date": "Business date the proactive report covers.",
+    "assistant_proactive_reports.summary_md": "Evidence-first natural-language report body.",
+    "assistant_proactive_reports.sections_json": "Structured sections with facts, source_refs, reason_codes, and warnings.",
+    "assistant_proactive_reports.source_refs_json": "Flattened evidence references used by the report.",
+    "assistant_proactive_reports.status": "Report generation status.",
+    "assistant_proactive_reports.created_at": "Row creation timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",

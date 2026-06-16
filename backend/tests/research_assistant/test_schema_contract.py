@@ -38,7 +38,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase8_code_intelligence_v1_20260616"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase9_proactive_reports_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -48,6 +48,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "research_memory_access_log",
         "assistant_context_packs",
         "assistant_code_context_refs",
+        "assistant_proactive_reports",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -94,6 +95,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "COMMENT ON TABLE assistant_capabilities" in sql
     assert "COMMENT ON TABLE assistant_action_proposals" in sql
     assert "COMMENT ON TABLE assistant_code_context_refs" in sql
+    assert "COMMENT ON TABLE assistant_proactive_reports" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -202,6 +204,19 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
                 **item,
             },
         )
+    _assert_columns(
+        table_columns,
+        "proactive_reports",
+        {
+            "report_id": "apr_x",
+            "report_type": "morning_brief",
+            "report_date": "2099-12-31",
+            "summary_md": "summary",
+            "sections_json": {},
+            "source_refs_json": [],
+            "status": "generated",
+        },
+    )
     _assert_columns(
         table_columns,
         "action_proposals",
