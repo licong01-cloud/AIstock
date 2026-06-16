@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -85,6 +86,26 @@ RULES = [
 ]
 
 
+def _finding_dict(rule: Rule, file_path: Path, line: int) -> dict[str, object]:
+    return {
+        "severity": rule.severity,
+        "code": rule.code,
+        "file": file_path.as_posix(),
+        "line": line,
+        "message": rule.message,
+    }
+
+
+def _write_json(path: str, payload: dict[str, object]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _format_finding(rule: Rule, file_path: Path, line: int) -> str:
+    return f"{rule.severity} {rule.code} {file_path}:{line} - {rule.message}"
+
+
 def _git_changed_files() -> list[Path]:
     output = subprocess.check_output(
         ["git", "diff", "--name-only", "HEAD"],
@@ -111,12 +132,24 @@ def _iter_files(paths: Iterable[Path]) -> Iterable[Path]:
                 yield child
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="*", help="Files or directories to scan.")
     parser.add_argument("--changed-only", action="store_true", help="Scan git changed files only.")
     parser.add_argument("--fail-on", choices=["HIGH", "MEDIUM", "LOW", "NONE"], default="HIGH")
-    args = parser.parse_args()
+    parser.add_argument("--output-json", help="Write full machine-readable findings to a JSON artifact.")
+    parser.add_argument(
+        "--verbose-findings",
+        action="store_true",
+        help="Print all findings even when the gate passes. Default success output is compact.",
+    )
+    parser.add_argument(
+        "--max-stdout-findings",
+        type=int,
+        default=80,
+        help="Maximum findings to print to stdout on failure or with --verbose-findings.",
+    )
+    args = parser.parse_args(argv)
 
     paths = _git_changed_files() if args.changed_only else [Path(item) for item in args.paths]
     if not paths:
@@ -133,14 +166,32 @@ def main() -> int:
                 line = text.count("\n", 0, match.start()) + 1
                 findings.append((rule, file_path, line))
 
-    for rule, file_path, line in findings:
-        print(f"{rule.severity} {rule.code} {file_path}:{line} - {rule.message}")
-
     should_fail = any(severity_rank[item[0].severity] >= fail_rank for item in findings)
+    if args.output_json:
+        _write_json(
+            args.output_json,
+            {
+                "schema_version": "aistock_verify_skill_guardrail_scan_v1",
+                "paths": [path.as_posix() for path in paths],
+                "finding_count": len(findings),
+                "blocking_count": sum(1 for item in findings if severity_rank[item[0].severity] >= fail_rank),
+                "fail_on": args.fail_on,
+                "status": "failed" if should_fail else "passed",
+                "findings": [_finding_dict(rule, file_path, line) for rule, file_path, line in findings],
+            },
+        )
+    if should_fail or args.verbose_findings:
+        visible = findings[: args.max_stdout_findings]
+        for rule, file_path, line in visible:
+            print(_format_finding(rule, file_path, line))
+        if len(findings) > len(visible):
+            print(f"... omitted {len(findings) - len(visible)} finding(s); see artifact output for full details.")
+
     if should_fail:
         print(f"Guardrail scan failed with {len(findings)} finding(s).")
         return 1
-    print(f"Guardrail scan completed with {len(findings)} finding(s).")
+    suffix = f" details={args.output_json}" if args.output_json else ""
+    print(f"Guardrail scan completed with {len(findings)} finding(s).{suffix}")
     return 0
 
 

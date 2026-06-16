@@ -508,6 +508,42 @@ def test_start_writes_fix_ready_and_context_pack(
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
 
+def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(allowed_write_scope=["scripts/aistock_issue_workflow.py"]))
+    captured: dict[str, Any] = {}
+
+    def fake_summary(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return _fake_code_intelligence_summary()
+
+    monkeypatch.setattr(workflow.code_intelligence, "build_summary", fake_summary)
+
+    workflow.build_start_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+
+    assert captured["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+
+
+def test_code_intelligence_scope_falls_back_to_allowed_write_scope() -> None:
+    record = _bug(allowed_write_scope=["scripts/aistock_issue_workflow.py"])
+
+    assert workflow._code_intelligence_scope(record, []) == ["scripts/aistock_issue_workflow.py"]
+    assert workflow._code_intelligence_scope(record, ["scripts/code_intelligence_adapter.py"]) == [
+        "scripts/code_intelligence_adapter.py"
+    ]
+
+
 def test_start_created_worktree_seeds_bug_json(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

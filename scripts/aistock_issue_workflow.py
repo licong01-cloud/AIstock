@@ -3689,6 +3689,17 @@ def _issue_query(record: dict[str, Any], changed_files: list[str] | None = None)
     return " ".join(part for part in parts if part).strip() or "AIstock issue"
 
 
+def _code_intelligence_scope(record: dict[str, Any], changed_files: list[str] | None = None) -> list[str]:
+    """Use explicit changed files, then allowed scope, so pre-fix task cards stay scoped."""
+    return flow._unique_strings(
+        [
+            str(path).replace("\\", "/").lstrip("./")
+            for path in (changed_files or flow._as_list(record.get("allowed_write_scope")) or flow._as_list(record.get("suggested_scope")))
+            if str(path).strip()
+        ]
+    )
+
+
 def _build_code_intelligence_summary(
     *,
     item_id: str,
@@ -3696,10 +3707,11 @@ def _build_code_intelligence_summary(
     changed_files: list[str] | None,
     root: Path,
 ) -> dict[str, Any]:
+    scoped_files = _code_intelligence_scope(record, changed_files)
     return code_intelligence.build_summary(
         item_id=item_id,
-        query=_issue_query(record, changed_files),
-        changed_files=changed_files or [],
+        query=_issue_query(record, scoped_files),
+        changed_files=scoped_files,
         module=str(record.get("module") or "").strip() or None,
         root=root,
         skip_external=False,
@@ -4024,10 +4036,13 @@ def _build_batch_code_intelligence_summary(
     changed_files: list[str] | None,
     root: Path,
 ) -> dict[str, Any]:
+    scoped_files = _normalize_changed_files(changed_files)
+    if not scoped_files:
+        scoped_files = flow._unique_strings(path for record in records for path in _record_scope(record))
     return code_intelligence.build_summary(
         item_id=batch_id,
-        query=_batch_code_intelligence_query(records, changed_files),
-        changed_files=changed_files or [],
+        query=_batch_code_intelligence_query(records, scoped_files),
+        changed_files=scoped_files,
         module=str(records[0].get("module") or "").strip() if records else None,
         root=root,
         skip_external=False,

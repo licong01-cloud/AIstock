@@ -340,6 +340,67 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
+def test_static_gate_uses_registry_metadata_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    static_gate_steps = workflow["jobs"]["static-gate"]["steps"]
+    registry_steps = [
+        step
+        for step in static_gate_steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "BUG registry metadata check"
+    ]
+
+    assert len(registry_steps) == 1
+    assert registry_steps[0]["if"] == "needs.classify-changes.outputs.close_sync_metadata_only == 'true'"
+    assert "scripts/bug_registry_metadata_check.py" in registry_steps[0]["run"]
+    assert "--close-sync-only" in registry_steps[0]["run"]
+
+    nox_steps = [
+        step
+        for step in static_gate_steps
+        if isinstance(step, dict) and str(step.get("name") or "").startswith("nox -s ")
+    ]
+    assert nox_steps
+    assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+
+
+def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    names = [str(step.get("name") or "") for step in steps if isinstance(step, dict)]
+
+    assert names.count("Detect PR quality lane") == 1
+    assert names.count("Build registry-sync quality record") == 1
+    assert names.count("Comment PR summary") == 1
+    assert names.count("Upload PR quality artifacts") == 1
+    assert not any("Legacy" in name for name in names)
+
+    registry_step = next(step for step in steps if isinstance(step, dict) and step.get("name") == "Build registry-sync quality record")
+    assert registry_step["if"] == "steps.quality_lane.outputs.registry_sync == '1'"
+    assert "scripts/bug_registry_metadata_check.py" in registry_step["run"]
+    assert "--close-sync-only" in registry_step["run"]
+
+    normal_lane_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("name")
+        in {
+            "Set up Python 3.12",
+            "Install quality tooling",
+            "Build AIstock PR quality summary",
+            "Build code intelligence PR artifact",
+            "Ruff changed Python files",
+            "Semgrep AIstock guardrails (report-only phase)",
+        }
+    ]
+    assert normal_lane_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
+
+
 def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
     allocator.parent.mkdir(parents=True, exist_ok=True)
