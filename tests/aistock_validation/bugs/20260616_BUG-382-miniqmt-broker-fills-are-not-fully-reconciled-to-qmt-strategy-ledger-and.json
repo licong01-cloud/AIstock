@@ -35,8 +35,8 @@
   "expected": "MiniQMT unified simulation-runtime must reconcile broker-authoritative orders/trades into qmt_strategy ledger, terminalize stale/orphan open-like rows when the broker no longer reports them, release AIstock virtual frozen cash when QMT frozen_cash is zero or orders are terminal, and keep SimulationDailyRun status consistent with broker evidence without overwriting submit failures incorrectly.",
   "first_seen_at": "2026-06-16T02:09:47.005700Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f8a97cb87370effa40ae9c305e5090a0ee88ec30",
+  "fixed_at": "2026-06-16T03:32:32.279826Z",
   "github_issue_number": 1136,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1136",
   "last_seen_at": "2026-06-16T02:09:47.005700Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1139",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -64,6 +65,12 @@
     "fingerprint": "e94b5795929b2583849237bf",
     "source_event_id": "FE-20260616-e94b5795929b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 76 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "python -m nox -s l0 -> passed (blocking=0)",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
