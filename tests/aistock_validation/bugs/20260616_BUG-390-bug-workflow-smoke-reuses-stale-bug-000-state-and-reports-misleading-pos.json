@@ -30,8 +30,8 @@
   "expected": "workflow-smoke should isolate each synthetic smoke run or clear stale BUG-000 state so compact success output only reports current smoke evidence and no misleading stale timing.",
   "first_seen_at": "2026-06-16T09:47:36.980835Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "034b887d766a7c95a4c4834f20e1607c9368b6cb",
+  "fixed_at": "2026-06-16T10:06:01.545100Z",
   "github_issue_number": 1162,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1162",
   "last_seen_at": "2026-06-16T09:47:36.980835Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1163",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,13 @@
     "fingerprint": "34a8e87061dfedf4bb0aef3e",
     "source_event_id": "FE-20260616-34a8e87061df"
   },
+  "validation_evidence": [
+    "pytest workflow-smoke targeted tests -> 2 passed",
+    "workflow-smoke compact repro -> passed, event_count=1 inferred_elapsed_seconds=0",
+    "ruff changed workflow files -> passed",
+    "git diff --check -> passed",
+    "nox -s l0 validation_module_registry_l0 validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
