@@ -235,6 +235,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_hyperparam_history',
                 'qe_archive_query_analytics_view_status',
                 'qe_archive_query_run_leaderboard',
+                'qe_archive_query_topk_quality',
                 'qe_archive_query_seed_robustness',
                 'qe_archive_query_factor_performance',
                 'qe_archive_query_model_hyperparam_seed_perf',
@@ -701,6 +702,12 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         assistant_usable="direct_or_catalog",
         requires_confirmation=False,
         reason="read-only GET evidence: backend/mcp/modules/qe_archive.py:274 uses GET /analytics/run-leaderboard and repository only queries leaderboard rows",
+    ),
+    "qe_archive_query_topk_quality": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py uses GET /analytics/topk-quality and repository only queries v_topk_quality rows",
     ),
     "list_validation_runs": ToolMetadataOverride(
         risk_level="read_only",

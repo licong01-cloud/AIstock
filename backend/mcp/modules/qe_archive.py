@@ -35,6 +35,7 @@ TOOL_NAMES = (
     "qe_archive_query_hyperparam_history",
     "qe_archive_query_analytics_view_status",
     "qe_archive_query_run_leaderboard",
+    "qe_archive_query_topk_quality",
     "qe_archive_query_seed_robustness",
     "qe_archive_query_factor_performance",
     "qe_archive_query_model_hyperparam_seed_perf",
@@ -277,11 +278,23 @@ def register(registry: "ModuleRegistry") -> None:
         min_icir: float | None = None,
         min_ir: float | None = None,
         limit: int = 20,
-        order_by: str = "cagr",
+        order_by: str = "calmar",
     ) -> Any:
         return client.get(
             "/analytics/run-leaderboard",
             params={"model_type": model_type, "min_icir": min_icir, "min_ir": min_ir, "limit": limit, "order_by": order_by},
+        )
+
+    @registry.mcp.tool(name="qe_archive_query_topk_quality")
+    def qe_archive_query_topk_quality(
+        run_id: str | None = None,
+        task_id: str | None = None,
+        k: int | None = None,
+        limit: int = 20,
+    ) -> Any:
+        return client.get(
+            "/analytics/topk-quality",
+            params={"run_id": run_id, "task_id": task_id, "k": k, "limit": limit},
         )
 
     @registry.mcp.tool(name="qe_archive_query_seed_robustness")
@@ -336,7 +349,7 @@ def register(registry: "ModuleRegistry") -> None:
         model_type: str | None = None,
         min_seed_count: int = 5,
         limit: int = 20,
-        order_by: str = "cagr_mean",
+        order_by: str = "calmar",
     ) -> Any:
         return client.get(
             "/analytics/promotion-candidates",

@@ -24,12 +24,48 @@ from .models import (
     SymbolSummaryRecord,
     TradeRecord,
     build_factor_set_hash,
+    normalize_json,
     sha256_json,
 )
 
 
 DEFAULT_CONFIG_SCHEMA_VERSION = "qe_archive_config_v1"
 DEFAULT_MANIFEST_SCHEMA_VERSION = "qe_archive_repro_manifest_v1"
+
+TOPK_NUMERIC_METRIC_KEYS = (
+    "topk_return_20",
+    "topk_return_50",
+    "topk_hit_rate_20",
+    "topk_hit_rate_50",
+    "topk_decay",
+    "within_portfolio_rankic",
+    "topk_dispersion_20",
+    "topk_dispersion_50",
+    "topk_date_count",
+    "topk_joined_observation_count",
+    "topk_pred_observation_count",
+    "topk_label_observation_count",
+    "topk_rankic_date_count",
+    "topk_observation_count_20",
+    "topk_observation_count_50",
+)
+
+TOPK_TEXT_METRIC_KEYS = (
+    "topk_quality_status",
+    "topk_source",
+    "topk_error",
+    "topk_label_source",
+    "topk_score_field",
+    "topk_realized_return_field",
+    "topk_rank_direction",
+    "topk_return_method",
+    "topk_hit_rate_method",
+    "topk_dispersion_method",
+    "within_portfolio_rankic_method",
+    "topk_forward_only",
+)
+
+TOPK_JSON_METRIC_KEYS = ("topk_k_values",)
 
 
 @dataclass(frozen=True)
@@ -447,10 +483,73 @@ class QEArchivePayloadExtractor:
                 if _is_metric_value(value):
                     records.append(_metric_record(run_id, key, value, scope, f"enhanced_metrics.{prefix}.{key}"))
 
+        records.extend(self._extract_topk_metrics(run_id, enhanced))
+
         deduped: dict[tuple[str, str, str | None], MetricRecord] = {}
         for record in records:
             deduped[(record.metric_key, record.metric_scope, record.source_key)] = record
         return list(deduped.values())
+
+    def _extract_topk_metrics(self, run_id: str, enhanced: Mapping[str, Any]) -> list[MetricRecord]:
+        """Pass through pre-computed Top-K diagnostics without recomputing them."""
+        diagnostics = _ensure_mapping(enhanced.get("prediction_diagnostics") or {})
+        if not diagnostics:
+            return []
+
+        status = _optional_str(diagnostics.get("topk_quality_status")) or "missing"
+        quality_flag = "ok" if status == "ok" else f"topk_{status}"
+        records: list[MetricRecord] = []
+        for key in TOPK_NUMERIC_METRIC_KEYS:
+            if key not in diagnostics:
+                continue
+            value = diagnostics.get(key)
+            source_key = f"enhanced_metrics.prediction_diagnostics.{key}"
+            num = _as_float(value)
+            records.append(
+                MetricRecord(
+                    run_id=run_id,
+                    metric_key=key,
+                    metric_scope="prediction_topk",
+                    value_num=num,
+                    value_text=None if num is not None or value is None else str(value),
+                    source_key=source_key,
+                    source_payload_path=source_key,
+                    quality_flag=quality_flag,
+                )
+            )
+        for key in TOPK_TEXT_METRIC_KEYS:
+            if key not in diagnostics:
+                continue
+            value = diagnostics.get(key)
+            source_key = f"enhanced_metrics.prediction_diagnostics.{key}"
+            records.append(
+                MetricRecord(
+                    run_id=run_id,
+                    metric_key=key,
+                    metric_scope="prediction_topk",
+                    value_text=_optional_str(value),
+                    source_key=source_key,
+                    source_payload_path=source_key,
+                    quality_flag=quality_flag,
+                )
+            )
+        for key in TOPK_JSON_METRIC_KEYS:
+            if key not in diagnostics:
+                continue
+            value = diagnostics.get(key)
+            source_key = f"enhanced_metrics.prediction_diagnostics.{key}"
+            records.append(
+                MetricRecord(
+                    run_id=run_id,
+                    metric_key=key,
+                    metric_scope="prediction_topk",
+                    value_json=normalize_json(value) if value is not None else None,
+                    source_key=source_key,
+                    source_payload_path=source_key,
+                    quality_flag=quality_flag,
+                )
+            )
+        return records
 
     def _extract_curves(self, run_id: str, enhanced: Mapping[str, Any]) -> list[CurveRecord]:
         records: list[CurveRecord] = []

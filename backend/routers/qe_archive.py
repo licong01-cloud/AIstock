@@ -395,7 +395,7 @@ def query_qe_archive_run_leaderboard(
     min_icir: float | None = Query(None),
     min_ir: float | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    order_by: str = Query("cagr"),
+    order_by: str = Query("calmar"),
 ):
     return {
         "status": "success",
@@ -407,6 +407,27 @@ def query_qe_archive_run_leaderboard(
             order_by=order_by,
         ),
     }
+
+
+@router.get("/analytics/topk-quality", summary="QE archive forward-only Top-K quality analytics")
+def query_qe_archive_topk_quality(
+    run_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    k: int | None = Query(None, description="Optional K selector; currently supports 20 or 50."),
+    limit: int = Query(20, ge=1, le=100),
+):
+    try:
+        return {
+            "status": "success",
+            "data": get_repository().query_topk_quality(
+                run_id=run_id,
+                task_id=task_id,
+                k=k,
+                limit=limit,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/analytics/seed-robustness", summary="QE archive seed robustness analytics")
@@ -486,7 +507,7 @@ def query_qe_archive_promotion_candidates(
     model_type: str | None = Query(None),
     min_seed_count: int = Query(5, ge=1, le=1000),
     limit: int = Query(20, ge=1, le=100),
-    order_by: str = Query("cagr_mean"),
+    order_by: str = Query("calmar"),
 ):
     return {
         "status": "success",

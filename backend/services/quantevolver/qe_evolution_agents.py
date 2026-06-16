@@ -2,7 +2,7 @@
 import json
 import asyncio
 from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Mapping
 
 from .factor_official_evaluation_service import CALC_ENGINE
 from .llm_client import get_llm_kwargs
@@ -13,6 +13,89 @@ except ImportError:
     litellm = None
 
 logger = logging.getLogger(__name__)
+
+_RETURN_METRIC_KEYS = (
+    "cagr",
+    "CAGR",
+    "annualized_return",
+    "annualized_return_with_cost",
+    "1day.excess_return_with_cost.annualized_return",
+    "enhanced_metrics.absolute_returns.cagr",
+)
+_MAX_DRAWDOWN_KEYS = (
+    "max_drawdown",
+    "1day.excess_return_with_cost.max_drawdown",
+    "enhanced_metrics.absolute_returns.max_drawdown",
+)
+_CALMAR_KEYS = (
+    "calmar",
+    "calmar_ratio",
+    "enhanced_metrics.absolute_returns.calmar",
+    "enhanced_metrics.absolute_returns.calmar_ratio",
+)
+_TOPK_EVAL_KEYS = (
+    "topk_return_20",
+    "topk_hit_rate_20",
+    "topk_decay",
+    "topk_return_50",
+    "topk_hit_rate_50",
+    "within_portfolio_rankic",
+    "topk_dispersion_20",
+    "topk_dispersion_50",
+)
+
+
+def _metric_by_path(metrics: Mapping[str, Any] | None, key: str) -> Any:
+    if not isinstance(metrics, Mapping):
+        return None
+    if key in metrics:
+        return metrics.get(key)
+    current: Any = metrics
+    for part in key.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _first_number_metric(metrics: Mapping[str, Any] | None, *keys: str) -> float | None:
+    for key in keys:
+        value = _metric_by_path(metrics, key)
+        if value is None or value == "" or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                continue
+    return None
+
+
+def _metric_subset(metrics: Mapping[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in keys:
+        value = _first_number_metric(metrics, key)
+        if value is not None:
+            result[key.split(".")[-1]] = value
+    return result
+
+
+def _calmar_from_metrics(metrics: Mapping[str, Any] | None, annual_return: float | None, max_drawdown: float | None) -> float | None:
+    calmar = _first_number_metric(metrics, *_CALMAR_KEYS)
+    if calmar is not None:
+        return calmar
+    if annual_return is None or max_drawdown is None:
+        return None
+    drawdown_abs = abs(max_drawdown)
+    if drawdown_abs == 0:
+        return None
+    return annual_return / drawdown_abs
+
+
+def _format_pct_or_na(value: float | None) -> str:
+    return f"{value:.1%}" if value is not None else "N/A"
 
 _ACTIVE_OFFICIAL_RATING_JOIN_SQL = """
 JOIN aistock_factor_catalog fc
@@ -215,64 +298,73 @@ class EvolutionAgents:
         返回 dict: {"is_sota": bool, "reason": str, "method": str}
         method: "baseline" | "hard_veto" | "llm" | "safety_net"
         """
+        cur_ret = _first_number_metric(current_metrics, *_RETURN_METRIC_KEYS)
+        cur_dd_raw = _first_number_metric(current_metrics, *_MAX_DRAWDOWN_KEYS)
+        cur_calmar = _calmar_from_metrics(current_metrics, cur_ret, cur_dd_raw)
+
         if not historical_sota_metrics:
-            _BASELINE_IC = 0.03
             _BASELINE_ANN_RET = 0.10
             _BASELINE_MAX_DD = 0.30
-            cur_ic = current_metrics.get("IC") or 0
-            cur_ret = current_metrics.get("annualized_return") or 0
-            cur_dd_raw = current_metrics.get("max_drawdown")
             cur_dd = abs(cur_dd_raw) if cur_dd_raw is not None else None
             meets_baseline = (
-                cur_ic > _BASELINE_IC
+                cur_ret is not None
                 and cur_ret > _BASELINE_ANN_RET
                 and cur_dd is not None
                 and cur_dd < _BASELINE_MAX_DD
             )
-            dd_str = f"{cur_dd:.1%}" if cur_dd is not None else "N/A"
+            dd_str = _format_pct_or_na(cur_dd)
+            ret_str = _format_pct_or_na(cur_ret)
+            calmar_str = f"{cur_calmar:.2f}" if cur_calmar is not None else "N/A"
             if meets_baseline:
-                reason = f"首个 SOTA 达标: IC={cur_ic:.4f}, AnnRet={cur_ret:.1%}, MaxDD={dd_str}"
+                reason = f"首个 SOTA 达标: AnnRet/CAGR={ret_str}, MaxDD={dd_str}, Calmar={calmar_str}"
                 logger.info(reason)
                 return {"is_sota": True, "reason": reason, "method": "baseline"}
             else:
-                reason = f"未达 SOTA 基线 (IC={cur_ic:.4f}, AnnRet={cur_ret:.1%}, MaxDD={dd_str})"
+                reason = f"未达 SOTA 基线 (AnnRet/CAGR={ret_str}, MaxDD={dd_str}, Calmar={calmar_str})"
                 logger.info(reason)
                 return {"is_sota": False, "reason": reason, "method": "baseline"}
 
         # ── 计算核心指标变化率 ──
-        cur_ret = current_metrics.get("annualized_return", 0) or 0
-        sota_ret = historical_sota_metrics.get("annualized_return", 0) or 0
-        cur_dd_raw = current_metrics.get("max_drawdown")
-        sota_dd_raw = historical_sota_metrics.get("max_drawdown")
+        sota_ret = _first_number_metric(historical_sota_metrics, *_RETURN_METRIC_KEYS)
+        sota_dd_raw = _first_number_metric(historical_sota_metrics, *_MAX_DRAWDOWN_KEYS)
+        sota_calmar = _calmar_from_metrics(historical_sota_metrics, sota_ret, sota_dd_raw)
         dd_available = cur_dd_raw is not None and sota_dd_raw is not None and cur_dd_raw != 0 and sota_dd_raw != 0
         cur_dd = abs(cur_dd_raw) if dd_available else None
         sota_dd = abs(sota_dd_raw) if dd_available else None
-        ret_change = (cur_ret - sota_ret) / abs(sota_ret) if sota_ret != 0 else 0
-        dd_change = (cur_dd - sota_dd) / sota_dd if dd_available else 0
-        cur_sharpe = current_metrics.get("sharpe", 0) or 0
-        sota_sharpe = historical_sota_metrics.get("sharpe", 0) or 0
-        sharpe_change = (cur_sharpe - sota_sharpe) / abs(sota_sharpe) if sota_sharpe != 0 else 0
+        ret_change = (cur_ret - sota_ret) / abs(sota_ret) if cur_ret is not None and sota_ret not in (None, 0) else None
+        dd_change = (cur_dd - sota_dd) / sota_dd if dd_available else None
+        calmar_change = (
+            (cur_calmar - sota_calmar) / abs(sota_calmar)
+            if cur_calmar is not None and sota_calmar not in (None, 0)
+            else None
+        )
 
         # ── 第一层: 硬性否决（LLM 无权推翻） ──
-        if ret_change < -0.20:
+        if ret_change is not None and ret_change < -0.20:
             reason = f"硬性否决: AnnRet 退化 {ret_change*100:.1f}%"
             logger.info(f"SOTA {reason}")
             return {"is_sota": False, "reason": reason, "method": "hard_veto"}
-        if dd_available and dd_change > 0.30:
+        if dd_change is not None and dd_change > 0.30:
             reason = f"硬性否决: MaxDD 恶化 {dd_change*100:.1f}%"
             logger.info(f"SOTA {reason}")
             return {"is_sota": False, "reason": reason, "method": "hard_veto"}
         degradation_count = 0
-        for key, cur_v, sota_v in [
-            ("IC", current_metrics.get("IC", 0) or 0, historical_sota_metrics.get("IC", 0) or 0),
-            ("ICIR", current_metrics.get("ICIR", 0) or 0, historical_sota_metrics.get("ICIR", 0) or 0),
-            ("AnnRet", cur_ret, sota_ret),
-            ("Sharpe", cur_sharpe, sota_sharpe),
-        ]:
-            if sota_v > 0 and cur_v < sota_v * 0.90:
+        comparable_count = 0
+        for key, cur_v, sota_v in (
+            ("AnnRet/CAGR", cur_ret, sota_ret),
+            ("Calmar", cur_calmar, sota_calmar),
+        ):
+            if cur_v is None or sota_v is None or sota_v <= 0:
+                continue
+            comparable_count += 1
+            if cur_v < sota_v * 0.90:
                 degradation_count += 1
-        if degradation_count >= 3:
-            reason = f"硬性否决: {degradation_count}/4 指标退化 >10%"
+        if dd_change is not None:
+            comparable_count += 1
+            if dd_change > 0.10:
+                degradation_count += 1
+        if comparable_count >= 2 and degradation_count >= 2:
+            reason = f"硬性否决: {degradation_count}/{comparable_count} CAGR/MDD/Calmar 指标退化"
             logger.info(f"SOTA {reason}")
             return {"is_sota": False, "reason": reason, "method": "hard_veto"}
 
@@ -292,13 +384,48 @@ class EvolutionAgents:
                 trimmed_eval_history["trend_summary"] = evolution_history.get("trend_summary", {})
                 loops = evolution_history.get("loops", [])
                 trimmed_eval_history["loops"] = [
-                    {k: v for k, v in lp.items() if k in ("loop_index", "action_type", "IC", "annualized_return", "sharpe", "max_drawdown", "is_sota")}
+                    {
+                        k: v
+                        for k, v in lp.items()
+                        if k in (
+                            "loop_index",
+                            "action_type",
+                            "annualized_return",
+                            "cagr",
+                            "max_drawdown",
+                            "calmar",
+                            "topk_return_20",
+                            "topk_hit_rate_20",
+                            "topk_decay",
+                            "IC",
+                            "Rank_IC",
+                            "ICIR",
+                            "is_sota",
+                        )
+                    }
                     for lp in loops[-3:]
                 ]
 
             # 清理 metrics 中的大体积字段，避免干扰 LLM 判断
             def _strip_heavy_fields(m: Dict) -> Dict:
-                return {k: v for k, v in m.items() if k != "enhanced_metrics"}
+                compact = {k: v for k, v in m.items() if k != "enhanced_metrics"}
+                compact.setdefault("sota_primary", {
+                    "annualized_return_or_cagr": _first_number_metric(m, *_RETURN_METRIC_KEYS),
+                    "max_drawdown": _first_number_metric(m, *_MAX_DRAWDOWN_KEYS),
+                    "calmar": _calmar_from_metrics(
+                        m,
+                        _first_number_metric(m, *_RETURN_METRIC_KEYS),
+                        _first_number_metric(m, *_MAX_DRAWDOWN_KEYS),
+                    ),
+                })
+                topk = _metric_subset(m, _TOPK_EVAL_KEYS)
+                if topk:
+                    compact["topk_quality"] = topk
+                compact.setdefault(
+                    "rubric_note",
+                    "Primary=CAGR/MDD/Calmar; Top-K participates only when present; IC/RankIC/ICIR diagnostic only.",
+                )
+                return compact
 
             user_prompt = safe_format(prompt_data["user_prompt_template"],
                 current_metrics=json.dumps(_strip_heavy_fields(current_metrics), ensure_ascii=False),
@@ -340,13 +467,15 @@ class EvolutionAgents:
                 return {"is_sota": True, "reason": llm_reason, "path": llm_path, "method": "llm"}
 
             # ── 第三层: 安全网 — 覆盖 LLM 的明显误判 ──
-            # 当核心绩效指标（AnnRet + Sharpe）均显著改善且 MaxDD 未严重恶化时，
+            # 当核心绩效指标（CAGR/AnnRet + Calmar）显著改善且 MaxDD 未严重恶化时，
             # LLM 拒绝可能是受到噪声指标干扰，安全网介入纠正
-            dd_ok = not dd_available or dd_change < 0.15  # MaxDD 恶化 <15%
-            if ret_change >= 0.03 and sharpe_change >= 0.03 and dd_ok:
+            dd_ok = dd_change is None or dd_change < 0.15  # MaxDD 恶化 <15%
+            ret_ok = ret_change is not None and ret_change >= 0.03
+            calmar_ok = calmar_change is not None and calmar_change >= 0.03
+            if ret_ok and calmar_ok and dd_ok:
                 reason = (
                     f"安全网覆盖 LLM 误判: AnnRet↑{ret_change*100:.1f}%, "
-                    f"Sharpe↑{sharpe_change*100:.1f}%, "
+                    f"Calmar↑{calmar_change*100:.1f}%, "
                     f"MaxDD变化{dd_change*100:+.1f}% (LLM reason: {llm_reason[:100]})"
                 )
                 logger.warning(f"SOTA {reason}")

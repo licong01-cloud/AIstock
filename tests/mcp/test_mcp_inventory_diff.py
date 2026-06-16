@@ -35,7 +35,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
     qe_experiment = _tool_names_from_standalone_script("scripts/aistock_qe_experiment_mcp_server.py")
     qe_archive = _tool_names_from_standalone_script("scripts/aistock_qe_archive_mcp_server.py")
     assert len(qe_experiment) == 27
-    assert len(qe_archive) == 28
+    assert len(qe_archive) == 29
     assert qe_experiment < set(MODULE_TOOL_NAMES["qe_experiment"])
     assert set(MODULE_TOOL_NAMES["qe_experiment"]) - qe_experiment == {
         "qe_template_create_and_run_confirmed",

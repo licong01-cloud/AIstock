@@ -451,12 +451,17 @@ JSON_COLUMNS = {
 QE_ARCHIVE_ANALYTICS_VIEW_DEFS: dict[str, dict[str, str]] = {
     "run_leaderboard": {
         "view_name": "v_run_leaderboard",
-        "purpose": "Run-level signal and return/risk leaderboard.",
+        "purpose": "Run-level CAGR/MDD/Calmar leaderboard with Top-K quality.",
+        "grain": "run_id",
+    },
+    "topk_quality": {
+        "view_name": "v_topk_quality",
+        "purpose": "Run-level forward-only prediction-rank Top-K quality.",
         "grain": "run_id",
     },
     "seed_robustness": {
         "view_name": "v_seed_robustness",
-        "purpose": "Multi-seed robustness by config fingerprint.",
+        "purpose": "Multi-seed return/risk robustness with nullable Top-K aggregates.",
         "grain": "factor_set_hash x model_type x label_horizon x undertrain_mode x topk",
     },
     "factor_importance_stability": {
@@ -501,6 +506,14 @@ def _order_by_clause(value: str | None, allowed: set[str], default: str) -> str:
     if column not in allowed:
         column = default
     return f"{column} DESC NULLS LAST"
+
+
+def _order_by_clause_with_direction(value: str | None, allowed: set[str], default: str, *, ascending: set[str] | None = None) -> str:
+    column = str(value or default).strip().lower()
+    if column not in allowed:
+        column = default
+    direction = "ASC" if column in (ascending or set()) else "DESC"
+    return f"{column} {direction} NULLS LAST"
 
 
 class QEArchiveRepository:
@@ -1904,7 +1917,7 @@ class QEArchiveRepository:
         min_icir: float | None = None,
         min_ir: float | None = None,
         limit: int = 20,
-        order_by: str = "cagr",
+        order_by: str = "calmar",
     ) -> list[dict[str, Any]]:
         limit = _clamped_limit(limit)
         filters: list[str] = []
@@ -1919,10 +1932,23 @@ class QEArchiveRepository:
             filters.append("information_ratio >= %s")
             params.append(float(min_ir))
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr", "sharpe", "information_ratio", "icir", "rank_icir", "completed_at", "score_total"},
-            "cagr",
+            {
+                "cagr",
+                "sharpe",
+                "information_ratio",
+                "icir",
+                "rank_icir",
+                "completed_at",
+                "score_total",
+                "calmar",
+                "max_drawdown",
+                "topk_return_20",
+                "topk_hit_rate_20",
+                "within_portfolio_rankic",
+            },
+            "calmar",
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -1933,13 +1959,69 @@ class QEArchiveRepository:
                            factor_count, label_horizon, ic, icir, rank_ic, rank_icir,
                            cagr, sharpe, information_ratio, max_drawdown, calmar,
                            random_seed, reproducibility_level, verification_status,
-                           score_total, completed_at
+                           score_total, completed_at,
+                           topk_return_20, topk_return_50, topk_hit_rate_20,
+                           topk_hit_rate_50, topk_decay, within_portfolio_rankic,
+                           topk_dispersion_20, topk_dispersion_50,
+                           topk_quality_status, topk_source, topk_date_count,
+                           topk_joined_observation_count
                     FROM qe_archive.v_run_leaderboard
                     {where_sql}
                     ORDER BY {order_sql}
                     LIMIT %s
                     """,
                     params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_topk_quality(
+        self,
+        *,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        k: int | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters: list[str] = []
+        params: list[Any] = []
+        if run_id:
+            filters.append("run_id = %s")
+            params.append(run_id)
+        if task_id:
+            filters.append("task_id = %s")
+            params.append(task_id)
+        if k is not None and int(k) not in {20, 50}:
+            raise ValueError("k must be one of 20 or 50")
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, task_id, loop_index, experiment_id, model_type,
+                           factor_set_hash, label_horizon, completed_at,
+                           topk_return_20, topk_return_50, topk_hit_rate_20,
+                           topk_hit_rate_50, topk_decay, within_portfolio_rankic,
+                           topk_dispersion_20, topk_dispersion_50,
+                           topk_date_count, topk_joined_observation_count,
+                           topk_pred_observation_count, topk_label_observation_count,
+                           topk_rankic_date_count, topk_observation_count_20,
+                           topk_observation_count_50, topk_quality_status,
+                           topk_source, topk_error, topk_label_source,
+                           topk_rank_direction,
+                           CASE WHEN %s = 20 THEN topk_return_20
+                                WHEN %s = 50 THEN topk_return_50 END AS selected_topk_return,
+                           CASE WHEN %s = 20 THEN topk_hit_rate_20
+                                WHEN %s = 50 THEN topk_hit_rate_50 END AS selected_topk_hit_rate,
+                           CASE WHEN %s = 20 THEN topk_dispersion_20
+                                WHEN %s = 50 THEN topk_dispersion_50 END AS selected_topk_dispersion
+                    FROM qe_archive.v_topk_quality
+                    {where_sql}
+                    ORDER BY completed_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    [k, k, k, k, k, k, *params],
                 )
                 return self._fetch_dicts(cur)
 
@@ -1960,10 +2042,24 @@ class QEArchiveRepository:
             params.append(model_type)
         if stable_only:
             filters.append("is_return_stable = TRUE")
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
+            {
+                "cagr_mean",
+                "sharpe_mean",
+                "ir_mean",
+                "icir_mean",
+                "rank_icir_mean",
+                "latest_completed_at",
+                "calmar_mean",
+                "max_drawdown_mean",
+                "cagr_cv",
+                "topk_return_20_mean",
+                "topk_hit_rate_20_mean",
+                "within_portfolio_rankic_mean",
+            },
             "cagr_mean",
+            ascending={"cagr_cv"},
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -1972,10 +2068,15 @@ class QEArchiveRepository:
                     f"""
                     SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
                            topk, run_count, distinct_seed_count, random_seeds,
-                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
-                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
-                           icir_mean, icir_std, rank_icir_mean,
-                           is_return_stable, latest_completed_at
+                            cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                            sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                            icir_mean, icir_std, rank_icir_mean,
+                            is_return_stable, latest_completed_at, calmar, calmar_mean,
+                            topk_return_20_mean, topk_return_20_std, topk_return_20_cv,
+                            topk_return_20_sample_count, topk_return_50_mean,
+                            topk_hit_rate_20_mean, topk_hit_rate_50_mean, topk_decay_mean,
+                            within_portfolio_rankic_mean, topk_dispersion_20_mean,
+                            topk_dispersion_50_mean, topk_metric_run_count, topk_ok_run_count
                     FROM qe_archive.v_seed_robustness
                     WHERE {' AND '.join(filters)}
                     ORDER BY {order_sql}
@@ -2102,7 +2203,7 @@ class QEArchiveRepository:
         model_type: str | None = None,
         min_seed_count: int = 5,
         limit: int = 20,
-        order_by: str = "cagr_mean",
+        order_by: str = "calmar",
     ) -> list[dict[str, Any]]:
         limit = _clamped_limit(limit)
         filters = ["distinct_seed_count >= %s"]
@@ -2110,10 +2211,25 @@ class QEArchiveRepository:
         if model_type:
             filters.append("model_type = %s")
             params.append(model_type)
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
-            "cagr_mean",
+            {
+                "cagr_mean",
+                "sharpe_mean",
+                "ir_mean",
+                "icir_mean",
+                "rank_icir_mean",
+                "latest_completed_at",
+                "calmar",
+                "calmar_mean",
+                "max_drawdown_mean",
+                "cagr_cv",
+                "topk_return_20_mean",
+                "topk_hit_rate_20_mean",
+                "within_portfolio_rankic_mean",
+            },
+            "calmar",
+            ascending={"cagr_cv"},
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -2122,10 +2238,21 @@ class QEArchiveRepository:
                     f"""
                     SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
                            topk, run_count, distinct_seed_count, random_seeds,
-                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
-                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
-                           icir_mean, rank_icir_mean, is_return_stable,
-                           latest_completed_at, passes_gate
+                            cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                            sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                            icir_mean, rank_icir_mean, is_return_stable,
+                            latest_completed_at, passes_gate, calmar, calmar_mean,
+                            cagr_gate_passes, max_drawdown_gate_passes,
+                            cagr_cv_gate_passes, overfit_gate_passes,
+                            cagr_gate_threshold, max_drawdown_gate_threshold,
+                            cagr_cv_gate_threshold, topk_return_20_mean,
+                            topk_return_20_std, topk_return_20_cv,
+                            topk_return_20_sample_count, topk_return_50_mean,
+                            topk_hit_rate_20_mean, topk_hit_rate_50_mean,
+                            topk_decay_mean, within_portfolio_rankic_mean,
+                            topk_dispersion_20_mean, topk_dispersion_50_mean,
+                            topk_metric_run_count, topk_ok_run_count,
+                            topk_return_20_present, topk_soft_gate_status
                     FROM qe_archive.v_promotion_candidates
                     WHERE {' AND '.join(filters)}
                     ORDER BY {order_sql}

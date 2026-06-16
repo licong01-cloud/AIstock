@@ -162,6 +162,7 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "query_hyperparam_history",
         "get_analytics_view_status",
         "query_run_leaderboard",
+        "query_topk_quality",
         "query_seed_robustness",
         "query_factor_performance",
         "query_model_hyperparam_seed_perf",
@@ -385,6 +386,69 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
         "qe_metrics_payload",
         "qe_enhanced_metrics_payload",
     }
+
+
+def test_payload_extractor_passes_through_topk_prediction_diagnostics() -> None:
+    payload = _sample_qe_payload()
+    payload["metrics"] = dict(payload["metrics"])
+    enhanced = dict(payload["metrics"]["enhanced_metrics"])
+    enhanced["prediction_diagnostics"] = {
+        "topk_return_20": 0.0123,
+        "topk_return_50": 0.0061,
+        "topk_hit_rate_20": 0.55,
+        "topk_hit_rate_50": 0.51,
+        "topk_decay": 0.0062,
+        "within_portfolio_rankic": -0.11,
+        "topk_dispersion_20": 0.018,
+        "topk_quality_status": "ok",
+        "topk_source": "pred_label_artifacts",
+        "topk_k_values": [20, 50],
+        "topk_date_count": 2,
+    }
+    payload["metrics"]["enhanced_metrics"] = enhanced
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_topk",
+        source_sub_id="Loop1",
+    )
+
+    by_key = {metric.metric_key: metric for metric in extracted.metrics if metric.metric_scope == "prediction_topk"}
+    assert by_key["topk_return_20"].value_num == 0.0123
+    assert by_key["topk_hit_rate_20"].value_num == 0.55
+    assert by_key["topk_quality_status"].value_text == "ok"
+    assert by_key["topk_k_values"].value_json == [20, 50]
+    assert by_key["topk_return_20"].quality_flag == "ok"
+
+
+def test_payload_extractor_preserves_null_topk_with_quality_flag() -> None:
+    payload = _sample_qe_payload()
+    payload["metrics"] = dict(payload["metrics"])
+    enhanced = dict(payload["metrics"]["enhanced_metrics"])
+    enhanced["prediction_diagnostics"] = {
+        "topk_return_20": None,
+        "topk_hit_rate_20": None,
+        "topk_quality_status": "missing_label",
+        "topk_error": "label.pkl not found",
+    }
+    payload["metrics"]["enhanced_metrics"] = enhanced
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_topk_missing",
+        source_sub_id="Loop1",
+    )
+
+    by_key = {metric.metric_key: metric for metric in extracted.metrics if metric.metric_scope == "prediction_topk"}
+    assert by_key["topk_return_20"].value_num is None
+    assert by_key["topk_hit_rate_20"].value_num is None
+    assert by_key["topk_quality_status"].value_text == "missing_label"
+    assert by_key["topk_return_20"].quality_flag == "topk_missing_label"
+    assert by_key["topk_error"].value_text == "label.pkl not found"
 
 
 def test_payload_extractor_marks_seedless_payload_audit_only_unset_legacy() -> None:
@@ -1434,6 +1498,10 @@ def test_qe_archive_analytics_api_exposes_compact_view_queries(monkeypatch) -> N
             assert kwargs == {"model_type": "LSTM", "min_icir": 0.5, "min_ir": None, "limit": 7, "order_by": "icir"}
             return [{"run_id": "run_1", "icir": 0.6}]
 
+        def query_topk_quality(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"run_id": "run_1", "task_id": None, "k": 20, "limit": 6}
+            return [{"run_id": "run_1", "topk_return_20": 0.012}]
+
         def query_seed_robustness(self, **kwargs):  # type: ignore[no-untyped-def]
             assert kwargs == {"model_type": None, "min_seed_count": 3, "stable_only": True, "limit": 5, "order_by": "cagr_mean"}
             return [{"factor_set_hash": "hash", "distinct_seed_count": 3}]
@@ -1466,6 +1534,7 @@ def test_qe_archive_analytics_api_exposes_compact_view_queries(monkeypatch) -> N
     cases = [
         ("/api/v1/qe-archive/analytics/views", None, "v_run_leaderboard"),
         ("/api/v1/qe-archive/analytics/run-leaderboard?model_type=LSTM&min_icir=0.5&limit=7&order_by=icir", "run_id", "run_1"),
+        ("/api/v1/qe-archive/analytics/topk-quality?run_id=run_1&k=20&limit=6", "run_id", "run_1"),
         ("/api/v1/qe-archive/analytics/seed-robustness?min_seed_count=3&stable_only=true&limit=5", "factor_set_hash", "hash"),
         ("/api/v1/qe-archive/analytics/factor-performance?factor_name=alpha_001&min_runs=2&limit=4&order_by=avg_icir", "factor_name", "alpha_001"),
         ("/api/v1/qe-archive/analytics/model-hyperparam-seed-perf?model_type=LSTM&limit=6", "model_type", "LSTM"),

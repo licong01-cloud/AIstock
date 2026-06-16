@@ -1034,11 +1034,274 @@ def _extract_top_stocks(recorder) -> dict:
     return result
 
 
+_TOPK_NUMERIC_KEYS = (
+    "topk_return_20",
+    "topk_return_50",
+    "topk_hit_rate_20",
+    "topk_hit_rate_50",
+    "topk_decay",
+    "within_portfolio_rankic",
+    "topk_dispersion_20",
+    "topk_dispersion_50",
+    "topk_date_count",
+    "topk_joined_observation_count",
+    "topk_pred_observation_count",
+    "topk_label_observation_count",
+    "topk_rankic_date_count",
+    "topk_observation_count_20",
+    "topk_observation_count_50",
+)
+
+
+def _round_or_none(value, digits=6):
+    try:
+        if value is None:
+            return None
+        value = float(value)
+        if _np.isnan(value) or _np.isinf(value):
+            return None
+        return round(value, digits)
+    except Exception:
+        return None
+
+
+def _topk_null_metrics(status, error=None, **extra) -> dict:
+    """Return an explicit null-valued Top-K payload for non-computable runs."""
+    result = {key: None for key in _TOPK_NUMERIC_KEYS}
+    result.update(
+        {
+            "topk_quality_status": status,
+            "topk_source": "pred_label_artifacts",
+            "topk_k_values": [20, 50],
+            "topk_error": str(error)[:500] if error else None,
+            "topk_rank_direction": "rank_ascending_1_best",
+            "topk_return_method": "daily_mean_of_prediction_rank_le_k_label_return",
+            "topk_hit_rate_method": "daily_mean_positive_label_ratio_in_prediction_rank_le_k",
+            "topk_dispersion_method": "daily_std_of_label_return_in_prediction_rank_le_k",
+            "within_portfolio_rankic_method": "negated_spearman_rank_vs_label_positive_good",
+            "topk_forward_only": True,
+        }
+    )
+    result.update(extra)
+    return result
+
+
+def _column_text(col) -> str:
+    if isinstance(col, tuple):
+        return ".".join(str(part) for part in col if part is not None)
+    return str(col)
+
+
+def _pick_named_column(df: pd.DataFrame, preferred_names: tuple[str, ...]):
+    lowered = {name.lower() for name in preferred_names}
+    for col in df.columns:
+        parts = [str(part).lower() for part in col] if isinstance(col, tuple) else [str(col).lower()]
+        if any(part in lowered for part in parts):
+            return col
+    for col in df.columns:
+        text = _column_text(col).lower()
+        if any(name in text for name in lowered):
+            return col
+    return df.columns[0] if len(df.columns) else None
+
+
+def _find_date_col(columns) -> object | None:
+    for col in columns:
+        text = _column_text(col).lower()
+        parts = [str(part).lower() for part in col] if isinstance(col, tuple) else [str(col).lower()]
+        if text in {"datetime", "date", "trade_date"} or "date" in text or any(
+            part in {"datetime", "date", "trade_date"} or "date" in part for part in parts
+        ):
+            return col
+    return None
+
+
+def _find_instrument_col(columns) -> object | None:
+    for col in columns:
+        text = _column_text(col).lower()
+        parts = [str(part).lower() for part in col] if isinstance(col, tuple) else [str(col).lower()]
+        if text in {"instrument", "symbol", "code"} or "instrument" in text or "inst" in text or any(
+            part in {"instrument", "symbol", "code"} or "instrument" in part or "inst" in part for part in parts
+        ):
+            return col
+    return None
+
+
+def _artifact_to_trade_frame(obj, value_name: str, preferred_cols: tuple[str, ...]) -> pd.DataFrame:
+    if isinstance(obj, pd.Series):
+        df = obj.to_frame(name=obj.name or value_name)
+    elif isinstance(obj, pd.DataFrame):
+        df = obj.copy()
+    else:
+        df = pd.DataFrame(obj)  # type: ignore[arg-type]
+
+    if isinstance(df.index, pd.MultiIndex):
+        index_names = [name if name else f"index_{idx}" for idx, name in enumerate(df.index.names)]
+        df = df.reset_index()
+        renamed = {}
+        date_col = _find_date_col(index_names)
+        inst_col = _find_instrument_col(index_names)
+        if date_col in df.columns:
+            renamed[date_col] = "datetime"
+        if inst_col in df.columns:
+            renamed[inst_col] = "instrument"
+        df = df.rename(columns=renamed)
+    else:
+        index_name = df.index.name or "datetime"
+        df = df.reset_index().rename(columns={"index": index_name})
+        date_col = _find_date_col(df.columns)
+        if date_col is not None:
+            df = df.rename(columns={date_col: "datetime"})
+
+    if "datetime" not in df.columns or "instrument" not in df.columns:
+        date_col = _find_date_col(df.columns)
+        inst_col = _find_instrument_col(df.columns)
+        renamed = {}
+        if date_col is not None:
+            renamed[date_col] = "datetime"
+        if inst_col is not None:
+            renamed[inst_col] = "instrument"
+        df = df.rename(columns=renamed)
+
+    datetime_col = _find_date_col(df.columns) or ("datetime" if "datetime" in df.columns else None)
+    instrument_col = _find_instrument_col(df.columns) or ("instrument" if "instrument" in df.columns else None)
+    if datetime_col is None or instrument_col is None:
+        raise ValueError(f"{value_name} artifact missing datetime/instrument axes")
+
+    excluded = {"datetime", "instrument", "trade_date", "date"}
+    candidate_cols = [
+        col
+        for col in df.columns
+        if col not in {datetime_col, instrument_col} and _column_text(col).lower() not in excluded
+    ]
+    value_col = _pick_named_column(df[candidate_cols], preferred_cols) if candidate_cols else None
+    if value_col is None:
+        raise ValueError(f"{value_name} artifact has no value column")
+
+    out = df[[datetime_col, instrument_col, value_col]].copy()
+    out.columns = ["datetime", "instrument", value_name]
+    out["datetime"] = pd.to_datetime(out["datetime"], utc=True, errors="coerce")
+    out["trade_date"] = out["datetime"].dt.date.astype(str)
+    out["instrument"] = out["instrument"].astype(str)
+    out[value_name] = pd.to_numeric(out[value_name], errors="coerce")
+    out = out.replace([_np.inf, -_np.inf], _np.nan).dropna(subset=["trade_date", "instrument", value_name])
+    return out
+
+
+def _load_label_artifact(recorder):
+    errors = []
+    for artifact_name in ("label.pkl", "sig_analysis/label.pkl"):
+        try:
+            return recorder.load_object(artifact_name), artifact_name
+        except Exception as exc:
+            errors.append(f"{artifact_name}: {exc}")
+    raise FileNotFoundError("; ".join(errors))
+
+
+def _extract_tier1_topk_metrics(recorder, pred_obj) -> dict:
+    """Compute forward-only prediction-rank Top-K realized-return metrics."""
+    try:
+        label_obj, label_source = _load_label_artifact(recorder)
+    except FileNotFoundError as exc:
+        return _topk_null_metrics("missing_label", exc)
+
+    try:
+        pred_df = _artifact_to_trade_frame(pred_obj, "score", ("score", "pred", "prediction"))
+        label_df = _artifact_to_trade_frame(label_obj, "label", ("LABEL0", "label", "return"))
+    except Exception as exc:
+        return _topk_null_metrics("invalid_artifact_schema", exc)
+
+    try:
+        pred_df = pred_df.sort_values(["trade_date", "score"], ascending=[True, False]).copy()
+        pred_df["rank"] = (
+            pred_df.groupby("trade_date")["score"].rank(ascending=False, method="first").astype("Int64")
+        )
+        joined = pred_df[["trade_date", "instrument", "score", "rank"]].merge(
+            label_df[["trade_date", "instrument", "label"]],
+            on=["trade_date", "instrument"],
+            how="inner",
+        )
+        joined = joined.replace([_np.inf, -_np.inf], _np.nan).dropna(subset=["score", "rank", "label"])
+        if joined.empty:
+            return _topk_null_metrics(
+                "insufficient_data",
+                "pred.pkl and label.pkl have no overlapping datetime/instrument rows",
+                topk_pred_observation_count=int(len(pred_df)),
+                topk_label_observation_count=int(len(label_df)),
+                topk_label_source=label_source,
+            )
+
+        per_k: dict[int, dict[str, list[float] | int]] = {
+            20: {"returns": [], "hit_rates": [], "dispersions": [], "obs": 0},
+            50: {"returns": [], "hit_rates": [], "dispersions": [], "obs": 0},
+        }
+        rankics: list[float] = []
+        date_count = 0
+        for _date, day_df in joined.groupby("trade_date", sort=True):
+            day_df = day_df.sort_values("rank", ascending=True)
+            if day_df.empty:
+                continue
+            date_count += 1
+            if len(day_df) >= 3:
+                corr = day_df["rank"].corr(day_df["label"], method="spearman")
+                # rank=1 is the best prediction, so invert Spearman to keep positive=good.
+                corr = _round_or_none(-corr if corr is not None else None)
+                if corr is not None:
+                    rankics.append(float(corr))
+            for k in (20, 50):
+                top = day_df[day_df["rank"] <= k]
+                if top.empty:
+                    continue
+                labels = pd.to_numeric(top["label"], errors="coerce").dropna()
+                if labels.empty:
+                    continue
+                per_k[k]["returns"].append(float(labels.mean()))  # type: ignore[index,union-attr]
+                per_k[k]["hit_rates"].append(float((labels > 0).mean()))  # type: ignore[index,union-attr]
+                dispersion = _round_or_none(labels.std())
+                if dispersion is not None:
+                    per_k[k]["dispersions"].append(float(dispersion))  # type: ignore[index,union-attr]
+                per_k[k]["obs"] = int(per_k[k]["obs"]) + int(len(labels))  # type: ignore[index]
+
+        result = _topk_null_metrics(
+            "ok",
+            None,
+            topk_pred_observation_count=int(len(pred_df)),
+            topk_label_observation_count=int(len(label_df)),
+            topk_joined_observation_count=int(len(joined)),
+            topk_date_count=int(date_count),
+            topk_rankic_date_count=int(len(rankics)),
+            topk_label_source=label_source,
+            topk_score_field="pred.pkl:score",
+            topk_realized_return_field=f"{label_source}:LABEL0",
+        )
+        for k in (20, 50):
+            returns = per_k[k]["returns"]  # type: ignore[index]
+            hit_rates = per_k[k]["hit_rates"]  # type: ignore[index]
+            dispersions = per_k[k]["dispersions"]  # type: ignore[index]
+            result[f"topk_return_{k}"] = _round_or_none(_np.mean(returns) if returns else None)
+            result[f"topk_hit_rate_{k}"] = _round_or_none(_np.mean(hit_rates) if hit_rates else None)
+            result[f"topk_dispersion_{k}"] = _round_or_none(_np.mean(dispersions) if dispersions else None)
+            result[f"topk_observation_count_{k}"] = int(per_k[k]["obs"])  # type: ignore[index]
+        if result["topk_return_20"] is not None and result["topk_return_50"] is not None:
+            result["topk_decay"] = _round_or_none(result["topk_return_20"] - result["topk_return_50"])
+        result["within_portfolio_rankic"] = _round_or_none(_np.mean(rankics) if rankics else None)
+        if not any(result[f"topk_observation_count_{k}"] for k in (20, 50)):
+            result.update(_topk_null_metrics("insufficient_data", "no non-null Top-K label returns"))
+        return result
+    except Exception as exc:
+        return _topk_null_metrics("error", exc)
+
+
 def _extract_prediction_diagnostics(recorder) -> dict:
     """Extract prediction behavior diagnostics from pred.pkl."""
     result = {}
     try:
         pred_obj = recorder.load_object("pred.pkl")
+    except Exception as e:
+        print(f"Warning: failed to load pred.pkl for prediction diagnostics: {e}")
+        return _topk_null_metrics("missing_pred", e)
+
+    try:
         if isinstance(pred_obj, pd.Series):
             pdf = pred_obj.to_frame(name="score")
         elif isinstance(pred_obj, pd.DataFrame):
@@ -1088,7 +1351,9 @@ def _extract_prediction_diagnostics(recorder) -> dict:
                     result["top30_stability"] = round(float(_np.mean(overlaps)), 4)
 
     except Exception as e:
-        print(f"Warning: failed to extract prediction diagnostics: {e}")
+        print(f"Warning: failed to extract prediction stability diagnostics: {e}")
+
+    result.update(_extract_tier1_topk_metrics(recorder, pred_obj))
     return result
 
 
