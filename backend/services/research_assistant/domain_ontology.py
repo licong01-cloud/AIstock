@@ -21,6 +21,7 @@ class McpDomain(str, Enum):
     STRATEGY_GOVERNANCE = "strategy_governance"
     EXECUTION_POLICY = "execution_policy"
     EXTERNAL_RESEARCH = "external_research"
+    STOCK_ANALYSIS = "stock_analysis"
     GENERAL = "general"
 
 
@@ -241,6 +242,53 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         plan_tools=("external_research_save_evidence",),
         confirmed_tools=(),
         prompt_key="domain.external_research",
+    ),
+    McpDomain.STOCK_ANALYSIS: DomainSpec(
+        domain=McpDomain.STOCK_ANALYSIS,
+        intent_value="stock_analysis_request",
+        server_key="aistock-stock-analysis",
+        default_tool="stock_analysis_get_quote",
+        risk_policy="read_only_stock_data_then_external_evidence",
+        summary_zh="Individual stock quote, kline, financial, fund-flow, margin, technical and external-fundamental evidence cards",
+        synonyms=(
+            "stock analysis",
+            "individual stock",
+            "stock evidence",
+            "stock evidence card",
+            "quote",
+            "kline",
+            "financials",
+            "fund flow",
+            "margin financing",
+            "technicals",
+            "个股",
+            "股票分析",
+            "证据卡",
+            "行情",
+            "K线",
+            "财务",
+            "资金流",
+            "融资融券",
+            "技术指标",
+            "主营业务",
+            "行业地位",
+            "竞争格局",
+            "发展趋势",
+        ),
+        read_tools=(
+            "stock_analysis_get_quote",
+            "stock_analysis_get_kline",
+            "stock_analysis_get_financials",
+            "stock_analysis_get_quarterly",
+            "stock_analysis_get_margin_financing",
+            "stock_analysis_get_fund_flow",
+            "stock_analysis_get_technicals",
+            "external_research_search_web",
+            "external_research_fetch_extract",
+        ),
+        plan_tools=(),
+        confirmed_tools=(),
+        prompt_key="domain.stock_analysis",
     ),
 }
 

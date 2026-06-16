@@ -114,6 +114,13 @@ SERVER_DISPLAY_METADATA: dict[str, dict[str, Any]] = {
         "domain": "external_research",
         "summary_zh": "Evidence-first external web, paper and fetch/extract retrieval",
     },
+    "aistock-stock-analysis": {
+        "title": "Stock Analysis MCP",
+        "display_name_zh": "个股分析",
+        "business_aliases_zh": ["个股证据卡", "行情", "财务", "资金流", "技术指标"],
+        "domain": "stock_analysis",
+        "summary_zh": "Read-only individual stock evidence cards from deterministic market data and external research",
+    },
 }
 
 LEGACY_SERVER_ALIASES: dict[str, str] = {
@@ -138,6 +145,13 @@ REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
     "qe_template_create_and_run_confirmed": ["template_kind", "title", "config_json", "confirm_direct_run"],
     "local_data_get_dataset_status": ["dataset"],
     "local_data_apply_repair_confirmed": ["plan_id", "confirmation_text"],
+    "stock_analysis_get_quote": ["symbol"],
+    "stock_analysis_get_kline": ["symbol"],
+    "stock_analysis_get_financials": ["symbol"],
+    "stock_analysis_get_quarterly": ["symbol"],
+    "stock_analysis_get_margin_financing": ["symbol"],
+    "stock_analysis_get_fund_flow": ["symbol"],
+    "stock_analysis_get_technicals": ["symbol"],
 }
 
 PREFLIGHT_CHECKS_BY_TOOL: dict[str, list[str]] = {

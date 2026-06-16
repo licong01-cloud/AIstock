@@ -58,6 +58,16 @@ class NextUnifiedDataAccess:
 
         return self._uda.get_quarterly_reports(symbol, analysis_date=analysis_date)
 
+    def get_margin_trading_history(
+        self,
+        symbol: str,
+        days: int = 5,
+        analysis_date: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """只读获取个股融资融券历史摘要，直接代理 core.UnifiedDataAccess 实现。"""
+
+        return self._uda.get_margin_trading_history(symbol, days=days, analysis_date=analysis_date)
+
     def get_market_sentiment_data(
         self,
         symbol: str,

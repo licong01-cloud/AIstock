@@ -220,6 +220,17 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
         "query",
         "locale",
         "provider",
+        "source_refs",
+        "as_of",
+        "reason_codes",
+        "warnings",
+        "status",
+        "evidence_card",
+        "sections",
+        "fundamentals",
+        "symbol",
+        "dataset",
+        "item",
     }
     compact = {key: value for key, value in payload.items() if key in allowed}
     if isinstance(compact.get("items"), list):
@@ -241,7 +252,7 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
     return compact
 
 
-TERMINAL_SUMMARY_RESPONSE_MODES = {"local_data_daily_sync_status"}
+TERMINAL_SUMMARY_RESPONSE_MODES = {"local_data_daily_sync_status", "stock_analysis_evidence_card"}
 
 
 def tool_result_message(result: McpToolResult) -> dict[str, Any]:

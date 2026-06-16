@@ -112,6 +112,16 @@
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
+    "aistock-stock-analysis": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=stock_analysis"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    },
     "research-assistant": {
       "command": "python",
       "args": [
