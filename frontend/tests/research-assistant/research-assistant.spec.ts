@@ -224,8 +224,12 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("<assistant_tool_choice>");
-  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("aistock-validation/mcp_github_issue_sync_bug");
+  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("validation issue");
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("route decision");
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
   await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("MCP route decision");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
 });
 
 test("Research Assistant chat renders auto-executed MCP summary result cards", async ({ page: browserPage }) => {
@@ -304,14 +308,16 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
 
   const main = browserPage.getByTestId("ra-chat-main");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已执行只读 MCP 摘要查询");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已完成只读业务查询");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("summary-first");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("返回 2 / 总计 47");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("alpha_momentum_20d");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("原始 payload / 矩阵 / 因子明细行");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("factor_library_get_detail");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("原始 payload / 矩阵 / 因子明细行");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("factor_library_get_detail");
   await expect(main).not.toContainText("raw_payload");
   await expect(main).not.toContainText("factor_value_rows");
+  await expect(main).not.toContainText("research_assistant_catalog_summary_adapter");
   await expect(main).not.toContainText('"items"');
   await expect(main).not.toContainText("{");
 });
@@ -403,8 +409,8 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   }
   await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
   await expect(browserPage.getByText("summary-first").first()).toBeVisible();
-  await expect(browserPage.getByText("limit=50&include_schema=false")).toBeVisible();
-  await expect(browserPage.getByText("已就绪").first()).toBeVisible();
+  await expect(browserPage.getByText("include_schema=false").first()).toBeVisible();
+  await expect(browserPage.getByText("ready").first()).toBeVisible();
   await expect(browserPage.locator("body")).not.toContainText("鎴");
   await expect(browserPage.locator("body")).not.toContainText("锛");
 });

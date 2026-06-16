@@ -1,0 +1,82 @@
+{
+  "actual": "A minqmt_sim portfolio without active binding produces kwargs without account_mode/account_group_id and therefore can use MiniQMTSimBackend exclusive_account mode; bind_capacity still reports max_concurrent_packages=1 for that legacy mode.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "tests/aistock_validation/bugs/20260612_BUG-348-p0-paperv2-miniqmt-designcompliance-miniqmt-portfolio-without-account-gr.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-348",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T13:33:25.204098Z",
+  "description": "A minqmt_sim portfolio without active binding produces kwargs without account_mode/account_group_id and therefore can use MiniQMTSimBackend exclusive_account mode; bind_capacity still reports max_concurrent_packages=1 for that legacy mode.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-968440236c20",
+      "timestamp": "2026-06-12T13:33:25.204094Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:104-110,144-149,627-632,871-884"
+  ],
+  "expected": "Paper v2 MiniQMT product execution must require account_group_slots binding/runtime attribution and fail fast before broker construction or submit when missing; no minqmt_sim product path may fall back to exclusive_account or fixed max_concurrent_packages=1.",
+  "first_seen_at": "2026-06-12T13:33:25.204098Z",
+  "fix_branch": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:24.280117Z",
+  "github_issue_number": 1032,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1032",
+  "last_seen_at": "2026-06-12T13:33:25.204098Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -c \"from types import SimpleNamespace; from backend.services.paper_trading_v2.day_runner import miniqmt_account_slot_context,miniqmt_broker_kwargs_for_portfolio; from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository; repo=InMemoryPaperTradingV2Repository(); p=SimpleNamespace(portfolio_id='paper_no_binding',auto_run_config={'broker':{'account_id':'acct-a'}},broker_backend='minqmt_sim'); print(miniqmt_account_slot_context(repo,p)); print(miniqmt_broker_kwargs_for_portfolio(repo,p,package_id='pkg_a'))\"",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][PaperV2][MiniQMT][DesignCompliance] MiniQMT portfolio without account-group binding still uses legacy exclusive_account path",
+  "trigger_condition": {
+    "fingerprint": "968440236c20f596c983759f",
+    "source_event_id": "FE-20260612-968440236c20"
+  },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

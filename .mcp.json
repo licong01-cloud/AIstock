@@ -31,6 +31,16 @@
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
+    "aistock-qlib-data": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=qlib_data"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    },
     "aistock-validation": {
       "command": "python",
       "args": [
@@ -67,6 +77,26 @@
       "args": [
         "scripts/aistock_mcp_gateway.py",
         "--profile=trading_ops"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    },
+    "aistock-paper-v2-monitor": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=paper_v2_monitor"
+      ],
+      "env": {
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    },
+    "aistock-paper-v2-stable": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_mcp_gateway.py",
+        "--profile=paper_v2_stable"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"

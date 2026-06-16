@@ -20,7 +20,7 @@ providers:
       required_permissions:
         - models:read
   deepseek_api:
-    enabled: false
+    enabled: true
     base_url_env: DEEPSEEK_BASE_URL
     default_base_url: https://api.deepseek.com
     model: deepseek-v4-pro

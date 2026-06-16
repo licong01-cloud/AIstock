@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import ComputePanel, { ComputeStatus, ComputeScope, SnapshotInfo, FactorStats } from "./components/ComputePanel";
+import ComputePanel, { ComputeStatus, ComputeScope, FactorStats, OfficialCacheWindow } from "./components/ComputePanel";
 import CorrelationHeatmap from "./components/CorrelationHeatmap";
 import HighCorrTable from "./components/HighCorrTable";
 import PairDetail, { PairData, RelatedFactor } from "./components/PairDetail";
@@ -30,11 +30,10 @@ export default function FactorCorrelationPage() {
   const [computing, setComputing] = useState(false);
   const [computeScope, setComputeScope] = useState<ComputeScope>("cache");
   const [includeDisabled, setIncludeDisabled] = useState(false);
-  const [snapshotDate, setSnapshotDate] = useState("");
   const [overviewData, setOverviewData] = useState<{
-    snapshots: SnapshotInfo[];
     factor_stats: FactorStats;
-    single_cache: { cached_count: number; total_size_mb: number; date_range: string | null; as_of_date: string | null };
+    single_cache: { cached_count: number; total_size_mb: number; date_range: string | null; as_of_date: string | null; cache_root?: string | null; cache_source?: string | null; data_source_mode?: string | null; window_train_start?: string | null; window_backtest_end?: string | null };
+    official_cache_window?: OfficialCacheWindow | null;
     correlation_meta: Record<string, any> | null;
   } | null>(null);
   const [selectedPair, setSelectedPair] = useState<{ fa: string; fb: string }>({
@@ -77,19 +76,16 @@ export default function FactorCorrelationPage() {
     return null;
   }, [includeDisabled]);
 
-  // ── 加载总览数据（快照列表 + 因子统计） ──
-  const loadOverview = useCallback(async (targetDataDate?: string) => {
+  // ── 加载总览数据（官方缓存窗口 + 因子统计） ──
+  const loadOverview = useCallback(async () => {
     try {
-      const url = targetDataDate
-        ? `${BASE}/correlations/overview?data_date=${targetDataDate}`
-        : `${BASE}/correlations/overview`;
-      const res = await fetch(url);
+      const res = await fetch(`${BASE}/correlations/overview`);
       if (res.ok) {
         const data = await res.json();
         setOverviewData(data);
         return data;
       }
-      // 非 ok 响应：清空数据，避免旧快照数据残留
+      // 非 ok 响应：清空数据，避免旧官方缓存状态残留
       setOverviewData(null);
     } catch (e) {
       console.error("加载总览数据失败", e);
@@ -99,15 +95,11 @@ export default function FactorCorrelationPage() {
   }, []);
 
   // ── 加载矩阵数据 ──
-  // HDF5 快照在 compute 时冻结，无法按 include_disabled 增量更新。
-  // 此处固定 include_disabled=true 拉取 HDF5 全量 + disabled_factors 列表，
+  // 相关性矩阵在 compute 时冻结，无法按 include_disabled 增量更新。
   // 子组件（HighCorrTable/FactorDedupPanel）自行按 includeDisabled 做客户端过滤/标识。
   const loadMatrix = useCallback(async () => {
     try {
-      const asOfParam = snapshotDate
-        ? `&as_of_date=${snapshotDate.slice(0, 4)}-${snapshotDate.slice(4, 6)}-${snapshotDate.slice(6, 8)}`
-        : "";
-      const res = await fetch(`${BASE}/correlations/matrix?threshold=0&include_disabled=true${asOfParam}`);
+      const res = await fetch(`${BASE}/correlations/matrix?threshold=0&include_disabled=true`);
       if (res.ok) {
         const data = await res.json();
         setMatrixData(data);
@@ -125,7 +117,7 @@ export default function FactorCorrelationPage() {
       setMatrixData(null);
     }
     return null;
-  }, [snapshotDate]);
+  }, []);
 
   // ── 加载因子对详情 ──
   const loadPairDetail = useCallback(async (fa: string, fb: string) => {
@@ -164,10 +156,6 @@ export default function FactorCorrelationPage() {
     try {
       const body: Record<string, any> = { force_recompute: true, include_disabled: includeDisabled };
 
-      if (snapshotDate) {
-        body.data_date = snapshotDate;
-      }
-
       const res = await fetch(`${BASE}/correlations/compute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -200,7 +188,7 @@ export default function FactorCorrelationPage() {
       showToast("触发计算异常", "error");
       setComputing(false);
     }
-  }, [loadStatus, loadMatrix, loadOverview, computeScope, includeDisabled, snapshotDate]);
+  }, [loadStatus, loadMatrix, loadOverview, computeScope, includeDisabled]);
 
   // ── 热力图点击 / 预警表点击 → 跳转因子对分析 ──
   const handleSelectPair = useCallback(
@@ -250,20 +238,6 @@ export default function FactorCorrelationPage() {
     setActiveTab("dedup");
   }, []);
 
-  // ── 快照切换时清空旧数据并重新加载 ──
-  const prevSnapshotDate = useRef(snapshotDate);
-  useEffect(() => {
-    if (prevSnapshotDate.current !== snapshotDate) {
-      prevSnapshotDate.current = snapshotDate;
-      // 先清空旧数据，避免新旧快照数据交叉显示
-      setMatrixData(null);
-      setOverviewData(null);
-      loadOverview(snapshotDate || undefined);
-      loadMatrix();
-    }
-  }, [snapshotDate, loadOverview, loadMatrix]);
-
-  // ── 初始加载（仅 mount 时执行一次）──
   const initRef = useRef(false);
   useEffect(() => {
     if (initRef.current) return;
@@ -335,13 +309,11 @@ export default function FactorCorrelationPage() {
         computing={computing}
         scope={computeScope}
         includeDisabled={includeDisabled}
-        snapshotDate={snapshotDate}
-        availableSnapshots={overviewData?.snapshots || []}
         factorStats={overviewData?.factor_stats || null}
         singleCache={overviewData?.single_cache || null}
+        officialCacheWindow={overviewData?.official_cache_window || null}
         onScopeChange={setComputeScope}
         onIncludeDisabledChange={setIncludeDisabled}
-        onSnapshotDateChange={setSnapshotDate}
         onCompute={handleCompute}
       />
 

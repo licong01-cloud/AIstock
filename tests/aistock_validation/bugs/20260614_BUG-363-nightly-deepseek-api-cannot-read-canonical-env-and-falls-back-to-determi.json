@@ -1,0 +1,89 @@
+{
+  "actual": "Nightly artifacts show GitHub Models 429 followed by deepseek_api missing key, so scheduler falls back to deterministic plans.",
+  "allowed_write_scope": [
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260614_BUG-363-nightly-deepseek-api-cannot-read-canonical-env-and-falls-back-to-determi.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-363",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-14T13:01:53.857316Z",
+  "description": "Nightly artifacts show GitHub Models 429 followed by deepseek_api missing key, so scheduler falls back to deterministic plans.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260614-8b4a07c52724",
+      "timestamp": "2026-06-14T13:01:53.857313Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Actions run 27478045411 code-intelligence artifact llm-nightly-adaptive-scheduler.json"
+  ],
+  "expected": "Nightly DeepSeek V4 Pro participates reliably in warning-only scheduling and diagnosis using safe canonical env resolution.",
+  "first_seen_at": "2026-06-14T13:01:53.857316Z",
+  "fix_branch": null,
+  "fix_commit": "9c0bcacbe4cbbfd9b7d63278f61600e244ba9cb9",
+  "fixed_at": "2026-06-14T15:20:37.727154Z",
+  "github_issue_number": 1075,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1075",
+  "last_seen_at": "2026-06-14T13:01:53.857316Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1076",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly DeepSeek API cannot read canonical env and falls back to deterministic scheduling",
+  "trigger_condition": {
+    "fingerprint": "8b4a07c52724746d5b5c9f9a",
+    "source_event_id": "FE-20260614-8b4a07c52724"
+  },
+  "validation_evidence": [
+    "python -m ruff check scripts/llm_provider_adapter.py scripts/nightly_adaptive_scheduler.py backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed",
+    "python -m pytest backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -q -> 50 passed",
+    "AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env python scripts/llm_provider_adapter.py --json validate-config --provider deepseek_api --require-api-key -> passed",
+    "AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env python scripts/llm_provider_adapter.py --json test-plan-advice --provider deepseek_api --invoke-llm -> llm_invoked=true",
+    "AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env python scripts/nightly_adaptive_scheduler.py --json --provider deepseek_api --invoke-llm -> llm_gate=ready",
+    "python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files validation_center_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

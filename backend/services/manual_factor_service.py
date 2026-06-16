@@ -6,14 +6,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import math
 import os
 import re
 import shlex
 import tempfile
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -328,16 +325,25 @@ class ManualFactorService:
         factor_names: Optional[List[str]] = None,
         all_available: bool = False,
         data_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the official independent-metrics writer for manual factors.
 
         This is the single product path for independent metrics. The legacy
         WSL script is no longer a writer and is not called here.
         """
-        if not data_date:
+        from .quantevolver.official_factor_batch_compute_service import (
+            OFFICIAL_FACTOR_WINDOW_END,
+            OFFICIAL_FACTOR_WINDOW_START,
+        )
+
+        resolved_start = start_date or OFFICIAL_FACTOR_WINDOW_START
+        resolved_end = end_date or data_date or OFFICIAL_FACTOR_WINDOW_END
+        if not resolved_start or not resolved_end or resolved_start > resolved_end:
             return {
                 "success": False,
-                "error": "data_date is required; select a factor-library data snapshot before computing official metrics.",
+                "error": "valid official offline cache start_date/end_date is required before computing official metrics.",
                 "official_metrics": True,
             }
 
@@ -347,8 +353,10 @@ class ManualFactorService:
         result = await asyncio.to_thread(
             svc.compute,
             factor_names=factor_names,
-            data_date=data_date,
+            data_date=resolved_end,
             include_disabled=all_available,
+            start_date=resolved_start,
+            end_date=resolved_end,
         )
         result["official_metrics"] = True
         return result
@@ -375,13 +383,22 @@ class ManualFactorService:
         description: Optional[str] = None,
         expression: Optional[str] = None,
         data_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Full manual-factor flow: validate -> save -> official metrics -> classification -> official rating."""
-        if not data_date:
+        from .quantevolver.official_factor_batch_compute_service import (
+            OFFICIAL_FACTOR_WINDOW_END,
+            OFFICIAL_FACTOR_WINDOW_START,
+        )
+
+        resolved_start = start_date or OFFICIAL_FACTOR_WINDOW_START
+        resolved_end = end_date or data_date or OFFICIAL_FACTOR_WINDOW_END
+        if not resolved_start or not resolved_end or resolved_start > resolved_end:
             return {
                 "success": False,
                 "stage": "official_metrics",
-                "error": "data_date is required; select a factor-library data snapshot before running full pipeline.",
+                "error": "valid official offline cache start_date/end_date is required before running full pipeline.",
             }
 
         val_result = await self.validate_factor_code(factor_name, code_text)
@@ -394,7 +411,9 @@ class ManualFactorService:
 
         metrics_result = await self.batch_compute_metrics(
             factor_names=[factor_name],
-            data_date=data_date,
+            data_date=resolved_end,
+            start_date=resolved_start,
+            end_date=resolved_end,
         )
         if not metrics_result.get("success"):
             return {
@@ -491,6 +510,8 @@ async def batch_compute_metrics_stream(
     factor_names: Optional[List[str]] = None,
     all_available: bool = False,
     data_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ):
     """Stream the official independent-metrics flow.
 
@@ -501,13 +522,17 @@ async def batch_compute_metrics_stream(
         "type": "stream_start",
         "official_metrics": True,
         "factor_names": factor_names or [],
-        "data_date": data_date,
+        "data_date": data_date or end_date,
+        "start_date": start_date,
+        "end_date": end_date,
     }
     svc = ManualFactorService()
     result = await svc.batch_compute_metrics(
         factor_names=factor_names,
         all_available=all_available,
-        data_date=data_date,
+        data_date=data_date or end_date,
+        start_date=start_date,
+        end_date=end_date,
     )
     if not result.get("success"):
         yield {"type": "error", **result}

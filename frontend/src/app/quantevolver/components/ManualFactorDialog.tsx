@@ -7,7 +7,8 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
-  dataDate?: string;
+  cacheStartDate: string;
+  cacheEndDate: string;
 }
 
 const DATASETS_REF = `可用数据集（MultiIndex: datetime, instrument，日频 A 股全市场）:
@@ -42,7 +43,7 @@ if __name__ == "__main__":
     compute_factor()
 `;
 
-export default function ManualFactorDialog({ open, onClose, onCreated, dataDate }: Props) {
+export default function ManualFactorDialog({ open, onClose, onCreated, cacheStartDate, cacheEndDate }: Props) {
   const [factorName, setFactorName] = useState("m_");
   const [codeText, setCodeText] = useState(DEFAULT_CODE);
   const [description, setDescription] = useState("");
@@ -90,8 +91,8 @@ export default function ManualFactorDialog({ open, onClose, onCreated, dataDate 
   const handleFullPipeline = useCallback(async () => {
     setLoading(true); setStage("完整流水线（验证→入库→指标→分类）..."); setError(""); setResult(null);
     try {
-      if (!dataDate) {
-        setError("请先在因子库选择数据快照；手工因子全流程必须写入官方独立指标快照。");
+      if (!cacheStartDate || !cacheEndDate || cacheStartDate > cacheEndDate) {
+        setError("请先选择有效的官方离线缓存时间段");
         setLoading(false); setStage("");
         return;
       }
@@ -99,7 +100,7 @@ export default function ManualFactorDialog({ open, onClose, onCreated, dataDate 
       const resp = await fetch(`${API}/quantevolver/factors/manual/full-pipeline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_name: factorName, code_text: code, description: description || undefined, data_date: dataDate }),
+        body: JSON.stringify({ factor_name: factorName, code_text: code, description: description || undefined, start_date: cacheStartDate, end_date: cacheEndDate }),
       });
       if (!resp.ok) { setError(`HTTP ${resp.status}: ${await resp.text()}`); setLoading(false); setStage(""); return; }
       const data = await resp.json();
@@ -108,7 +109,7 @@ export default function ManualFactorDialog({ open, onClose, onCreated, dataDate 
       else setError(data.error || "流水线失败");
     } catch (e: any) { setError(e?.message || "请求失败"); }
     setLoading(false); setStage("");
-  }, [factorName, codeText, description, dataDate, onCreated]);
+  }, [factorName, codeText, description, cacheStartDate, cacheEndDate, onCreated]);
 
   if (!open) return null;
 
@@ -208,14 +209,14 @@ export default function ManualFactorDialog({ open, onClose, onCreated, dataDate 
           >保存入库</button>
           <button
             onClick={handleFullPipeline}
-            disabled={loading || !factorName || factorName.length < 3 || !dataDate}
-            title={dataDate ? `使用快照 ${dataDate} 写入官方指标和评级` : "请先选择因子库数据快照"}
+            disabled={loading || !factorName || factorName.length < 3 || !cacheStartDate || !cacheEndDate || cacheStartDate > cacheEndDate}
+            title={`使用官方离线缓存窗口 ${cacheStartDate || "-"} ~ ${cacheEndDate || "-"} 写入指标和评级`}
             style={{
               padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none",
               background: "#7c3aed", color: "#fff", fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
-              opacity: (loading || !dataDate) ? 0.5 : 1,
+              opacity: (loading || !cacheStartDate || !cacheEndDate || cacheStartDate > cacheEndDate) ? 0.5 : 1,
             }}
-          >完整入库（含指标）</button>
+          >完整入库（官方窗口含指标）</button>
         </div>
 
         {/* 状态 */}
@@ -260,7 +261,7 @@ export default function ManualFactorDialog({ open, onClose, onCreated, dataDate 
                 {result.metrics?.success && (
                   <div style={{ marginTop: 4 }}>
                     官方独立指标已写入: inserted={result.metrics.db_result?.inserted ?? "-"} |
-                    snapshot={result.metrics.snapshot_date ?? dataDate ?? "-"}
+                    窗口={result.metrics.data_start ?? cacheStartDate ?? "-"} ~ {result.metrics.data_end ?? cacheEndDate ?? "-"}
                   </div>
                 )}
                 {result.rating?.ok && (

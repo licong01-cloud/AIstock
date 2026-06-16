@@ -27,7 +27,12 @@ from backend.mcp.tool_manifest import TOOL_MANIFEST, TOOL_MANIFEST_BY_NAME
 from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL, resolve_deepseek_config
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
-from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
+from .code_intelligence import (
+    artifact_ref_paths,
+    build_code_intelligence_context,
+    build_query_code_context,
+    code_context_artifact_paths,
+)
 from .execution import ResearchAssistantExecutionMixin
 from .graph_context import expand_neighbors
 from .memory_curator import CuratorResult, MemoryCurator
@@ -67,7 +72,9 @@ from .react_grounding import (
     McpToolCall,
     McpToolResult,
     ModelTurn,
+    EvidenceGuardDecision,
     ReactGroundingConfig,
+    ReactGroundingResult,
     ToolCatalogEntry,
     ToolGateDecision,
     run_react_grounding_loop,
@@ -90,6 +97,7 @@ from .mcp_catalog_sync import (
     server_key_for_module,
     workflow_capabilities as catalog_workflow_capabilities,
 )
+from .semantic_tool_planner import SemanticToolPlan, SemanticToolPlanner
 from .tool_router import route_request
 from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
 from .agent_teams.models import WorkerTask
@@ -163,11 +171,16 @@ class _ServiceAgentWorkerExecutor:
 
     def run_worker(self, task: WorkerTask, agent: Any, context_pack: dict[str, Any], catalog_entries: list[ToolCatalogEntry]) -> WorkerRunResult:
         cards: dict[str, Any] = {"agent_key": task.agent_key, "action_proposals": []}
+        code_context_refs = [
+            str(ref.get("code_ref_id"))
+            for ref in (task.input_json.get("code_context_refs") or [])
+            if isinstance(ref, dict) and ref.get("code_ref_id")
+        ]
         if task.agent_key == "qe_experiment_designer" and isinstance(task.input_json.get("qe_autonomy_request"), dict):
             report = self.service.run_qe_autonomous_evolution(dict(task.input_json["qe_autonomy_request"]))
             report_dict = report.to_dict() if hasattr(report, "to_dict") else dict(report)
             status = "failed" if report_dict.get("status") == "failed" else "succeeded"
-            evidence_refs = tuple(sorted(str(ref) for ref in report_dict.get("evidence_refs", []) or ["qe_autonomy_report"]))
+            evidence_refs = tuple(sorted({str(ref) for ref in report_dict.get("evidence_refs", []) or ["qe_autonomy_report"]} | set(code_context_refs)))
             return WorkerRunResult(
                 agent_run_id="service_runtime_pending",
                 parent_task_id=task.parent_task_id,
@@ -178,7 +191,7 @@ class _ServiceAgentWorkerExecutor:
                 summary=f"QE autonomy {report_dict.get('status')}: {report_dict.get('stop_reason')}",
                 artifacts=tuple(str(ref) for ref in report_dict.get("artifact_refs", []) or []),
                 evidence_refs=evidence_refs,
-                result_json={"autonomy_report": report_dict, "worker_consumed_autonomy": True},
+                result_json={"autonomy_report": report_dict, "worker_consumed_autonomy": True, "code_context_ref_ids": code_context_refs},
                 context_pack_id=str(context_pack.get("context_pack_id") or ""),
             )
         provider = _ServiceReactMcpProvider(
@@ -196,6 +209,8 @@ class _ServiceAgentWorkerExecutor:
                     "context_pack_id": context_pack.get("context_pack_id"),
                     "route_reason": (context_pack.get("pack_json") or {}).get("route_reason"),
                     "graph_relation_refs": (context_pack.get("pack_json") or {}).get("graph_relation_refs", [])[:3],
+                    "code_context_ref_ids": code_context_refs[:3],
+                    "code_affected_tests": list(task.input_json.get("code_affected_tests") or [])[:5],
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -218,6 +233,7 @@ class _ServiceAgentWorkerExecutor:
             config=ReactGroundingConfig(max_tool_iterations=agent.max_tool_iterations, evidence_required=True),
         )
         status = "succeeded" if result.evidence_guard.allowed else "failed"
+        evidence_refs = tuple(sorted({ref for tool_result in result.tool_results for ref in tool_result.source_refs} | {"agent_team_context"} | set(code_context_refs)))
         return WorkerRunResult(
             agent_run_id="service_runtime_pending",
             parent_task_id=task.parent_task_id,
@@ -227,8 +243,8 @@ class _ServiceAgentWorkerExecutor:
             task_order=task.task_order,
             summary=result.final_text,
             artifacts=tuple(str(ref) for tool_result in result.tool_results for ref in tool_result.artifact_refs),
-            evidence_refs=tuple(sorted({ref for tool_result in result.tool_results for ref in tool_result.source_refs} | {"agent_team_context"})),
-            result_json={"react_stopped_reason": result.stopped_reason, "tool_result_count": len(result.tool_results), "cards": cards},
+            evidence_refs=evidence_refs,
+            result_json={"react_stopped_reason": result.stopped_reason, "tool_result_count": len(result.tool_results), "cards": cards, "code_context_ref_ids": code_context_refs},
             context_pack_id=str(context_pack.get("context_pack_id") or ""),
         )
 
@@ -269,13 +285,14 @@ class _ServiceReactMcpProvider:
 
     def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        capability_key = self.service._capability_key_for_tool(call, route)
         payload = dict(call.payload_json)
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
         payload.setdefault("selected_tool", {"server_key": call.server_key, "tool_name": call.tool_name})
-        payload.setdefault("limit", 20)
+        payload.update(self.service._mcp_route_tool_args(route))
+        payload.setdefault("limit", self.service._mcp_route_limit(route))
+        capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
                 task_id=self.task["task_id"],
@@ -330,8 +347,8 @@ class _ServiceReactMcpProvider:
             tool_name=call.tool_name,
             status=str(executed.get("status") or "unknown"),
             payload_json=summary_result,
-            source_refs=[str(summary_result.get("source") or "mcp_tool_event")],
-            as_of=utc_now().date().isoformat(),
+            source_refs=self.service._mcp_result_source_refs(summary_result, tool_event),
+            as_of=self.service._mcp_result_as_of(summary_result),
             artifact_refs=list(summary_result.get("artifact_refs") or tool_event.get("artifact_refs") or []),
             summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
             tool_event_id=tool_event.get("tool_event_id"),
@@ -345,11 +362,12 @@ class _ServiceReactMcpProvider:
 
     def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        capability_key = self.service._capability_key_for_tool(call, route)
         payload = dict(call.payload_json)
         payload.setdefault("request", self.user_message)
         payload.setdefault("route", route)
         payload.setdefault("mcp_route_decision", route)
+        payload.update(self.service._mcp_route_tool_args(route))
+        capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
                 task_id=self.task["task_id"],
@@ -398,11 +416,16 @@ class _ServiceReactMcpProvider:
             "preflight": preflight_payload,
             "summary_first": True,
         }
+        self.cards["mcp_preflight_result"] = preflight_payload
         return McpToolResult(
             server_key=call.server_key,
             tool_name=call.tool_name,
             status=self.cards["mcp_execution_result"]["status"],
-            payload_json={"preflight_only": True},
+            payload_json={
+                "preflight_only": True,
+                "response_mode": "mcp_safe_preflight_summary",
+                "preflight": preflight_payload,
+            },
             source_refs=["preflight"],
             as_of=utc_now().date().isoformat(),
             summary="preflight confirmation card generated; write/high-risk execution was not called",
@@ -420,6 +443,37 @@ ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
 SERVICE_MODULE_PATH = Path(__file__).resolve()
+QE_BUSINESS_RESPONSE_MODES = {"qe_experiment_status_summary", "qe_warehouse_business_summary"}
+MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS = (
+    "summary-first",
+    "summary_first",
+    "Route decision",
+    "route decision",
+    "artifact_ref",
+    "payload budget",
+    "raw_payload",
+    "omitted_sections",
+    "server_key",
+    "server_key=",
+    "tool_name",
+    "tool_name=",
+    "selected_tool",
+    "detail tool",
+    "detail_tool",
+    "transport",
+    "mcp_tool_event",
+    "mcp_summary_result",
+    "mcp_execution_result",
+    "response_mode",
+    "summary_envelope",
+    "mcp route",
+    "Evidence: source=",
+    "source=",
+    "as_of=",
+    "research_assistant_catalog_summary_adapter",
+    "summary_adapter",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+)
 
 
 def _git_output(args: list[str]) -> str | None:
@@ -958,6 +1012,30 @@ def _default_workflow_capabilities() -> list[dict[str, Any]]:
     return DEFAULT_WORKFLOW_CAPABILITIES
 
 
+def _code_context_ref_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    manifest = row.get("manifest_json") if isinstance(row.get("manifest_json"), dict) else {}
+    provenance = row.get("provenance_json") if isinstance(row.get("provenance_json"), dict) else {}
+    affected_tests = manifest.get("affected_tests") if isinstance(manifest.get("affected_tests"), list) else []
+    query_scope = str(row.get("query_scope") or manifest.get("query_scope") or "")
+    as_of = row.get("as_of")
+    as_of_text = as_of.isoformat() if hasattr(as_of, "isoformat") else as_of
+    summary_tests = ", ".join(map(str, affected_tests[:3])) if affected_tests else "no affected-test suggestion"
+    return {
+        "code_ref_id": row.get("code_ref_id"),
+        "query_scope": query_scope,
+        "query_scope_type": query_scope.split(":", 1)[0] if ":" in query_scope else "unknown",
+        "source": row.get("source") or "codegraph",
+        "summary": f"Cached code context scoped to {query_scope}; affected tests: {summary_tests}.",
+        "provenance": provenance,
+        "as_of": as_of_text,
+        "manifest_json": manifest,
+        "context_artifact_ref": manifest.get("context_artifact_ref"),
+        "manifest_artifact_ref": manifest.get("manifest_artifact_ref"),
+        "affected_tests_ref": manifest.get("affected_tests_ref"),
+        "affected_tests": [str(item) for item in affected_tests],
+    }
+
+
 class ResearchAssistantLlmClient:
     """Small LiteLLM wrapper for assistant chat turns.
 
@@ -1002,6 +1080,9 @@ class ResearchAssistantLlmClient:
             raise RuntimeError("assistant LLM returned empty content")
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
 
+    def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
+        return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
+
 
 class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
@@ -1011,6 +1092,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def __init__(self, repository: Any | None = None, llm_client: Any | None = None, *, environment: str = DEFAULT_ENVIRONMENT) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
+        self.semantic_tool_planner = SemanticToolPlanner(self.llm_client)
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
 
@@ -1025,6 +1107,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_autonomy_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         config = load_agent_teams_config(REPO_ROOT / "configs/research_assistant/agent_teams.yaml")
+        code_team_context = build_query_code_context(
+            user_query=objective,
+            task_id=parent_task_id,
+            repo_root=REPO_ROOT,
+            token_budget=1800,
+            cache_lookup=self._lookup_code_context_cache,
+        )
+        code_team_refs = list(code_team_context.get("code_context_refs") or [])
         runtime = AgentTeamsRuntime(
             config=config,
             providers=AgentTeamsRuntimeProviders(
@@ -1039,6 +1129,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         merged_worker_inputs: dict[str, dict[str, object]] = {key: dict(value) for key, value in (worker_inputs or {}).items()}
         if qe_autonomy_request is not None:
             merged_worker_inputs.setdefault("qe_experiment_designer", {})["qe_autonomy_request"] = dict(qe_autonomy_request)
+        if code_team_refs:
+            self._persist_code_context_refs(task_id=parent_task_id, refs=code_team_refs)
+            affected_tests = sorted(
+                {
+                    str(test)
+                    for ref in code_team_refs
+                    for test in (ref.get("affected_tests") if isinstance(ref, dict) else []) or []
+                }
+            )
+            for agent in config.workers:
+                worker_input = merged_worker_inputs.setdefault(agent.agent_key, {})
+                worker_input["code_context_refs"] = code_team_refs
+                worker_input["code_affected_tests"] = affected_tests
+                worker_input["code_context_reason_codes"] = list(code_team_context.get("reason_codes") or [])
         result = runtime.run(
             parent_task_id=parent_task_id,
             objective=objective,
@@ -2189,7 +2293,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
-        route_decision = self._canonicalize_mcp_route(dict(route_request(data.message)))
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -2198,6 +2301,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         model_profile = route.get("model_profile")
         if not model_profile:
             raise RuntimeError(f"no enabled primary model profile for risk={data.risk_level}: {route.get('route_status')}")
+        route_decision = self._semantic_or_legacy_route_decision(data.message, model_profile=model_profile)
         bundle = self.build_prompt_bundle(
             PromptBundleBuildRequest(
                 user_message=data.message,
@@ -2279,7 +2383,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             assembly_trace=assembly_trace,
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
-        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision, route_decision=route_decision)
         if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
             existing_route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
             route_card = dict(existing_route)
@@ -2296,6 +2400,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             route_card.setdefault("auto_execute", self._read_only_mcp_auto_execution_eligibility(route_card, mode_decision))
             cards["mcp_route_decision"] = route_card
+        elif isinstance(route_decision, dict) and route_decision.get("requires_clarification"):
+            cards["mcp_route_decision"] = route_decision
+            cards["clarification_card"] = {
+                "title": "需要先确认比较口径",
+                "questions": list(route_decision.get("clarification_questions") or []),
+                "default_collapsed": False,
+            }
         llm_result, messages, react_result = self._complete_chat_with_react_grounding(
             user_message=data.message,
             conversation_id=conversation_id,
@@ -2835,6 +2946,49 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             route["canonicalized_from"] = original_server_key
         return route
 
+    def _semantic_or_legacy_route_decision(self, user_message: str, *, model_profile: dict[str, Any]) -> dict[str, Any]:
+        semantic_plan = self._semantic_tool_plan(user_message, model_profile=model_profile)
+        if semantic_plan is not None:
+            route = semantic_plan.to_route()
+            if route.get("requires_clarification"):
+                return route
+            if route.get("semantic_status") == "no_tool":
+                return route
+            if route.get("server_key") and route.get("tool_name"):
+                return self._canonicalize_mcp_route(route)
+        return self._canonicalize_mcp_route(dict(route_request(user_message)))
+
+    def _semantic_tool_plan(self, user_message: str, *, model_profile: dict[str, Any]) -> SemanticToolPlan | None:
+        if not model_profile or not self.semantic_tool_planner.available():
+            return None
+        try:
+            return self.semantic_tool_planner.plan(
+                user_message=user_message,
+                model_profile=model_profile,
+                tool_catalog=self._manifest_mcp_catalog_records(),
+            )
+        except Exception:  # noqa: BLE001 - semantic planning is best-effort; legacy route keeps chat usable.
+            logger.exception("semantic MCP tool planner failed; falling back to legacy route")
+            return None
+
+    @staticmethod
+    def _mcp_route_tool_args(route: dict[str, Any]) -> dict[str, Any]:
+        args = route.get("tool_args") if isinstance(route.get("tool_args"), dict) else {}
+        normalized = {str(key): value for key, value in args.items() if value not in (None, "", [], {})}
+        if route.get("limit") not in (None, "", [], {}) and "limit" not in normalized:
+            normalized["limit"] = route["limit"]
+        return {"tool_args": normalized, **normalized} if normalized else {}
+
+    @staticmethod
+    def _mcp_route_limit(route: dict[str, Any]) -> int:
+        args = route.get("tool_args") if isinstance(route.get("tool_args"), dict) else {}
+        raw = route.get("limit", args.get("limit"))
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            limit = 20
+        return max(1, min(limit, 100))
+
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
         servers = [item for item in self._manifest_mcp_server_records() if str(item.get("status") or "") in {"ready", "enabled", "ok"}]
         tools = [item for item in self._manifest_mcp_catalog_records() if str(item.get("status") or "") in {"enabled", "ready", "approved"}]
@@ -3308,6 +3462,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route: dict[str, Any],
         dialogue_intent: DialogueIntent,
         mode_decision: ModeDecision,
+        route_decision: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del task
         intent_config = self._dialogue_intent_config()
@@ -3321,7 +3476,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        mcp_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
+        mcp_route = dict(route_decision) if isinstance(route_decision, dict) else self._semantic_or_legacy_route_decision(user_message, model_profile=route.get("model_profile") or {})
         route_domain = str(mcp_route.get("domain") or "general")
         is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
             route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
@@ -3333,7 +3488,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
         route_capability_keys = set()
-        if mcp_route.get("domain") and mcp_route.get("domain") != "general":
+        if mcp_route.get("domain") and mcp_route.get("domain") != "general" and not mcp_route.get("requires_clarification"):
             route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")
             side_effect = str(mcp_route.get("side_effect") or "read_only")
             mcp_route.update(
@@ -3459,6 +3614,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "questions": clarification_questions,
                 "default_collapsed": details_default_collapsed,
             }
+        if mcp_route.get("requires_clarification"):
+            cards["clarification_card"] = {
+                "title": "需要先确认比较口径",
+                "questions": list(mcp_route.get("clarification_questions") or []),
+                "default_collapsed": False,
+            }
         return cards
 
     def _maybe_auto_execute_read_only_mcp_route(
@@ -3485,7 +3646,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "request": user_message,
             "route": route,
             "mcp_route_decision": route,
-            "limit": 20,
+            **self._mcp_route_tool_args(route),
+            "limit": self._mcp_route_limit(route),
         }
         try:
             proposal = self.create_action_proposal(
@@ -3628,6 +3790,57 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             cards=cards,
             user_message=user_message,
         )
+        if (
+            route_seed
+            and mode_decision.mode != DialogueMode.ANALYSIS
+            and self._should_finish_with_business_summary_tool(route_seed, cards)
+        ):
+            entry = next(
+                (
+                    item
+                    for item in self._react_tool_catalog_entries()
+                    if item.server_key == route_seed.server_key and item.tool_name == route_seed.tool_name
+                ),
+                None,
+            )
+            if entry is not None:
+                decision = ToolGateDecision(
+                    allowed=True,
+                    action="execute_read_only",
+                    reason="business_summary_terminal",
+                    catalog_entry=entry,
+                    requires_approval=False,
+                    risk_level=entry.risk_level,
+                    side_effect_level=entry.side_effect_level,
+                )
+                result = provider.execute_read_only(route_seed, decision)
+                guard = EvidenceGuardDecision(
+                    allowed=True,
+                    text=first_llm_result.content,
+                    reason="ok",
+                    source_count=1 if result.source_refs else 0,
+                    as_of_count=1 if result.as_of else 0,
+                )
+                react_result = ReactGroundingResult(
+                    final_text=first_llm_result.content,
+                    messages=[dict(item) for item in messages],
+                    tool_calls=[route_seed],
+                    tool_results=[result],
+                    trace_steps=[
+                        {
+                            "iteration": 1,
+                            "model": "business_summary_terminal",
+                            "tool_call_count": 1,
+                            "provider": "route_seed",
+                        }
+                    ],
+                    evidence_guard=guard,
+                    iterations=1,
+                    stopped_reason="business_summary_terminal",
+                    model_turns=[],
+                )
+                return first_llm_result, [dict(item) for item in messages], react_result
+
         def fallback_tool_calls() -> list[McpToolCall]:
             fallback = self._grounded_route_fallback_tool_call(cards, mode_decision)
             return [fallback] if fallback else []
@@ -3656,6 +3869,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             usage=self._merge_llm_usage([turn.usage for turn in react_result.model_turns]),
         )
         return grounded_llm_result, [dict(item) for item in react_result.messages], react_result
+
+    def _should_finish_with_business_summary_tool(self, call: McpToolCall, cards: dict[str, Any]) -> bool:
+        route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
+        domain = str(route.get("domain") or "")
+        if domain not in {"qe_experiment", "qe_warehouse"}:
+            return False
+        if domain == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
+            return False
+        return call.server_key == "aistock-qe" and str(route.get("side_effect") or "read_only") == "read_only"
 
     def _react_grounding_config(self, runtime_config: dict[str, Any]) -> ReactGroundingConfig:
         cfg = runtime_config.get("react_grounding") if isinstance(runtime_config.get("react_grounding"), dict) else {}
@@ -3704,7 +3926,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return McpToolCall(
                 server_key=str(route["server_key"]),
                 tool_name=str(route["tool_name"]),
-                payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+                payload_json={
+                    "request": route.get("request") or "",
+                    "route": route,
+                    "mcp_route_decision": route,
+                    **self._mcp_route_tool_args(route),
+                    "limit": self._mcp_route_limit(route),
+                },
                 stable_call_id=f"route:{route['server_key']}:{route['tool_name']}",
                 reason=str(route.get("reason") or "route_seed"),
             )
@@ -3723,7 +3951,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return McpToolCall(
             server_key=str(route["server_key"]),
             tool_name=str(route["tool_name"]),
-            payload_json={"request": route.get("request") or "", "route": route, "mcp_route_decision": route, "limit": 20},
+            payload_json={
+                "request": route.get("request") or "",
+                "route": route,
+                "mcp_route_decision": route,
+                **self._mcp_route_tool_args(route),
+                "limit": self._mcp_route_limit(route),
+            },
             stable_call_id=f"fallback:{route['server_key']}:{route['tool_name']}",
             reason="evidence_guard_route_fallback",
         )
@@ -3744,17 +3978,92 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             },
         }
 
+    @staticmethod
+    def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
+        source = summary_result.get("source") or tool_event.get("transport") or tool_event.get("tool_event_id") or "mcp_tool_event"
+        refs = [str(source)] if source else []
+        evidence_sources = summary_result.get("evidence_sources") if isinstance(summary_result.get("evidence_sources"), list) else []
+        for item in evidence_sources:
+            ref = str(item)
+            if ref and ref not in refs:
+                refs.append(ref)
+        return refs
+
+    @staticmethod
+    def _mcp_result_as_of(summary_result: dict[str, Any]) -> str:
+        return str(summary_result.get("as_of") or summary_result.get("trade_date") or utc_now().date().isoformat())
+
+
+    @staticmethod
+    def _capability_has_tool_ref(capability: dict[str, Any], server_key: str, tool_name: str) -> bool:
+        refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
+        return any(
+            isinstance(ref, dict)
+            and ref.get("server_key") == server_key
+            and ref.get("tool_name") == tool_name
+            for ref in refs
+        )
+
+    def _refresh_capability_cache_for_tool(
+        self,
+        *,
+        server_key: str,
+        tool_name: str,
+        capability_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        candidate_keys: list[str] = []
+        for item in self._workflow_capabilities():
+            candidate = self._canonicalize_capability_mcp_refs(dict(item))
+            key = str(candidate.get("capability_key") or "")
+            if capability_key and key != capability_key:
+                continue
+            if key and self._capability_has_tool_ref(candidate, server_key, tool_name):
+                candidate_keys.append(key)
+        if not candidate_keys:
+            return None
+        try:
+            self.sync_capabilities({"apply": True, "requested_by": "capability_tool_lookup_self_heal"})
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to refresh capability cache for %s/%s", server_key, tool_name)
+            return None
+        for key in candidate_keys:
+            capability = self.repository.find_one("capabilities", {"capability_key": key, "status": "approved"})
+            if capability and self._capability_has_tool_ref(capability, server_key, tool_name):
+                return capability
+        return None
+
     def _capability_key_for_tool(self, call: McpToolCall, route: dict[str, Any] | None = None) -> str:
+        selected_tool = route.get("selected_tool") if isinstance(route, dict) and isinstance(route.get("selected_tool"), dict) else None
+        if isinstance(selected_tool, dict) and selected_tool.get("domain"):
+            route = selected_tool
+        elif isinstance(route, dict):
+            selected_tool = call.payload_json.get("selected_tool") if isinstance(call.payload_json.get("selected_tool"), dict) else None
+            if isinstance(selected_tool, dict) and selected_tool.get("domain"):
+                route.update(selected_tool)
         if isinstance(route, dict) and route.get("domain"):
             candidate = f"{route['domain']}.mcp_orchestration"
-            if self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"}):
+            capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
+            if capability and self._capability_allows_tool(capability, call):
+                return candidate
+            capability = self._refresh_capability_cache_for_tool(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                capability_key=candidate,
+            )
+            if capability and self._capability_allows_tool(capability, call):
                 return candidate
         capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
         for capability in capabilities:
-            refs = capability.get("mcp_tool_refs") if isinstance(capability.get("mcp_tool_refs"), list) else []
-            if any(isinstance(ref, dict) and ref.get("server_key") == call.server_key and ref.get("tool_name") == call.tool_name for ref in refs):
+            if self._capability_allows_tool(capability, call):
                 return str(capability["capability_key"])
+        capability = self._refresh_capability_cache_for_tool(server_key=call.server_key, tool_name=call.tool_name)
+        if capability:
+            return str(capability["capability_key"])
         raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
+
+    @staticmethod
+    def _capability_allows_tool(capability: dict[str, Any], call: McpToolCall) -> bool:
+        return ResearchAssistantService._capability_has_tool_ref(capability, call.server_key, call.tool_name)
 
     def _populate_cards_from_tool_execution(self, cards: dict[str, Any], proposal: dict[str, Any], executed: dict[str, Any], result: McpToolResult) -> None:
         tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
@@ -3786,6 +4095,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "human_cards": list(executed.get("human_cards") or []),
             "source_refs": list(result.source_refs),
             "as_of": result.as_of,
+            "response_mode": summary_result.get("response_mode"),
         }
         cards["status_rail"] = self._mcp_executed_status_rail()
 
@@ -3794,6 +4104,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {"eligible": False, "reason": "route_missing_tool"}
         if route.get("domain") in {"general"}:
             return {"eligible": False, "reason": "general_route"}
+        if route.get("domain") == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
+            return {"eligible": False, "reason": "qe_draft_creation_uses_plan_reply"}
         if str(route.get("side_effect") or "read_only") != "read_only":
             return {"eligible": False, "reason": "route_not_read_only"}
         if mode_decision.allowed_tool_side_effect == "none":
@@ -3822,6 +4134,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "risk_level": tool.get("risk_level"),
             "side_effect_level": tool.get("side_effect_level"),
         }
+
+    @staticmethod
+    def _is_qe_draft_creation_request_text(text: str) -> bool:
+        lower = text.lower()
+        draft_terms = ("草案", "设计", "方案", "template", "draft", "proposal")
+        list_terms = ("列表", "汇总", "状态", "进度", "有哪些", "最近", "leaderboard", "outbox", "数仓")
+        return ("qe" in lower or "实验" in lower or "custom_evo" in lower) and any(term in lower for term in draft_terms) and not any(
+            term in lower for term in list_terms
+        )
 
     @staticmethod
     def _compact_mcp_summary_for_cards(summary_result: dict[str, Any]) -> dict[str, Any]:
@@ -3894,9 +4215,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         text = self._strip_assistant_tool_choice_markup(raw_text)
         react_active = isinstance(cards.get("react_grounding"), dict)
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
-        if isinstance(execution, dict) and execution.get("auto_executed") and not react_active:
+        if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
-            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
+            if self._should_render_auto_mcp_execution_reply(execution, summary, react_active=react_active):
+                return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
         if (
             react_active
@@ -3906,11 +4228,29 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if isinstance(route, dict) and route.get("requires_clarification"):
+            return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
+        if (
+            isinstance(execution, dict)
+            and execution.get("auto_executed")
+            and text
+            and self._contains_mcp_business_forbidden_marker(text)
+        ):
+            summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
+        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
+            return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
+        if self._is_insufficient_evidence_text(text):
+            if isinstance(execution, dict) and not execution.get("auto_executed"):
+                preflight = cards.get("mcp_preflight_result") if isinstance(cards.get("mcp_preflight_result"), dict) else {}
+                return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(execution, preflight), mode_decision)
+            if isinstance(route, dict) and str(route.get("side_effect") or "read_only") != "read_only":
+                return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(route, {}), mode_decision)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
-        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if (not react_active or "<assistant_tool_choice" in raw_text.lower()) and self._should_render_mcp_route_reply(route, mode_decision, raw_text):
             return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
         if text:
@@ -3919,33 +4259,182 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
 
     @staticmethod
+    def _should_render_auto_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any], *, react_active: bool) -> bool:
+        del execution
+        if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
+            return True
+        if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:
+            return True
+        if summary.get("response_mode") == "summary":
+            return True
+        return not react_active
+
+    @staticmethod
     def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
         if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
             return ResearchAssistantService._render_local_data_daily_status_reply(execution, summary)
-        route = str(execution.get("route") or "unknown/unknown")
-        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        if summary.get("response_mode") == "qe_experiment_status_summary":
+            return ResearchAssistantService._render_qe_experiment_status_reply(execution, summary)
+        if summary.get("response_mode") == "qe_warehouse_business_summary":
+            return ResearchAssistantService._render_qe_warehouse_business_reply(execution, summary)
+        return ResearchAssistantService._render_generic_mcp_business_reply(execution, summary)
+
+    @staticmethod
+    def _render_semantic_clarification_reply(route: dict[str, Any], cards: dict[str, Any]) -> str:
+        clarification = cards.get("clarification_card") if isinstance(cards.get("clarification_card"), dict) else {}
+        questions = clarification.get("questions") if isinstance(clarification.get("questions"), list) else route.get("clarification_questions")
+        clean_questions = [str(item).strip() for item in (questions or []) if str(item).strip()]
+        if not clean_questions:
+            clean_questions = ["你希望按哪个指标比较：收益、Sharpe/IR、稳定性，还是最新状态？"]
         lines = [
-            "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
-            f"Route decision：{route}。",
-            f"结果概要：total={summary.get('total', len(items))}，returned={len(items)}，limit={summary.get('limit')}，offset={summary.get('offset')}。",
+            "这个问题需要先确认比较口径，我不会直接按默认状态列表或健康检查来回答。",
+            "请先确认：" + clean_questions[0],
         ]
-        for item in items[:3]:
-            if not isinstance(item, dict):
+        if len(clean_questions) > 1:
+            lines.extend(f"- {question}" for question in clean_questions[1:3])
+        reason = str(route.get("reason") or "").strip()
+        if reason:
+            lines.append(f"原因：{reason}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _humanize_business_identifier(value: str) -> str:
+        raw = value.strip().strip("/")
+        if "/" in raw:
+            raw = raw.split("/")[-1]
+        words = [part for part in raw.replace("-", "_").split("_") if part]
+        acronyms = {"api", "bug", "ic", "mcp", "qe", "rankic", "url"}
+        rendered = [word.upper() if word.lower() in acronyms else word for word in words]
+        return " ".join(rendered) if rendered else "\u4e1a\u52a1\u67e5\u8be2"
+
+    @staticmethod
+    def _business_label_for_domain(domain: str, route: str) -> str:
+        if domain:
+            return ResearchAssistantService._humanize_business_identifier(domain)
+        return ResearchAssistantService._humanize_business_identifier(route)
+
+    @staticmethod
+    def _friendly_field_label(key: str) -> str:
+        labels = {
+            "title": "\u540d\u79f0",
+            "item_type": "\u7c7b\u578b",
+            "risk_level": "\u98ce\u9669",
+            "side_effect_level": "\u6267\u884c\u8fb9\u754c",
+            "requires_approval": "\u9700\u5ba1\u6279",
+            "status": "\u72b6\u6001",
+            "summary": "\u6982\u8981",
+            "query": "\u68c0\u7d22\u8bcd",
+            "result_type": "\u7c7b\u578b",
+            "url": "\u94fe\u63a5",
+            "safety_boundary": "\u5b89\u5168\u8fb9\u754c",
+            "requested_args": "\u6761\u4ef6",
+            "next_action": "\u4e0b\u4e00\u6b65",
+        }
+        return labels.get(key, ResearchAssistantService._humanize_business_identifier(key))
+
+    @staticmethod
+    def _render_generic_business_item(item: dict[str, Any], *, max_fields: int = 7) -> str:
+        hidden = {
+            "server_key",
+            "tool_name",
+            "item_type",
+            "risk_level",
+            "side_effect_level",
+            "requires_approval",
+            "summary_first_contract",
+            "detail_ref",
+            "detail_tool",
+            "detail_args_hint",
+            "source",
+            "provider",
+            "as_of",
+            "evidence_ref",
+            "evidence_policy",
+            "artifact_refs",
+            "omitted_sections",
+            "pagination",
+        }
+
+        def visible_value(value: Any) -> str:
+            if value in (None, "", []):
+                return ""
+            if isinstance(value, dict):
+                parts = []
+                for nested_key, nested_value in value.items():
+                    nested_key_text = str(nested_key)
+                    if nested_key_text in hidden or ResearchAssistantService._contains_mcp_business_forbidden_marker(nested_key_text):
+                        continue
+                    nested_rendered = visible_value(nested_value)
+                    if nested_rendered:
+                        parts.append(f"{ResearchAssistantService._friendly_field_label(nested_key_text)}={nested_rendered}")
+                    if len(parts) >= max_fields:
+                        break
+                return "\uff1b".join(parts)
+            if isinstance(value, list):
+                rendered_items = [visible_value(item) for item in value[:max_fields]]
+                return "\uff0c".join(item for item in rendered_items if item)
+            text = str(value)
+            return "" if ResearchAssistantService._contains_mcp_business_forbidden_marker(text) else text
+
+        title = visible_value(item.get("title") or item.get("summary") or item.get("item_type") or item.get("tool_name")) or "\u8bb0\u5f55"
+        preferred = (
+            "status",
+            "summary",
+            "result_type",
+            "query",
+            "url",
+            "requested_args",
+            "safety_boundary",
+            "next_action",
+        )
+        bits: list[str] = []
+        for key in preferred:
+            value = item.get(key)
+            if key in hidden or value in (None, "", []):
                 continue
-            title = item.get("title") or item.get("tool_name") or item.get("item_type") or item.get("server_key") or "item"
-            detail = []
-            for key in ("server_key", "tool_name", "risk_level", "side_effect_level", "status"):
-                if item.get(key) is not None:
-                    detail.append(f"{key}={item.get(key)}")
-            lines.append(f"- {title}: {', '.join(detail[:5])}")
-        if summary.get("detail_tool"):
-            lines.append(f"需要单项详情时再调用 detail tool：{summary.get('detail_tool')}。")
-        artifact_refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
-        omitted = summary.get("omitted_sections") if isinstance(summary.get("omitted_sections"), list) else []
-        if artifact_refs:
-            lines.append(f"大对象已收敛为 artifact_ref：{len(artifact_refs)} 个。")
-        if omitted:
-            lines.append(f"已按 payload budget 省略：{', '.join(str(item) for item in omitted[:6])}。")
+            rendered_value = visible_value(value)
+            if not rendered_value:
+                continue
+            bits.append(f"{ResearchAssistantService._friendly_field_label(key)}={rendered_value}")
+            if len(bits) >= max_fields:
+                break
+        if not bits:
+            for key, value in item.items():
+                key_text = str(key)
+                if key_text in hidden or ResearchAssistantService._contains_mcp_business_forbidden_marker(key_text) or value in (None, "", [], {}):
+                    continue
+                rendered_value = visible_value(value)
+                if not rendered_value:
+                    continue
+                bits.append(f"{ResearchAssistantService._friendly_field_label(key_text)}={rendered_value}")
+                if len(bits) >= max_fields:
+                    break
+        return f"{title}\uff1a" + ("\uff1b".join(bits) if bits else "\u6682\u65e0\u53ef\u5c55\u793a\u7684\u5173\u952e\u5b57\u6bb5")
+
+    @staticmethod
+    def _render_generic_mcp_business_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        route = str(execution.get("route") or "")
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        domain = str(summary.get("domain") or "")
+        label = ResearchAssistantService._business_label_for_domain(domain, route)
+        total = summary.get("total")
+        total_count = total if isinstance(total, int) else len(items)
+        lines = [
+            f"\u5df2\u5b8c\u6210{label}\u67e5\u8be2\u3002",
+            f"\u6c47\u603b\uff1a\u5171 {total_count} \u9879\uff0c\u672c\u6b21\u5c55\u793a {len(items)} \u9879\u3002",
+        ]
+        if not items:
+            lines.append("\u6682\u65e0\u53ef\u5c55\u793a\u7684\u4e1a\u52a1\u8bb0\u5f55\uff0c\u53ef\u4ee5\u6362\u68c0\u7d22\u6761\u4ef6\u6216\u6307\u5b9a\u5bf9\u8c61 ID \u7ee7\u7eed\u67e5\u770b\u3002")
+        else:
+            lines.append("\u660e\u7ec6\uff1a")
+            for item in items[:20]:
+                if isinstance(item, dict):
+                    lines.append(f"- {ResearchAssistantService._render_generic_business_item(item)}")
+        if len(items) > 20:
+            lines.append(f"\u53e6\u6709 {len(items) - 20} \u9879\u672a\u5728\u4e3b\u56de\u590d\u5c55\u5f00\uff0c\u53ef\u7ee7\u7eed\u6309\u6761\u4ef6\u7b5b\u9009\u6216\u6307\u5b9a\u5355\u9879\u67e5\u770b\u3002")
+        if domain == "external_research":
+            lines.append("\u8fd9\u4e9b\u53ea\u662f\u5916\u90e8\u7814\u7a76\u7ebf\u7d22\uff0c\u672a\u4fdd\u5b58\u4e3a\u8bc1\u636e\uff0c\u4e0d\u7b49\u540c\u4e8e\u6700\u7ec8\u7ed3\u8bba\u3002")
+        lines.append("\u672c\u8f6e\u53ea\u8fdb\u884c\u67e5\u8be2/\u6982\u8981\u6574\u7406\uff0c\u672a\u6267\u884c\u5199\u5165\u3001\u63d0\u4ea4\u3001\u8bad\u7ec3\u3001\u56de\u8865\u6216\u664b\u5347\u64cd\u4f5c\u3002")
         return "\n".join(lines)
 
     @staticmethod
@@ -3953,7 +4442,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         del execution
         groups = summary.get("status_groups") if isinstance(summary.get("status_groups"), dict) else {}
         counts = summary.get("group_counts") if isinstance(summary.get("group_counts"), dict) else {}
-        evidence_sources = summary.get("evidence_sources") if isinstance(summary.get("evidence_sources"), list) else []
         trade_date = str(summary.get("trade_date") or utc_now().date().isoformat())
         as_of = str(summary.get("as_of") or utc_now().isoformat())
         labels = {
@@ -3965,9 +4453,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         }
         order = ("success", "failed", "not_synced", "running", "blocked")
         lines = [
-            "已按本地数据只读证据汇总今天的数据同步情况。",
-            f"查询日期：{trade_date}；as_of={as_of}。",
-            f"证据来源：{', '.join(str(item) for item in evidence_sources) if evidence_sources else 'local-data facade'}。",
+            "已汇总本地数据同步情况如下。",
+            f"数据日期：{trade_date}；汇总时间：{as_of}。",
         ]
         if not any(int(counts.get(key) or 0) for key in order):
             lines.append("今天暂无可用的 preset/job/target 同步记录；这通常表示尚未运行，或本地数据 facade 没有返回当天记录。")
@@ -4006,12 +4493,333 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "\n".join(lines)
 
     @staticmethod
+    def _format_metric_bits(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+        bits = []
+        for key in keys:
+            value = item.get(key)
+            if value is None or value == "":
+                continue
+            bits.append(f"{key}={value}")
+        return "，".join(bits)
+
+    @staticmethod
+    def _format_numeric_metric(value: Any, *, as_percent: bool = False) -> str:
+        if value is None or value == "":
+            return "-"
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if as_percent:
+            return f"{numeric * 100:.2f}%"
+        return f"{numeric:.4g}"
+
+    @staticmethod
+    def _qe_leaderboard_display_name(item: dict[str, Any]) -> str:
+        for key in ("experiment_id", "run_id", "task_id"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return "unknown"
+
+    @staticmethod
+    def _render_qe_run_leaderboard_reply(items: list[Any], summary: dict[str, Any], as_of: str) -> str:
+        total = summary.get("total")
+        total_count = total if isinstance(total, int) else len(items)
+        lines = [
+            "已按 QE 数仓 leaderboard 查询回测收益排行。",
+            f"口径：只读查询已入仓 QE run，默认按年化收益/CAGR 降序；汇总时间：{as_of}。",
+        ]
+        dict_items = [item for item in items if isinstance(item, dict)]
+        if not dict_items:
+            lines.append("结论：当前没有可展示的已入仓 QE run 收益排行记录。")
+            return "\n".join(lines)
+
+        best = dict_items[0]
+        best_name = ResearchAssistantService._qe_leaderboard_display_name(best)
+        best_cagr = ResearchAssistantService._format_numeric_metric(best.get("cagr"), as_percent=True)
+        best_model = str(best.get("model_type") or "-")
+        best_run = str(best.get("run_id") or "-")
+        lines.append(
+            f"结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一的是 {best_name}，CAGR={best_cagr}；run={best_run}，模型={best_model}。"
+        )
+        lines.append(f"本次展示 {len(dict_items[:20])} 条，匹配总数 {total_count} 条。")
+        lines.append("| 排名 | 年化收益/CAGR | Run | 实验 | Task | Loop | 模型 | Sharpe | IR | 最大回撤 | IC/ICIR | 完成时间 |")
+        lines.append("|---:|---:|---|---|---|---:|---|---:|---:|---:|---|---|")
+        for index, item in enumerate(dict_items[:20], start=1):
+            ic_bits = []
+            if item.get("ic") is not None:
+                ic_bits.append(f"IC={ResearchAssistantService._format_numeric_metric(item.get('ic'))}")
+            if item.get("icir") is not None:
+                ic_bits.append(f"ICIR={ResearchAssistantService._format_numeric_metric(item.get('icir'))}")
+            row = [
+                str(index),
+                ResearchAssistantService._format_numeric_metric(item.get("cagr"), as_percent=True),
+                str(item.get("run_id") or "-"),
+                str(item.get("experiment_id") or "-"),
+                str(item.get("task_id") or "-"),
+                str(item.get("loop_index") if item.get("loop_index") is not None else "-"),
+                str(item.get("model_type") or "-"),
+                ResearchAssistantService._format_numeric_metric(item.get("sharpe")),
+                ResearchAssistantService._format_numeric_metric(item.get("information_ratio")),
+                ResearchAssistantService._format_numeric_metric(item.get("max_drawdown"), as_percent=True),
+                "；".join(ic_bits) if ic_bits else "-",
+                str(item.get("completed_at") or "-"),
+            ]
+            lines.append("| " + " | ".join(row) + " |")
+        if len(dict_items) > 20:
+            lines.append(f"另有 {len(dict_items) - 20} 条未在主回复展开，可继续指定模型、task 或过滤条件查看。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_qe_experiment_status_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
+        summary_kind = str(summary.get("summary_kind") or "qe_experiments")
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        title = "已汇总 QE custom_evo 任务进度如下。" if summary_kind == "custom_evo_tasks" else "已汇总 QE 实验状态如下。"
+        lines = [title, f"汇总时间：{as_of}。"]
+        if counts:
+            status_text = "，".join(f"{status}={count}" for status, count in sorted(counts.items()))
+            lines.append(f"状态汇总：{status_text}。")
+        else:
+            lines.append("状态汇总：当前未返回可统计的实验/任务状态。")
+
+        if not items:
+            lines.append("明细列表：暂无可展示的 QE 实验/任务记录。")
+        elif summary_kind == "custom_evo_tasks":
+            lines.append("任务明细：")
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("task_name") or item.get("target_desc") or item.get("task_id") or "unknown"
+                loop = ResearchAssistantService._format_metric_bits(item, ("current_loop", "max_loops"))
+                loop_counts = item.get("loop_status_counts") if isinstance(item.get("loop_status_counts"), dict) else {}
+                loop_counts_text = "，".join(f"{key}={value}" for key, value in sorted(loop_counts.items()))
+                suffix = []
+                if loop:
+                    suffix.append(loop)
+                if loop_counts_text:
+                    suffix.append(f"loops[{loop_counts_text}]")
+                if item.get("node_id"):
+                    suffix.append(f"node={item.get('node_id')}")
+                if item.get("updated_at"):
+                    suffix.append(f"updated={item.get('updated_at')}")
+                lines.append(f"- {name}（{item.get('task_id', 'unknown')}）：{item.get('status', 'unknown')}{'；' + '；'.join(suffix) if suffix else ''}")
+        else:
+            lines.append("实验明细：")
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("experiment_name") or item.get("experiment_id") or "unknown"
+                metrics = ResearchAssistantService._format_metric_bits(
+                    item,
+                    ("ic", "icir", "rank_ic", "rank_icir", "annualized_return", "information_ratio", "max_drawdown"),
+                )
+                refs = ResearchAssistantService._format_metric_bits(item, ("qe_task_id", "task_id", "qe_loop_id", "loop_id", "loop_index", "model_id", "model_type"))
+                suffix = "；".join(part for part in (refs, metrics, f"updated={item.get('updated_at')}" if item.get("updated_at") else "") if part)
+                lines.append(f"- {name}（{item.get('experiment_id', 'unknown')}）：{item.get('status', 'unknown')}{'；' + suffix if suffix else ''}")
+        if len(items) > 20:
+            lines.append(f"另有 {len(items) - 20} 项未在主回复展开，可指定状态或 ID 继续查看。")
+        partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+        if partial_errors:
+            rendered_errors = "; ".join(
+                f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+            )
+            lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+        lines.append("本轮未启动、执行、物化或修改任何 QE 实验。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_compact_business_item(item: dict[str, Any], *, max_fields: int = 8) -> str:
+        preferred = [
+            "event_id",
+            "run_id",
+            "task_id",
+            "experiment_id",
+            "logical_name",
+            "view_name",
+            "model_type",
+            "factor_name",
+            "status",
+            "available",
+            "row_count",
+            "cagr",
+            "sharpe",
+            "information_ratio",
+            "icir",
+            "rank_icir",
+            "is_suspicious",
+            "is_return_stable",
+            "passes_gate",
+            "updated_at",
+            "completed_at",
+        ]
+        fields = []
+        for key in preferred:
+            if key in item and item.get(key) is not None:
+                fields.append(f"{key}={item.get(key)}")
+            if len(fields) >= max_fields:
+                break
+        if not fields:
+            for key, value in item.items():
+                if value is not None:
+                    fields.append(f"{key}={value}")
+                if len(fields) >= max_fields:
+                    break
+        return "，".join(fields) if fields else "无关键字段"
+
+    @staticmethod
+    def _render_qe_warehouse_business_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        del execution
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
+        health = summary.get("health_summary") if isinstance(summary.get("health_summary"), dict) else {}
+        summary_kind = str(summary.get("summary_kind") or "warehouse")
+        as_of = str(summary.get("as_of") or utc_now().isoformat())
+        if summary_kind == "query_run_leaderboard":
+            lines = [ResearchAssistantService._render_qe_run_leaderboard_reply(items, summary, as_of)]
+            partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+            if partial_errors:
+                rendered_errors = "; ".join(
+                    f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+                )
+                lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+            lines.append("本轮未执行 backfill、重跑、写库或任何高风险 QE 操作。")
+            return "\n".join(lines)
+        title_by_kind = {
+            "health": "QE 数仓健康汇总如下。",
+            "list_outbox": "QE 数仓 outbox / 漏入库处理项汇总如下。",
+            "query_analytics_view_status": "QE 数仓分析视图状态如下。",
+            "query_seed_robustness": "QE 种子鲁棒性汇总如下。",
+            "query_overfit_flags": "QE 过拟合红旗汇总如下。",
+            "query_promotion_candidates": "QE 晋升候选汇总如下。",
+            "query_evolution_lineage": "QE 演进血缘汇总如下。",
+            "query_factor_performance": "QE 因子表现汇总如下。",
+            "query_model_hyperparam_seed_perf": "QE 模型超参与 seed 表现汇总如下。",
+        }
+        lines = [title_by_kind.get(summary_kind, "QE 数仓业务数据汇总如下。"), f"汇总时间：{as_of}。"]
+        if health:
+            lines.append(
+                "健康指标："
+                f"run_count={health.get('run_count', 0)}，"
+                f"pending_outbox={health.get('pending_outbox_count', 0)}，"
+                f"latest_archived_at={health.get('latest_archived_at') or '无'}，"
+                f"skip={health.get('skip_count', 0)}，"
+                f"manual_only={health.get('manual_only_count', 0)}。"
+            )
+            for label, key in (
+                ("outbox 状态", "outbox_status_counts"),
+                ("归档 job 状态", "archive_job_status_counts"),
+                ("入仓历史状态", "ingest_history_status_counts"),
+                ("backfill 状态", "backfill_run_status_counts"),
+                ("research_valid", "research_valid_counts"),
+            ):
+                value = health.get(key)
+                if isinstance(value, dict) and value:
+                    lines.append(f"{label}：" + "，".join(f"{k}={v}" for k, v in sorted(value.items())) + "。")
+        elif counts:
+            lines.append("状态汇总：" + "，".join(f"{status}={count}" for status, count in sorted(counts.items())) + "。")
+
+        if not items:
+            lines.append("明细列表：暂无需要展示的数仓记录或处理项。")
+        else:
+            lines.append("明细列表：")
+            for item in items[:20]:
+                if isinstance(item, dict):
+                    lines.append(f"- {ResearchAssistantService._render_compact_business_item(item)}")
+        if len(items) > 20:
+            lines.append(f"另有 {len(items) - 20} 项未在主回复展开，可指定 run/task/view 继续查看。")
+        partial_errors = summary.get("partial_errors") if isinstance(summary.get("partial_errors"), list) else []
+        if partial_errors:
+            rendered_errors = "; ".join(
+                f"{item.get('source')}: {item.get('error')}" for item in partial_errors[:3] if isinstance(item, dict)
+            )
+            lines.append(f"部分只读证据读取失败：{rendered_errors}。")
+        lines.append("本轮未执行 backfill、重跑、写库或任何高风险 QE 操作。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_insufficient_evidence_text(text: str) -> bool:
+        lower = text.lower()
+        return "insufficient evidence" in lower or "max tool iterations reached" in lower
+
+    @staticmethod
+    def _contains_mcp_business_forbidden_marker(text: str) -> bool:
+        lower = text.lower()
+        return any(marker.lower() in lower for marker in MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS)
+
+    @staticmethod
+    def _route_needs_concrete_target_hint(route: dict[str, Any]) -> bool:
+        tool_name = str(route.get("tool_name") or "").lower()
+        side_effect = str(route.get("side_effect") or "read_only")
+        if side_effect != "read_only":
+            return True
+        collection_terms = ("list", "search", "overview", "summary", "health", "catalog", "available")
+        if any(term in tool_name for term in collection_terms):
+            return False
+        object_terms = ("get", "detail", "validate", "bind", "plan", "promote", "retire", "deprecate")
+        return any(term in tool_name for term in object_terms)
+
+    @staticmethod
+    def _render_mcp_safe_preflight_reply(route_or_execution: dict[str, Any], preflight: dict[str, Any]) -> str:
+        route = str(route_or_execution.get("route") or "")
+        if not route and route_or_execution.get("server_key") and route_or_execution.get("tool_name"):
+            route = f"{route_or_execution.get('server_key')}/{route_or_execution.get('tool_name')}"
+        domain = str(route_or_execution.get("domain") or "")
+        side_effect = str(route_or_execution.get("side_effect") or route_or_execution.get("status") or "plan_or_preflight")
+        label = ResearchAssistantService._business_label_for_domain(domain, route)
+        lines = [
+            f"{label}需要先做方案/预检，本轮未执行写入、训练、回补或晋升操作。",
+        ]
+        if side_effect in {"approval_required", "preflight_required", "preflight_failed", "confirmed_action"}:
+            lines.append("安全边界：需先展示预检结果和确认口令，获得明确授权后才能进入下一步。")
+        else:
+            lines.append("安全边界：只会生成方案或预检说明，不会直接提交高风险操作。")
+        failed_checks = preflight.get("failed_checks") if isinstance(preflight.get("failed_checks"), list) else []
+        if failed_checks:
+            rendered = "; ".join(
+                str(item.get("detail") or item.get("check") or item)
+                for item in failed_checks[:3]
+                if isinstance(item, dict)
+            )
+            lines.append(f"预检阻断：{rendered}。")
+        missing = preflight.get("missing_confirmations") if isinstance(preflight.get("missing_confirmations"), list) else []
+        if missing:
+            lines.append("需要确认：" + "，".join(str(item) for item in missing[:3]) + "。")
+        lines.append("下一步：请先补充必要 ID/参数，或明确说“先给预检”、“我确认执行”等边界。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_qe_draft_safe_reply(cards: dict[str, Any]) -> str:
+        plan = cards.get("plan_card") if isinstance(cards.get("plan_card"), dict) else {}
+        steps = [str(item) for item in plan.get("steps", []) if str(item)]
+        clarification = cards.get("clarification_card") if isinstance(cards.get("clarification_card"), dict) else {}
+        questions = [str(item) for item in clarification.get("questions", []) if str(item)]
+        lines = [
+            "已收到 QE 实验草案需求；本轮只生成方案，不会执行、物化或启动训练。",
+            "草案框架：",
+        ]
+        if steps:
+            for step in steps[:5]:
+                lines.append(f"- {step}")
+        else:
+            lines.extend(
+                [
+                    "- 明确实验目标、股票池、时间窗、频率和标签口径。",
+                    "- 固定 seed、成本假设、数据版本和训练/回测边界。",
+                    "- 先形成 template draft 与校验项，确认后再进入 preflight。",
+                ]
+            )
+        if questions:
+            lines.append("需要你补充的关键参数：" + "；".join(questions[:3]) + "。")
+        lines.append("如果你确认目标和约束，我再把它整理成可校验的 QE template 草案。")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_react_execution_fallback_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
-        reply = ResearchAssistantService._render_mcp_execution_reply(execution, summary)
-        source_refs = execution.get("source_refs") if isinstance(execution.get("source_refs"), list) else []
-        source = str(source_refs[0] if source_refs else summary.get("source") or execution.get("tool_event_id") or "mcp_tool_event")
-        as_of = str(execution.get("as_of") or utc_now().date().isoformat())
-        return f"{reply}\nEvidence: source={source} as_of={as_of}."
+        return ResearchAssistantService._render_mcp_execution_reply(execution, summary)
 
     @staticmethod
     def _strip_assistant_tool_choice_markup(text: str) -> str:
@@ -4041,68 +4849,66 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _render_mcp_route_reply(route: Any) -> str:
         if not isinstance(route, dict):
-            return "我会先做 MCP route decision 和 preflight，不会用模型猜业务数据。"
-        server_key = str(route.get("server_key") or "unknown-server")
-        tool_name = str(route.get("tool_name") or "unknown-tool")
-        domain = str(route.get("domain") or "unknown")
+            return "\u6211\u8fd8\u9700\u8981\u5148\u786e\u8ba4\u4e1a\u52a1\u57df\u548c\u76ee\u6807\uff0c\u4e0d\u4f1a\u7528\u6a21\u578b\u731c\u6d4b\u4e1a\u52a1\u6570\u636e\u3002"
+        server_key = str(route.get("server_key") or "")
+        tool_name = str(route.get("tool_name") or "")
+        domain = str(route.get("domain") or "")
         side_effect = str(route.get("side_effect") or "read_only")
-        lines = [
-            "我先把这类业务问题交给 MCP 路由处理，不会用模型猜因子数量、Issue 状态或其他业务事实。",
-            f"Route decision：{domain} -> {server_key}/{tool_name}。",
-            "返回边界：summary-first；列表/概览只返回数量、分页和关键字段，具体对象详情再用 get/detail 工具展开，矩阵、日志和原始 payload 只给 artifact_ref 或 detail 引用。",
-        ]
+        label = ResearchAssistantService._business_label_for_domain(domain, f"{server_key}/{tool_name}")
+        lines = [f"\u5df2\u8bc6\u522b\u4e3a{label}\u9700\u6c42\uff0c\u6211\u4f1a\u6309\u8be5\u4e1a\u52a1\u57df\u5904\u7406\u3002"]
         if side_effect == "read_only":
-            lines.append("当前选择的是只读工具，可以继续做真实查询；我会只展示 MCP 返回的概要数据。")
+            lines.append("\u8fd9\u662f\u53ea\u8bfb\u67e5\u8be2\uff0c\u4e0b\u4e00\u6b65\u5e94\u76f4\u63a5\u7ed9\u51fa\u4e1a\u52a1\u5217\u8868\u3001\u72b6\u6001\u6c47\u603b\u6216\u5173\u952e\u6307\u6807\u3002")
         elif side_effect == "plan_or_preflight":
-            lines.append("当前选择的是计划/预检查工具，只生成方案和校验结果，不会执行写入或长任务。")
+            lines.append("\u8fd9\u662f\u65b9\u6848/\u9884\u68c0\u7c7b\u9700\u6c42\uff0c\u53ea\u751f\u6210\u65b9\u6848\u548c\u5b89\u5168\u6821\u9a8c\uff0c\u4e0d\u4f1a\u6267\u884c\u5199\u5165\u6216\u957f\u4efb\u52a1\u3002")
         else:
-            lines.append("当前选择涉及 confirmed action；必须先展示 preflight、确认口令和审批边界，确认前不会执行。")
-        reason = str(route.get("reason") or "").strip()
-        if reason:
-            lines.append(f"选择依据：{reason}")
-        read_tools = route.get("read_tools") if isinstance(route.get("read_tools"), list) else []
-        if read_tools:
-            preview = ", ".join(str(item) for item in read_tools[:4])
-            lines.append(f"可先使用的只读工具：{preview}。")
+            lines.append("\u8fd9\u662f\u9700\u786e\u8ba4\u7684\u64cd\u4f5c\uff0c\u5fc5\u987b\u5148\u5c55\u793a\u9884\u68c0\u3001\u786e\u8ba4\u53e3\u4ee4\u548c\u5ba1\u6279\u8fb9\u754c\uff0c\u786e\u8ba4\u524d\u4e0d\u4f1a\u6267\u884c\u3002")
+        if ResearchAssistantService._route_needs_concrete_target_hint(route):
+            lines.append("\u5982\u679c\u672a\u6307\u5b9a\u5bf9\u8c61 ID \u6216\u5fc5\u8981\u53c2\u6570\uff0c\u6211\u5e94\u5148\u5217\u51fa\u5019\u9009\u5bf9\u8c61\u6216\u8bf7\u4f60\u8865\u5145\u6761\u4ef6\uff0c\u4e0d\u5bf9\u4e0d\u660e\u786e\u5bf9\u8c61\u505a\u8be6\u60c5\u5224\u65ad\u3001\u53d8\u66f4\u6216\u664b\u5347\u3002")
         return "\n".join(lines)
 
     @staticmethod
     def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
         lines = [
-            "可以，我会按你的业务目标来选择 MCP：本地数据、QE 实验、QE 数仓、Issue/验证、Research Pipeline、因子、模型、策略和执行策略都在同一套路由里。",
-            f"当前目录里有 {catalog.get('server_count', 0)} 个 MCP server、{catalog.get('tool_count', 0)} 个 MCP tool、{catalog.get('capability_count', 0)} 个已批准能力。",
-            "默认采用 summary-first：先看概要、状态、top risks 和分页列表；需要某个对象详情时再展开，矩阵、日志、parquet/raw payload 只返回 artifact_ref 或 detail 引用。",
+            "\u53ef\u4ee5\uff0c\u6211\u4f1a\u6309 AIstock \u4e1a\u52a1\u76ee\u6807\u9009\u62e9\u5bf9\u5e94\u4e1a\u52a1\u80fd\u529b\u3002",
+            f"\u5f53\u524d\u53ef\u7528\u76ee\u5f55\uff1a{catalog.get('server_count', 0)} \u4e2a\u4e1a\u52a1\u57df\uff0c{catalog.get('tool_count', 0)} \u4e2a\u53ef\u7528\u80fd\u529b\uff0c{catalog.get('capability_count', 0)} \u4e2a\u5df2\u6279\u51c6\u80fd\u529b\u3002",
+            "\u4f60\u53ef\u4ee5\u76f4\u63a5\u7528\u81ea\u7136\u8bed\u8a00\u63d0\u9700\u6c42\uff0c\u6211\u5e94\u8be5\u8fd4\u56de\u4e1a\u52a1\u7ed3\u679c\uff0c\u800c\u4e0d\u662f\u8fd0\u884c\u8fc7\u7a0b\u8bf4\u660e\u3002",
         ]
         tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
         servers_by_key = catalog.get("servers_by_key") if isinstance(catalog.get("servers_by_key"), dict) else {}
         if tools_by_server:
-            lines.append("已登记 MCP 工具概览：")
+            lines.append("\u4e1a\u52a1\u5206\u7c7b\u6982\u89c8\uff1a")
             for server_key in sorted(str(key) for key in tools_by_server):
                 tools = tools_by_server.get(server_key) or []
                 server = servers_by_key.get(server_key) if isinstance(servers_by_key.get(server_key), dict) else {}
                 health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
                 display_name = str(health.get("display_name_zh") or server.get("title") or server_key)
                 aliases = health.get("business_aliases_zh") if isinstance(health.get("business_aliases_zh"), list) else []
-                alias_text = f"（{', '.join(str(item) for item in aliases[:3])}）" if aliases else ""
-                sample = [str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict)]
-                important = [
-                    name
-                    for name in ("assistant_create_issue_candidate", "qe_template_create", "mcp_github_issue_create")
-                    if name in sample
-                ]
+                alias_text = "\uff08" + "\uff0c".join(str(item) for item in aliases[:3]) + "\uff09" if aliases else ""
+                sample = []
+                for tool in tools:
+                    if not isinstance(tool, dict):
+                        continue
+                    raw_tool_name = str(tool.get("tool_name") or "")
+                    if "artifact_ref" in raw_tool_name.lower():
+                        continue
+                    display = str(tool.get("title") or "").strip() or ResearchAssistantService._humanize_business_identifier(raw_tool_name)
+                    if ResearchAssistantService._contains_mcp_business_forbidden_marker(display):
+                        display = ResearchAssistantService._humanize_business_identifier(raw_tool_name)
+                    sample.append(display)
                 preview_names = []
-                for name in [*important, *sample]:
+                for name in sample:
                     if name and name not in preview_names:
                         preview_names.append(name)
-                    if len(preview_names) >= 12:
+                    if len(preview_names) >= 8:
                         break
-                preview = ", ".join(preview_names)
-                suffix = f" ... count {len(sample)}" if len(sample) > 12 else f"(count {len(sample)})"
-                lines.append(f"- {display_name}{alias_text} / {server_key}: {preview}{suffix}")
+                preview = "\uff0c".join(preview_names)
+                suffix = f"\uff0c\u5171 {len(sample)} \u4e2a" if len(sample) > 8 else f"\uff0c\u5171 {len(sample)} \u4e2a"
+                lines.append(f"- {display_name}{alias_text}\uff1a{preview}{suffix}")
         else:
-            lines.append("我会先刷新 MCP 目录，再给你可调用的工具概览。")
-        lines.append("你直接描述目标即可，例如补 trade_date、检查 QE 入仓、计算因子 RankIC、比较模型 seed 稳定性、判断策略能否进入 Paper v2；我会给出 route decision、工具和确认边界。")
+            lines.append("\u6682\u672a\u8bfb\u5230\u53ef\u7528\u5de5\u5177\u76ee\u5f55\uff0c\u9700\u5148\u5237\u65b0\u80fd\u529b\u76ee\u5f55\u3002")
+        lines.append("\u793a\u4f8b\uff1a\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u3001\u67e5\u770b QE \u6570\u4ed3\u5065\u5eb7\u3001\u641c\u7d22\u56e0\u5b50\u5e93\u3001\u6bd4\u8f83\u6a21\u578b\u8868\u73b0\u3001\u5224\u65ad\u7b56\u7565\u5305\u662f\u5426\u53ef\u8fdb\u5165 Paper v2\u3002")
         return "\n".join(lines)
+
 
 
 
@@ -4232,6 +5038,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         code_intelligence_context = build_code_intelligence_context(repo_root=REPO_ROOT)
         code_intelligence_refs = artifact_ref_paths(code_intelligence_context)
+        query_code_context = build_query_code_context(
+            user_query=user_message,
+            task_id=data.task_id,
+            repo_root=REPO_ROOT,
+            token_budget=token_budget,
+            cache_lookup=self._lookup_code_context_cache,
+        )
+        code_context_refs = list(query_code_context.get("code_context_refs") or [])
+        if code_context_refs:
+            self._persist_code_context_refs(task_id=data.task_id, refs=code_context_refs)
+        code_context_artifacts = code_context_artifact_paths(query_code_context)
         core_refs = [
             *refs_by_type.get("core", []),
             *refs_by_type.get("directive", []),
@@ -4259,6 +5076,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "omitted_relation_refs": graph_result.omitted_relation_refs,
             },
             "code_intelligence_context": code_intelligence_context,
+            "code_context_route": {
+                "status": query_code_context.get("status"),
+                "reason_codes": query_code_context.get("reason_codes") or [],
+                "warnings": query_code_context.get("warnings") or [],
+                "scope": query_code_context.get("scope") or {},
+                "adapter_contract": query_code_context.get("adapter_contract") or {},
+                "as_of": query_code_context.get("as_of"),
+            },
+            "code_context_refs": code_context_refs,
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -4276,13 +5102,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "task_state_refs": refs_by_type.get("task_state", []),
             "experiment_memory_refs": refs_by_type.get("experiment", []),
             "graph_relation_refs": graph_result.graph_relation_refs,
-            "external_source_refs": code_intelligence_refs,
+            "external_source_refs": [*code_intelligence_refs, *[ref for ref in code_context_artifacts if ref not in code_intelligence_refs]],
             "temp_memory_refs": temp_refs,
             "omitted_relevant_refs": memory_result.omitted_refs,
             "pack_summary": (
                 f"Context Pack: {len(memory_items)} tree-selected memories, "
                 f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories, "
-                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}"
+                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}, "
+                f"{len(code_context_refs)} code context refs"
             ),
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
@@ -4312,8 +5139,75 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             self._mark_memory_used(item)
         if data.task_id:
-            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack built", payload_json={"context_pack_id": row["context_pack_id"]}))
+            self.add_task_event(
+                data.task_id,
+                TaskEventCreate(
+                    event_type="context_pack_built",
+                    message="Context Pack built",
+                    payload_json={
+                        "context_pack_id": row["context_pack_id"],
+                        "code_context_ref_count": len(code_context_refs),
+                        "code_context_reason_codes": query_code_context.get("reason_codes") or [],
+                    },
+                ),
+            )
         return context_pack
+
+    def _lookup_code_context_cache(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_id = payload.get("task_id")
+        expected_ref_ids = [str(ref_id) for ref_id in payload.get("expected_ref_ids") or []]
+        if not expected_ref_ids:
+            return {
+                "status": "miss",
+                "code_context_refs": [],
+                "reason_codes": ["code_context_cache_miss"],
+                "warnings": ["code context cache miss: no deterministic ref ids for query scope"],
+            }
+        try:
+            rows = []
+            for code_ref_id in expected_ref_ids:
+                row = self.repository.get_record("code_context_refs", code_ref_id)
+                if not row or (task_id and row.get("task_id") != task_id):
+                    return {
+                        "status": "miss",
+                        "code_context_refs": [],
+                        "reason_codes": ["code_context_cache_miss"],
+                        "warnings": [f"code context cache miss: {code_ref_id}"],
+                    }
+                rows.append(row)
+        except Exception as exc:  # noqa: BLE001 - explicit degraded cache route, adapter may still run.
+            return {
+                "status": "unavailable",
+                "code_context_refs": [],
+                "reason_codes": ["code_context_cache_unavailable"],
+                "warnings": [f"code context cache unavailable: {type(exc).__name__}: {exc}"],
+            }
+
+        refs = [_code_context_ref_from_row(row) for row in rows]
+        return {
+            "status": "hit",
+            "code_context_refs": refs,
+            "reason_codes": ["code_context_cache_hit"],
+            "warnings": [],
+            "as_of": refs[0].get("as_of") if refs else None,
+        }
+
+    def _persist_code_context_refs(self, *, task_id: str | None, refs: list[dict[str, Any]]) -> None:
+        for ref in refs:
+            if not isinstance(ref, dict) or not ref.get("code_ref_id"):
+                continue
+            self.repository.create_record(
+                "code_context_refs",
+                {
+                    "code_ref_id": ref["code_ref_id"],
+                    "task_id": task_id,
+                    "query_scope": ref.get("query_scope") or "",
+                    "manifest_json": ref.get("manifest_json") or {},
+                    "source": ref.get("source") or "codegraph",
+                    "provenance_json": ref.get("provenance") or {},
+                    "as_of": ref.get("as_of"),
+                },
+            )
 
     def _context_pack_user_message(self, task_id: str | None) -> str | None:
         if not task_id:

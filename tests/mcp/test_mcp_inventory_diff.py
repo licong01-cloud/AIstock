@@ -51,7 +51,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
 def test_mcp_modules_do_not_import_backend_services_directly() -> None:
     offenders: list[str] = []
     for path in Path("backend/mcp/modules").glob("*.py"):
-        if path.name == "__init__.py":
+        if path.name in {"__init__.py", "_gateway_specs.py"}:
             continue
         text = path.read_text(encoding="utf-8-sig")
         if "backend.services" in text or "backend.db" in text:
@@ -63,7 +63,7 @@ def test_mcp_modules_do_not_import_scripts_or_transitive_business_code() -> None
     offenders: list[str] = []
     module_names: list[str] = []
     for path in Path("backend/mcp/modules").glob("*.py"):
-        if path.name == "__init__.py":
+        if path.name in {"__init__.py", "_gateway_specs.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):

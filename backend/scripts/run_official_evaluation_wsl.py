@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 from backend.services.quantevolver.factor_official_evaluation_service import (  # noqa: E402
     FactorOfficialEvaluationService,
 )
+from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
 
 
 def _emit(obj: dict) -> None:
@@ -39,6 +40,7 @@ def main() -> int:
 
     payload_path = Path(sys.argv[1])
     try:
+        assert_wsl_runtime("run_official_evaluation_wsl")
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
         svc = FactorOfficialEvaluationService()
         result = svc._compute_local(

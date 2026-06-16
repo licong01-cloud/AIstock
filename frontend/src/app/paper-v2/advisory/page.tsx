@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
+  type AdvisoryBindingPayload,
   type AdvisoryEpisode,
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
@@ -40,6 +41,15 @@ type ActivePoolSortKey =
 type ActivePoolSort = { key: ActivePoolSortKey; direction: SortDirection } | null;
 type ListDetailSource = "latest" | "review_result" | "timeline";
 type PackageWeightRow = { rowId: string; packageId: string; weight: string };
+type ProgramStrategyDraft = {
+  packageMode: AdvisoryPackageMode;
+  targetCount: string;
+  rows: PackageWeightRow[];
+  activationReason: string;
+  activeBindingVersionId?: string | null;
+  replayResult: JsonObject | null;
+  applyResult: AdvisoryStrategyBindingVersion | null;
+};
 type ReviewDateOption = {
   value: string;
   label: string;
@@ -133,6 +143,15 @@ function packageRowsFromText(text: string): PackageWeightRow[] {
 
 function newPackageRow(index: number): PackageWeightRow {
   return { rowId: `pkg-new-${Date.now()}-${index}`, packageId: "", weight: "1" };
+}
+
+function packageRowsFromIds(packageIds: string[] = [], packageWeights: Record<string, number> = {}): PackageWeightRow[] {
+  if (!packageIds.length) return [{ rowId: "pkg-1", packageId: "", weight: "1" }];
+  return packageIds.map((packageId, index) => ({
+    rowId: `pkg-${index + 1}`,
+    packageId,
+    weight: String(packageWeights[packageId] ?? 1),
+  }));
 }
 
 function packageOptionLabel(pkg: SelectablePackage): string {
@@ -492,6 +511,33 @@ function modeNeedsWeights(mode: AdvisoryPackageMode): boolean {
   return mode === "fusion_pool" || mode === "weighted_rank_fusion";
 }
 
+function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisoryStrategyBindingVersion | null): ProgramStrategyDraft {
+  const source = binding || program;
+  return {
+    packageMode: source.package_mode,
+    targetCount: String(program.target_count || 20),
+    rows: packageRowsFromIds(source.package_ids, source.package_weights || {}),
+    activationReason: `替换荐股任务「${program.program_name}」策略包配置`,
+    activeBindingVersionId: binding?.binding_version_id || null,
+    replayResult: null,
+    applyResult: null,
+  };
+}
+
+function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPayload {
+  const packageIds = packageIdsFromRows(draft.rows, draft.packageMode);
+  if (!packageIds.length) throw new Error("至少需要从下拉菜单选择一个策略包");
+  const targetCount = Number(draft.targetCount || 20);
+  if (!Number.isFinite(targetCount) || targetCount <= 0) throw new Error("目标数量必须是有效正数");
+  return {
+    package_mode: draft.packageMode,
+    package_ids: packageIds,
+    package_weights: draft.packageMode === "single_package" ? { [packageIds[0]]: 1 } : packageWeightsFromRows(draft.rows, packageIds),
+    target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
+    runtime_config_json: {},
+  };
+}
+
 function adviceText(item: AdvisoryRecommendationListItem): string {
   return String(item.operation_advice_json?.human_label || item.operation_advice_json?.reason_summary || item.reason_code || "-");
 }
@@ -612,6 +658,9 @@ function AdvisoryPageContent() {
   const [replayStart, setReplayStart] = useState("");
   const [replayEnd, setReplayEnd] = useState("");
   const [replayResult, setReplayResult] = useState<JsonObject | null>(null);
+  const [expandedStrategyProgramId, setExpandedStrategyProgramId] = useState("");
+  const [programStrategyDrafts, setProgramStrategyDrafts] = useState<Record<string, ProgramStrategyDraft>>({});
+  const [strategyActionKey, setStrategyActionKey] = useState("");
   const [qualityRows, setQualityRows] = useState<QualityInputRow[]>(() => [{ ...newQualityRow(1), rowId: "quality-1" }]);
   const [qualityReport, setQualityReport] = useState<AdvisoryQualityReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -661,6 +710,13 @@ function AdvisoryPageContent() {
   const packageSummary = (packageIds: string[]): string => {
     if (!packageIds.length) return "-";
     return packageIds.map(packageLabel).join(" + ");
+  };
+
+  const activeBindingForProgram = (programId: string): AdvisoryStrategyBindingVersion | undefined => {
+    if (programId === selectedProgram?.program_id && loadedDetailsProgramId === programId) {
+      return bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
+    }
+    return undefined;
   };
 
   const sortedActivePool = useMemo(() => {
@@ -866,6 +922,12 @@ function AdvisoryPageContent() {
     }
   }, [prefillPackages]);
 
+  useEffect(() => {
+    if (!tradingDefaults) return;
+    setReplayStart((current) => current || tradingDefaults.replay_start_date || tradingDefaults.trading_days?.[0] || "");
+    setReplayEnd((current) => current || tradingDefaults.replay_end_date || tradingDefaults.latest_trading_day || "");
+  }, [tradingDefaults]);
+
   async function createProgram() {
     setError(null);
     try {
@@ -1007,6 +1069,114 @@ function AdvisoryPageContent() {
       setReplayResult(replay);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  function setProgramStrategyDraft(programId: string, updater: (draft: ProgramStrategyDraft) => ProgramStrategyDraft) {
+    setProgramStrategyDrafts((drafts) => {
+      const program = programs.find((item) => item.program_id === programId) || leaderboard.find((item) => item.program_id === programId);
+      if (!program) return drafts;
+      const current = drafts[programId] || strategyDraftFromProgram(program, activeBindingForProgram(programId));
+      return { ...drafts, [programId]: updater(current) };
+    });
+  }
+
+  async function toggleStrategyManager(program: AdvisoryProgram) {
+    if (expandedStrategyProgramId === program.program_id) {
+      setExpandedStrategyProgramId("");
+      return;
+    }
+    setExpandedStrategyProgramId(program.program_id);
+    if (programStrategyDrafts[program.program_id]) return;
+    setStrategyActionKey(`${program.program_id}:load-binding`);
+    try {
+      let binding = activeBindingForProgram(program.program_id);
+      if (!binding) {
+        binding = await advisoryApi.activeBinding(program.program_id);
+      }
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: strategyDraftFromProgram(program, binding),
+      }));
+    } catch {
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: strategyDraftFromProgram(program),
+      }));
+    } finally {
+      setStrategyActionKey("");
+    }
+  }
+
+  function updateStrategyRow(programId: string, rowId: string, patch: Partial<PackageWeightRow>) {
+    setProgramStrategyDraft(programId, (draft) => ({
+      ...draft,
+      rows: draft.rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row),
+    }));
+  }
+
+  async function runProgramStrategyReplay(program: AdvisoryProgram) {
+    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
+    const startDate = replayStart || tradingDefaults?.replay_start_date || tradingDefaults?.trading_days?.[0] || "";
+    const endDate = replayEnd || tradingDefaults?.replay_end_date || tradingDefaults?.latest_trading_day || "";
+    if (!startDate || !endDate) {
+      setError("请先选择回放验证的开始和结束交易日。");
+      return;
+    }
+    setError(null);
+    setStrategyActionKey(`${program.program_id}:replay`);
+    try {
+      const binding = bindingPayloadFromDraft(draft);
+      const replay = await advisoryApi.replay(program.program_id, {
+        start_date: startDate,
+        end_date: endDate,
+        draft_binding: binding,
+        compare_to_binding_version_id: draft.activeBindingVersionId || activeBindingForProgram(program.program_id)?.binding_version_id || null,
+        include_daily_items: false,
+      });
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: { ...(drafts[program.program_id] || draft), replayResult: replay },
+      }));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setStrategyActionKey("");
+    }
+  }
+
+  async function applyProgramStrategyBinding(program: AdvisoryProgram) {
+    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
+    const activationReason = draft.activationReason.trim() || `更新荐股任务「${program.program_name}」策略包配置`;
+    setError(null);
+    setStrategyActionKey(`${program.program_id}:apply`);
+    try {
+      const binding = bindingPayloadFromDraft(draft);
+      const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
+      const result = await advisoryApi.applyBinding(program.program_id, {
+        binding,
+        activation_reason: activationReason,
+        source_replay_run_id: typeof replayRun?.replay_run_id === "string" ? replayRun.replay_run_id : null,
+        effective_from_trade_date: tradingDefaults?.next_trading_day || tradingDefaults?.latest_trading_day || null,
+        created_by: "advisory_ui",
+      });
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: {
+          ...strategyDraftFromProgram(result.program, result.binding),
+          activationReason,
+          activeBindingVersionId: result.binding.binding_version_id,
+          replayResult: draft.replayResult,
+          applyResult: result.binding,
+        },
+      }));
+      const keepSelectedProgramId = selectedProgramId || program.program_id;
+      await refreshAll(keepSelectedProgramId, { preserveReviewDate: true });
+      setExpandedStrategyProgramId(program.program_id);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setStrategyActionKey("");
     }
   }
 
@@ -1193,6 +1363,174 @@ function AdvisoryPageContent() {
     }
   }
 
+  function renderStrategyManager(program: AdvisoryProgram): ReactNode {
+    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
+    const loadingBinding = strategyActionKey === `${program.program_id}:load-binding`;
+    const replayRunning = strategyActionKey === `${program.program_id}:replay`;
+    const applyRunning = strategyActionKey === `${program.program_id}:apply`;
+    const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
+    const replaySummary = draft.replayResult?.summary as JsonObject | undefined;
+    return (
+      <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">独立策略包配置</div>
+            <h3 style={{ margin: 0 }}>{program.program_name}</h3>
+            <p className="pv2-muted" data-testid={`advisory-strategy-manager-hint-${program.program_id}`}>
+              当前面板只作用于本荐股任务；回放与应用都会按 program_id 调用接口，不会修改其他任务的荐股列表或 active binding。
+            </p>
+          </div>
+          <button
+            className="pv2-button-ghost"
+            onClick={() => setExpandedStrategyProgramId("")}
+            type="button"
+          >
+            收起
+          </button>
+        </div>
+        <div className="pv2-form-grid" style={{ marginTop: 8 }}>
+          <label className="pv2-field">
+            策略模式
+            <select
+              className="pv2-select"
+              data-testid={`advisory-strategy-mode-${program.program_id}`}
+              disabled={loadingBinding}
+              value={draft.packageMode}
+              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
+                ...current,
+                packageMode: event.target.value as AdvisoryPackageMode,
+                replayResult: null,
+                applyResult: null,
+              }))}
+            >
+              {PACKAGE_MODE_OPTIONS.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+            </select>
+          </label>
+          <label className="pv2-field">
+            目标数量
+            <input
+              className="pv2-input"
+              data-testid={`advisory-strategy-target-count-${program.program_id}`}
+              min={1}
+              max={100}
+              type="number"
+              value={draft.targetCount}
+              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, replayResult: null, applyResult: null }))}
+            />
+          </label>
+          <label className="pv2-field">
+            应用原因
+            <input
+              className="pv2-input"
+              data-testid={`advisory-strategy-activation-reason-${program.program_id}`}
+              value={draft.activationReason}
+              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, activationReason: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+          <table className="pv2-table">
+            <thead><tr><th>策略包</th><th>权重</th><th>说明</th><th>操作</th></tr></thead>
+            <tbody>
+              {draft.rows.map((row, index) => (
+                <tr key={row.rowId}>
+                  <td>
+                    <select
+                      className="pv2-select"
+                      data-testid={`advisory-strategy-package-${program.program_id}-${row.rowId}`}
+                      value={row.packageId}
+                      onChange={(event) => updateStrategyRow(program.program_id, row.rowId, { packageId: event.target.value })}
+                    >
+                      <option value="">选择策略包</option>
+                      {selectablePackages.map((pkg) => (
+                        <option key={pkg.package_id} value={pkg.package_id}>{packageOptionLabel(pkg)}</option>
+                      ))}
+                      {row.packageId && !packageById.has(row.packageId) ? (
+                        <option value={row.packageId}>当前绑定策略包 {shortHash(row.packageId, 7)}</option>
+                      ) : null}
+                    </select>
+                    <div className="pv2-muted" style={{ marginTop: 4 }}>
+                      {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "当前绑定"}` : "从下拉菜单选择策略包，不需要填写或记忆内部 ID。"}
+                    </div>
+                  </td>
+                  <td>
+                    <input
+                      className="pv2-input"
+                      min="0.01"
+                      step="0.01"
+                      type="number"
+                      value={row.weight}
+                      onChange={(event) => updateStrategyRow(program.program_id, row.rowId, { weight: event.target.value })}
+                    />
+                  </td>
+                  <td className="pv2-muted">
+                    {draft.packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : modeNeedsWeights(draft.packageMode) ? "参与加权融合；权重不作为硬门禁" : "参与荐股集合运算"}
+                  </td>
+                  <td>
+                    <button
+                      className="pv2-button-ghost"
+                      disabled={draft.rows.length <= 1}
+                      onClick={() => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, rows: current.rows.filter((item) => item.rowId !== row.rowId), replayResult: null, applyResult: null }))}
+                      type="button"
+                    >
+                      移除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+          <button
+            className="pv2-button"
+            onClick={() => setProgramStrategyDraft(program.program_id, (current) => ({
+              ...current,
+              rows: [...current.rows, newPackageRow(current.rows.length + 1)],
+              replayResult: null,
+              applyResult: null,
+            }))}
+            type="button"
+          >
+            添加策略包
+          </button>
+          <span className="pv2-muted">回放区间：{replayStart || "未选择"} 至 {replayEnd || "未选择"}；可在页面底部回放区间中调整。</span>
+        </div>
+        <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+          <button
+            className="pv2-button"
+            data-testid={`advisory-strategy-replay-${program.program_id}`}
+            disabled={loadingBinding || replayRunning || applyRunning || !replayStart || !replayEnd}
+            onClick={() => void runProgramStrategyReplay(program)}
+            type="button"
+          >
+            {replayRunning ? "回放验证中..." : "回放验证"}
+          </button>
+          <button
+            className="pv2-button-primary"
+            data-testid={`advisory-strategy-apply-${program.program_id}`}
+            disabled={loadingBinding || replayRunning || applyRunning}
+            onClick={() => void applyProgramStrategyBinding(program)}
+            type="button"
+          >
+            {applyRunning ? "应用中..." : "应用新策略绑定"}
+          </button>
+          <span className="pv2-muted">回放是人工验证入口，不设置程序硬门禁；应用后仅替换本任务策略包配置，后续复评继续从本任务最新荐股列表迭代。</span>
+        </div>
+        {draft.replayResult ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-replay-result-${program.program_id}`}>
+            回放状态：{String(replayRun?.status || "-")}；胜率 {fmtPct(replaySummary?.win_rate as number | null | undefined)}；平均涨幅 {fmtBps(replaySummary?.avg_return_bps as number | null | undefined)}
+          </div>
+        ) : null}
+        {draft.applyResult ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
+            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <main className="pv2-main">
       <section className="pv2-card">
@@ -1253,61 +1591,76 @@ function AdvisoryPageContent() {
                 const catchUpKey = `${row.program_id}:catchup`;
                 const catchUpRunning = catchUpProgress?.programId === row.program_id;
                 return (
-                  <tr key={row.program_id} onClick={() => void selectProgram(row.program_id)}>
-                    <td><strong>{row.program_name}</strong><br /><span className="pv2-muted">{packageSummary(row.package_ids)}</span></td>
-                    <td>{row.status}</td>
-                    <td>{short(row.enabled_since, 16)}</td>
-                    <td>{row.entered_episode_count ?? 0}</td>
-                    <td>{row.active_count ?? 0}</td>
-                    <td>{row.take_profit_count ?? 0}</td>
-                    <td>{row.stop_loss_count ?? 0}</td>
-                    <td>{fmtPct(row.win_rate)}<br /><span className="pv2-muted">{metricStatusText(row)}</span></td>
-                    <td>{fmtBps(row.avg_return_bps)}<br /><span className="pv2-muted">样本 {row.metric_evaluable_count ?? 0}/{row.active_count ?? 0}</span></td>
-                    <td data-testid={`advisory-row-latest-context-${row.program_id}`}>
-                      {row.last_review_status || "STALE"}
-                      <br /><span className="pv2-muted">预测目标：{rowLatestMeta.targetTradeDate || "尚未生成"}</span>
-                      <br /><span className="pv2-muted">数据截止：{rowLatestMeta.selectionAsOfDate || "未记录"}</span>
-                      <br /><span className="pv2-muted">生成时间：{short(rowLatestMeta.generatedAt, 16)}</span>
-                    </td>
-                    <td>
-                      <div className="pv2-muted" data-testid={`advisory-row-review-progress-${row.program_id}`} style={{ marginBottom: 6 }}>
-                        已复评到：{rowProgress.reviewedThroughDate || "尚未开始"}；缺失：{compactDateList(rowProgress.missingTargetDates)}
-                        <br />本行待执行目标：{rowActionContext.targetDate || "-"}；数据截止：{rowActionContext.selectionAsOfDate || "系统解析"}
-                        {catchUpRunning ? <><br />补跑 {catchUpProgress.index}/{catchUpProgress.total}：{catchUpProgress.targetDate}</> : null}
-                        {rowContextLoading ? <><br />正在加载该任务完整版本时间线...</> : null}
-                      </div>
-                      <div className="pv2-row-actions">
-                        <button
-                          className="pv2-button"
-                          data-testid={`advisory-preview-${row.program_id}`}
-                          disabled={!state.canPreview || Boolean(reviewingKey)}
-                          onClick={(event) => { event.stopPropagation(); void runReview(row, true, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
-                          type="button"
-                        >
-                          {reviewingKey === previewKey ? "预览中..." : state.previewLabel}
-                        </button>
-                        <button
-                          className="pv2-button-primary"
-                          data-testid={`advisory-run-${row.program_id}`}
-                          disabled={!state.canRun || Boolean(reviewingKey)}
-                          onClick={(event) => { event.stopPropagation(); void runReview(row, false, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
-                          type="button"
-                        >
-                          {reviewingKey === runKey ? "执行中..." : state.label}
-                        </button>
-                        <button
-                          className="pv2-button"
-                          data-testid={`advisory-catchup-${row.program_id}`}
-                          disabled={rowContextLoading || !rowProgress.missingTargetDates.length || Boolean(reviewingKey)}
-                          onClick={(event) => { event.stopPropagation(); void runCatchUp(row, rowProgress.missingTargetDates); }}
-                          type="button"
-                        >
-                          {reviewingKey === catchUpKey && catchUpProgress ? `补跑 ${catchUpProgress.index}/${catchUpProgress.total}` : `补齐全部缺失复评（${rowProgress.missingTargetDates.length} 天）`}
-                        </button>
-                      </div>
-                      <span className="pv2-muted">{state.hint}</span>
-                    </td>
-                  </tr>
+                  <Fragment key={row.program_id}>
+                    <tr onClick={() => void selectProgram(row.program_id)}>
+                      <td><strong>{row.program_name}</strong><br /><span className="pv2-muted">{packageSummary(row.package_ids)}</span></td>
+                      <td>{row.status}</td>
+                      <td>{short(row.enabled_since, 16)}</td>
+                      <td>{row.entered_episode_count ?? 0}</td>
+                      <td>{row.active_count ?? 0}</td>
+                      <td>{row.take_profit_count ?? 0}</td>
+                      <td>{row.stop_loss_count ?? 0}</td>
+                      <td>{fmtPct(row.win_rate)}<br /><span className="pv2-muted">{metricStatusText(row)}</span></td>
+                      <td>{fmtBps(row.avg_return_bps)}<br /><span className="pv2-muted">样本 {row.metric_evaluable_count ?? 0}/{row.active_count ?? 0}</span></td>
+                      <td data-testid={`advisory-row-latest-context-${row.program_id}`}>
+                        {row.last_review_status || "STALE"}
+                        <br /><span className="pv2-muted">预测目标：{rowLatestMeta.targetTradeDate || "尚未生成"}</span>
+                        <br /><span className="pv2-muted">数据截止：{rowLatestMeta.selectionAsOfDate || "未记录"}</span>
+                        <br /><span className="pv2-muted">生成时间：{short(rowLatestMeta.generatedAt, 16)}</span>
+                      </td>
+                      <td>
+                        <div className="pv2-muted" data-testid={`advisory-row-review-progress-${row.program_id}`} style={{ marginBottom: 6 }}>
+                          已复评到：{rowProgress.reviewedThroughDate || "尚未开始"}；缺失：{compactDateList(rowProgress.missingTargetDates)}
+                          <br />本行待执行目标：{rowActionContext.targetDate || "-"}；数据截止：{rowActionContext.selectionAsOfDate || "系统解析"}
+                          {catchUpRunning ? <><br />补跑 {catchUpProgress.index}/{catchUpProgress.total}：{catchUpProgress.targetDate}</> : null}
+                          {rowContextLoading ? <><br />正在加载该任务完整版本时间线...</> : null}
+                        </div>
+                        <div className="pv2-row-actions">
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-preview-${row.program_id}`}
+                            disabled={!state.canPreview || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runReview(row, true, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
+                            type="button"
+                          >
+                            {reviewingKey === previewKey ? "预览中..." : state.previewLabel}
+                          </button>
+                          <button
+                            className="pv2-button-primary"
+                            data-testid={`advisory-run-${row.program_id}`}
+                            disabled={!state.canRun || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runReview(row, false, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
+                            type="button"
+                          >
+                            {reviewingKey === runKey ? "执行中..." : state.label}
+                          </button>
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-catchup-${row.program_id}`}
+                            disabled={rowContextLoading || !rowProgress.missingTargetDates.length || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runCatchUp(row, rowProgress.missingTargetDates); }}
+                            type="button"
+                          >
+                            {reviewingKey === catchUpKey && catchUpProgress ? `补跑 ${catchUpProgress.index}/${catchUpProgress.total}` : `补齐全部缺失复评（${rowProgress.missingTargetDates.length} 天）`}
+                          </button>
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-manage-strategy-${row.program_id}`}
+                            onClick={(event) => { event.stopPropagation(); void toggleStrategyManager(row); }}
+                            type="button"
+                          >
+                            {expandedStrategyProgramId === row.program_id ? "收起策略包" : "策略包配置"}
+                          </button>
+                        </div>
+                        <span className="pv2-muted">{state.hint}</span>
+                      </td>
+                    </tr>
+                    {expandedStrategyProgramId === row.program_id ? (
+                      <tr>
+                        <td colSpan={11}>{renderStrategyManager(row)}</td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 );
               })}
               {!leaderboard.length ? (

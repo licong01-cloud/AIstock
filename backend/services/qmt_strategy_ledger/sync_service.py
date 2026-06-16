@@ -23,6 +23,7 @@ from .models import (
     SELL_ORDER_TYPE,
     STATUS_CANCELLED,
     STATUS_FILLED,
+    STATUS_OPEN_LIKE,
     STATUS_REJECTED,
     CashEntryType,
     CashLedgerEntry,
@@ -67,6 +68,7 @@ class SyncSummary:
     unattributed_orders: int
     unattributed_trades: int
     status_events_appended: int
+    orders_trade_reconciled: int
     lots_created: int
     cash_entries_appended: int
     buy_fill_settled_amount: Decimal
@@ -81,6 +83,10 @@ class SyncSummary:
     raw_positions: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     stale_orders_skipped: int = 0
     stale_trades_skipped: int = 0
+    stale_orders_terminalized: int = 0
+    stale_buy_freeze_released_amount: Decimal = Decimal("0")
+    orphan_orders_terminalized: int = 0
+    orphan_buy_freeze_released_amount: Decimal = Decimal("0")
     stale_broker_snapshot: bool = False
     stale_broker_payload_samples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
@@ -96,6 +102,7 @@ class SyncSummary:
             "unattributed_orders": self.unattributed_orders,
             "unattributed_trades": self.unattributed_trades,
             "status_events_appended": self.status_events_appended,
+            "orders_trade_reconciled": self.orders_trade_reconciled,
             "lots_created": self.lots_created,
             "cash_entries_appended": self.cash_entries_appended,
             "buy_fill_settled_amount": float(self.buy_fill_settled_amount),
@@ -110,6 +117,10 @@ class SyncSummary:
             "raw_positions": list(self.raw_positions),
             "stale_orders_skipped": self.stale_orders_skipped,
             "stale_trades_skipped": self.stale_trades_skipped,
+            "stale_orders_terminalized": self.stale_orders_terminalized,
+            "stale_buy_freeze_released_amount": float(self.stale_buy_freeze_released_amount),
+            "orphan_orders_terminalized": self.orphan_orders_terminalized,
+            "orphan_buy_freeze_released_amount": float(self.orphan_buy_freeze_released_amount),
             "stale_broker_snapshot": self.stale_broker_snapshot,
             "stale_broker_payload_samples": list(self.stale_broker_payload_samples),
         }
@@ -147,17 +158,24 @@ class QmtStrategyLedgerSyncService:
         raw_trades = self._qmt_client.get_trades()
         positions = self._qmt_client.get_positions()
 
+        broker_reported_order_ids: set[str] = set()
         orders: list[dict[str, Any]] = []
         stale_order_ids: set[str] = set()
+        stale_orders: list[tuple[dict[str, Any], RawQmtOrder, date]] = []
         stale_payload_samples: list[dict[str, Any]] = []
         stale_orders_skipped = 0
         for payload in raw_orders:
+            raw_order = RawQmtOrder.from_dict(payload)
+            if raw_order.order_id:
+                broker_reported_order_ids.add(raw_order.order_id)
             broker_date = _broker_order_payload_date(payload)
             if broker_date is not None and broker_date != self._trade_date:
                 stale_orders_skipped += 1
-                order_id = RawQmtOrder.from_dict(payload).order_id
+                stale_order = raw_order
+                order_id = stale_order.order_id
                 if order_id:
                     stale_order_ids.add(order_id)
+                stale_orders.append((payload, stale_order, broker_date))
                 stale_payload_samples.append(
                     _stale_payload_sample(
                         payload_type="order",
@@ -325,7 +343,13 @@ class QmtStrategyLedgerSyncService:
         sell_fill_fee_amount = Decimal("0")
         sell_fill_realized_pnl = Decimal("0")
         buy_freeze_released_amount = Decimal("0")
+        orders_trade_reconciled = 0
+        stale_orders_terminalized = 0
+        stale_buy_freeze_released_amount = Decimal("0")
+        orphan_orders_terminalized = 0
+        orphan_buy_freeze_released_amount = Decimal("0")
         changed_strategy_ids: set[str] = set()
+        attributed_trades_by_order_id: dict[str, list[_AttributedTrade]] = {}
         attributed_trades: list[_AttributedTrade] = []
         for index, payload in enumerate(trades):
             trade = RawQmtTrade.from_dict(payload)
@@ -359,7 +383,7 @@ class QmtStrategyLedgerSyncService:
 
             if order is None or intent is None or strategy_id is None:
                 continue
-            attributed_trades.append(
+            attributed_trade = (
                 _AttributedTrade(
                     index=index,
                     payload=payload,
@@ -387,6 +411,8 @@ class QmtStrategyLedgerSyncService:
                     ),
                 )
             )
+            attributed_trades.append(attributed_trade)
+            attributed_trades_by_order_id.setdefault(trade.order_id, []).append(attributed_trade)
 
         for item in sorted(attributed_trades, key=_trade_settlement_sort_key):
             trade = item.trade
@@ -430,12 +456,54 @@ class QmtStrategyLedgerSyncService:
             if created_lot:
                 lots_created += 1
 
+        for order_id, order_trades in attributed_trades_by_order_id.items():
+            order = orders_by_id.get(order_id)
+            if order is None:
+                continue
+            if self._reconcile_order_ledger_from_trades_once(order, order_trades):
+                orders_trade_reconciled += 1
+
         for order, strategy_id, intent_id in terminal_buy_orders:
             release_entry, inserted_cash = self._release_terminal_buy_freeze_once(strategy_id, intent_id, order)
             if release_entry is not None and inserted_cash:
                 cash_entries_appended += 1
                 buy_freeze_released_amount += release_entry.cash_delta
                 changed_strategy_ids.add(strategy_id)
+
+        for payload, order, broker_date in stale_orders:
+            terminalized, release_entry, inserted_cash = self._terminalize_stale_order_once(
+                payload,
+                order,
+                broker_date,
+                strategy_id_by_name=strategy_id_by_name,
+                strategy_name_by_id=strategy_name_by_id,
+                strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+            )
+            if terminalized:
+                stale_orders_terminalized += 1
+                status_events_appended += 1
+            if release_entry is not None and inserted_cash:
+                cash_entries_appended += 1
+                buy_freeze_released_amount += release_entry.cash_delta
+                stale_buy_freeze_released_amount += release_entry.cash_delta
+                changed_strategy_ids.add(release_entry.strategy_id)
+
+        (
+            orphan_orders_terminalized,
+            orphan_release_entries,
+            orphan_release_amount,
+        ) = self._terminalize_broker_absent_historical_open_orders_once(
+            broker_reported_order_ids=broker_reported_order_ids,
+            strategy_id_by_name=strategy_id_by_name,
+            strategy_name_by_id=strategy_name_by_id,
+            strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+        )
+        if orphan_orders_terminalized:
+            status_events_appended += orphan_orders_terminalized
+        if orphan_release_entries:
+            cash_entries_appended += orphan_release_entries
+            buy_freeze_released_amount += orphan_release_amount
+            orphan_buy_freeze_released_amount += orphan_release_amount
 
         for strategy_id in strategy_id_by_name.values():
             if self._revalue_strategy_account(strategy_id):
@@ -452,6 +520,7 @@ class QmtStrategyLedgerSyncService:
             unattributed_orders=unattributed_orders,
             unattributed_trades=unattributed_trades,
             status_events_appended=status_events_appended,
+            orders_trade_reconciled=orders_trade_reconciled,
             lots_created=lots_created,
             cash_entries_appended=cash_entries_appended,
             buy_fill_settled_amount=buy_fill_settled_amount,
@@ -466,6 +535,10 @@ class QmtStrategyLedgerSyncService:
             raw_positions=tuple(dict(item) for item in positions),
             stale_orders_skipped=stale_orders_skipped,
             stale_trades_skipped=stale_trades_skipped,
+            stale_orders_terminalized=stale_orders_terminalized,
+            stale_buy_freeze_released_amount=stale_buy_freeze_released_amount,
+            orphan_orders_terminalized=orphan_orders_terminalized,
+            orphan_buy_freeze_released_amount=orphan_buy_freeze_released_amount,
             stale_broker_snapshot=stale_orders_skipped > 0 or stale_trades_skipped > 0,
             stale_broker_payload_samples=tuple(stale_payload_samples[:10]),
         )
@@ -556,6 +629,55 @@ class QmtStrategyLedgerSyncService:
             updated,
         )
         return entry, trade_inserted, lot_created, cash_inserted
+
+    def _reconcile_order_ledger_from_trades_once(
+        self,
+        order: RawQmtOrder,
+        attributed_trades: list[_AttributedTrade],
+    ) -> bool:
+        if not attributed_trades:
+            return False
+        first = attributed_trades[0]
+        total_traded = sum((item.trade.traded_volume for item in attributed_trades), 0)
+        if total_traded <= int(order.traded_volume or 0):
+            return False
+        total_amount = sum((item.ledger_trade.amount for item in attributed_trades), Decimal("0"))
+        traded_price = _money(total_amount / Decimal(total_traded)) if total_traded > 0 else order.traded_price
+        status = STATUS_FILLED if total_traded >= order.order_volume else STATUS_OPEN_LIKE
+        raw_json = dict(order.raw)
+        raw_json["trade_reconciled"] = {
+            "source": "miniqmt_sync_trade_aggregate",
+            "trade_ids": [item.trade.traded_id for item in attributed_trades],
+            "broker_order_traded_volume": order.traded_volume,
+            "trade_aggregated_volume": total_traded,
+            "broker_order_status": order.order_status,
+            "reconciled_order_status": status,
+        }
+        strategy_name = self._repository.get_virtual_account(first.strategy_id).strategy_name
+        self._repository.upsert_order_ledger(
+            OrderLedgerRecord(
+                intent_id=first.intent_id,
+                strategy_id=first.strategy_id,
+                strategy_name=strategy_name,
+                qmt_order_id=order.order_id,
+                qmt_order_sysid=order.order_sysid,
+                symbol=order.stock_code,
+                order_type=order.order_type,
+                order_volume=order.order_volume,
+                traded_volume=total_traded,
+                order_status=status,
+                account_id=self._account_id,
+                trade_date=self._trade_date,
+                price_type=order.price_type,
+                price=order.price,
+                traded_price=traded_price,
+                status_msg=order.status_msg,
+                order_remark=order.order_remark,
+                raw_json=raw_json,
+                last_synced_at=datetime.now(UTC),
+            )
+        )
+        return True
 
     def _settle_sell_fill_once(
         self,
@@ -721,6 +843,248 @@ class QmtStrategyLedgerSyncService:
                 "traded_volume": order.traded_volume,
                 "remaining_volume": order.remaining_volume,
                 "order_price": str(order.price),
+            },
+        )
+        _, inserted = self._repository.apply_cash_entry_once(entry, updated)
+        return entry, inserted
+
+    def _terminalize_stale_order_once(
+        self,
+        payload: dict[str, Any],
+        order: RawQmtOrder,
+        broker_date: date,
+        *,
+        strategy_id_by_name: dict[str, str],
+        strategy_name_by_id: dict[str, str],
+        strategy_id_by_remark_prefix: dict[str, str],
+    ) -> tuple[bool, CashLedgerEntry | None, bool]:
+        if not order.order_remark:
+            return False, None, False
+        intent = self._repository.get_order_intent_by_remark(self._account_id, order.order_remark)
+        if intent is None:
+            return False, None, False
+        if intent.trade_date != broker_date:
+            return False, None, False
+        strategy_id = _resolve_strategy_id(
+            strategy_name=order.strategy_name,
+            order_remark=order.order_remark,
+            intent=intent,
+            strategy_id_by_name=strategy_id_by_name,
+            strategy_name_by_id=strategy_name_by_id,
+            strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+        )
+        if strategy_id is None:
+            return False, None, False
+
+        # A stale filled/partially filled broker row needs historical replay, not
+        # rollover expiry. Only unfilled previous-day orders are terminalized here.
+        if order.traded_volume > 0 or order.order_status == STATUS_FILLED:
+            return False, None, False
+        submit_status = IntentSubmitStatus.REJECTED if order.order_status == STATUS_REJECTED else IntentSubmitStatus.CANCELLED
+        if intent.submit_status in {IntentSubmitStatus.CREATED, IntentSubmitStatus.SUBMITTED, IntentSubmitStatus.ACCEPTED}:
+            self._repository.set_order_intent_submit_status(
+                intent.intent_id,
+                submit_status,
+                submitted_at=intent.submitted_at,
+                updated_at=datetime.now(UTC),
+            )
+        self._terminalize_order_ledger_once(
+            account_id=self._account_id,
+            qmt_order_id=order.order_id,
+            terminal_status=order.order_status if order.order_status == STATUS_REJECTED else STATUS_CANCELLED,
+            status_msg=order.status_msg or "broker previous-day open order expired",
+            reason="BROKER_ORDER_DATE_MISMATCH",
+            broker_date=broker_date,
+        )
+        self._repository.append_order_status_event(
+            OrderStatusEventRecord(
+                event_id=_stale_order_event_id(self._account_id, self._trade_date, order.order_id),
+                intent_id=intent.intent_id,
+                qmt_order_id=order.order_id,
+                qmt_order_sysid=order.order_sysid,
+                event_type="STALE_ORDER_ROLLOVER",
+                event_time=datetime.now(UTC),
+                account_id=self._account_id,
+                qmt_order_status=order.order_status,
+                status_msg=order.status_msg,
+                raw_json={
+                    **dict(payload),
+                    "stale_rollover": {
+                        "source": "miniqmt_sync",
+                        "broker_payload_date": broker_date.isoformat(),
+                        "expected_trade_date": self._trade_date.isoformat(),
+                        "reason": "BROKER_ORDER_DATE_MISMATCH",
+                        "intent_submit_status": submit_status.value,
+                    },
+                },
+            )
+        )
+        if order.order_type != BUY_ORDER_TYPE:
+            return True, None, False
+        release_entry, inserted_cash = self._release_stale_buy_freeze_once(strategy_id, intent.intent_id, order, broker_date)
+        return True, release_entry, inserted_cash
+
+    def _terminalize_broker_absent_historical_open_orders_once(
+        self,
+        *,
+        broker_reported_order_ids: set[str],
+        strategy_id_by_name: dict[str, str],
+        strategy_name_by_id: dict[str, str],
+        strategy_id_by_remark_prefix: dict[str, str],
+    ) -> tuple[int, int, Decimal]:
+        terminalized = 0
+        release_entries = 0
+        release_amount = Decimal("0")
+        for ledger in self._repository.list_order_ledger(account_id=self._account_id):
+            if ledger.trade_date >= self._trade_date:
+                continue
+            if ledger.qmt_order_id in broker_reported_order_ids:
+                continue
+            if ledger.order_status != STATUS_OPEN_LIKE or int(ledger.order_volume or 0) <= int(ledger.traded_volume or 0):
+                continue
+            intent = self._repository.get_order_intent_by_remark(self._account_id, ledger.order_remark) if ledger.order_remark else None
+            if intent is None or intent.intent_id != ledger.intent_id or intent.trade_date != ledger.trade_date:
+                continue
+            strategy_id = _resolve_strategy_id(
+                strategy_name=ledger.strategy_name,
+                order_remark=ledger.order_remark,
+                intent=intent,
+                strategy_id_by_name=strategy_id_by_name,
+                strategy_name_by_id=strategy_name_by_id,
+                strategy_id_by_remark_prefix=strategy_id_by_remark_prefix,
+            )
+            if strategy_id is None:
+                continue
+            if intent.submit_status in {IntentSubmitStatus.CREATED, IntentSubmitStatus.SUBMITTED, IntentSubmitStatus.ACCEPTED}:
+                self._repository.set_order_intent_submit_status(
+                    intent.intent_id,
+                    IntentSubmitStatus.CANCELLED,
+                    submitted_at=intent.submitted_at,
+                    updated_at=datetime.now(UTC),
+                )
+            updated = self._terminalize_order_ledger_once(
+                account_id=self._account_id,
+                qmt_order_id=ledger.qmt_order_id,
+                terminal_status=STATUS_CANCELLED,
+                status_msg="broker no longer reports historical open order; treated as expired",
+                reason="BROKER_ORDER_ABSENT_ON_NEXT_TRADING_DAY",
+                broker_date=ledger.trade_date,
+            )
+            if not updated:
+                continue
+            terminalized += 1
+            self._repository.append_order_status_event(
+                OrderStatusEventRecord(
+                    event_id=_stale_order_event_id(self._account_id, self._trade_date, ledger.qmt_order_id),
+                    intent_id=intent.intent_id,
+                    qmt_order_id=ledger.qmt_order_id,
+                    qmt_order_sysid=ledger.qmt_order_sysid,
+                    event_type="STALE_ORDER_ROLLOVER",
+                    event_time=datetime.now(UTC),
+                    account_id=self._account_id,
+                    qmt_order_status=STATUS_CANCELLED,
+                    status_msg="broker no longer reports historical open order; treated as expired",
+                    raw_json={
+                        **dict(ledger.raw_json),
+                        "stale_rollover": {
+                            "source": "miniqmt_sync",
+                            "broker_payload_date": ledger.trade_date.isoformat(),
+                            "expected_trade_date": self._trade_date.isoformat(),
+                            "reason": "BROKER_ORDER_ABSENT_ON_NEXT_TRADING_DAY",
+                            "intent_submit_status": IntentSubmitStatus.CANCELLED.value,
+                        },
+                    },
+                )
+            )
+            if ledger.order_type != BUY_ORDER_TYPE:
+                continue
+            release_entry, inserted = self._release_stale_buy_freeze_once(
+                strategy_id,
+                intent.intent_id,
+                _raw_order_from_ledger(ledger, status=STATUS_CANCELLED),
+                ledger.trade_date,
+            )
+            if release_entry is not None and inserted:
+                release_entries += 1
+                release_amount += release_entry.cash_delta
+        return terminalized, release_entries, release_amount
+
+    def _terminalize_order_ledger_once(
+        self,
+        *,
+        account_id: str,
+        qmt_order_id: str,
+        terminal_status: int,
+        status_msg: str,
+        reason: str,
+        broker_date: date,
+    ) -> bool:
+        ledger = self._repository.get_order_ledger(account_id, qmt_order_id)
+        if ledger is None or ledger.order_status != STATUS_OPEN_LIKE:
+            return False
+        raw_json = dict(ledger.raw_json)
+        raw_json["terminalized"] = {
+            "source": "miniqmt_sync",
+            "reason": reason,
+            "broker_payload_date": broker_date.isoformat(),
+            "expected_trade_date": self._trade_date.isoformat(),
+            "previous_order_status": ledger.order_status,
+            "terminal_order_status": terminal_status,
+        }
+        self._repository.upsert_order_ledger(
+            replace(
+                ledger,
+                order_status=terminal_status,
+                status_msg=status_msg,
+                raw_json=raw_json,
+                last_synced_at=datetime.now(UTC),
+            )
+        )
+        return True
+
+    def _release_stale_buy_freeze_once(
+        self,
+        strategy_id: str,
+        intent_id: str,
+        order: RawQmtOrder,
+        broker_date: date,
+    ) -> tuple[CashLedgerEntry | None, bool]:
+        cash_id = _cash_event_id(self._account_id, self._trade_date, "stale_buy_expire", order.order_id)
+        account = self._repository.get_virtual_account(strategy_id)
+        release_amount = min(self._remaining_frozen_for_intent(strategy_id, intent_id), account.frozen_cash)
+        if release_amount <= Decimal("0"):
+            return None, False
+        entry_type = CashEntryType.UNFREEZE_REJECT if order.order_status == STATUS_REJECTED else CashEntryType.UNFREEZE_CANCEL
+        reason = "STALE_BUY_ORDER_REJECTED" if order.order_status == STATUS_REJECTED else "STALE_BUY_ORDER_EXPIRED"
+        updated = replace(
+            account,
+            cash=account.cash + release_amount,
+            frozen_cash=account.frozen_cash - release_amount,
+            updated_at=datetime.now(UTC),
+        )
+        entry = CashLedgerEntry(
+            cash_id=cash_id,
+            strategy_id=strategy_id,
+            entry_type=entry_type,
+            cash_delta=release_amount,
+            cash_after=updated.cash,
+            frozen_delta=-release_amount,
+            frozen_after=updated.frozen_cash,
+            account_id=self._account_id,
+            trade_date=self._trade_date,
+            intent_id=intent_id,
+            symbol=order.stock_code,
+            reason=reason,
+            metadata={
+                "source": "miniqmt_sync",
+                "qmt_order_id": order.order_id,
+                "order_status": order.order_status,
+                "order_volume": order.order_volume,
+                "traded_volume": order.traded_volume,
+                "remaining_volume": order.remaining_volume,
+                "order_price": str(order.price),
+                "broker_payload_date": broker_date.isoformat(),
+                "expected_trade_date": self._trade_date.isoformat(),
             },
         )
         _, inserted = self._repository.apply_cash_entry_once(entry, updated)
@@ -977,6 +1341,11 @@ def _order_event_id(account_id: str, order_id: str, order_status: int | None) ->
     return f"evt_{account_id}_{order_id}_{status}"
 
 
+def _stale_order_event_id(account_id: str, trade_date: date, order_id: str) -> str:
+    safe_order_id = order_id or "blank"
+    return f"evt_{account_id}_{trade_date.isoformat()}_stale_rollover_{safe_order_id}"
+
+
 def _lot_id(account_id: str, trade_date: date, trade_id: str) -> str:
     return f"lot_{account_id}_{trade_date.isoformat()}_{trade_id}"
 
@@ -989,6 +1358,43 @@ def _cash_event_id(account_id: str, trade_date: date, event_type: str, row_id: s
 def _reserved_fill_amount(order: RawQmtOrder, trade: TradeLedgerRecord) -> Decimal:
     reserve_price = order.price if order.price > Decimal("0") else trade.price
     return _money(reserve_price * Decimal(trade.quantity))
+
+
+def _raw_order_from_ledger(ledger: OrderLedgerRecord, *, status: int | None) -> RawQmtOrder:
+    raw_json = dict(ledger.raw_json)
+    raw_json.update(
+        {
+            "order_id": ledger.qmt_order_id,
+            "order_sysid": ledger.qmt_order_sysid,
+            "stock_code": ledger.symbol,
+            "order_type": ledger.order_type,
+            "order_volume": ledger.order_volume,
+            "price_type": ledger.price_type,
+            "price": ledger.price,
+            "traded_volume": ledger.traded_volume,
+            "traded_price": ledger.traded_price,
+            "order_status": status,
+            "status_msg": ledger.status_msg,
+            "strategy_name": ledger.strategy_name,
+            "order_remark": ledger.order_remark,
+        }
+    )
+    return RawQmtOrder(
+        order_id=ledger.qmt_order_id,
+        order_sysid=ledger.qmt_order_sysid or "",
+        stock_code=ledger.symbol,
+        order_type=ledger.order_type,
+        order_volume=ledger.order_volume,
+        price_type=ledger.price_type,
+        price=ledger.price,
+        traded_volume=ledger.traded_volume,
+        traded_price=ledger.traded_price,
+        order_status=status,
+        status_msg=ledger.status_msg,
+        strategy_name=ledger.strategy_name,
+        order_remark=ledger.order_remark,
+        raw=raw_json,
+    )
 
 
 def _proportional_fee(total_fee: Decimal, quantity: int, total_quantity: int) -> Decimal:

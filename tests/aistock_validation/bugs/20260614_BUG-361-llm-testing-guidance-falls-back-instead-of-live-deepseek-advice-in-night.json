@@ -1,0 +1,121 @@
+{
+  "actual": "Nightly/CI LLM steps are wired but recent evidence shows llm_invoked=false. GitHub Models returns 429 or schema-invalid output, deepseek_api is disabled by default, and Nightly summary does not clearly show live invocation, fallback reason, advised plan keys, executed plan keys, or advice_consumed. Fix the validation/LLM workflow so DeepSeek can reliably provide guarded advisory test-plan/scheduler guidance with deterministic fallback, strict JSON repair/retry, and explicit consumption evidence, while keeping warning-only safety boundaries and no production actions.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260614_BUG-361-llm-testing-guidance-falls-back-instead-of-live-deepseek-advice-in-night.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "configs/validation/llm_triage.yaml",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-361",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T18:52:15.678540Z",
+  "description": "Nightly/CI LLM steps are wired but recent evidence shows llm_invoked=false. GitHub Models returns 429 or schema-invalid output, deepseek_api is disabled by default, and Nightly summary does not clearly show live invocation, fallback reason, advised plan keys, executed plan keys, or advice_consumed. Fix the validation/LLM workflow so DeepSeek can reliably provide guarded advisory test-plan/scheduler guidance with deterministic fallback, strict JSON repair/retry, and explicit consumption evidence, while keeping warning-only safety boundaries and no production actions.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260614-939de7d41530",
+      "timestamp": "2026-06-13T18:52:15.678535Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "BUG-361 requires validation/LLM workflow repair; expanded scope to configured validation/LLM scripts, config, workflow, and focused tests.",
+      "timestamp": "2026-06-13T19:10:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-13T18:52:15.678540Z",
+  "fix_branch": null,
+  "fix_commit": "0fea54431b56507f273eb1502ae1e4776e27240f",
+  "fixed_at": "2026-06-13T19:38:59.662092Z",
+  "github_issue_number": 1067,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1067",
+  "last_seen_at": "2026-06-13T18:52:15.678540Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1068",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "LLM testing guidance falls back instead of live DeepSeek advice in Nightly",
+  "trigger_condition": {
+    "fingerprint": "939de7d41530162bc55880c2",
+    "source_event_id": "FE-20260614-939de7d41530"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/CI",
+    "ui_routes": [
+      "/CI"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m ruff check scripts/llm_provider_adapter.py scripts/nightly_adaptive_scheduler.py backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed",
+    "python -m pytest backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -q -> 48 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_workflow_automation -> passed",
+    "python -m nox -s validation_center_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -35,8 +35,8 @@
   "expected": "当用户询问本地数据同步任务运行情况、今天数据哪些已完成同步时，Research Assistant 应理解为业务状态查询，使用只读本地数据 MCP/API 证据汇总当天各数据集/同步目标/任务的状态，按“已同步成功、同步失败、未同步/未运行、运行中/排队中、告警/阻断/需要处理”分组展示；如无记录则明确说明无当天记录，并给出 as_of 和真实数据源。主回答不得只展示 tool catalog、adapter summary 或诊断性路由信息。",
   "first_seen_at": "2026-06-12T09:32:17.348266Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "228ea0b72e7314492c1c2285f2465d4b229196f7",
+  "fixed_at": "2026-06-12T10:29:58.019376Z",
   "github_issue_number": 1016,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1016",
   "last_seen_at": "2026-06-12T09:32:17.348266Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1018",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -67,6 +68,11 @@
     "fingerprint": "c6579ac26a9933ee1ad3ba85",
     "source_event_id": "FE-20260612-c6579ac26a99"
   },
+  "validation_evidence": [
+    "GitHub PR #1018 checks -> passed (gh pr checks: 16 passed, 0 failed; skipped-only optional lanes)",
+    "python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py::test_bug_343_local_data_today_sync_question_routes_to_daily_status backend/tests/research_assistant/test_service.py::test_bug_343_chat_turn_renders_local_data_daily_status_groups -q -> passed (2 passed)",
+    "python -m nox -s l0 research_assistant_mcp_contract validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

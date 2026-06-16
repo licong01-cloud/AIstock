@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from backend.mcp.tool_manifest import TOOL_MANIFEST, TOOL_MANIFEST_BY_NAME
+from backend.services.research_assistant import mcp_catalog_sync
 from backend.services.research_assistant.mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
@@ -97,8 +98,9 @@ def test_ra_catalog_matches_gateway_manifest_without_legacy_drift() -> None:
     tools = default_mcp_tools()
     servers = default_mcp_servers()
 
-    assert len(tools) == len(TOOL_MANIFEST) == 212
-    assert len(servers) == 9
+    assert len(tools) == len(TOOL_MANIFEST)
+    assert len(servers) == len(catalog.server_order)
+    assert "aistock-qlib-data" in {server["server_key"] for server in servers}
     assert {tool["tool_name"] for tool in tools} == {entry.tool_name for entry in TOOL_MANIFEST}
     assert {tool["server_key"] for tool in tools} <= set(catalog.server_key_to_modules)
     assert not {"aistock-qe-archive", "aistock-factor-library", "aistock-execution-policy"} & {tool["server_key"] for tool in tools}
@@ -157,9 +159,9 @@ def test_catalog_readiness_uses_manifest_counts_not_legacy_cache_rows() -> None:
 
     assert readiness["ready"] is True
     assert checks["mcp_servers"]["source"] == "gateway_manifest_derived_catalog"
-    assert checks["mcp_servers"]["present"] == len(default_mcp_servers()) == 9
+    assert checks["mcp_servers"]["present"] == len(default_mcp_servers())
     assert checks["mcp_tools"]["source"] == "gateway_manifest_derived_catalog"
-    assert checks["mcp_tools"]["present"] == len(TOOL_MANIFEST) == 212
+    assert checks["mcp_tools"]["present"] == len(TOOL_MANIFEST)
 
 
 def test_assistant_list_mcp_tools_summary_adapter_uses_manifest_not_legacy_cache() -> None:
@@ -168,7 +170,7 @@ def test_assistant_list_mcp_tools_summary_adapter_uses_manifest_not_legacy_cache
     tool, _server = svc._resolve_mcp_catalog_tool("research-assistant", "assistant_list_mcp_tools")
 
     all_items, all_total = svc._summary_adapter_items(tool, {}, limit=500, offset=0)
-    assert all_total == len(TOOL_MANIFEST) == 212
+    assert all_total == len(TOOL_MANIFEST)
     assert not any(item["server_key"] == "aistock-qe-archive" for item in all_items)
 
     alias_items, alias_total = svc._summary_adapter_items(
@@ -245,6 +247,25 @@ def test_read_only_tools_enter_execute_read_only_path(message: str, server_key: 
     assert result["cards"]["mcp_execution_result"]["tool_name"] == tool_name
     assert result["cards"]["mcp_execution_result"]["server_key"] == server_key
     assert len(fake.calls) >= 2
+
+
+def test_gateway_catalog_uses_manifest_profile_tags_when_profile_registry_lags(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_resolve_modules = mcp_catalog_sync.resolve_modules
+
+    def stale_resolve_modules(*, profile: str | None = "research", modules: Any = None) -> list[str]:
+        if profile == "qlib_data":
+            raise ValueError("Unknown MCP profile 'qlib_data'")
+        return real_resolve_modules(profile=profile, modules=modules)
+
+    monkeypatch.setattr(mcp_catalog_sync, "resolve_modules", stale_resolve_modules)
+
+    catalog = gateway_catalog()
+    servers = default_mcp_servers()
+    tools = default_mcp_tools()
+
+    assert catalog.server_key_to_modules["aistock-qlib-data"] == ("qlib_export",)
+    assert "aistock-qlib-data" in {server["server_key"] for server in servers}
+    assert any(tool["server_key"] == "aistock-qlib-data" and tool["tool_name"] == "qlib_export_list_snapshots" for tool in tools)
 
 
 def test_external_save_evidence_remains_preflight_not_auto_execute() -> None:

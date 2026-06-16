@@ -10,6 +10,7 @@ from backend.execution_algos.vnpy_style import VnpyAction, VnpyStyleConfigError
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.simulation_runtime import (
+    ExecutionPathNotCanonicalError,
     ExecutionPlanCompiler,
     LocalSimExecutionBridge,
     MiniQMTExecutionBridge,
@@ -319,6 +320,36 @@ def test_localsim_bridge_rejects_vnpy_plan_before_broker_submit() -> None:
     assert broker.submitted == []
     assert exc_info.value.context["broker_backend"] == "local_sim"
     assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"
+
+
+def test_miniqmt_bridge_rejects_non_vnpy_plan_without_managed_order_fallback() -> None:
+    binding, plan = _vnpy_plan("SNIPER_MINIQMT")
+    plan = plan.model_copy(
+        update={
+            "execution_policy_version_id": "exec_policy_close_price",
+            "plan_payload_json": {
+                **plan.plan_payload_json,
+                "execution_policy": {
+                    **plan.plan_payload_json["execution_policy"],
+                    "version_id": "exec_policy_close_price",
+                    "payload": {"algo_code": "CLOSE_PRICE", "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}}},
+                },
+            },
+        }
+    )
+    bridge = MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
+    )
+
+    with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
+        bridge.build_managed_order_requests(
+            plan=plan,
+            binding=binding,
+            price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
+        )
+
+    assert exc_info.value.context["inferred_algo_code"] == "CLOSE_PRICE"
+    assert exc_info.value.context["required_action"].startswith("activate SNIPER_MINIQMT")
 
 
 def test_miniqmt_bridge_vnpy_invalid_config_fails_fast_without_direct_order_fallback() -> None:

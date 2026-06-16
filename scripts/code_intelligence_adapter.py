@@ -1218,6 +1218,188 @@ def render_code_intelligence_run_manifest_markdown(payload: dict[str, Any]) -> s
     return text.rstrip("\n")
 
 
+def _artifact_ref(path: Path, root: Path) -> str | None:
+    return _repo_rel(path, root) if path.exists() else None
+
+
+def _artifact_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return {}
+    return {
+        "schema_version": payload.get("schema_version"),
+        "workflow_gate": payload.get("workflow_gate") or payload.get("gate"),
+        "artifact": payload.get("artifact") or payload.get("artifact_path"),
+    }
+
+
+def build_llm_value_summary(
+    *,
+    root: Path | None = None,
+    artifact_dir: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    artifact_dir = artifact_dir or root / "tmp" / "validation" / "code-intelligence" / "latest"
+    codegraph = _read_json_object(artifact_dir / "codegraph-freshness.json")
+    code_summary = _read_json_object(artifact_dir / "code-intelligence-summary.json")
+    adaptive = _read_json_object(artifact_dir / "llm-nightly-adaptive-scheduler.json")
+    scheduler = _read_json_object(artifact_dir / "llm-nightly-scheduler-advice.json")
+    prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
+    rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
+    ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
+    adaptive_evidence = (
+        adaptive.get("llm_invocation_evidence") if isinstance(adaptive.get("llm_invocation_evidence"), dict) else {}
+    )
+    scheduler_evidence = (
+        scheduler.get("llm_invocation_evidence") if isinstance(scheduler.get("llm_invocation_evidence"), dict) else {}
+    )
+    queue = adaptive.get("queue_summary") if isinstance(adaptive.get("queue_summary"), dict) else {}
+    consumption = adaptive.get("advice_consumption") if isinstance(adaptive.get("advice_consumption"), dict) else {}
+    ua_summary = (
+        code_summary.get("understand_anything_summary")
+        if isinstance(code_summary.get("understand_anything_summary"), dict)
+        else {}
+    )
+    prompt_metrics = prompt_eval.get("metrics") if isinstance(prompt_eval.get("metrics"), dict) else {}
+    provider = (
+        adaptive.get("effective_provider")
+        or adaptive.get("provider")
+        or scheduler.get("effective_provider")
+        or scheduler.get("provider")
+        or adaptive_evidence.get("provider")
+        or scheduler_evidence.get("provider")
+    )
+    model = (
+        adaptive.get("effective_model")
+        or adaptive.get("model")
+        or scheduler.get("effective_model")
+        or scheduler.get("model")
+        or adaptive_evidence.get("model")
+        or scheduler_evidence.get("model")
+    )
+    warnings: list[str] = []
+    if not codegraph:
+        warnings.append("CodeGraph freshness artifact is missing.")
+    if not adaptive and not scheduler:
+        warnings.append("LLM scheduler advice artifact is missing.")
+    if not prompt_eval:
+        warnings.append("LLM prompt evaluation artifact is missing.")
+    if not rollout:
+        warnings.append("LLM guarded rollout artifact is missing.")
+    artifact_refs = {
+        "codegraph_freshness_json": _artifact_ref(artifact_dir / "codegraph-freshness.json", root),
+        "codegraph_freshness_md": _artifact_ref(artifact_dir / "codegraph-freshness.md", root),
+        "code_intelligence_summary_json": _artifact_ref(artifact_dir / "code-intelligence-summary.json", root),
+        "code_intelligence_summary_md": _artifact_ref(artifact_dir / "code-intelligence-summary.md", root),
+        "understand_anything_manifest_json": _artifact_ref(artifact_dir / "ua-summary-manifest.json", root),
+        "adaptive_scheduler_json": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.json", root),
+        "adaptive_scheduler_md": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.md", root),
+        "scheduler_advice_json": _artifact_ref(artifact_dir / "llm-nightly-scheduler-advice.json", root),
+        "test_plan_advice_json": _artifact_ref(artifact_dir / "llm-test-plan-advice.json", root),
+        "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
+        "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
+    }
+    return {
+        "schema_version": "aistock_llm_code_intelligence_value_summary_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "artifact_dir": _repo_rel(artifact_dir, root),
+        "codegraph": {
+            "workflow_gate": codegraph.get("workflow_gate") or codegraph.get("gate"),
+            "freshness": codegraph.get("freshness"),
+            "status": codegraph.get("status"),
+            "git_commit": codegraph.get("git_commit"),
+            "graph_root_git_commit": codegraph.get("graph_root_git_commit"),
+            "files": (codegraph.get("index_summary") or {}).get("files") or codegraph.get("files"),
+            "nodes": (codegraph.get("index_summary") or {}).get("nodes") or codegraph.get("nodes"),
+            "edges": (codegraph.get("index_summary") or {}).get("edges") or codegraph.get("edges"),
+        },
+        "understand_anything": {
+            "status": code_summary.get("understand_anything_status")
+            or ua_summary.get("status")
+            or ("available" if ua_manifest else "unknown"),
+            "summary_ref": code_summary.get("understand_anything_summary_ref") or ua_summary.get("summary_ref"),
+            "manifest_ref": artifact_refs["understand_anything_manifest_json"],
+            "summary_count": len(ua_manifest.get("summary_refs") or []) if isinstance(ua_manifest.get("summary_refs"), list) else 0,
+        },
+        "llm": {
+            "provider": provider,
+            "model": model,
+            "llm_invoked": bool(adaptive.get("llm_invoked") or scheduler.get("llm_invoked") or adaptive_evidence.get("invoked") or scheduler_evidence.get("invoked")),
+            "fallback_used": bool(adaptive_evidence.get("fallback_used") or scheduler_evidence.get("fallback_used")),
+            "advice_consumed": bool(consumption.get("advice_consumed") or adaptive.get("advice_consumed")),
+            "allowed_plan_keys": queue.get("allowed_plan_keys") or adaptive.get("allowed_plan_keys") or [],
+            "issue_creation": ((adaptive.get("issue_creation_policy") or {}) if isinstance(adaptive.get("issue_creation_policy"), dict) else {}).get("mode")
+            or adaptive.get("issue_creation")
+            or rollout.get("mode"),
+            "adaptive_scheduler": _artifact_summary(adaptive),
+            "scheduler_advice": _artifact_summary(scheduler),
+        },
+        "prompt_evaluation": {
+            "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
+            "case_count": prompt_eval.get("case_count") or prompt_metrics.get("case_count"),
+            "issue_body_completeness": prompt_eval.get("issue_body_completeness") or prompt_metrics.get("issue_body_completeness"),
+            "false_positive_auto_file_rate": prompt_eval.get("false_positive_auto_file_rate") or prompt_metrics.get("false_positive_auto_file_rate"),
+            "plan_recommendation_accuracy": prompt_eval.get("plan_recommendation_accuracy") or prompt_metrics.get("plan_recommendation_accuracy"),
+        },
+        "guarded_rollout": {
+            "workflow_gate": rollout.get("workflow_gate") or rollout.get("gate"),
+            "mode": rollout.get("mode"),
+            "auto_file_allowed": rollout.get("auto_file_allowed"),
+            "llm_can_enhance_issue": rollout.get("llm_can_enhance_issue"),
+            "llm_enhancement_allowed": rollout.get("llm_enhancement_allowed"),
+        },
+        "artifact_refs": artifact_refs,
+        "warnings": warnings,
+    }
+
+
+def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
+    codegraph = payload.get("codegraph") if isinstance(payload.get("codegraph"), dict) else {}
+    ua = payload.get("understand_anything") if isinstance(payload.get("understand_anything"), dict) else {}
+    llm = payload.get("llm") if isinstance(payload.get("llm"), dict) else {}
+    prompt = payload.get("prompt_evaluation") if isinstance(payload.get("prompt_evaluation"), dict) else {}
+    rollout = payload.get("guarded_rollout") if isinstance(payload.get("guarded_rollout"), dict) else {}
+    refs = payload.get("artifact_refs") if isinstance(payload.get("artifact_refs"), dict) else {}
+    allowed_plan_keys = ",".join(llm.get("allowed_plan_keys") or []) or "none"
+    prompt_cases = prompt.get("case_count") or "unknown"
+    prompt_completeness = prompt.get("issue_body_completeness")
+    prompt_false_positive = prompt.get("false_positive_auto_file_rate")
+    codegraph_ref = refs.get("codegraph_freshness_md") or refs.get("codegraph_freshness_json") or "missing"
+    code_summary_ref = refs.get("code_intelligence_summary_md") or refs.get("code_intelligence_summary_json") or "missing"
+    adaptive_ref = refs.get("adaptive_scheduler_md") or refs.get("adaptive_scheduler_json") or "missing"
+    lines = [
+        "## LLM + Code Intelligence Value",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- codegraph: `{codegraph.get('freshness') or 'unknown'}` / `{codegraph.get('status') or 'unknown'}`",
+        f"- understand_anything: `{ua.get('status') or 'unknown'}` summaries=`{ua.get('summary_count') or 0}`",
+        f"- llm_provider: `{llm.get('provider') or 'unknown'}`",
+        f"- llm_model: `{llm.get('model') or 'unknown'}`",
+        f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
+        f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
+        f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
+        f"- allowed_plan_keys: `{allowed_plan_keys}`",
+        f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
+        f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
+        f"- guarded_rollout: `mode={rollout.get('mode') or 'unknown'}, can_enhance={rollout.get('llm_can_enhance_issue')}`",
+        "",
+        "### Compact Artifact Refs",
+        "",
+        f"- codegraph_freshness: `{codegraph_ref}`",
+        f"- code_intelligence_summary: `{code_summary_ref}`",
+        f"- adaptive_scheduler: `{adaptive_ref}`",
+        f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
+        f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
+        "",
+        "This is a compact value summary. Raw JSON artifacts stay in the uploaded artifact bundle and are not inlined in the Nightly summary.",
+    ]
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    return "\n".join(lines).rstrip("\n")
+
+
 def understand_anything_status(
     root: Path | None = None,
     *,
@@ -2478,6 +2660,33 @@ def cmd_run_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_llm_value_summary(args: argparse.Namespace) -> int:
+    payload = build_llm_value_summary(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        artifact_dir=Path(args.artifact_dir) if args.artifact_dir else None,
+    )
+    if args.output_md:
+        _write_text(Path(args.output_md), render_llm_value_summary_markdown(payload))
+    _emit_compact_line(
+        "llm-value-summary",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "codegraph": (payload.get("codegraph") or {}).get("freshness"),
+            "ua": (payload.get("understand_anything") or {}).get("status"),
+            "provider": (payload.get("llm") or {}).get("provider"),
+            "model": (payload.get("llm") or {}).get("model"),
+            "llm_invoked": str(bool((payload.get("llm") or {}).get("llm_invoked"))).lower(),
+            "fallback_used": str(bool((payload.get("llm") or {}).get("fallback_used"))).lower(),
+            "advice_consumed": str(bool((payload.get("llm") or {}).get("advice_consumed"))).lower(),
+            "summary_ref": args.output_md,
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -2733,6 +2942,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_manifest.add_argument("--commit")
     run_manifest.add_argument("--output")
     run_manifest.set_defaults(func=cmd_run_manifest)
+
+    llm_value = sub.add_parser(
+        "llm-value-summary",
+        help="Build a compact human-readable summary of Nightly LLM and code-intelligence value evidence.",
+    )
+    llm_value.add_argument("--root")
+    llm_value.add_argument("--artifact-dir")
+    llm_value.add_argument("--output")
+    llm_value.add_argument("--output-md")
+    llm_value.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints value status only; full-json emits the complete payload.",
+    )
+    llm_value.set_defaults(func=cmd_llm_value_summary)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)

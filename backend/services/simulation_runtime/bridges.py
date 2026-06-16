@@ -21,7 +21,6 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTRuntimeManagedBatchSubmitResult,
 )
 from backend.services.trading_core.errors import (
-    ArtifactGenerationFailedError,
     BrokerUnavailableError,
     InvalidStateTransitionError,
     LiveApprovalRequiredError,
@@ -30,7 +29,14 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
-from .models import ExecutionPlan, ExecutionPlanIntent, MiniQMTUnsupportedExecutionAlgoError, SimulationReleaseBinding, canonical_json_sha256
+from .models import (
+    ExecutionPathNotCanonicalError,
+    ExecutionPlan,
+    ExecutionPlanIntent,
+    MiniQMTUnsupportedExecutionAlgoError,
+    SimulationReleaseBinding,
+    canonical_json_sha256,
+)
 
 
 MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
@@ -164,66 +170,37 @@ class MiniQMTExecutionBridge:
                 "MiniQMTExecutionBridge requires strategy_name",
                 context={"plan_id": plan.plan_id, "binding_id": binding.binding_id},
             )
-        vnpy_policy_context = _vnpy_policy_context_from_plan(plan)
-        if vnpy_policy_context is not None:
-            build = self._runtime_client.build_managed_vnpy_order_requests(
-                parent_intents=[self._vnpy_parent_order_intent(intent, plan=plan) for intent in plan.intents],
-                policy_context=vnpy_policy_context,
-                account_group_id=self._account_group_id(plan=plan, binding=binding),
-                trade_date=plan.target_trade_date,
-                runtime_config_hash=self._runtime_config_hash(plan),
-                runtime_id=self._runtime_id(plan=plan, binding=binding),
-                strategy_slot_id=binding.strategy_slot_id or binding.strategy_id,
-                managed_request_factory=self._managed_vnpy_request_factory(
-                    plan=plan,
-                    binding=binding,
-                    account_id=effective_account,
-                    strategy_name=effective_strategy_name,
-                    order_remark_prefix=effective_prefix,
-                    price_type=price_type,
-                    mode=mode,
-                ),
-                quote_provider=_quote_provider(quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}),
-                source="simulation_runtime_vnpy_request_build",
-            )
-            return list(build.requests)
-        requests: list[ManagedOrderRequest] = []
-        for index, intent in enumerate(plan.intents, start=1):
-            side = intent.side.value
-            order_type = BUY_ORDER_TYPE if intent.side == OrderSide.BUY else SELL_ORDER_TYPE
-            price = self._request_price(intent, price_by_symbol or {})
-            requests.append(
-                ManagedOrderRequest(
-                    account_id=effective_account,
-                    strategy_name=effective_strategy_name,
-                    symbol=intent.symbol,
-                    side=side,
-                    order_type=order_type,
-                    quantity=intent.order_quantity,
-                    price_type=int(price_type),
-                    price=price,
-                    order_remark=self._order_remark(effective_prefix, plan=plan, intent=intent, index=index),
-                    trade_date=plan.target_trade_date,
-                    mode=str(mode or "SIM").strip().upper(),
-                    package_id=plan.package_id,
-                    target_weight=Decimal(str(intent.target_weight)) if intent.target_weight is not None else None,
-                    metadata={
-                        "source": "shared_execution_plan",
-                        "execution_plan_id": plan.plan_id,
-                        "execution_plan_hash": plan.plan_hash,
-                        "execution_plan_intent_id": intent.intent_id,
-                        "release_id": plan.release_id,
-                        "release_hash": plan.release_hash,
-                        "binding_id": plan.binding_id,
-                        "binding_hash": plan.binding_hash,
-                        "selection_evidence_id": plan.selection_evidence_id,
-                        "selection_evidence_hash": plan.selection_evidence_hash,
-                        "trading_rule_decision_id": intent.trading_rule_decision_id,
-                        "rebalance_reason": intent.rebalance_reason,
-                    },
-                )
-            )
-        return requests
+        build = self._runtime_client.build_managed_vnpy_order_requests(
+            parent_intents=[self._vnpy_parent_order_intent(intent, plan=plan) for intent in plan.intents],
+            policy_context=self._require_vnpy_policy_context(plan),
+            account_group_id=self._account_group_id(plan=plan, binding=binding),
+            trade_date=plan.target_trade_date,
+            runtime_config_hash=self._runtime_config_hash(plan),
+            runtime_id=self._runtime_id(plan=plan, binding=binding),
+            strategy_slot_id=binding.strategy_slot_id or binding.strategy_id,
+            managed_request_factory=self._managed_vnpy_request_factory(
+                plan=plan,
+                binding=binding,
+                account_id=effective_account,
+                strategy_name=effective_strategy_name,
+                order_remark_prefix=effective_prefix,
+                price_type=price_type,
+                mode=mode,
+            ),
+            quote_provider=_quote_provider(quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}),
+            source="simulation_runtime_vnpy_request_build",
+        )
+        return list(build.requests)
+
+    @staticmethod
+    def _require_vnpy_policy_context(plan: ExecutionPlan) -> dict[str, Any]:
+        policy_context = _vnpy_policy_context_from_plan(plan)
+        if policy_context is not None:
+            return policy_context
+        raise ExecutionPathNotCanonicalError(
+            "MiniQMT broker execution requires a full approved vn.py-style execution policy snapshot",
+            context=_missing_vnpy_policy_context(plan),
+        )
 
     def _build_vnpy_runtime_submission_kwargs(
         self,
@@ -237,11 +214,9 @@ class MiniQMTExecutionBridge:
         mode: str = "SIM",
         price_by_symbol: dict[str, Decimal | float | int | str] | None = None,
         quote_by_symbol: dict[str, dict[str, Any]] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         self._validate_plan_binding(plan=plan, binding=binding, mode=mode)
-        policy_context = _vnpy_policy_context_from_plan(plan)
-        if policy_context is None:
-            return None
+        policy_context = self._require_vnpy_policy_context(plan)
         effective_account = str(account_id or binding.broker_account_id or "").strip()
         effective_strategy_name = str(strategy_name or binding.strategy_name or binding.strategy_id).strip()
         effective_prefix = str(order_remark_prefix or binding.order_remark_prefix or "aistock").strip()
@@ -276,59 +251,25 @@ class MiniQMTExecutionBridge:
         }
 
     def preview_plan(self, **kwargs: Any) -> MiniQMTPlanPreviewResult:
-        plan = kwargs["plan"]
-        binding = kwargs["binding"]
         vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
-        if vnpy_kwargs is not None:
-            return self._runtime_client.preview_managed_vnpy_order_requests(
-                managed_order_service=self._managed_order_service,
-                source="simulation_runtime_vnpy_preview",
-                **vnpy_kwargs,
-            )
-        requests = self.build_managed_order_requests(**kwargs)
-        return self._runtime_client.preview_managed_order_requests(
+        return self._runtime_client.preview_managed_vnpy_order_requests(
             managed_order_service=self._managed_order_service,
-            requests=requests,
-            account_group_id=self._account_group_id(plan=plan, binding=binding),
-            trade_date=plan.target_trade_date,
-            runtime_config_hash=self._runtime_config_hash(plan),
-            runtime_id=self._runtime_id(plan=plan, binding=binding),
-            source="simulation_runtime_preview",
+            source="simulation_runtime_vnpy_preview",
+            **vnpy_kwargs,
         )
 
     def submit_plan(self, **kwargs: Any) -> MiniQMTRuntimeManagedBatchSubmitResult:
-        plan = kwargs["plan"]
-        binding = kwargs["binding"]
         vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
-        if vnpy_kwargs is not None:
-            mode = str(kwargs.get("mode") or "SIM").strip().upper()
-            if mode != "SIM":
-                raise LiveApprovalRequiredError(
-                    "MiniQMTExecutionBridge only submits SIM orders; LIVE requires separate approval path",
-                    context={"mode": mode},
-                )
-            return self._runtime_client.submit_managed_vnpy_order_requests(
-                managed_order_service=self._managed_order_service,
-                source="simulation_runtime_vnpy_submit",
-                **vnpy_kwargs,
-            )
-        requests = self.build_managed_order_requests(**kwargs)
-        if not requests:
-            raise ArtifactGenerationFailedError("MiniQMTExecutionBridge requires at least one plan intent")
         mode = str(kwargs.get("mode") or "SIM").strip().upper()
         if mode != "SIM":
             raise LiveApprovalRequiredError(
                 "MiniQMTExecutionBridge only submits SIM orders; LIVE requires separate approval path",
                 context={"mode": mode},
             )
-        return self._runtime_client.submit_managed_order_requests(
+        return self._runtime_client.submit_managed_vnpy_order_requests(
             managed_order_service=self._managed_order_service,
-            requests=requests,
-            account_group_id=self._account_group_id(plan=plan, binding=binding),
-            trade_date=plan.target_trade_date,
-            runtime_config_hash=self._runtime_config_hash(plan),
-            runtime_id=self._runtime_id(plan=plan, binding=binding),
-            source="simulation_runtime_submit",
+            source="simulation_runtime_vnpy_submit",
+            **vnpy_kwargs,
         )
 
     def _managed_vnpy_request_factory(
@@ -673,6 +614,33 @@ def _infer_unsupported_v25_algo_from_values(values: tuple[Any, ...]) -> str | No
             if algo_code in normalized:
                 return algo_code
     return None
+
+
+def _missing_vnpy_policy_context(plan: ExecutionPlan) -> dict[str, Any]:
+    policy_container = plan.plan_payload_json.get("execution_policy")
+    if not isinstance(policy_container, dict):
+        policy_container = {}
+    payload = policy_container.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
+    explicit_algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip().upper() or None
+    inferred_algo_code = explicit_algo_code or _infer_vnpy_algo_code_from_policy_ids(
+        plan=plan,
+        policy_container=policy_container,
+        payload=payload,
+    )
+    return _policy_error_context(
+        plan=plan,
+        policy_container=policy_container,
+        payload=payload,
+        inferred_algo_code=inferred_algo_code,
+        broker_backend="minqmt_sim",
+        required_action=(
+            "activate SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT, "
+            "or another approved MiniQMT vn.py-style execution asset"
+        ),
+    )
 
 
 def _policy_error_context(

@@ -1074,6 +1074,18 @@ def _events_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "events.jsonl"
 
 
+def _remove_synthetic_smoke_workflow_dir(path: Path, bug_id: str) -> None:
+    canonical_bug_id = bug_id.strip().upper()
+    expected = (REPO_ROOT / WORKFLOW_ROOT / "BUG-000").resolve()
+    if canonical_bug_id != "BUG-000" or path.resolve() != expected:
+        raise WorkflowError("refusing to remove non-synthetic workflow-smoke state")
+    if not path.exists():
+        return
+    if not path.is_dir() or path.is_symlink():
+        raise WorkflowError(f"refusing to remove unsafe workflow-smoke path: {path}")
+    shutil.rmtree(path)
+
+
 def _task_card_json_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "task-card.json"
 
@@ -4095,6 +4107,9 @@ def _infer_fast_path_tier(
     reasons: list[str] = []
     tier = "T0"
     categories = {_file_category(path) for path in changed_files}
+    docs_lite_change = bool(changed_files) and all(flow._is_docs_lite_path(path) for path in changed_files)
+    docs_fast_tier = validation.get("docs_fast_tier")
+    docs_controlled_required = bool(validation.get("docs_controlled_required"))
     metadata_only = bool(categories) and categories <= {"docs", "client_wrapper", "bug_registry"} and not record
     severity_parts = str((record or {}).get("severity") or "").upper().split()
     severity = severity_parts[0] if severity_parts else ""
@@ -4108,8 +4123,13 @@ def _infer_fast_path_tier(
         reasons.append(f"{severity} issue keeps at least T1 validation and evidence")
     if not changed_files:
         reasons.append("no changed files supplied; plan uses issue metadata and l0 fallback")
-    if metadata_only:
+    if docs_lite_change:
+        reasons.append(f"{docs_fast_tier or 'docs-fast-update'} scope uses git diff check plus version/change note only")
+    elif metadata_only:
         reasons.append("docs/client/registry-only scope can stay T0")
+    if docs_controlled_required:
+        tier = _bump_fast_path_tier(tier, "T1")
+        reasons.append("controlled docs/client instructions keep normal workflow guardrails")
     if categories & {"workflow", "validation_catalog", "backend", "frontend", "scripts", "tests"}:
         tier = _bump_fast_path_tier(tier, "T1")
         reasons.append("code, workflow, test, or validation catalog files require T1")
@@ -4128,9 +4148,9 @@ def _infer_fast_path_tier(
     if module in {"paper_v2", "strategy_package", "research_assistant"} and changed_files:
         tier = _bump_fast_path_tier(tier, "T2")
         reasons.append(f"{module} is high-risk product scope; avoid T0 shortcut")
-    if any(path.startswith("docs/architecture/") for path in changed_files):
+    if any(path.startswith("docs/architecture/") for path in changed_files) and not docs_lite_change:
         tier = _bump_fast_path_tier(tier, "T3")
-        reasons.append("architecture/design documents require T3 design review context")
+        reasons.append("strict architecture/design documents require T3 design review context")
     return tier, flow._unique_strings(reasons)
 
 
@@ -4278,6 +4298,10 @@ def build_workflow_smoke_plan(
         synthetic_record = True
         smoke_bug_id = "BUG-000"
         smoke_dir = REPO_ROOT / WORKFLOW_ROOT / "smoke"
+        smoke_workflow_dir = REPO_ROOT / WORKFLOW_ROOT / smoke_bug_id
+        if smoke_workflow_dir.exists():
+            _remove_synthetic_smoke_workflow_dir(smoke_workflow_dir, smoke_bug_id)
+        cleanup_paths.append(smoke_workflow_dir)
         issue_path = smoke_dir / "synthetic-BUG-000.json"
         record = {
             "bug_id": smoke_bug_id,
@@ -4362,7 +4386,7 @@ def build_workflow_smoke_plan(
     if unexpected:
         blocking.append(f"workflow smoke created unexpected git-status paths: {unexpected}")
     if synthetic_record:
-        warnings.append("used synthetic BUG-000 record under ignored tmp/issue_workflow/smoke")
+        warnings.append("used isolated synthetic BUG-000 record under ignored tmp/issue_workflow")
     return {
         "schema_version": "aistock_issue_workflow_smoke_v1",
         "generated_at": _utc_now(),

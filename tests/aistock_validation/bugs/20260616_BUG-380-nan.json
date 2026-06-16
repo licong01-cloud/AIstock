@@ -1,0 +1,83 @@
+{
+  "actual": "任务结果 success_factor_count=575、failed_factor_count=0、excluded_factors 为空，但 quality_structure_composite pair_count=0，HDF5 中该因子 off-diagonal 574/574 全 NaN，/correlations/status?include_disabled=false 返回 db_correlation_count=164429、latest_computation.num_factors=575、uncorrelated_factor_count=1。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/correlation_engine.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "tests/aistock_validation/bugs/20260616_BUG-380-nan.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-380",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T18:14:08.703796Z",
+  "description": "任务结果 success_factor_count=575、failed_factor_count=0、excluded_factors 为空，但 quality_structure_composite pair_count=0，HDF5 中该因子 off-diagonal 574/574 全 NaN，/correlations/status?include_disabled=false 返回 db_correlation_count=164429、latest_computation.num_factors=575、uncorrelated_factor_count=1。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-4bb6db5f2e51",
+      "timestamp": "2026-06-15T18:14:08.703792Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/20260615_231717_l3_qe-read-only-workspace-access-regression.md"
+  ],
+  "expected": "相关性运行时应在矩阵聚合/落库前识别 off-diagonal 全 NaN 或无可落库 pair 的因子，将其归入结构化 excluded_factors（如 degenerate_nan/no_valid_pairs），success_factor_count 应等于实际可产生 pair 的因子数，status/overview/UI 应解释该因子无需重复计算而非显示为待计算；不应影响其余 574 因子的 2026-04-30 相关性结果。",
+  "first_seen_at": "2026-06-15T18:14:08.703796Z",
+  "fix_branch": null,
+  "fix_commit": "4969035fcabc454274bd4220164772e655a7cd90",
+  "fixed_at": "2026-06-15T18:59:14.898350Z",
+  "github_issue_number": 1128,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1128",
+  "last_seen_at": "2026-06-15T18:14:08.703796Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1130",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/quantevolver/evolution/correlations/compute {force_recompute:true, include_disabled:false}; then check /api/v1/dispatch/tasks/494f94c7-e114-4ca5-bc15-0f3f62a9b027/results and data/correlation_matrices/corr_20260430.h5 row quality_structure_composite",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "相关性全量重算后全 NaN 因子未归类导致成功数与待计算数不一致",
+  "trigger_condition": {
+    "fingerprint": "4bb6db5f2e51967575942326",
+    "source_event_id": "FE-20260616-4bb6db5f2e51"
+  },
+  "validation_evidence": [
+    "PR #1130 CI green: 20 passed, 0 failed, 0 pending; non-blocking skips: Docs-lite version record, Workflow validation fast lane, Validation LLM prompt evaluation",
+    "python -m pytest -q backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_runtime_validation.py -> 15 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

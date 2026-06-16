@@ -27,9 +27,13 @@ def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_pat
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "aistock_public_scheduler_status_v1"
-    assert payload["workflow_gate"] == "generated"
+    assert payload["workflow_gate"] == "ready"
     assert payload["execution_mode"] == "warning_only_advice"
     assert payload["public_artifact"] is True
+    assert payload["llm_gate"] == "degraded"
+    assert payload["queue_summary"]["allowed_plan_keys"] == ["l0"]
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert payload["advice_consumption"]["warning_only"] is True
     assert "does not create GitHub Issues" in markdown.read_text(encoding="utf-8")
 
 
@@ -174,13 +178,156 @@ def test_nightly_adaptive_scheduler_can_invoke_llm_advice(monkeypatch, tmp_path:
 
     assert report["provider"] == "github_models"
     assert report["llm_invoked"] is True
+    assert report["llm_invocation_evidence"]["invoked"] is True
+
+
+def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    original_build = scheduler.llm_provider_adapter.build_nightly_scheduler_advice
+
+    def fake_build(provider, config, **kwargs):
+        payload = original_build(
+            "deterministic",
+            config,
+            changed_files=kwargs.get("changed_files"),
+            recent_failure_modules=kwargs.get("recent_failure_modules"),
+            codegraph_freshness=kwargs.get("codegraph_freshness", "fresh"),
+            resource_budget_seconds=kwargs.get("resource_budget_seconds"),
+        )
+        payload["provider"] = provider
+        payload["effective_provider"] = "deepseek_api"
+        payload["effective_model"] = "deepseek-v4-pro"
+        payload["llm_invocation_evidence"]["provider"] = "deepseek_api"
+        payload["llm_invocation_evidence"]["model"] = "deepseek-v4-pro"
+        payload["llm_invocation_evidence"]["invoked"] = True
+        payload["llm_invocation_evidence"]["fallback_used"] = True
+        payload["llm_invocation_evidence"]["provider_chain"] = [
+            {"provider": "github_models", "status": "failed"},
+            {"provider": "deepseek_api", "status": "invoked"},
+        ]
+        payload["llm_advice"] = {"suggested_plan_keys": ["l0"], "advisory_only": True}
+        payload["advised_plan_keys"] = ["l0"]
+        payload["advice_consumption"] = {
+            "advice_consumed": True,
+            "consumption_mode": "allowlisted_queue_intersection_only",
+            "warning_only": True,
+        }
+        return payload
+
+    monkeypatch.setattr(scheduler.llm_provider_adapter, "build_nightly_scheduler_advice", fake_build)
+    output = tmp_path / "scheduler.json"
+
+    exit_code = scheduler.main(
+        [
+            "--provider",
+            "github_models",
+            "--codegraph-freshness",
+            "fresh",
+            "--changed-file",
+            "scripts/llm_provider_adapter.py",
+            "--invoke-llm",
+            "--output",
+            str(output),
+        ]
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert payload["public_artifact"] is True
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_invoked"] is True
+    assert payload["llm_invocation_evidence"]["fallback_used"] is True
+    assert payload["advised_plan_keys"] == ["l0"]
+    assert payload["advice_consumption"]["advice_consumed"] is True
+    assert payload["llm_gate"] == "ready"
+
+
+def test_nightly_adaptive_scheduler_includes_code_intelligence_refs_in_public_artifact(
+    tmp_path: Path,
+) -> None:
+    code_refs = tmp_path / "code-intelligence-summary.json"
+    code_refs.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_code_intelligence_summary_v1",
+                "context_ref": "tmp/validation/code-intelligence/9005/codegraph-context.md",
+                "affected_tests_ref": "tmp/validation/code-intelligence/9005/affected-tests.json",
+                "affected_tests_count": 3,
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/9005/ua-validation-summary.md",
+                "understand_anything_status": "available",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "scheduler.json"
+
+    exit_code = scheduler.main(
+        [
+            "--provider",
+            "deterministic",
+            "--codegraph-freshness",
+            "fresh",
+            "--code-intelligence-json",
+            str(code_refs),
+            "--output",
+            str(output),
+            "--json",
+        ]
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert payload["input_refs"]["code_intelligence_refs"]["affected_tests_count"] == 3
+    assert payload["public_artifact"] is True
+
+
+def test_collect_changed_files_filters_diff_headers_and_bom(tmp_path: Path) -> None:
+    changed_files_file = tmp_path / "changed.txt"
+    changed_files_file.write_text(
+        "\ufeff--- Changes ---\n"
+        "+++ b/scripts/llm_provider_adapter.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "scripts/llm_provider_adapter.py\n"
+        "F:/Dev/AIstock/scripts/nightly_adaptive_scheduler.py\n",
+        encoding="utf-8",
+    )
+
+    collected = scheduler.collect_changed_files(
+        changed_files=["./scripts/llm_provider_adapter.py", "https://example.com/nope"],
+        changed_files_file=changed_files_file,
+        base_ref=None,
+        root=scheduler.ROOT,
+    )
+
+    assert collected == ["scripts/llm_provider_adapter.py"]
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
+    assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
+    assert "Build compact code intelligence refs for LLM advice" in workflow
+    assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
+    assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
+    assert "--code-intelligence-json" in workflow
     assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
+    assert "llm-value-summary" in workflow
+    assert "llm-value-summary.md" in workflow
+    assert "LLM + Code Intelligence Value" in workflow
+    assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
+
+
+def test_nightly_workflow_always_materializes_changed_files_handoff() -> None:
+    workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+    blocks = [block for block in workflow.split("      - name: ") if "nightly-changed-files.txt" in block]
+
+    assert len(blocks) == 2
+    for block in blocks:
+        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" in block
+        assert "if (@($changedFiles).Count -gt 0)" in block
+        assert "Clear-Content -Path $changedFile" in block
