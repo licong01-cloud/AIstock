@@ -151,3 +151,5 @@ backend/db/dev/
 # Code intelligence local indexes and generated graph artifacts
 .codegraph/
 .understand-anything/
+/CLAUDE.md
+/.rtk/
