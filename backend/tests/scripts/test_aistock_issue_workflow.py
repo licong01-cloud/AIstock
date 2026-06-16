@@ -987,6 +987,36 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
 
+def test_workflow_smoke_isolates_synthetic_timing_from_stale_bug_000_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    events_path = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-000" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"timestamp": "2026-01-01T00:00:00Z", "event": "state:context_ready", "state": "context_ready"}),
+                json.dumps({"timestamp": "2026-06-01T00:00:00Z", "event": "state:validation_passed", "state": "validation_passed"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = workflow.build_workflow_smoke_plan(
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation.guardrails",
+    )
+
+    timing = payload["postmortem_preview"]["timing_summary"]
+    assert timing["event_count"] <= 1
+    assert timing["inferred_elapsed_seconds"] == 0.0
+    assert "isolated synthetic BUG-000" in payload["warnings"][0]
+
+
 def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
