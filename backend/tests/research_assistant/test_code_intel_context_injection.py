@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from backend.services.research_assistant.code_intelligence import build_query_code_context
+from backend.services.research_assistant.code_intelligence import build_query_code_context, expected_code_context_ref_ids
 from backend.services.research_assistant.models import ContextPackBuildRequest
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.runtime_config import DEFAULT_RUNTIME_CONFIG_PATH, RUNTIME_CONFIG_KEY, load_runtime_config
@@ -47,6 +47,22 @@ class FakeCodeIntelligenceAdapter:
         }
 
 
+def _service_with_runtime(repo: InMemoryResearchAssistantRepository) -> ResearchAssistantService:
+    runtime = load_runtime_config(DEFAULT_RUNTIME_CONFIG_PATH).config
+    repo.create_record(
+        "runtime_config_activations",
+        {
+            "activation_id": "runtime_phase8",
+            "config_key": RUNTIME_CONFIG_KEY,
+            "config_version": "test",
+            "environment": "dev",
+            "status": "active",
+            "config_json": runtime,
+        },
+    )
+    return ResearchAssistantService(repository=repo, llm_client=object())
+
+
 def test_code_query_injects_query_scoped_refs_with_complete_provenance() -> None:
     adapter = FakeCodeIntelligenceAdapter()
     payload = build_query_code_context(
@@ -81,21 +97,52 @@ def test_code_query_injects_query_scoped_refs_with_complete_provenance() -> None
     }
 
 
+def test_code_query_cache_hit_reuses_persisted_refs_without_adapter() -> None:
+    adapter = FakeCodeIntelligenceAdapter()
+    first = build_query_code_context(
+        user_query="check backend/services/research_assistant/service.py build_context_pack impact",
+        task_id="task-code-cache",
+        repo_root=Path.cwd(),
+        token_budget=1800,
+        adapter_module=adapter,
+        skip_external=True,
+    )
+    assert first["code_context_refs"]
+    assert len(adapter.context_calls) == 1
+    persisted_refs = list(first["code_context_refs"])
+
+    def cache_lookup(payload: dict[str, Any]) -> dict[str, Any]:
+        expected = set(payload["expected_ref_ids"])
+        hits = [ref for ref in persisted_refs if ref["code_ref_id"] in expected]
+        return {
+            "status": "hit",
+            "code_context_refs": hits,
+            "reason_codes": ["code_context_cache_hit"],
+            "warnings": [],
+            "as_of": hits[0]["as_of"],
+        }
+
+    cached = build_query_code_context(
+        user_query="check backend/services/research_assistant/service.py build_context_pack impact",
+        task_id="task-code-cache",
+        repo_root=Path.cwd(),
+        token_budget=1800,
+        adapter_module=adapter,
+        skip_external=True,
+        cache_lookup=cache_lookup,
+    )
+
+    assert cached["status"] == "ok"
+    assert cached["cache"]["status"] == "hit"
+    assert "code_context_cache_hit" in cached["reason_codes"]
+    assert cached["code_context_refs"] == persisted_refs
+    assert len(adapter.context_calls) == 1
+    assert len(adapter.affected_calls) == 1
+
+
 def test_non_code_query_does_not_inject_or_pollute_context_pack() -> None:
     repo = InMemoryResearchAssistantRepository()
-    runtime = load_runtime_config(DEFAULT_RUNTIME_CONFIG_PATH).config
-    repo.create_record(
-        "runtime_config_activations",
-        {
-            "activation_id": "runtime_phase8",
-            "config_key": RUNTIME_CONFIG_KEY,
-            "config_version": "test",
-            "environment": "dev",
-            "status": "active",
-            "config_json": runtime,
-        },
-    )
-    service = ResearchAssistantService(repository=repo, llm_client=object())
+    service = _service_with_runtime(repo)
     repo.create_record(
         "tasks",
         {
@@ -123,7 +170,40 @@ def test_non_code_query_does_not_inject_or_pollute_context_pack() -> None:
     pack_json = pack["pack_json"]
     assert pack_json["code_context_refs"] == []
     assert pack_json["code_context_route"]["reason_codes"] == ["non_code_query"]
+    assert pack_json["code_context_route"]["warnings"]
     assert service.repository.list_records("code_context_refs", limit=10)["total"] == 0
+
+
+def test_repository_cache_lookup_returns_persisted_code_context_refs_without_adapter() -> None:
+    repo = InMemoryResearchAssistantRepository()
+    service = _service_with_runtime(repo)
+    adapter = FakeCodeIntelligenceAdapter()
+    query = "check backend/services/research_assistant/service.py build_context_pack impact"
+    refs_payload = build_query_code_context(
+        user_query=query,
+        task_id="task-code-cache-pack",
+        repo_root=Path.cwd(),
+        token_budget=1200,
+        adapter_module=adapter,
+        skip_external=True,
+    )
+    service._persist_code_context_refs(task_id="task-code-cache-pack", refs=list(refs_payload["code_context_refs"]))
+    cache_payload = expected_code_context_ref_ids(
+        user_query=query,
+        task_id="task-code-cache-pack",
+        repo_root=Path.cwd(),
+        token_budget=1200,
+    )
+    assert len(adapter.context_calls) == 1
+    assert len(adapter.affected_calls) == 1
+
+    cached = service._lookup_code_context_cache(cache_payload)
+
+    assert cached["status"] == "hit"
+    assert cached["code_context_refs"]
+    assert "code_context_cache_hit" in cached["reason_codes"]
+    assert len(adapter.context_calls) == 1
+    assert len(adapter.affected_calls) == 1
 
 
 def test_code_scope_parse_failure_is_explicit_degrade_not_error() -> None:
@@ -138,6 +218,7 @@ def test_code_scope_parse_failure_is_explicit_degrade_not_error() -> None:
     assert payload["status"] == "skipped"
     assert payload["code_context_refs"] == []
     assert payload["reason_codes"] == ["no_code_scope_detected"]
+    assert payload["warnings"]
 
 
 def test_code_context_is_summary_first_and_has_no_embedding_dependency() -> None:
@@ -159,3 +240,22 @@ def test_code_context_is_summary_first_and_has_no_embedding_dependency() -> None
     serialized_refs = str(payload["code_context_refs"])
     assert "Code Intelligence Context Guidance" not in serialized_refs
     assert "raw_context_embedded': True" not in serialized_refs
+
+
+def test_catalog_parse_failure_is_explicit_and_keeps_default_limits(tmp_path: Path) -> None:
+    catalog_dir = tmp_path / "tests" / "aistock_validation" / "catalog"
+    catalog_dir.mkdir(parents=True)
+    (catalog_dir / "code_intelligence.yaml").write_text("codegraph: [unterminated\n", encoding="utf-8")
+
+    payload = build_query_code_context(
+        user_query="check backend/services/research_assistant/code_intelligence.py parse_code_query_scope impact",
+        task_id="task-code-bad-catalog",
+        repo_root=tmp_path,
+        token_budget=1800,
+        adapter_module=FakeCodeIntelligenceAdapter(),
+        skip_external=True,
+    )
+
+    assert payload["limits"]["max_context_symbols"] == 8
+    assert "code_intelligence_catalog_parse_failed" in payload["reason_codes"]
+    assert any("code intelligence catalog parse failed" in warning for warning in payload["warnings"])

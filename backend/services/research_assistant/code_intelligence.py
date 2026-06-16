@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,7 @@ def build_query_code_context(
     token_budget: int | None = None,
     adapter_module: Any | None = None,
     skip_external: bool = False,
+    cache_lookup: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build query-scoped code refs through the existing code-intelligence adapter."""
 
@@ -112,14 +114,16 @@ def build_query_code_context(
     generated_at = _utc_now()
     limits = _load_code_intelligence_limits(repo_root, token_budget=token_budget)
     scope = parse_code_query_scope(query, repo_root=repo_root)
+    limit_reason_codes = _as_list(limits.get("reason_codes"))
+    limit_warnings = _as_list(limits.get("warnings"))
     base: dict[str, Any] = {
         "schema_version": CODE_CONTEXT_REFS_SCHEMA,
         "status": "skipped",
         "query": query,
         "scope": scope,
         "code_context_refs": [],
-        "reason_codes": [],
-        "warnings": [],
+        "reason_codes": list(limit_reason_codes),
+        "warnings": list(limit_warnings),
         "limits": limits,
         "adapter_contract": {
             "provider": "codegraph",
@@ -132,13 +136,50 @@ def build_query_code_context(
     }
     if not query:
         base["reason_codes"].append("empty_query")
+        base["warnings"].append("code context skipped: empty query")
         return base
     if not scope["is_code_query"]:
         base["reason_codes"].append("non_code_query")
+        base["warnings"].append("code context skipped: non-code query")
         return base
     if not scope["concrete"]:
         base["reason_codes"].append("no_code_scope_detected")
+        base["warnings"].append("code context skipped: no concrete code scope detected")
         return base
+
+    cache_payload = _query_scope_cache_payload(query=query, task_id=task_id, scope=scope, limits=limits)
+    if cache_lookup is not None:
+        try:
+            cached_refs = cache_lookup(cache_payload)
+        except Exception as exc:  # noqa: BLE001 - cache failure is surfaced and adapter remains authoritative.
+            base["reason_codes"].append("code_context_cache_unavailable")
+            base["warnings"].append(f"code context cache lookup failed: {type(exc).__name__}: {exc}")
+        else:
+            cache_reason_codes = _as_list(cached_refs.get("reason_codes"))
+            cache_warnings = _as_list(cached_refs.get("warnings"))
+            base["reason_codes"].extend(cache_reason_codes)
+            base["warnings"].extend(cache_warnings)
+            refs = _as_list(cached_refs.get("code_context_refs"))
+            if refs and cached_refs.get("status") == "hit":
+                base.update(
+                    {
+                        "status": "ok",
+                        "code_context_refs": refs,
+                        "reason_codes": _dedupe_strings([*base["reason_codes"], "code_context_cache_hit"]),
+                        "warnings": _dedupe_strings(base["warnings"]),
+                        "as_of": cached_refs.get("as_of") or refs[0].get("as_of") or generated_at,
+                        "generated_at": cached_refs.get("generated_at") or generated_at,
+                        "cache": {
+                            "status": "hit",
+                            "expected_ref_ids": cache_payload["expected_ref_ids"],
+                        },
+                    }
+                )
+                return base
+            if cached_refs.get("status") != "unavailable" and "code_context_cache_miss" not in base["reason_codes"]:
+                base["reason_codes"].append("code_context_cache_miss")
+            if cached_refs.get("status") != "unavailable" and not cache_warnings:
+                base["warnings"].append("code context cache miss; invoking adapter")
 
     item_id = _context_item_id(task_id=task_id, query=query)
     changed_files = list(scope["paths"])
@@ -183,7 +224,8 @@ def build_query_code_context(
             "context_artifact_ref": context.get("context_markdown"),
             "manifest_artifact_ref": context.get("manifest_path"),
             "affected_tests_ref": affected.get("artifact_path"),
-            "reason_codes": [*base["reason_codes"], *reason_codes] or (["code_context_refs_built"] if refs else ["no_code_context_refs_built"]),
+            "reason_codes": _dedupe_strings([*base["reason_codes"], *reason_codes, "code_context_refs_built" if refs else "no_code_context_refs_built"]),
+            "warnings": _dedupe_strings(base["warnings"]),
             "as_of": context.get("generated_at") or affected.get("generated_at") or generated_at,
             "generated_at": context.get("generated_at") or generated_at,
         }
@@ -231,6 +273,19 @@ def parse_code_query_scope(query: str, *, repo_root: Path) -> dict[str, Any]:
     }
 
 
+def expected_code_context_ref_ids(*, user_query: str | None, task_id: str | None, repo_root: Path, token_budget: int | None = None) -> dict[str, Any]:
+    """Return deterministic cache keys for a query without invoking the adapter."""
+
+    query = (user_query or "").strip()
+    limits = _load_code_intelligence_limits(repo_root, token_budget=token_budget)
+    scope = parse_code_query_scope(query, repo_root=repo_root)
+    payload = _query_scope_cache_payload(query=query, task_id=task_id, scope=scope, limits=limits)
+    payload["is_cacheable"] = bool(query and scope.get("is_code_query") and scope.get("concrete"))
+    payload["reason_codes"] = _as_list(limits.get("reason_codes"))
+    payload["warnings"] = _as_list(limits.get("warnings"))
+    return payload
+
+
 def code_context_artifact_paths(context: dict[str, Any]) -> list[str]:
     refs: list[str] = []
     for key in ("context_artifact_ref", "manifest_artifact_ref", "affected_tests_ref"):
@@ -261,7 +316,7 @@ def artifact_ref_paths(context: dict[str, Any]) -> list[str]:
     return refs
 
 
-def _load_code_intelligence_limits(repo_root: Path, *, token_budget: int | None) -> dict[str, int]:
+def _load_code_intelligence_limits(repo_root: Path, *, token_budget: int | None) -> dict[str, Any]:
     catalog = _load_code_intelligence_catalog(repo_root)
     codegraph = catalog.get("codegraph") if isinstance(catalog.get("codegraph"), dict) else {}
     ua = catalog.get("understand_anything") if isinstance(catalog.get("understand_anything"), dict) else {}
@@ -272,6 +327,8 @@ def _load_code_intelligence_limits(repo_root: Path, *, token_budget: int | None)
         "max_context_symbols": int(codegraph.get(max_symbols_key) or (DEFAULT_CODEGRAPH_MAX_CONTEXT_SYMBOLS_T2 if use_t2 else DEFAULT_CODEGRAPH_MAX_CONTEXT_SYMBOLS_T1)),
         "max_impact_depth": int(codegraph.get("max_impact_depth") or DEFAULT_CODEGRAPH_MAX_IMPACT_DEPTH),
         "max_context_nodes": int(ua.get(max_nodes_key) or (DEFAULT_UA_MAX_CONTEXT_NODES_T3 if use_t2 else DEFAULT_UA_MAX_CONTEXT_NODES_T2)),
+        "reason_codes": _as_list(catalog.get("reason_codes")),
+        "warnings": _as_list(catalog.get("warnings")),
     }
 
 
@@ -283,9 +340,33 @@ def _load_code_intelligence_catalog(repo_root: Path) -> dict[str, Any]:
         import yaml  # type: ignore
 
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
+        if isinstance(payload, dict):
+            return payload
+        return {
+            "reason_codes": ["code_intelligence_catalog_parse_failed"],
+            "warnings": [f"code intelligence catalog is not a mapping: {path}"],
+        }
+    except Exception as exc:  # noqa: BLE001 - explicit fallback to default limits.
+        return {
+            "reason_codes": ["code_intelligence_catalog_parse_failed"],
+            "warnings": [f"code intelligence catalog parse failed: {type(exc).__name__}: {exc}"],
+        }
+
+
+def _query_scope_cache_payload(*, query: str, task_id: str | None, scope: dict[str, Any], limits: dict[str, Any]) -> dict[str, Any]:
+    candidates = _scope_candidates(scope)[: int(limits["max_context_symbols"])]
+    expected_ref_ids = [
+        _stable_ref_id(task_id=task_id, query_scope=f"{candidate['type']}:{candidate['value']}", index=index)
+        for index, candidate in enumerate(candidates)
+    ]
+    return {
+        "schema_version": "aistock_research_assistant_code_context_cache_lookup_v1",
+        "task_id": task_id,
+        "query": query,
+        "scope": scope,
+        "limits": limits,
+        "expected_ref_ids": expected_ref_ids,
+    }
 
 
 def _load_adapter(repo_root: Path) -> Any:
