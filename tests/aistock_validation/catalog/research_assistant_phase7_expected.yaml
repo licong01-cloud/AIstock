@@ -79,13 +79,13 @@ dai_classification:
     status: hard_pass
     evidence: [scripts/research_assistant_phase7_crosscheck.py]
   DAI-CODE-001:
-    status: future_phase_pending
+    status: hard_pass
     phase: Phase 8
-    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+    evidence: [backend/services/research_assistant/code_intelligence.py, backend/services/research_assistant/service.py, backend/tests/research_assistant/test_code_intel_context_injection.py]
   DAI-CODE-002:
-    status: future_phase_pending
+    status: hard_pass
     phase: Phase 8
-    evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]
+    evidence: [scripts/code_intelligence_adapter.py, backend/services/research_assistant/code_intelligence.py, backend/tests/research_assistant/test_code_intel_context_injection.py]
   DAI-REPORT-001:
     status: future_phase_pending
     phase: Phase 9
@@ -127,7 +127,7 @@ defect_classification:
   DEF-07: {status: hard_pass, evidence: [backend/tests/research_assistant/test_external_research_evidence_first.py]}
   DEF-08: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_tree_ddl_contract.py]}
   DEF-09: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_dedup_scope.py]}
-  DEF-10: {status: future_phase_pending, phase: Phase 8, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
+  DEF-10: {status: hard_pass, phase: Phase 8, evidence: [backend/services/research_assistant/code_intelligence.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/004_code_intelligence.sql, backend/tests/research_assistant/test_code_intel_context_injection.py, backend/tests/research_assistant/test_code_intel_decomposition.py]}
   DEF-11: {status: future_phase_pending, phase: Phase 9, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
   DEF-12: {status: future_phase_pending, phase: Phase 10-12, evidence: [docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md]}
   DEF-13: {status: future_phase_pending, phase: Phase 13-15, evidence: [backend/tests/research_assistant/test_core_no_adapter_import.py]}
