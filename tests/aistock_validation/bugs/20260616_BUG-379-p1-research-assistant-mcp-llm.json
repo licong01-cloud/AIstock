@@ -56,8 +56,8 @@
   "expected": "Research Assistant 应先由 LLM 基于用户真实意图、业务域和已审计 MCP 工具目录生成结构化工具计划；明确的收益排行问题应选择只读 qe_archive_query_run_leaderboard 并传递安全查询参数，口径不清的“哪个最好”应先追问比较指标，而不是新增特定词语/短句/synonym 路由规则。",
   "first_seen_at": "2026-06-15T18:13:00.350484Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dd77964305009c9ad596e0e5fdf7595ae2740437",
+  "fixed_at": "2026-06-16T01:32:56.169944Z",
   "github_issue_number": 1127,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1127",
   "last_seen_at": "2026-06-15T18:13:00.350484Z",
@@ -65,6 +65,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1134",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -79,7 +80,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -88,6 +89,16 @@
     "fingerprint": "27cd8cc874a14e6f31e71509",
     "source_event_id": "FE-20260616-27cd8cc874a1"
   },
+  "validation_evidence": [
+    "python -m compileall backend/services/research_assistant/semantic_tool_planner.py backend/services/research_assistant/service.py -> passed",
+    "python -m ruff check backend/services/research_assistant/semantic_tool_planner.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed",
+    "python -m pytest backend/tests/research_assistant/test_service.py::test_bug_379_semantic_planner_overrides_legacy_route_without_new_phrase_rules backend/tests/research_assistant/test_service.py::test_bug_379_semantic_planner_asks_metric_clarification_for_underspecified_best -q -> 2 passed",
+    "python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -> 79 passed",
+    "python -m nox -s l0 validation_module_registry_l0 research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful",
+    "python -m nox -s research_assistant_backend --no-error-on-missing-interpreters -> 212 passed",
+    "python -m nox -s ra_phase7_full_accept --no-error-on-missing-interpreters -> backend 212 passed, frontend lint/build passed with existing warnings, Playwright 12 passed, phase7 crosscheck passed",
+    "gh pr checks 1134 -> 17 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
