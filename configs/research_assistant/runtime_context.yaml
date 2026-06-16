@@ -924,6 +924,7 @@ query_limits:
   api_list_memory_access_log: 50
   api_list_context_packs: 50
   api_list_code_context_refs: 50
+  api_list_proactive_reports: 50
   api_list_entities: 50
   api_list_relations: 50
   api_list_evolution_paths: 50
