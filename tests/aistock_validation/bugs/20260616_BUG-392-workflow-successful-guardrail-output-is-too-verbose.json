@@ -41,8 +41,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-16T12:27:57.036151Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5c2c683f0442165245065c392948de081d3735be",
+  "fixed_at": "2026-06-16T13:34:45.982557Z",
   "github_issue_number": 1172,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1172",
   "last_seen_at": "2026-06-16T12:27:57.036151Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1179",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -70,6 +71,9 @@
     "fingerprint": "ed268f00032659c4aa9e5069",
     "source_event_id": "FE-20260616-ed268f000326"
   },
+  "validation_evidence": [
+    "PR #1179 CI checks -> all required checks passed; python -m pytest targeted workflow tests -> 293 passed; python -m nox -s l0 validation_module_registry_l0 validation_center_backend validation_catalog_integrity guardrail_changed_files -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
