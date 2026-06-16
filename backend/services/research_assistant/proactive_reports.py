@@ -156,7 +156,7 @@ def collect_task_activity_section(context: ProactiveReportContext) -> dict[str, 
 
 
 def collect_experiment_status_section(context: ProactiveReportContext) -> dict[str, Any]:
-    records = _try_list_records(context.repository, ("qe_autonomous_runs", "qe_autonomy_runs", "evolution_paths"), limit=context.max_items_per_section)
+    records, reason_codes, warnings = _try_list_records(context.repository, ("qe_autonomy_runs", "evolution_paths"), limit=context.max_items_per_section)
     items = [
         _item(
             title=str(row.get("objective") or row.get("qe_task_id") or row.get("auto_run_id") or row.get("path_id") or "experiment"),
@@ -165,47 +165,46 @@ def collect_experiment_status_section(context: ProactiveReportContext) -> dict[s
         )
         for index, (kind, row) in enumerate(records)
     ]
-    return _section("experiments", "QE/实验状态", items, empty_reason="experiments_no_evidence")
+    return _section("experiments", "QE/experiment status", items, empty_reason="experiments_no_evidence", reason_codes=reason_codes, warnings=warnings)
 
 
 def collect_issue_validation_section(context: ProactiveReportContext) -> dict[str, Any]:
-    issues = _list_records(context.repository, "issue_candidates", limit=context.max_items_per_section)
-    validations = _list_records(context.repository, "validation_discovery_reports", limit=context.max_items_per_section)
+    records, reason_codes, warnings = _try_list_records(context.repository, ("issue_candidates",), limit=context.max_items_per_section)
     items = [
         _item(
-            title=str(item.get("title") or item.get("issue_candidate_id") or item.get("discovery_report_id")),
+            title=str(item.get("title") or item.get("candidate_id")),
             body=f"状态={item.get('status') or 'unknown'}。",
-            source_refs=[f"issue_validation:{item.get('issue_candidate_id') or item.get('discovery_report_id') or index}"],
+            source_refs=[f"assistant_issue_candidates:{item.get('candidate_id') or index}"],
         )
-        for index, item in enumerate([*issues, *validations][: context.max_items_per_section])
+        for index, (_kind, item) in enumerate(records)
     ]
-    return _section("issues", "Validation/BUG/Issue", items, empty_reason="issues_no_evidence")
+    return _section("issues", "Validation/BUG/Issue", items, empty_reason="issues_no_evidence", reason_codes=reason_codes, warnings=warnings)
 
 
 def collect_local_data_health_section(context: ProactiveReportContext) -> dict[str, Any]:
-    events = _list_records(context.repository, "trace_events", filters={"component": "local_data_health"}, limit=context.max_items_per_section)
+    records, reason_codes, warnings = _try_list_records(context.repository, ("external_events", "task_events"), search="local_data", limit=context.max_items_per_section)
     items = [
         _item(
             title=str(event.get("event_type") or "local_data_health"),
             body=f"状态={event.get('status') or 'unknown'}。",
-            source_refs=[f"assistant_trace_events:{event.get('trace_id') or index}"],
+            source_refs=_source_refs_for_record(kind, event, fallback_index=index),
         )
-        for index, event in enumerate(events)
+        for index, (kind, event) in enumerate(records)
     ]
-    return _section("data_health", "本地数据健康", items, empty_reason="data_health_no_evidence")
+    return _section("data_health", "local data health", items, empty_reason="data_health_no_evidence", reason_codes=reason_codes, warnings=warnings)
 
 
 def collect_agent_team_section(context: ProactiveReportContext) -> dict[str, Any]:
-    tasks = _list_records(context.repository, "tasks", filters={"task_type": "agent_team"}, limit=context.max_items_per_section)
+    runs = _list_records(context.repository, "agent_runs", limit=context.max_items_per_section)
     items = [
         _item(
-            title=str(task.get("title") or task.get("task_id")),
-            body=f"Agent Teams 状态={task.get('status') or 'unknown'}。",
-            source_refs=[f"research_agent_tasks:{task.get('task_id')}"],
+            title=str(run.get("agent_key") or run.get("role") or run.get("agent_run_id")),
+            body=f"Agent Teams status={run.get('status') or 'unknown'}.",
+            source_refs=[f"assistant_agent_runs:{run.get('agent_run_id')}"],
         )
-        for task in tasks
+        for run in runs
     ]
-    return _section("agent_teams", "Agent Teams 运行", items, empty_reason="agent_teams_no_evidence")
+    return _section("agent_teams", "Agent Teams runs", items, empty_reason="agent_teams_no_evidence")
 
 
 def collect_personal_task_section(context: ProactiveReportContext) -> dict[str, Any]:
@@ -213,12 +212,12 @@ def collect_personal_task_section(context: ProactiveReportContext) -> dict[str, 
     items = [
         _item(
             title=str(memory.get("title") or memory.get("tree_path") or memory.get("memory_id")),
-            body=str(memory.get("content_text") or "personal.task 进展已记录。"),
+            body=str(memory.get("content_text") or "personal.task progress recorded."),
             source_refs=[f"research_memory_items:{memory.get('memory_id')}"],
         )
         for memory in memories
     ]
-    return _section("personal_tasks", "personal.task.* 进展", items, empty_reason="personal_tasks_no_evidence")
+    return _section("personal_tasks", "personal.task.* progress", items, empty_reason="personal_tasks_no_evidence")
 
 
 def _summary_payload(context: ProactiveReportContext, sections: list[dict[str, Any]], registry: ProactiveReportProviderRegistry) -> dict[str, Any]:
@@ -255,7 +254,17 @@ def _deterministic_summary(context: ProactiveReportContext, sections: list[dict[
     return "\n".join(lines).strip()
 
 
-def _section(section_key: str, title: str, items: list[dict[str, Any]], *, empty_reason: str) -> dict[str, Any]:
+def _section(
+    section_key: str,
+    title: str,
+    items: list[dict[str, Any]],
+    *,
+    empty_reason: str,
+    reason_codes: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    extra_reason_codes = list(reason_codes or [])
+    extra_warnings = list(warnings or [])
     if items:
         return {
             "schema_version": PROACTIVE_SECTION_SCHEMA,
@@ -265,8 +274,8 @@ def _section(section_key: str, title: str, items: list[dict[str, Any]], *, empty
             "items": items,
             "source_refs": _dedupe(ref for item in items for ref in _as_strings(item.get("source_refs"))),
             "todo_items": [],
-            "reason_codes": [],
-            "warnings": [],
+            "reason_codes": _dedupe(extra_reason_codes),
+            "warnings": _dedupe(extra_warnings),
         }
     return {
         "schema_version": PROACTIVE_SECTION_SCHEMA,
@@ -276,8 +285,8 @@ def _section(section_key: str, title: str, items: list[dict[str, Any]], *, empty
         "items": [],
         "source_refs": [],
         "todo_items": [],
-        "reason_codes": [empty_reason],
-        "warnings": [f"{title} has no read-only evidence"],
+        "reason_codes": _dedupe([empty_reason, *extra_reason_codes]),
+        "warnings": _dedupe([f"{title} has no read-only evidence", *extra_warnings]),
     }
 
 
@@ -341,14 +350,33 @@ def _list_records(repository: Any, kind: str, *, limit: int, filters: dict[str, 
     return [dict(item) for item in page.get("items") or [] if isinstance(item, Mapping)]
 
 
-def _try_list_records(repository: Any, kinds: Sequence[str], *, limit: int) -> list[tuple[str, dict[str, Any]]]:
+def _try_list_records(
+    repository: Any,
+    kinds: Sequence[str],
+    *,
+    limit: int,
+    filters: dict[str, Any] | None = None,
+    search: str | None = None,
+) -> tuple[list[tuple[str, dict[str, Any]]], list[str], list[str]]:
     records: list[tuple[str, dict[str, Any]]] = []
+    reason_codes: list[str] = []
+    warnings: list[str] = []
     for kind in kinds:
         try:
-            records.extend((kind, item) for item in _list_records(repository, kind, limit=limit))
-        except KeyError:
-            continue
-    return records[:limit]
+            records.extend((kind, item) for item in _list_records(repository, kind, limit=limit, filters=filters, search=search))
+        except KeyError as exc:
+            reason_codes.append(f"{kind}_repository_kind_unavailable")
+            warnings.append(f"repository kind {kind!r} is unavailable: {exc}")
+    return records[:limit], _dedupe(reason_codes), _dedupe(warnings)
+
+
+def _source_refs_for_record(kind: str, row: Mapping[str, Any], *, fallback_index: int) -> list[str]:
+    embedded_refs = _as_strings(row.get("evidence_refs"))
+    if kind == "external_events":
+        return _dedupe([*embedded_refs, f"assistant_external_agent_events:{row.get('external_event_id') or fallback_index}"])
+    if kind == "task_events":
+        return _dedupe([*embedded_refs, f"agent_task_events:{row.get('event_id') or fallback_index}"])
+    return _dedupe([*embedded_refs, f"{kind}:{fallback_index}"])
 
 
 def _as_strings(value: Any) -> list[str]:

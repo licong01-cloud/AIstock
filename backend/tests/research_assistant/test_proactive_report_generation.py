@@ -7,6 +7,7 @@ from backend.services.research_assistant.proactive_reports import (
     ProactiveReportContext,
     ProactiveReportProvider,
     ProactiveReportProviderRegistry,
+    build_default_proactive_report_registry,
     generate_proactive_report,
 )
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
@@ -68,6 +69,11 @@ def _seed_runtime_config(repo: SpyRepository) -> None:
     repo.write_calls.clear()
 
 
+def _section_by_key(report: dict[str, Any], section_key: str) -> dict[str, Any]:
+    sections = report["sections_json"]["sections"]
+    return next(section for section in sections if section["section_key"] == section_key)
+
+
 def test_proactive_report_contains_evidence_sections_and_no_placeholders() -> None:
     registry = ProactiveReportProviderRegistry(
         [
@@ -120,6 +126,51 @@ def test_proactive_report_degrades_missing_provider_evidence_with_reason_and_war
     assert "tasks_no_evidence" in section["reason_codes"]
     assert section["warnings"]
     assert "proactive_report_no_evidence" in report["sections_json"]["reason_codes"]
+
+
+def test_default_registry_collects_real_repository_issue_and_data_health_sources() -> None:
+    repo = InMemoryResearchAssistantRepository()
+    repo.create_record(
+        "issue_candidates",
+        {
+            "candidate_id": "issue_phase9",
+            "title": "Phase 9 issue evidence",
+            "severity": "P1",
+            "module": "research_assistant",
+            "status": "needs_review",
+            "problem_statement": "issue_candidates should feed proactive reports",
+            "dedupe_key": "phase9-issue",
+            "evidence_refs": ["issue://phase9"],
+        },
+    )
+    repo.create_record(
+        "external_events",
+        {
+            "external_event_id": "extev_local_data_health",
+            "session_id": "local_data",
+            "event_type": "local_data_health_overview",
+            "payload_json": {"status": "ok"},
+            "evidence_refs": ["local_data://health"],
+            "risk_level": "low",
+        },
+    )
+
+    report = generate_proactive_report(
+        context=ProactiveReportContext(repository=repo, report_date=date(2026, 6, 16)),
+        registry=build_default_proactive_report_registry(),
+        report_id_factory=lambda prefix: f"{prefix}_real_registry",
+    )
+
+    issue_section = _section_by_key(report, "issues")
+    data_health_section = _section_by_key(report, "data_health")
+    assert issue_section["status"] == "ok"
+    assert issue_section["source_refs"]
+    assert issue_section["items"][0]["source_refs"] == ["assistant_issue_candidates:issue_phase9"]
+    assert "issues_provider_failed" not in report["sections_json"]["reason_codes"]
+    assert data_health_section["status"] == "ok"
+    assert data_health_section["source_refs"]
+    assert "local_data://health" in data_health_section["source_refs"]
+    assert "data_health_provider_failed" not in report["sections_json"]["reason_codes"]
 
 
 def test_proactive_report_generation_is_read_only_until_explicit_persist() -> None:
