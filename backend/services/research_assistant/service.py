@@ -1012,6 +1012,30 @@ def _default_workflow_capabilities() -> list[dict[str, Any]]:
     return DEFAULT_WORKFLOW_CAPABILITIES
 
 
+def _code_context_ref_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    manifest = row.get("manifest_json") if isinstance(row.get("manifest_json"), dict) else {}
+    provenance = row.get("provenance_json") if isinstance(row.get("provenance_json"), dict) else {}
+    affected_tests = manifest.get("affected_tests") if isinstance(manifest.get("affected_tests"), list) else []
+    query_scope = str(row.get("query_scope") or manifest.get("query_scope") or "")
+    as_of = row.get("as_of")
+    as_of_text = as_of.isoformat() if hasattr(as_of, "isoformat") else as_of
+    summary_tests = ", ".join(map(str, affected_tests[:3])) if affected_tests else "no affected-test suggestion"
+    return {
+        "code_ref_id": row.get("code_ref_id"),
+        "query_scope": query_scope,
+        "query_scope_type": query_scope.split(":", 1)[0] if ":" in query_scope else "unknown",
+        "source": row.get("source") or "codegraph",
+        "summary": f"Cached code context scoped to {query_scope}; affected tests: {summary_tests}.",
+        "provenance": provenance,
+        "as_of": as_of_text,
+        "manifest_json": manifest,
+        "context_artifact_ref": manifest.get("context_artifact_ref"),
+        "manifest_artifact_ref": manifest.get("manifest_artifact_ref"),
+        "affected_tests_ref": manifest.get("affected_tests_ref"),
+        "affected_tests": [str(item) for item in affected_tests],
+    }
+
+
 class ResearchAssistantLlmClient:
     """Small LiteLLM wrapper for assistant chat turns.
 
@@ -1088,6 +1112,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             task_id=parent_task_id,
             repo_root=REPO_ROOT,
             token_budget=1800,
+            cache_lookup=self._lookup_code_context_cache,
         )
         code_team_refs = list(code_team_context.get("code_context_refs") or [])
         runtime = AgentTeamsRuntime(
@@ -5018,6 +5043,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             task_id=data.task_id,
             repo_root=REPO_ROOT,
             token_budget=token_budget,
+            cache_lookup=self._lookup_code_context_cache,
         )
         code_context_refs = list(query_code_context.get("code_context_refs") or [])
         if code_context_refs:
@@ -5053,6 +5079,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "code_context_route": {
                 "status": query_code_context.get("status"),
                 "reason_codes": query_code_context.get("reason_codes") or [],
+                "warnings": query_code_context.get("warnings") or [],
                 "scope": query_code_context.get("scope") or {},
                 "adapter_contract": query_code_context.get("adapter_contract") or {},
                 "as_of": query_code_context.get("as_of"),
@@ -5125,6 +5152,45 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 ),
             )
         return context_pack
+
+    def _lookup_code_context_cache(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_id = payload.get("task_id")
+        expected_ref_ids = [str(ref_id) for ref_id in payload.get("expected_ref_ids") or []]
+        if not expected_ref_ids:
+            return {
+                "status": "miss",
+                "code_context_refs": [],
+                "reason_codes": ["code_context_cache_miss"],
+                "warnings": ["code context cache miss: no deterministic ref ids for query scope"],
+            }
+        try:
+            rows = []
+            for code_ref_id in expected_ref_ids:
+                row = self.repository.get_record("code_context_refs", code_ref_id)
+                if not row or (task_id and row.get("task_id") != task_id):
+                    return {
+                        "status": "miss",
+                        "code_context_refs": [],
+                        "reason_codes": ["code_context_cache_miss"],
+                        "warnings": [f"code context cache miss: {code_ref_id}"],
+                    }
+                rows.append(row)
+        except Exception as exc:  # noqa: BLE001 - explicit degraded cache route, adapter may still run.
+            return {
+                "status": "unavailable",
+                "code_context_refs": [],
+                "reason_codes": ["code_context_cache_unavailable"],
+                "warnings": [f"code context cache unavailable: {type(exc).__name__}: {exc}"],
+            }
+
+        refs = [_code_context_ref_from_row(row) for row in rows]
+        return {
+            "status": "hit",
+            "code_context_refs": refs,
+            "reason_codes": ["code_context_cache_hit"],
+            "warnings": [],
+            "as_of": refs[0].get("as_of") if refs else None,
+        }
 
     def _persist_code_context_refs(self, *, task_id: str | None, refs: list[dict[str, Any]]) -> None:
         for ref in refs:
