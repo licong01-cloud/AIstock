@@ -146,4 +146,46 @@
 
 ---
 
-*落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`。Tier-1 无需 pred.pkl 可立即开发;Tier-2 待 P2。实施前复核所有 file:line 与数据语义。*
+---
+
+## 12. Step-1 数据语义核验 + 阈值校准结果（2026-06-16，我执行）
+
+> 用 MCP 实测代表 run `qe_20260614_022643_edaf_L13`(C_FundVal) 的 enhanced_metrics + 数仓 leaderboard 分布。**修正了 §2 的一处可行性假设。**
+
+### 12.1 数据语义实测（关键修正）
+MCP `qe_experiment_get_enhanced_metrics` 返回的 enhanced_metrics 实际含：
+- **`all_stocks`(460)**：全交易标的，每项 `{code, profit, profit_pct, avg_cost, last_price, first/last_date, holding_days}` —— **纯已实现结果，无预测 score/rank，非按预测排序**。
+- **`top_stocks`/`bottom_stocks`(各10)**：**按已实现 profit 绝对额排序**（盈利冠军/亏损王），**不是预测 top-K** → 不可用于预测质量。
+- `stock_trades`：per-stock 买卖流水(pnl/date/type/price/amount)。
+- `prediction_diagnostics`：`{pred_std, top30_stability:0.843, pred_autocorr_1d:0.979, pred_rank_turnover:0.021}` —— 只有预测**稳定性**诊断，无 rank 分桶收益。
+- `ic_series/rank_ic_series`(日,409)：**全局**。`summary`：标量。
+
+**→ 修正结论：预测对齐的 top-K 收益（前20/前50 是否更好）MCP 层算不出**——enhanced_metrics 有"实际怎样"(all_stocks)但没有"预测排第几"。因此：
+1. **Tier-1 必须后端计算**，源 = `run_position`(score/rank_in_portfolio/return_contribution，DB)**或**回测内计算 `top30_stability` 的同一步（那里有逐日预测分数，是最佳插入点——顺带把 `topk_return@20/50 / hit_rate / decay` 一起算进 `prediction_diagnostics`）。
+2. **§2 Tier-1 "从 run_symbol_summary 直接算" 作废**：本 run 的 symbol summary 只会有 top10/bottom10(无 all_stocks→symbol 的全量)或 realized 排序，**不含预测 rank**。改以 `run_position` / 回测步为准。
+3. **`top_stocks` 明确不可用**（realized-sorted）。
+
+### 12.2 回填可行性（修正：从"纯SQL必可回填"→"条件可回填，需先验证")
+- 存量 616 run 要回填**真·预测 top-K**，前提是 `run_position` 已存逐再平衡的**预测 rank + realized 贡献**。**Codex 第一步必须先验证 `run_position` 是否被填充、粒度、rank 语义**。
+- 若 `run_position` 不含逐日预测 rank → 存量真预测 top-K **无法纯 SQL 回填**，需 pred.pkl(P2) 或重跑；新 run 则在回测步直接算(forward)。
+- `prediction_diagnostics.top30_stability` 已存在 → 证明回测在跑时**确有逐日预测分数** → 新 run 的 top-K 计算成本极低(就在那一步加)。
+
+### 12.3 阈值校准（用 leaderboard + promotion_candidates 实测分布）
+- 观测：头部 run CAGR≈0.98-1.12 / MDD≈-0.13~-0.20 / Calmar≈5-7 / Sharpe≈2.3-2.7；gate 通过的**配置均值** CAGR_mean 0.745-0.962、cagr_cv 3-11%、mdd_mean -0.15~-0.19。
+- **校准后的晋升门(配置级)**：
+  - `cagr_mean ≥ 0.60`（生产候选；0.50 作"观察"软档）
+  - `max_drawdown_mean ≥ -0.20`（|MDD|≤20%，头部实测 -0.15~-0.19）
+  - `cagr_cv < 0.15`（收紧；现 is_return_stable 的 0.25 过松）
+  - `topk_return@20` 门：**待指标算出后用其分布二次校准**（占位 >0 且 > 基准）
+  - 排序默认 `calmar`(头部 5-7) 或 `cagr_mean`，`topk_return@20` 为 tiebreak
+- IC/ICIR 退出门(仅诊断)的决定**维持**。
+
+### 12.4 对 §8-§11 的影响
+- §3/§5 数据源：Tier-1 主源改 `run_position` / 回测 prediction_diagnostics 步（非 enhanced_metrics MCP、非 run_symbol_summary）。
+- §6 MCP：仍需新增 `qe_archive_query_topk_quality` 只读工具（当前完全无预测-rank-top-K 的 MCP 出口，是 MCP-first 缺口）。
+- §9 风险首条升级为**硬阻塞前置**：Codex 开工第一件事 = 验证 `run_position` 是否含逐再平衡预测 rank;结果决定回填走 SQL 还是 P2。
+- §2 Tier-2 不变(全截面 precision@K/NDCG@K 仍需 pred.pkl)。
+
+---
+
+*落于 worktree `docs/ma1-multi-alpha-sourcing-20260615`。Step-1 已坐实数据语义+阈值(§12)：Tier-1 后端从 run_position/回测步算（非 MCP enhanced_metrics）；回填需先验 run_position；Tier-2 待 P2。实施前复核所有 file:line。*
