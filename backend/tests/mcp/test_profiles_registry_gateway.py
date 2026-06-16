@@ -84,8 +84,16 @@ def test_research_profile_is_only_current_module() -> None:
         ("external_research", ["external_research"]),
         ("factor_research", ["factor_library", "factor_metrics", "factor_correlation"]),
         ("strategy_ops", ["strategy_governance", "execution_policy"]),
-        ("research_full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
-        ("full", ["catalog", "research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research", "validation", "qe_experiment", "qe_archive"]),
+        ("qlib_data", ["qlib_export"]),
+        ("backtest_data", ["qlib_export"]),
+        ("data_full", ["local_data", "qlib_export"]),
+        ("paper_v2_monitor", ["paper_v2_monitoring", "qmt_broker_monitoring"]),
+        ("strategy_package_ops", ["strategy_packages"]),
+        ("selection_advisory", ["selection_center", "advisory"]),
+        ("paper_v2_stable", ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]),
+        ("paper_v2_ops", ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]),
+        ("research_full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research"]),
+        ("full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research", "validation", "qe_experiment", "qe_archive"]),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -230,6 +238,28 @@ def test_gateway_loads_local_data_tools() -> None:
     assert registry.total_tool_count() == local_data.TOOL_COUNT
 
 
+def test_gateway_loads_qlib_data_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import local_data, qlib_export
+
+    _mcp, registry = gateway.create_gateway(
+        profile="qlib_data",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+    assert registry.tool_count("qlib_export") == qlib_export.TOOL_COUNT
+    assert registry.total_tool_count() == qlib_export.TOOL_COUNT
+
+    _mcp, full_registry = gateway.create_gateway(
+        profile="data_full",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+    assert full_registry.tool_count("local_data") == local_data.TOOL_COUNT
+    assert full_registry.tool_count("qlib_export") == qlib_export.TOOL_COUNT
+    assert full_registry.total_tool_count() == local_data.TOOL_COUNT + qlib_export.TOOL_COUNT
+
+
 def test_gateway_loads_external_research_tools() -> None:
     from backend.mcp import gateway
     from backend.mcp.modules import external_research
@@ -242,6 +272,31 @@ def test_gateway_loads_external_research_tools() -> None:
 
     assert registry.tool_count("external_research") == external_research.TOOL_COUNT
     assert registry.total_tool_count() == external_research.TOOL_COUNT
+
+
+def test_gateway_loads_paper_v2_stable_profiles() -> None:
+    from backend.mcp import gateway
+
+    _mcp, monitor_registry = gateway.create_gateway(
+        profile="paper_v2_monitor",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+    assert monitor_registry.tool_count("paper_v2_monitoring") == 32
+    assert monitor_registry.tool_count("qmt_broker_monitoring") == 10
+    assert monitor_registry.total_tool_count() == 42
+
+    _mcp, stable_registry = gateway.create_gateway(
+        profile="paper_v2_stable",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+    assert stable_registry.tool_count("strategy_packages") == 48
+    assert stable_registry.tool_count("selection_center") == 16
+    assert stable_registry.tool_count("advisory") == 22
+    assert stable_registry.tool_count("paper_v2_monitoring") == 32
+    assert stable_registry.tool_count("qmt_broker_monitoring") == 10
+    assert stable_registry.total_tool_count() == 128
 
 
 def test_gateway_loads_research_full_profile() -> None:
@@ -257,11 +312,17 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("research") == 16
     assert registry.tool_count("research_assistant") == 13
     assert registry.tool_count("local_data") == 47
+    assert registry.tool_count("qlib_export") == 15
     assert registry.tool_count("factor_library") == 10
     assert registry.tool_count("factor_metrics") == 7
     assert registry.tool_count("factor_correlation") == 8
     assert registry.tool_count("model_registry") == 9
     assert registry.tool_count("strategy_governance") == 9
+    assert registry.tool_count("strategy_packages") == 48
     assert registry.tool_count("execution_policy") == 7
+    assert registry.tool_count("selection_center") == 16
+    assert registry.tool_count("advisory") == 22
+    assert registry.tool_count("paper_v2_monitoring") == 32
+    assert registry.tool_count("qmt_broker_monitoring") == 10
     assert registry.tool_count("external_research") == 4
-    assert registry.total_tool_count() == 136
+    assert registry.total_tool_count() == 279

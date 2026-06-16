@@ -25,7 +25,41 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect docs-lite lane
+        id: docs_lite
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p tmp/validation/semgrep
+          HEAD_COMMIT="${HEAD_SHA:-HEAD}"
+          git rev-parse --verify "${HEAD_COMMIT}^{commit}" >/dev/null 2>&1 || HEAD_COMMIT="HEAD"
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
+          fi
+          DOCS_LITE=1
+          while IFS= read -r path; do
+            case "${path}" in
+              docs/architecture/*|docs/analysis/*|docs/operations/*|docs/operations_*.md|README.md)
+                ;;
+              docs/standards/*|docs/codex_project_memory.md|AGENTS.md|AGENTS.override.md|.codex/*|.claude/*)
+                DOCS_LITE=0
+                break
+                ;;
+              "")
+                ;;
+              *)
+                DOCS_LITE=0
+                break
+                ;;
+            esac
+          done < tmp/validation/semgrep/semgrep_changed_files.txt
+          echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
+
       - name: Set up Python 3.12
+        if: steps.docs_lite.outputs.docs_lite != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -33,9 +67,11 @@ jobs:
           cache-dependency-path: .github/requirements/semgrep.txt
 
       - name: Install Semgrep
+        if: steps.docs_lite.outputs.docs_lite != '1'
         run: python -m pip install --prefer-binary -r .github/requirements/semgrep.txt
 
       - name: Run Semgrep
+        if: steps.docs_lite.outputs.docs_lite != '1'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -54,6 +90,14 @@ jobs:
             printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/semgrep/semgrep.json
           fi
 
+      - name: Emit docs-lite semgrep no-op record
+        if: steps.docs_lite.outputs.docs_lite == '1'
+        run: |
+          {
+            echo '{"docs_lite":true,"validation":"version_change_record_only","semgrep":"skipped"}'
+          } > tmp/validation/semgrep/semgrep.json
+          cat tmp/validation/semgrep/semgrep.json
+
       - name: Upload Semgrep report
         if: always()
         uses: actions/upload-artifact@v4
@@ -61,3 +105,4 @@ jobs:
           name: semgrep-${{ github.run_id }}
           path: tmp/validation/semgrep/
           if-no-files-found: ignore
+

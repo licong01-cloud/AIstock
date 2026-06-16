@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.services.research_assistant.models import (
     ApprovalCreate,
     ChatTurnRequest,
@@ -28,7 +29,10 @@ from backend.services.research_assistant.models import (
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
+    DialogueIntent,
+    DialogueMode,
     LlmCallResult,
+    ModeDecision,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
 )
@@ -58,6 +62,23 @@ class DialogueAwareFakeLlmClient:
 
 
 FakeLlmClient = DialogueAwareFakeLlmClient
+
+
+class SemanticPlanningFakeLlmClient(DialogueAwareFakeLlmClient):
+    def __init__(self, plan: dict[str, object]) -> None:
+        super().__init__()
+        self.plan = dict(plan)
+        self.plan_calls: list[dict[str, object]] = []
+
+    def complete_tool_plan(self, **kwargs: object) -> LlmCallResult:
+        self.plan_calls.append(kwargs)
+        return LlmCallResult(
+            content=json.dumps(self.plan, ensure_ascii=False),
+            provider="fake",
+            model="fake-semantic-planner",
+            duration_ms=1,
+            usage={"prompt_tokens": 12, "completion_tokens": 8},
+        )
 
 
 class PromptTooLongOnceLlmClient(FakeLlmClient):
@@ -107,6 +128,198 @@ def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake or FakeLlmClient())
     svc.seed_catalogs()
     return svc
+
+
+class FakeQeExperimentService:
+    def list_experiments(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "ok": True,
+            "total": 3,
+            "items": [
+                {
+                    "experiment_id": "exp_completed",
+                    "experiment_name": "alpha baseline",
+                    "status": "completed",
+                    "model_id": "lgbm_v1",
+                    "qe_task_id": "task-custom-1",
+                    "qe_loop_id": "loop-1",
+                    "loop_index": 1,
+                    "ic": 0.031,
+                    "rank_ic": 0.044,
+                    "information_ratio": 1.21,
+                    "updated_at": "2026-06-13T09:30:00+08:00",
+                },
+                {
+                    "experiment_id": "exp_running",
+                    "experiment_name": "alpha live loop",
+                    "status": "running",
+                    "model_id": "catboost_v2",
+                    "qe_task_id": "task-custom-2",
+                    "loop_index": 2,
+                    "rank_ic": 0.052,
+                },
+                {
+                    "experiment_id": "exp_failed",
+                    "experiment_name": "alpha failed",
+                    "status": "failed",
+                    "model_id": "xgb_v1",
+                },
+            ],
+        }
+
+
+class FakeQeCustomEvoService:
+    async def get_all_tasks(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [
+            {
+                "task_id": "task-custom-1",
+                "task_name": "custom evo alpha",
+                "status": "running",
+                "current_loop": 2,
+                "max_loops": 5,
+                "node_id": "qe-node-a",
+                "loop_status_counts": {"completed": 1, "running": 1},
+                "updated_at": "2026-06-13T10:00:00+08:00",
+            },
+            {
+                "task_id": "task-custom-2",
+                "task_name": "custom evo beta",
+                "status": "completed",
+                "current_loop": 5,
+                "max_loops": 5,
+                "loop_status_counts": {"completed": 5},
+            },
+        ]
+
+
+class FakeQeArchiveRepository:
+    last_leaderboard_kwargs: dict[str, object] = {}
+
+    def get_archive_summary(self) -> dict[str, object]:
+        return {
+            "run_count": 7,
+            "pending_outbox_count": 1,
+            "latest_archived_at": "2026-06-13T09:00:00+08:00",
+            "skip_count": 2,
+            "manual_only_count": 0,
+            "outbox_status_counts": {"pending": 1, "succeeded": 8},
+            "archive_job_status_counts": {"succeeded": 7},
+            "ingest_history_status_counts": {"archived": 7},
+            "backfill_run_status_counts": {"completed": 1},
+            "research_valid_counts": {"true": 6, "false": 1},
+        }
+
+    def list_outbox_events(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [{"event_id": "evt-1", "event_type": "run", "status": "pending", "retry_count": 0}]
+
+    def list_runs(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return [{"run_id": "run-1", "status": "archived", "model_type": "LightGBM", "cagr": 0.12}]
+
+    def get_analytics_view_status(self) -> list[dict[str, object]]:
+        return [{"logical_name": "leaderboard", "view_name": "qe_run_leaderboard", "available": True, "row_count": 5}]
+
+    def query_run_leaderboard(self, **kwargs: object) -> list[dict[str, object]]:
+        FakeQeArchiveRepository.last_leaderboard_kwargs = dict(kwargs)
+        return [
+            {
+                "run_id": "run-best",
+                "task_id": "task-custom-1",
+                "experiment_id": "exp_completed",
+                "model_type": "CatBoost",
+                "cagr": 0.22,
+                "sharpe": 1.4,
+                "information_ratio": 1.1,
+                "icir": 0.8,
+                "completed_at": "2026-06-13T09:00:00+08:00",
+            }
+        ]
+
+    def query_seed_robustness(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_factor_performance(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_model_hyperparam_seed_perf(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_overfit_flags(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_promotion_candidates(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+    def query_evolution_lineage(self, **kwargs: object) -> list[dict[str, object]]:
+        del kwargs
+        return []
+
+
+class FakeLocalDataDailyStatusService:
+    def get_preset_daily_status(self) -> dict[str, object]:
+        return {
+            "operation": "local_data_get_preset_daily_status",
+            "risk_level": "read_only",
+            "data": {
+                "items": {
+                    "daily_basic": {"status": "success", "created_at": "2026-06-12T09:00:00+08:00", "finished_at": "2026-06-12T09:02:00+08:00"},
+                    "stock_moneyflow_ts": {"status": "failed", "created_at": "2026-06-12T09:03:00+08:00", "finished_at": "2026-06-12T09:04:00+08:00"},
+                    "kline_weekly": {"status": "running", "created_at": "2026-06-12T09:05:00+08:00"},
+                }
+            },
+            "trace": {"generated_at": "2026-06-12T01:06:00+00:00"},
+        }
+
+    def get_preset_stats(self) -> dict[str, object]:
+        return {
+            "operation": "local_data_get_preset_stats",
+            "risk_level": "read_only",
+            "data": {
+                "items": [
+                    {"dataset": "daily_basic"},
+                    {"dataset": "stock_moneyflow_ts"},
+                    {"dataset": "kline_weekly"},
+                    {"dataset": "anns_metadata"},
+                ]
+            },
+        }
+
+    def list_jobs(self, *, limit: int = 50, active_only: bool = False) -> dict[str, object]:
+        del limit, active_only
+        return {
+            "operation": "local_data_list_jobs",
+            "risk_level": "read_only",
+            "data": {"items": [{"job_id": "job-live-1", "status": "queued", "summary": {"dataset": "sector_data"}, "created_at": "2026-06-12T09:06:00+08:00"}]},
+        }
+
+    def list_sync_targets(self, *, limit: int = 100) -> dict[str, object]:
+        del limit
+        return {
+            "operation": "local_data_list_sync_targets",
+            "risk_level": "read_only",
+            "data": {
+                "items": [
+                    {
+                        "dataset": "stock_moneyflow_ts",
+                        "target_status": "retry",
+                        "last_error_message": "upstream timeout",
+                    },
+                    {
+                        "dataset": "anns_metadata",
+                        "target_status": "final_blocked",
+                        "last_error_message": "schema mismatch",
+                    },
+                ]
+            },
+        }
 
 
 def test_catalog_readiness_blocks_chat_until_seeded() -> None:
@@ -746,17 +959,20 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "mcp_github_issue_create" in catalog_context
 
     text = result["assistant_message"]["content_text"]
-    assert "assistant_create_issue_candidate" in text
-    assert "qe_template_create" in text
-    assert "mcp_github_issue_create" in text
+    assert "assistant create issue candidate" in text
+    assert "qe_template_create" in catalog_context
+    assert "mcp_github_issue_create" in catalog_context
+    assert "assistant_create_issue_candidate" not in text
+    assert "qe_template_create" not in text
+    assert "mcp_github_issue_create" not in text
     assert "reading files" not in text
     assert "writing files" not in text
     assert "HTTP requests" not in text
     assert "no direct warehouse tool" not in text
     catalog = result["cards"]["runtime_mcp_catalog"]
     assert catalog["source"] == "gateway_manifest_derived_catalog"
-    assert catalog["manifest_tool_count"] == 212
-    assert catalog["tool_count"] == 212
+    assert catalog["manifest_tool_count"] == len(TOOL_MANIFEST)
+    assert catalog["tool_count"] == len(TOOL_MANIFEST)
     assert result["mode_decision"]["intent_type"] == "capability_inquiry"
     assert result["cards"]["action_proposals"] == []
 
@@ -779,8 +995,9 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
 
     text = result["assistant_message"]["content_text"]
     assert "10 个已注册因子" not in text
-    assert "aistock-factor/factor_library_list" in text
-    assert "summary-first" in text
+    assert "factor library list" in text
+    assert "summary-first" not in text
+    assert "Route decision" not in text
     assert result["mode_decision"]["intent_type"] == "factor_library_request"
     assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
     assert result["cards"]["mcp_route_decision"]["summary_first"] is True
@@ -806,7 +1023,8 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     text = result["assistant_message"]["content_text"]
     assert "999 factors" not in text
-    assert "aistock-factor/factor_library_list" in text
+    assert "factor library list" in text
+    _assert_no_mcp_process_markers(text)
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["status"] == "succeeded"
@@ -831,6 +1049,559 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     walk(summary)
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
+
+
+def test_bug_359_generic_mcp_reply_renderer_hides_process_markers_across_domains() -> None:
+    class DiagnosticLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content=(
+                    "已通过只读工具完成 MCP summary-first 查询；Route decision：x/y；"
+                    "server_key=x tool_name=y source=research_assistant_catalog_summary_adapter as_of=2026-06-13"
+                ),
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    cases = [
+        ("因子库有哪些因子？只要概要列表。", "factor library list"),
+        ("模型库有什么模型？给我概要。", "model registry list"),
+        ("策略库目前有哪些策略？", "strategy governance list packages"),
+        ("执行策略库有什么 minute algo？", "execution policy list algos"),
+        ("检索 A 股多因子稳定性的论文线索。", "external evidence candidate"),
+    ]
+    for message, expected_business_text in cases:
+        svc = _chat_service(DiagnosticLlmClient())
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        text = result["assistant_message"]["content_text"]
+        _assert_no_mcp_process_markers(text)
+        assert expected_business_text in text
+        assert "已完成" in text
+        assert "本轮只进行查询" in text
+
+
+def test_bug_359_generic_preflight_reply_replaces_insufficient_evidence_for_non_readonly_tools() -> None:
+    class InsufficientEvidenceLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    cases = [
+        "repair stock_daily trade_date local data plan",
+        "把这个策略晋升到 paper v2",
+        "查看因子相关性计算能力概要",
+    ]
+    for message in cases:
+        svc = _chat_service(InsufficientEvidenceLlmClient())
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        text = result["assistant_message"]["content_text"]
+        _assert_no_mcp_process_markers(text)
+        assert "Insufficient evidence" not in text
+        assert "安全边界" in text
+        assert "本轮未执行" in text
+
+
+BUG_356_FORBIDDEN_REPLY_MARKERS = (
+    "summary-first",
+    "Route decision",
+    "artifact_ref",
+    "payload budget",
+    "Evidence: source=",
+    "research_assistant_catalog_summary_adapter",
+    "local_data_health_overview",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+)
+
+
+BUG_357_FORBIDDEN_REPLY_MARKERS = (
+    "summary-first",
+    "summary_first",
+    "Route decision",
+    "route decision",
+    "artifact_ref",
+    "payload budget",
+    "Evidence: source=",
+    "source=",
+    "as_of=",
+    "research_assistant_catalog_summary_adapter",
+    "summary_adapter",
+    "server_key",
+    "tool_name",
+    "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+    "Insufficient evidence",
+    "max tool iterations",
+)
+
+
+def _chat_service_with_qe_fakes(fake: FakeLlmClient | None = None) -> ResearchAssistantService:
+    svc = _chat_service(fake)
+    svc.qe_experiment_service_factory = FakeQeExperimentService
+    svc.qe_custom_evo_service_factory = FakeQeCustomEvoService
+    svc.qe_archive_repository_factory = FakeQeArchiveRepository
+    return svc
+
+
+def _assert_bug_357_no_diagnostic_reply(result: dict[str, object]) -> str:
+    text = result["assistant_message"]["content_text"]  # type: ignore[index]
+    for marker in BUG_357_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
+    return text
+
+
+def _assert_no_mcp_process_markers(text: str) -> None:
+    for marker in BUG_357_FORBIDDEN_REPLY_MARKERS + BUG_356_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
+
+
+def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None:
+    text = result["assistant_message"]["content_text"]  # type: ignore[index]
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert "\u540c\u6b65\u5931\u8d25" in text
+    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
+    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
+    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "anns_metadata" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+    for marker in BUG_356_FORBIDDEN_REPLY_MARKERS:
+        assert marker not in text
+
+    cards = result["cards"]  # type: ignore[index]
+    route = cards["mcp_route_decision"]  # type: ignore[index]
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    execution = cards["mcp_execution_result"]  # type: ignore[index]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
+    summary = cards["mcp_summary_result"]  # type: ignore[index]
+    assert summary["response_mode"] == "local_data_daily_sync_status"
+    assert summary["source"] == "local_data_facade_read_adapter"
+
+
+
+def test_bug_357_qe_experiment_list_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u76ee\u524d\u6700\u8fd1\u7684 QE \u5b9e\u9a8c\u6709\u54ea\u4e9b\uff1f\u7ed9\u6211\u4e00\u4e2a\u5217\u8868\u548c\u72b6\u6001\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6c47\u603b QE \u5b9e\u9a8c\u72b6\u6001\u5982\u4e0b" in text
+    assert "completed=1" in text
+    assert "running=1" in text
+    assert "failed=1" in text
+    assert "exp_completed" in text
+    assert "alpha baseline" in text
+    assert "\u672c\u8f6e\u672a\u542f\u52a8\u3001\u6267\u884c\u3001\u7269\u5316\u6216\u4fee\u6539\u4efb\u4f55 QE \u5b9e\u9a8c" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_experiment"
+    assert route["tool_name"] == "qe_experiment_list"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_experiment_status_summary"
+    assert summary["source"] == "qe_experiment_read_adapter"
+    assert summary["summary_kind"] == "qe_experiments"
+    assert result["cards"]["react_grounding"]["stopped_reason"] == "business_summary_terminal"
+
+
+def test_bug_357_qe_custom_evo_progress_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="custom_evo \u4efb\u52a1\u6700\u65b0\u8fdb\u5ea6\u600e\u4e48\u6837\uff1f\u7ed9\u6211\u72b6\u6001\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6c47\u603b QE custom_evo \u4efb\u52a1\u8fdb\u5ea6\u5982\u4e0b" in text
+    assert "custom evo alpha" in text
+    assert "task-custom-1" in text
+    assert "current_loop=2" in text
+    assert "loops[completed=1" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_experiment"
+    assert route["tool_name"] == "qe_experiment_list"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_experiment_status_summary"
+    assert summary["summary_kind"] == "custom_evo_tasks"
+    assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
+
+
+def test_bug_357_qe_warehouse_health_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+
+    result = svc.chat_turn(ChatTurnRequest(message="QE \u6570\u4ed3\u73b0\u5728\u662f\u5426\u6b63\u5e38\uff1f\u7ed9\u6211\u5065\u5eb7\u72b6\u6001\u548c\u5165\u4ed3\u6c47\u603b"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "QE \u6570\u4ed3\u5065\u5eb7\u6c47\u603b\u5982\u4e0b" in text
+    assert "run_count=7" in text
+    assert "pending_outbox=1" in text
+    assert "outbox \u72b6\u6001" in text
+    assert "research_valid" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c backfill\u3001\u91cd\u8dd1\u3001\u5199\u5e93\u6216\u4efb\u4f55\u9ad8\u98ce\u9669 QE \u64cd\u4f5c" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_health"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_warehouse_business_summary"
+    assert summary["source"] == "qe_archive_read_adapter"
+
+
+def test_bug_357_qe_warehouse_leaderboard_business_reply_without_diagnostics() -> None:
+    svc = _chat_service_with_qe_fakes()
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u67e5\u770b QE run leaderboard\uff0c\u544a\u8bc9\u6211\u6700\u597d\u7684\u6a21\u578b\u548c\u5173\u952e\u6307\u6807"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "已按 QE 数仓 leaderboard 查询回测收益排行" in text
+    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一" in text
+    assert "| 排名 | 年化收益/CAGR | Run | 实验 | Task | Loop | 模型 | Sharpe | IR | 最大回撤 | IC/ICIR | 完成时间 |" in text
+    assert "run-best" in text
+    assert "CatBoost" in text
+    assert "22.00%" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["response_mode"] == "qe_warehouse_business_summary"
+    assert summary["summary_kind"] == "query_run_leaderboard"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+
+
+def test_bug_376_qe_archive_best_return_question_gets_human_leaderboard_answer() -> None:
+    svc = _chat_service_with_qe_fakes()
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一的是 exp_completed" in text
+    assert "CAGR=22.00%" in text
+    assert "run=run-best" in text
+    assert "模型=CatBoost" in text
+    assert "| 1 | 22.00% | run-best | exp_completed | task-custom-1 | - | CatBoost | 1.4 | 1.1 | - | ICIR=0.8 | 2026-06-13T09:00:00+08:00 |" in text
+    assert "run_count=7" not in text
+    assert "pending_outbox=1" not in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "qe_warehouse"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    assert route["side_effect"] == "read_only"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["summary_kind"] == "query_run_leaderboard"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+
+
+def test_bug_379_semantic_planner_overrides_legacy_route_without_new_phrase_rules() -> None:
+    fake = SemanticPlanningFakeLlmClient(
+        {
+            "status": "tool_plan",
+            "domain": "qe_warehouse",
+            "server_key": "aistock-qe",
+            "tool_name": "qe_archive_query_run_leaderboard",
+            "tool_args": {"order_by": "cagr", "limit": 1},
+            "confidence": 0.91,
+            "reason": "The user asks for the best archived QE result by return, so a run leaderboard query is the relevant read-only evidence.",
+        }
+    )
+    svc = _chat_service_with_qe_fakes(fake)
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我从 QE archive 中找一个按 CAGR 口径的冠军样本，并说出它的数值。"))
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["planner_source"] == "llm_semantic_tool_planner"
+    assert route["tool_name"] == "qe_archive_query_run_leaderboard"
+    assert route["tool_args"]["order_by"] == "cagr"
+    assert route["limit"] == 1
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["order_by"] == "cagr"
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs["limit"] == 1
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "CAGR=22.00%" in text
+    assert "run_count=7" not in text
+    assert len(fake.plan_calls) == 1
+    planner_context = "\n".join(str(message.get("content", "")) for message in fake.plan_calls[0]["messages"])  # type: ignore[index]
+    assert "Do not use keyword matching or synonym lists" in planner_context
+    assert "audited_tools" in planner_context
+
+
+def test_bug_379_semantic_planner_asks_metric_clarification_for_underspecified_best() -> None:
+    fake = SemanticPlanningFakeLlmClient(
+        {
+            "status": "clarification",
+            "domain": "qe_warehouse",
+            "confidence": 0.82,
+            "reason": "The user asks for the best QE experiment but does not state whether best means return, risk-adjusted return, stability, or latest status.",
+            "clarification_questions": ["你希望按收益、Sharpe/IR、稳定性，还是最新状态来判断“最好”？"],
+        }
+    )
+    svc = _chat_service_with_qe_fakes(fake)
+    FakeQeArchiveRepository.last_leaderboard_kwargs = {}
+
+    result = svc.chat_turn(ChatTurnRequest(message="QE 实验里哪个最好？"))
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["planner_source"] == "llm_semantic_tool_planner"
+    assert route["requires_clarification"] is True
+    assert "mcp_execution_result" not in result["cards"]
+    assert FakeQeArchiveRepository.last_leaderboard_kwargs == {}
+    text = result["assistant_message"]["content_text"]
+    assert "需要先确认比较口径" in text
+    assert "收益、Sharpe/IR、稳定性" in text
+    assert "QE 实验状态" not in text
+
+
+def test_bug_357_qe_draft_does_not_auto_execute_or_surface_insufficient_evidence() -> None:
+    class InsufficientEvidenceDraftLlm(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service_with_qe_fakes(InsufficientEvidenceDraftLlm())
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u5e2e\u6211\u8bbe\u8ba1\u4e00\u4e2a QE \u5b9e\u9a8c\u8349\u6848\uff0c\u5148\u4e0d\u8981\u6267\u884c\u3002"))
+
+    text = _assert_bug_357_no_diagnostic_reply(result)
+    assert "\u5df2\u6536\u5230 QE \u5b9e\u9a8c\u8349\u6848\u9700\u6c42" in text
+    assert "\u672c\u8f6e\u53ea\u751f\u6210\u65b9\u6848" in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "qe_template_create"
+    assert route["side_effect"] == "plan_or_preflight"
+    assert "mcp_execution_result" not in result["cards"] or result["cards"]["mcp_execution_result"].get("auto_executed") is not True
+
+
+def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
+    class LocalDataDailyLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Catalog route summary only.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataDailyLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "Route decision" not in text
+    assert "research_assistant_catalog_summary_adapter" not in text
+    assert "local_data_health_overview" not in text
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert "\u540c\u6b65\u5931\u8d25" in text
+    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
+    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
+    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "anns_metadata" in text
+    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "local_data_get_preset_daily_status"
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
+    assert result["cards"]["mcp_tool_event"]["transport"] == "local_data_facade_read_adapter"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["source"] == "local_data_facade_read_adapter"
+    assert summary["local_data_daily_status"] is True
+    assert summary["group_counts"]["success"] == 1
+    assert summary["group_counts"]["failed"] == 1
+    assert summary["group_counts"]["running"] == 2
+    assert summary["group_counts"]["blocked"] == 1
+
+
+
+def test_bug_356_generic_local_data_sync_summary_returns_dataset_status_list_without_diagnostics() -> None:
+    class LocalDataSummaryLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Diagnostic route text that must not become the final reply.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataSummaryLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5\uff0c\u5e76\u6c47\u603b\u6570\u636e\u7ed9\u6211"
+        )
+    )
+
+    _assert_bug_356_business_local_data_reply(result)
+
+
+def test_bug_356_each_dataset_sync_detail_returns_all_dataset_statuses_without_diagnostics() -> None:
+    class LocalDataDetailLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="Tool-grounded summary for local_data_get_dataset_status; source=preflight as_of=2026-06-13.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataDetailLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u7ed9\u6211\u8be6\u60c5\u4ecb\u7ecd\uff0c\u6bcf\u4e2a\u6570\u636e\u96c6\u7684\u540c\u6b65\u60c5\u51b5"
+        )
+    )
+
+    _assert_bug_356_business_local_data_reply(result)
+    assert "local_data_get_dataset_status" not in result["assistant_message"]["content_text"]
+
+
+def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
+    class LocalDataSingleShotLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            if len(self.calls) > 1:
+                raise AssertionError("terminal local-data summary should not ask the LLM to re-compose")
+            return LlmCallResult(
+                content="Unsourced placeholder answer that must not become the final reply.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = LocalDataSingleShotLlmClient()
+    svc = _chat_service(fake)
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\u5417\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65\uff0c\u7ed9\u6211\u4e00\u4e2a\u6c47\u603b\u4fe1\u606f"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "Insufficient evidence" not in text
+    assert "Unsourced placeholder" not in text
+    assert "daily_basic" in text
+    assert "stock_moneyflow_ts" in text
+    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
+    assert len(fake.calls) == 1
+    react = result["cards"]["react_grounding"]
+    assert react["stopped_reason"] == "evidence_summary_fallback"
+    assert react["iterations"] == 1
+    assert react["evidence_guard"]["reason"] == "ok"
+    assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
+
+
+def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -> None:
+    svc = _chat_service(FakeLlmClient())
+    summary = {
+        "local_data_daily_status": True,
+        "response_mode": "local_data_daily_sync_status",
+        "source": "local_data_facade_read_adapter",
+        "trade_date": "2026-06-12",
+        "as_of": "2026-06-12T01:06:00+00:00",
+        "evidence_sources": ["local_data_get_preset_daily_status"],
+        "group_counts": {"success": 1, "failed": 0, "not_synced": 0, "running": 0, "blocked": 0},
+        "status_groups": {
+            "success": [{"dataset": "daily_basic", "status": "success", "finished_at": "2026-06-12T09:02:00+08:00"}],
+            "failed": [],
+            "not_synced": [],
+            "running": [],
+            "blocked": [],
+        },
+    }
+    cards = {
+        "mcp_execution_result": {
+            "auto_executed": True,
+            "status": "succeeded",
+            "server_key": "aistock-local-data",
+            "tool_name": "local_data_get_preset_daily_status",
+            "route": "aistock-local-data/local_data_get_preset_daily_status",
+        },
+        "mcp_summary_result": summary,
+        "react_grounding": {"stopped_reason": "max_iterations_exhausted"},
+    }
+    mode_decision = ModeDecision(
+        mode=DialogueMode.PLANNING,
+        intent_type=DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST,
+        confidence=0.96,
+        mode_reason="explicit_task_request",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    text = svc._compose_assistant_reply(
+        "????????",
+        "Insufficient evidence: max tool iterations reached without reliable evidence.",
+        cards,
+        mode_decision,
+    )
+
+    assert "Insufficient evidence" not in text
+    assert "daily_basic" in text
+    assert "local_data_get_preset_daily_status" not in text
+
+
+def test_bug_352_local_data_daily_status_refreshes_stale_capability_cache() -> None:
+    svc = _chat_service(FakeLlmClient())
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+    capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = [
+        ref
+        for ref in capability["mcp_tool_refs"]
+        if ref["tool_name"] != "local_data_get_preset_daily_status"
+    ]
+    capability["checksum"] = "stale-local-data-capability-cache"
+    svc.repository.create_record("capabilities", capability)
+
+    stale = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert stale is not None
+    assert all(ref["tool_name"] != "local_data_get_preset_daily_status" for ref in stale["mcp_tool_refs"])
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="\u68c0\u67e5\u5f53\u524d\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u8fd0\u884c\u60c5\u51b5\u5417\uff0c\u4eca\u5929\u6570\u636e\u54ea\u4e9b\u5b8c\u6210\u4e86\u540c\u6b65\uff0c\u7ed9\u6211\u4e00\u4e2a\u6c47\u603b\u4fe1\u606f"
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "approved capability not found" not in text
+    assert "Insufficient evidence" not in text
+    assert "daily_basic" in text
+    assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
+    refreshed = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert refreshed is not None
+    assert any(ref["tool_name"] == "local_data_get_preset_daily_status" for ref in refreshed["mcp_tool_refs"])
 
 
 def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
@@ -927,9 +1698,9 @@ def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> Non
     result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
 
     text = result["assistant_message"]["content_text"]
-    assert "aistock-trading-ops/execution_policy_list_algos" in text
+    assert "execution policy list algos" in text
     assert "execution_policy_validate_for_strategy" not in text
-    assert "只读工具" in text
+    assert "Route decision" not in text
     assert result["mode_decision"]["intent_type"] == "execution_policy_request"
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "execution_policy"
@@ -960,8 +1731,9 @@ def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None
     text = result["assistant_message"]["content_text"]
     assert "<assistant_tool_choice>" not in text
     assert "</assistant_tool_choice>" not in text
-    assert "aistock-validation/mcp_github_issue_sync_bug" in text
-    assert "确认前不会执行" in text
+    assert "aistock-validation/mcp_github_issue_sync_bug" not in text
+    assert "Route decision" not in text
+    assert "summary-first" not in text
     assert result["mode_decision"]["intent_type"] == "validation_issue_request"
     assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
     assert result["cards"]["mcp_route_decision"]["auto_execute"]["eligible"] is False

@@ -40,7 +40,9 @@ def _ensure_tq():
     sys.path.insert(0, pyplugins_user)
     from tqcenter import tq as _tq_module  # noqa: E402
 
-    _tq_module.initialize(__file__)
+    # initialize 需要通达信客户端目录下的路径才能正确连接 DLL 管道
+    init_path = os.path.join(_TDX_CLIENT_PATH, "PYPlugins", "user", "__aistock__.py")
+    _tq_module.initialize(init_path)
     run_id = _tq_module._get_run_id()
     if run_id <= 0:
         raise RuntimeError(f"TdxQuant 连接失败 (run_id={run_id})，请确认通达信客户端已运行并登录")

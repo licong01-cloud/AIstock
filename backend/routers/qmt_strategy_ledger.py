@@ -26,6 +26,7 @@ from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRep
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
 from backend.services.simulation_runtime import MiniQMTExecutionBridge, SimulationBrokerBackend, SimulationRuntimeRepository
+from backend.services.simulation_runtime.models import CANONICAL_MINIQMT_RUNTIME_OWNER, ExecutionPathNotCanonicalError
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     InvalidStateTransitionError,
@@ -261,15 +262,13 @@ def preview_order(payload: dict[str, Any]) -> dict[str, Any]:
 @router.post("/orders", summary="Submit managed MiniQMT order after AIstock virtual strategy preflight")
 def submit_order(payload: dict[str, Any]) -> dict[str, Any]:
     _require_real_managed_orders_enabled()
-    repository = _repository_factory()
     request = request_from_payload(payload)
     _require_request_mode_allowed(request)
-    result = QmtManagedOrderService(
-        repository=repository,
-        broker=_client_factory(),
-        calendar_provider=_calendar_provider_factory(),
-    ).submit_order(request)
-    return {"success": result.success, "result": result.to_dict()}
+    _raise_direct_managed_broker_mutation_retired(
+        endpoint="/qmt/virtual-strategies/orders",
+        operation="submit_order",
+        request_count=1,
+    )
 
 
 @router.post("/orders/batch", summary="Submit managed MiniQMT order batch with item-level results")
@@ -278,29 +277,28 @@ def submit_order_batch(payload: dict[str, Any]) -> dict[str, Any]:
     orders = payload.get("orders")
     if not isinstance(orders, list) or not orders:
         raise HTTPException(status_code=400, detail="orders must be a non-empty list")
-    repository = _repository_factory()
-    service = QmtManagedOrderService(
-        repository=repository,
-        broker=_client_factory(),
-        calendar_provider=_calendar_provider_factory(),
-    )
     requests = [request_from_payload(item) for item in orders]
     for request in requests:
         _require_request_mode_allowed(request)
-    result = service.submit_batch(requests)
-    return {"success": result.success, "result": result.to_dict()}
+    _raise_direct_managed_broker_mutation_retired(
+        endpoint="/qmt/virtual-strategies/orders/batch",
+        operation="submit_order_batch",
+        request_count=len(requests),
+    )
 
 
 @router.post("/orders/cancel", summary="Cancel managed MiniQMT order and release local frozen cash")
 def cancel_order(payload: dict[str, Any]) -> dict[str, Any]:
     _require_real_managed_orders_enabled()
-    repository = _repository_factory()
     request = cancel_request_from_payload(payload)
     _require_request_mode_allowed(request.mode)
     if not request.qmt_order_id:
         raise HTTPException(status_code=400, detail="qmt_order_id or order_id is required")
-    result = QmtManagedOrderService(repository=repository, broker=_client_factory()).cancel_order(request)
-    return {"success": result.success, "result": result.to_dict()}
+    _raise_direct_managed_broker_mutation_retired(
+        endpoint="/qmt/virtual-strategies/orders/cancel",
+        operation="cancel_order",
+        request_count=1,
+    )
 
 
 @router.post("/sync-snapshot", summary="Read-only sync of MiniQMT orders/trades into virtual strategy ledger")
@@ -557,6 +555,23 @@ def _require_request_mode_allowed(request_or_mode: Any) -> None:
         status_code=403,
         detail="managed order submission currently allows SIM only unless AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS=1",
     )
+
+
+def _raise_direct_managed_broker_mutation_retired(*, endpoint: str, operation: str, request_count: int) -> None:
+    error = ExecutionPathNotCanonicalError(
+        "qmt_strategy_ledger managed broker mutation endpoints are not a canonical MiniQMT product execution path",
+        context={
+            "endpoint": endpoint,
+            "operation": operation,
+            "required_runtime_owner": CANONICAL_MINIQMT_RUNTIME_OWNER,
+            "request_count": request_count,
+            "blocked_path": "public qmt_strategy_ledger managed mutation -> QmtManagedOrderService",
+            "canonical_path": "simulation_runtime/Paper v2 -> MiniQMTExecutionRuntime -> runtime-owned gateway",
+            "preview_endpoint": "/qmt/virtual-strategies/orders/preview",
+            "operator_command_endpoint": "/simulation-runtime/miniqmt/operator-commands",
+        },
+    )
+    raise HTTPException(status_code=400, detail=error.to_dict())
 
 
 def _require_live_approval_for_managed_order(request: Any) -> None:

@@ -96,6 +96,45 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["prompt_evaluation_required"] is False
 
 
+def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/analysis/example.md", "docs/design/example.md"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "docs_fast_update"
+    assert payload["docs_fast_tier"] == "docs_fast_update"
+    assert payload["docs_fast_required"] is True
+    assert payload["docs_controlled_required"] is False
+    assert payload["backend_required"] is False
+    assert payload["static_gate_required"] is False
+
+
+def test_docs_fast_new_records_new_doc_tier(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/handoff/new-handoff.md"],
+        repo_root=tmp_path,
+        added_files=["docs/handoff/new-handoff.md"],
+    )
+
+    assert payload["classification"] == "docs_fast_new"
+    assert payload["docs_fast_tier"] == "docs_fast_new"
+    assert payload["backend_required"] is False
+
+
+def test_docs_controlled_keeps_normal_guardrails(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/standards/aistock_issue_workflow_quickstart.md", "AGENTS.md"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "docs_controlled"
+    assert payload["docs_fast_required"] is False
+    assert payload["docs_controlled_required"] is True
+    assert payload["backend_required"] is True
+    assert payload["static_gate_required"] is True
+
+
 def test_unrelated_workflow_validation_change_does_not_run_prompt_evaluation(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

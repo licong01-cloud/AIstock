@@ -1,0 +1,104 @@
+{
+  "actual": "On 2026-06-12 paper_v2_l3 -> paper_v2_data_quality failed with missing_success_event=2 for recent successful LocalSim unattended L16/L2 runs simrun_0e2c3ab2300f03b0 and simrun_6d62e7e36a61bd51.",
+  "allowed_write_scope": [
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2",
+    "scripts/aistock_data_quality_smoke.py",
+    "tests/aistock_validation/bugs/20260612_BUG-347-p0-paperv2-traceability-successful-localsim-runs-can-miss-success-no-reb.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260612_204847_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-347",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T12:39:14.616477Z",
+  "description": "On 2026-06-12 paper_v2_l3 -> paper_v2_data_quality failed with missing_success_event=2 for recent successful LocalSim unattended L16/L2 runs simrun_0e2c3ab2300f03b0 and simrun_6d62e7e36a61bd51.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-daf899ee9690",
+      "timestamp": "2026-06-12T12:39:14.616473Z"
+    },
+    {
+      "action": "expand_allowed_scope_for_confirmed_localsim_persistence_path",
+      "actor": "codex",
+      "note": "Reproduced missing_success_event on LocalSim unattended runs and confirmed the durable Paper v2 SUCCEEDED transition is written from simulation_runtime.scheduler._persist_local_sim_execution_result; expanding scope before code changes.",
+      "timestamp": "2026-06-12T12:48:00Z"
+    },
+    {
+      "action": "apply_idempotent_traceability_data_repair",
+      "actor": "codex",
+      "note": "Inserted RUN_SUCCEEDED run_events only for confirmed LocalSim SUCCEEDED runs simrun_0e2c3ab2300f03b0 and simrun_6d62e7e36a61bd51 when no success/no-rebalance event existed; inserted event_seq 15951 and 15952; no DDL/status/order/fill/cash changes.",
+      "timestamp": "2026-06-12T12:55:00Z"
+    },
+    {
+      "action": "record_design_compliance_validation_scope",
+      "actor": "codex",
+      "note": "Added the successful L3 validation history record to allowed scope and aligned required verification for the combined Paper v2/MiniQMT design-compliance PR.",
+      "timestamp": "2026-06-12T13:03:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/paper_v2_data_quality_smoke.json",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260612_204847_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "expected": "Every Paper v2 run with status=SUCCEEDED must persist at least one success/no-rebalance/finalized event trace before completion, including LocalSim unattended scheduler runs, so paper_v2_run_traceability passes without historical false success.",
+  "first_seen_at": "2026-06-12T12:39:14.616477Z",
+  "fix_branch": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:14.423192Z",
+  "github_issue_number": 1029,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1029",
+  "last_seen_at": "2026-06-12T12:39:14.616477Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s paper_v2_l3 with PAPER_V2_L3_SKIP_UI=1; or python scripts/aistock_data_quality_smoke.py --scope paper_v2_selection_center --output tmp/paper_v2_data_quality_smoke.json",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2",
+    "simulation_runtime"
+  ],
+  "title": "[P0][PaperV2][Traceability] Successful LocalSim runs can miss success/no-rebalance events",
+  "trigger_condition": {
+    "fingerprint": "daf899ee9690ac1884a9228c",
+    "source_event_id": "FE-20260612-daf899ee9690"
+  },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

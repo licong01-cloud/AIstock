@@ -42,6 +42,51 @@ LOCAL_DATA_STATUS_TERMS = (
 )
 LOCAL_DATA_REPAIR_TERMS = ("repair", "gap", "fix", "修复", "缺口", "补齐", "修复计划")
 LOCAL_DATA_DATASET_TERMS = ("dataset", "trade_date", "calendar", "数据集", "交易日", "日历")
+LOCAL_DATA_DAILY_STATUS_TERMS = (
+    "today",
+    "daily",
+    "current",
+    "completed",
+    "finished",
+    "which completed",
+    "task status",
+    "job status",
+    "run status",
+    "\u4eca\u5929",
+    "\u5f53\u5929",
+    "\u5f53\u65e5",
+    "\u5f53\u524d",
+    "\u672c\u65e5",
+    "\u54ea\u4e9b",
+    "\u5df2\u5b8c\u6210",
+    "\u5b8c\u6210",
+    "\u4efb\u52a1",
+    "\u8fd0\u884c\u60c5\u51b5",
+    "\u6267\u884c\u72b6\u6001",
+)
+LOCAL_DATA_COLLECTION_STATUS_TERMS = (
+    "all",
+    "each",
+    "every",
+    "list",
+    "summary",
+    "summarize",
+    "which",
+    "\u5168\u90e8",
+    "\u6240\u6709",
+    "\u6bcf\u4e2a",
+    "\u5404\u4e2a",
+    "\u5217\u8868",
+    "\u6c47\u603b",
+    "\u54ea\u4e9b",
+)
+LOCAL_DATA_SYNC_TARGET_TERMS = (
+    "sync target",
+    "sync targets",
+    "target list",
+    "\u540c\u6b65\u76ee\u6807",
+    "\u540c\u6b65 target",
+)
 LOCAL_DATA_ANCHOR_TERMS = (
     "local data",
     "local_data",
@@ -52,6 +97,73 @@ LOCAL_DATA_ANCHOR_TERMS = (
     "本地数据",
     "数据同步",
 )
+QE_SEED_STABILITY_TERMS = ("seed robustness", "seed stable", "seed stability", "seed", "\u79cd\u5b50\u9c81\u68d2\u6027", "\u79cd\u5b50\u7a33\u5b9a\u6027", "\u79cd\u5b50")
+QE_RUN_HISTORY_TERMS = ("failed run", "failed runs", "recent failed", "list runs", "recent runs", "run status", "failed", "\u6700\u8fd1\u5931\u8d25", "\u5931\u8d25")
+QE_RUN_SCOPE_TERMS = (
+    "qe",
+    "run",
+    "runs",
+    "experiment",
+    "experiments",
+    "backtest",
+    "backtests",
+    "warehouse",
+    "archive",
+    "archived",
+    "data warehouse",
+    "数仓",
+    "入仓",
+    "已入仓",
+    "归档",
+    "实验",
+    "回测",
+)
+QE_RETURN_METRIC_TERMS = (
+    "return",
+    "returns",
+    "profit",
+    "cagr",
+    "annualized return",
+    "performance",
+    "pnl",
+    "收益",
+    "年化",
+    "年化收益",
+    "赚钱",
+    "盈利",
+    "回测收益",
+    "回测效果",
+    "效果",
+    "表现",
+)
+QE_RANK_INTENT_TERMS = (
+    "best",
+    "top",
+    "highest",
+    "rank",
+    "ranking",
+    "leader",
+    "leaderboard",
+    "first",
+    "no.1",
+    "number one",
+    "最好",
+    "最高",
+    "最强",
+    "第一",
+    "第一名",
+    "排名",
+    "排行",
+    "排行榜",
+    "哪个",
+    "哪条",
+    "谁",
+)
+EXTERNAL_RESEARCH_INTENT_TERMS = ("paper", "papers", "academic", "literature", "research clue", "research lead", "\u8bba\u6587", "\u6587\u732e", "\u5b66\u672f", "\u7ebf\u7d22")
+EXTERNAL_RESEARCH_SEARCH_TERMS = SEARCH_TERMS + ("retrieve", "look up", "\u68c0\u7d22", "\u641c\u7d22", "\u67e5\u627e")
+STRATEGY_COLLECTION_TERMS = ("which", "list", "all", "candidate", "candidates", "available", "\u54ea\u4e9b", "\u5217\u51fa", "\u5168\u90e8", "\u5019\u9009", "\u53ef\u4ee5")
+STRATEGY_PROMOTION_TERMS = ("promote", "promotion", "\u664b\u5347", "\u63d0\u5347")
+STRATEGY_EXECUTION_QUALITY_TERMS = ("execution quality", "execution performance", "quality", "\u6267\u884c\u8d28\u91cf", "\u8d28\u91cf", "\u8868\u73b0")
 
 TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.MCP_CAPABILITY, ("tool", "server", "capability", "mcp"), "assistant_list_mcp_tools"),
@@ -70,7 +182,8 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("promotion candidate", "promote candidate", "晋升候选", "晋升榜"), "qe_archive_query_promotion_candidates"),
     (McpDomain.QE_WAREHOUSE, ("lineage", "evolution lineage", "演进血缘", "血缘"), "qe_archive_query_evolution_lineage"),
     (McpDomain.QE_EXPERIMENT, ("create and run", "generate and run", "direct run", "direct experiment"), "qe_template_create_and_run_confirmed"),
-    (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
+    (McpDomain.QE_EXPERIMENT, ("custom_evo", "custom evo", "task status", "task progress", "任务", "进度"), "qe_experiment_list"),
+    (McpDomain.QE_EXPERIMENT, ("template", "草案", "draft", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
     (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),
     (McpDomain.VALIDATION_ISSUE, ("agent context", "context"), "get_bug_agent_context"),
@@ -121,6 +234,22 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(_term_in_text(term, text) for term in terms)
 
 
+def _has_explicit_strategy_package_id(text: str) -> bool:
+    if any(term in text for term in ("package_id", "package id", "\u7b56\u7565\u5305id", "\u7b56\u7565\u5305 id")):
+        return True
+    return re.search(r"(?<![a-z0-9_])(?:spkg|pkg|strategy_pkg)[-_][a-z0-9][a-z0-9_-]*(?![a-z0-9_])", text) is not None
+
+
+def _is_qe_run_leaderboard_intent(text: str) -> bool:
+    """Detect business meaning: QE/archive run + return metric + rank/best question."""
+    has_run_scope = _contains_any(text, QE_RUN_SCOPE_TERMS)
+    has_return_metric = _contains_any(text, QE_RETURN_METRIC_TERMS)
+    has_rank_question = _contains_any(text, QE_RANK_INTENT_TERMS)
+    has_backtest_return = _contains_any(text, ("backtest", "回测")) and has_return_metric
+    has_cagr_rank = _term_in_text("cagr", text) and has_rank_question
+    return has_rank_question and (has_cagr_rank or (has_return_metric and (has_run_scope or has_backtest_return)))
+
+
 def score_domains(message: str) -> list[dict[str, Any]]:
     lower = _norm(message)
     scores: list[dict[str, Any]] = []
@@ -133,6 +262,11 @@ def score_domains(message: str) -> list[dict[str, Any]]:
                 matched.append(term)
         if spec.domain == McpDomain.QE_WAREHOUSE and _contains_any(lower, WAREHOUSE_TERMS):
             score += 8
+        if spec.domain == McpDomain.QE_WAREHOUSE and "qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS + QE_RUN_HISTORY_TERMS):
+            score += 14
+        if spec.domain == McpDomain.QE_WAREHOUSE and _is_qe_run_leaderboard_intent(lower):
+            score += 18
+            matched.append("qe_run_leaderboard_intent")
         if spec.domain == McpDomain.QE_WAREHOUSE and any(
             token in lower
             for token in (
@@ -191,6 +325,20 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             )
         ):
             score += 10
+        if spec.domain == McpDomain.EXTERNAL_RESEARCH and _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS) and _contains_any(lower, EXTERNAL_RESEARCH_SEARCH_TERMS):
+            score += 16
+        if spec.domain == McpDomain.EXTERNAL_RESEARCH and (
+            "paper v2" in lower
+            or _contains_any(lower, ("strategy package", "strategy library", "strategy governance", "\u7b56\u7565\u5305", "\u7b56\u7565\u5e93", "\u7b56\u7565\u6cbb\u7406"))
+        ):
+            score -= 20
+        if spec.domain == McpDomain.FACTOR_METRICS and (
+            ("qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS))
+            or _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS)
+        ):
+            score -= 8
+        if spec.domain == McpDomain.MODEL_REGISTRY and "qe" in lower and _contains_any(lower, QE_SEED_STABILITY_TERMS):
+            score -= 6
         if score > 0:
             scores.append({"domain": spec.domain, "score": score, "matched_terms": matched})
     scores.sort(key=lambda item: item["score"], reverse=True)
@@ -211,13 +359,56 @@ def select_tool(domain: McpDomain, message: str) -> str:
     if domain == McpDomain.LOCAL_DATA:
         has_repair = _contains_any(lower, LOCAL_DATA_REPAIR_TERMS)
         has_dataset = _contains_any(lower, LOCAL_DATA_DATASET_TERMS)
+        has_sync_targets = _contains_any(lower, LOCAL_DATA_SYNC_TARGET_TERMS)
+        has_collection_status = _contains_any(lower, LOCAL_DATA_COLLECTION_STATUS_TERMS) and _contains_any(
+            lower,
+            LOCAL_DATA_STATUS_TERMS + ("sync", "sync status", "data sync", "\u540c\u6b65", "\u540c\u6b65\u60c5\u51b5"),
+        )
+        has_sync_status_overview = _contains_any(lower, LOCAL_DATA_ANCHOR_TERMS + ("sync status", "sync overview", "data sync", "\u540c\u6b65\u60c5\u51b5", "\u540c\u6b65\u72b6\u6001")) and _contains_any(
+            lower,
+            LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + ("\u6c47\u603b",),
+        )
+        has_explicit_health_readiness = _contains_any(lower, ("health", "readiness", "ready", "\u5065\u5eb7", "\u5c31\u7eea"))
+        has_daily_status = _contains_any(lower, LOCAL_DATA_DAILY_STATUS_TERMS) and _contains_any(
+            lower,
+            LOCAL_DATA_ANCHOR_TERMS + LOCAL_DATA_STATUS_TERMS + ("sync", "data sync", "\u540c\u6b65"),
+        )
         has_status_check = _contains_any(lower, LOCAL_DATA_STATUS_TERMS + SEARCH_TERMS + PLAN_TERMS)
         if has_repair:
             return "local_data_plan_repair"
+        if has_sync_targets:
+            return "local_data_list_sync_targets"
+        if has_daily_status or has_collection_status or (has_sync_status_overview and not has_explicit_health_readiness):
+            return "local_data_get_preset_daily_status"
         if has_dataset and has_status_check:
             return "local_data_get_dataset_status"
         if has_status_check:
             return "local_data_health_overview"
+    if domain == McpDomain.QE_EXPERIMENT:
+        if _contains_any(lower, ("custom_evo", "custom evo")) and _contains_any(lower, SEARCH_TERMS + ("task status", "task progress", "任务", "进度")):
+            return "qe_experiment_list"
+        if _contains_any(lower, ("草案", "draft", "template", "设计", "方案")) and _contains_any(lower, ("先不要执行", "不要执行", "不执行", "draft", "草案", "设计")):
+            return "qe_template_create"
+    if domain == McpDomain.QE_WAREHOUSE:
+        if _is_qe_run_leaderboard_intent(lower):
+            return "qe_archive_query_run_leaderboard"
+        if "qe" in lower and _contains_any(lower, QE_RUN_HISTORY_TERMS):
+            return "qe_archive_list_runs"
+        for hint_domain, terms, tool in TOOL_HINTS:
+            if hint_domain == domain and _contains_any(lower, terms):
+                return tool
+    if domain == McpDomain.EXTERNAL_RESEARCH:
+        if _contains_any(lower, EXTERNAL_RESEARCH_INTENT_TERMS):
+            return "external_research_search_papers"
+    if domain == McpDomain.STRATEGY_GOVERNANCE:
+        has_package_id = _has_explicit_strategy_package_id(lower)
+        if _contains_any(lower, STRATEGY_PROMOTION_TERMS):
+            return "strategy_governance_plan_promotion"
+        if not has_package_id and (
+            _contains_any(lower, STRATEGY_COLLECTION_TERMS)
+            or _contains_any(lower, STRATEGY_EXECUTION_QUALITY_TERMS)
+        ):
+            return "strategy_governance_list_packages"
     if _contains_any(lower, summary_terms):
         for hint_domain, terms, tool in TOOL_HINTS:
             if hint_domain == domain and _contains_any(lower, terms):

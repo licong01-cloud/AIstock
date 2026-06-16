@@ -5,6 +5,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.routers import research_assistant
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
@@ -401,7 +402,7 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     assert compact["summary_first"] is True
     assert compact["detail_available"] is True
     assert compact["items"]
-    assert compact["total"] == 212
+    assert compact["total"] == len(TOOL_MANIFEST)
     assert "input_schema_json" not in compact["items"][0]
     assert "output_schema_json" not in compact["items"][0]
     assert "preflight_schema_json" not in compact["items"][0]

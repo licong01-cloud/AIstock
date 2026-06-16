@@ -7,6 +7,8 @@ credential resolution, and redaction without writing GitHub Issues or BUG JSON.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -43,11 +45,15 @@ NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_ad
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
 CODEGRAPH_FRESHNESS_VALUES = {"fresh", "stale", "missing", "unknown"}
 GUARDED_ROLLOUT_MODES = {"off", "warning_only", "opt_in_auto_file"}
+DEEPSEEK_ENV_FILE_ENV_VARS = ("AISTOCK_LLM_ENV_FILE", "AISTOCK_ENV_FILE")
+DEEPSEEK_ENV_ROOT_VARS = ("AISTOCK_SELF_HOSTED_SOURCE", "AISTOCK_CANONICAL_ROOT", "AISTOCK_ROOT")
+DEEPSEEK_ENV_KEYS = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
 EVALUATION_INFRA_SIGNATURE_TOKENS = (
     "self-hosted runner unavailable",
     "runner unavailable",
@@ -76,6 +82,7 @@ EVALUATION_MODULE_PLAN_MAP = {
     "rl_execution": ["rl_execution_smoke"],
     "local_data": ["data_sync_autonomy_backend"],
 }
+_BOOTSTRAPPED_DEEPSEEK_ENV_FILES: set[str] = set()
 
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "llm_triage.yaml"
@@ -83,6 +90,21 @@ DEFAULT_PROMPT_PACK_ROOT = ROOT / "prompt_packs" / "validation_llm"
 DEFAULT_EVALUATION_CASES = DEFAULT_PROMPT_PACK_ROOT / "evaluation_cases" / "historical_failure_fixtures.json"
 EVALUATION_BLOCKING_PATH_PREFIXES = ("prompt_packs/validation_llm/", "configs/validation/llm_triage.yaml")
 EVALUATION_BLOCKING_FILES = ("scripts/llm_provider_adapter.py",)
+CODE_INTELLIGENCE_REF_FIELDS = (
+    "status",
+    "latest_freshness",
+    "latest_freshness_ref",
+    "context_ref",
+    "manifest_ref",
+    "affected_tests_ref",
+    "affected_tests_count",
+    "affected_quality",
+    "understand_anything_summary_ref",
+    "understand_anything_status",
+    "understand_anything_freshness",
+    "fallback_used",
+    "stale_metadata_warning",
+)
 
 
 class ProviderAdapterError(RuntimeError):
@@ -97,7 +119,102 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     return config
 
 
+def _try_read_json_object(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return {
+            "status": "warning",
+            "warning": "code_intelligence_refs_unavailable",
+            "load_error": str(exc)[:240],
+        }
+    return payload if isinstance(payload, dict) else {}
+
+
+def _compact_code_intelligence_refs(refs: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only small artifact refs and status fields for LLM prompts."""
+
+    source = refs if isinstance(refs, dict) else {}
+    result = {
+        field: source.get(field)
+        for field in CODE_INTELLIGENCE_REF_FIELDS
+        if source.get(field) not in (None, "", [])
+    }
+    ua = source.get("understand_anything")
+    if isinstance(ua, dict):
+        result.setdefault("understand_anything_status", ua.get("status"))
+        result.setdefault("understand_anything_freshness", ua.get("freshness"))
+    ua_summary = source.get("understand_anything_summary")
+    if isinstance(ua_summary, dict):
+        result.setdefault("understand_anything_status", ua_summary.get("status"))
+        result.setdefault("understand_anything_summary_ref", ua_summary.get("summary_ref"))
+    return {key: value for key, value in result.items() if value not in (None, "", [])}
+
+
+def code_intelligence_refs_from_file(path: str | Path | None) -> dict[str, Any]:
+    return _compact_code_intelligence_refs(_try_read_json_object(Path(path)) if path else {})
+
+
+def _candidate_deepseek_env_files() -> list[Path]:
+    candidates: list[Path] = []
+    for env_name in DEEPSEEK_ENV_FILE_ENV_VARS:
+        raw = os.environ.get(env_name)
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    for env_name in DEEPSEEK_ENV_ROOT_VARS:
+        raw_root = os.environ.get(env_name)
+        if raw_root:
+            candidates.append(Path(raw_root).expanduser() / ".env")
+    candidates.append(ROOT / ".env")
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _bootstrap_deepseek_env() -> list[str]:
+    loaded_sources: list[str] = []
+    for candidate in _candidate_deepseek_env_files():
+        candidate_key = str(candidate.resolve(strict=False))
+        if candidate_key in _BOOTSTRAPPED_DEEPSEEK_ENV_FILES:
+            continue
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        _BOOTSTRAPPED_DEEPSEEK_ENV_FILES.add(candidate_key)
+        try:
+            lines = candidate.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            continue
+        loaded_any = False
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key.lower().startswith("export "):
+                key = key[7:].strip()
+            if key not in DEEPSEEK_ENV_KEYS:
+                continue
+            value = value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            if not os.environ.get(key):
+                os.environ[key] = value
+                loaded_any = True
+        if loaded_any:
+            loaded_sources.append(str(candidate))
+    return loaded_sources
+
+
 def validate_config(config: dict[str, Any]) -> None:
+    _bootstrap_deepseek_env()
     if config.get("schema_version") != "aistock_llm_triage_config_v1":
         raise ProviderAdapterError("unsupported llm triage config schema_version")
     providers = config.get("providers")
@@ -106,8 +223,8 @@ def validate_config(config: dict[str, Any]) -> None:
     deepseek_api = providers.get("deepseek_api") or {}
     if deepseek_api.get("model") != DEFAULT_DEEPSEEK_MODEL:
         raise ProviderAdapterError("deepseek_api.model must be deepseek-v4-pro")
-    if deepseek_api.get("enabled") is not False:
-        raise ProviderAdapterError("deepseek_api must be disabled by default")
+    if not isinstance(deepseek_api.get("enabled"), bool):
+        raise ProviderAdapterError("deepseek_api.enabled must be a boolean")
     github_models = providers.get("github_models") or {}
     selector = (github_models.get("model_selector") or {})
     if selector.get("required_model_family") != GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY:
@@ -165,13 +282,128 @@ def normalize_catalog(payload: Any) -> list[dict[str, Any]]:
 def parse_json_response(text: str) -> dict[str, Any]:
     """Parse provider JSON output and fail closed on malformed/non-object data."""
 
+    payload = _parse_json_value_response(text)
+    if isinstance(payload, dict):
+        return payload
+    raise ProviderAdapterError("provider output JSON schema invalid")
+
+
+def _parse_json_value_response(text: str) -> Any:
+    """Parse a single JSON value embedded in provider prose."""
+
+    text = str(text or "")
+    candidates = [text]
+    fence = re.search(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fence:
+        candidates.append(fence.group(1))
+    extracted_object = _extract_json_object(text)
+    if extracted_object:
+        candidates.append(extracted_object)
+    extracted_array = _extract_json_array(text)
+    if extracted_array:
+        candidates.append(extracted_array)
+
+    last_error: Exception | None = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+    raise ProviderAdapterError("provider output JSON schema invalid") from last_error
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Return the first balanced JSON object embedded in provider prose."""
+
+    return _extract_json_value(text, "{", "}")
+
+
+def _extract_json_array(text: str) -> str | None:
+    """Return the first balanced JSON array embedded in provider prose."""
+
+    return _extract_json_value(text, "[", "]")
+
+
+def _extract_json_value(text: str, opener: str, closer: str) -> str | None:
+    """Return the first balanced JSON object or array embedded in provider prose."""
+
+    start = text.find(opener)
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
+def _strict_json_retry_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    retry = list(messages)
+    retry.append(
+        {
+            "role": "user",
+            "content": "Your previous response was not a single JSON object. Return only one valid JSON object.",
+        }
+    )
+    return retry
+
+
+def _invoke_provider_raw_chat(
+    provider: str,
+    config: dict[str, Any],
+    *,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any], str, str, str]:
+    endpoint, model, auth_token, credential_source = _provider_chat_endpoint(config, provider)
+    body = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {auth_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ProviderAdapterError("provider output JSON schema invalid") from exc
-    if not isinstance(payload, dict):
-        raise ProviderAdapterError("provider output JSON schema invalid")
-    return payload
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+            raw_response = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        retry_after = exc.headers.get("retry-after") or exc.headers.get("Retry-After")
+        suffix = f" retry_after={retry_after}" if retry_after else ""
+        raise ProviderAdapterError(
+            f"{provider} inference request failed status={exc.code}{suffix}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise ProviderAdapterError(f"{provider} inference request failed: {exc.reason}") from exc
+    return raw_response, model, credential_source, endpoint
 
 
 def select_github_model(catalog_payload: Any, selector: dict[str, Any]) -> dict[str, Any]:
@@ -295,7 +527,14 @@ def _provider_chat_endpoint(config: dict[str, Any], provider: str) -> tuple[str,
             )
         return f"{base_url}/inference/chat/completions", model, auth_token, credential_source
     if provider == "deepseek_api":
-        resolved = resolve_deepseek_config(model=DEFAULT_DEEPSEEK_MODEL, require_api_key=True)
+        _bootstrap_deepseek_env()
+        try:
+            # Some DB fallback paths print connection diagnostics to stdout;
+            # keep JSON-mode CLI output parseable and report sanitized errors.
+            with contextlib.redirect_stdout(io.StringIO()):
+                resolved = resolve_deepseek_config(model=DEFAULT_DEEPSEEK_MODEL, require_api_key=True)
+        except DeepSeekConfigError as exc:
+            raise ProviderAdapterError(str(exc)) from exc
         return (
             f"{resolved.base_url.rstrip('/')}/chat/completions",
             resolved.model,
@@ -320,42 +559,38 @@ def invoke_provider_json(
     gates. This helper never logs or returns secrets.
     """
 
-    endpoint, model, auth_token, credential_source = _provider_chat_endpoint(config, provider)
-    body = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0,
-        "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {auth_token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-            raw_response = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        retry_after = exc.headers.get("retry-after") or exc.headers.get("Retry-After")
-        suffix = f" retry_after={retry_after}" if retry_after else ""
-        raise ProviderAdapterError(
-            f"{provider} inference request failed status={exc.code}{suffix}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise ProviderAdapterError(f"{provider} inference request failed: {exc.reason}") from exc
-
-    choices = raw_response.get("choices") if isinstance(raw_response, dict) else None
-    if not isinstance(choices, list) or not choices:
-        raise ProviderAdapterError("provider output JSON schema invalid: choices missing")
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = (message or {}).get("content") if isinstance(message, dict) else choices[0].get("text")
-    payload = parse_json_response(content or "")
+    last_error: ProviderAdapterError | None = None
+    for attempt, attempt_messages in enumerate((messages, _strict_json_retry_messages(messages)), start=1):
+        try:
+            raw_response, model, credential_source, _endpoint = _invoke_provider_raw_chat(
+                provider,
+                config,
+                messages=attempt_messages,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+            )
+        except ProviderAdapterError:
+            raise
+        choices = raw_response.get("choices") if isinstance(raw_response, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise ProviderAdapterError("provider output JSON schema invalid: choices missing")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = (message or {}).get("content") if isinstance(message, dict) else choices[0].get("text")
+        try:
+            if purpose in ADVISORY_LLM_PURPOSES:
+                payload = _normalize_advisory_payload(
+                    _parse_json_value_response(content or ""),
+                    purpose=purpose,
+                )
+            else:
+                payload = parse_json_response(content or "")
+            break
+        except ProviderAdapterError as exc:
+            last_error = exc
+            if attempt == 2:
+                raise
+    else:
+        raise last_error or ProviderAdapterError("provider output JSON schema invalid")
     return {
         "provider": provider,
         "model": model,
@@ -369,10 +604,12 @@ def invoke_provider_json(
 
 def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool) -> dict[str, Any]:
     provider = config["providers"]["deepseek_api"]
-    resolved = resolve_deepseek_config(
-        model=str(provider.get("model") or DEFAULT_DEEPSEEK_MODEL),
-        require_api_key=require_api_key,
-    )
+    _bootstrap_deepseek_env()
+    with contextlib.redirect_stdout(io.StringIO()):
+        resolved = resolve_deepseek_config(
+            model=str(provider.get("model") or DEFAULT_DEEPSEEK_MODEL),
+            require_api_key=require_api_key,
+        )
     summary = resolved.as_safe_dict()
     summary["enabled"] = bool(provider.get("enabled"))
     return summary
@@ -662,6 +899,47 @@ def _provider_model_summary(config: dict[str, Any], provider: str) -> dict[str, 
     }
 
 
+def _enabled_provider_chain(config: dict[str, Any], provider: str) -> list[str]:
+    if provider == "deterministic":
+        return []
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    chain = [provider]
+    if provider == "github_models":
+        deepseek = providers.get("deepseek_api") if isinstance(providers.get("deepseek_api"), dict) else {}
+        if deepseek.get("enabled") is True:
+            chain.append("deepseek_api")
+    if provider == "deepseek_api":
+        github_models = providers.get("github_models") if isinstance(providers.get("github_models"), dict) else {}
+        if github_models.get("enabled") is True:
+            chain.append("github_models")
+    return list(dict.fromkeys(chain))
+
+
+def _merge_usage(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    found = False
+    for record in records:
+        usage = record.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        found = True
+        for key in totals:
+            try:
+                totals[key] += int(usage.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+    return totals if found else None
+
+
+def _redact_llm_error(error: Any) -> str:
+    redacted = redact_secret_text(str(error))
+    return re.sub(
+        r"(?i)(\btoken\s*[:=]\s*)['\"]?[^'\"\s,;]+",
+        r"\1<redacted>",
+        redacted,
+    )
+
+
 def _llm_evidence(
     *,
     provider_summary: dict[str, Any],
@@ -670,6 +948,7 @@ def _llm_evidence(
     input_policy: str,
     usage: dict[str, Any] | None = None,
     error: str | None = None,
+    provider_chain: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     evidence = {
         "schema_version": LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
@@ -680,6 +959,20 @@ def _llm_evidence(
         "input_policy": input_policy,
         "redaction_applied": True,
     }
+    if provider_chain is not None:
+        safe_chain = []
+        for item in provider_chain:
+            safe_item = dict(item)
+            if safe_item.get("error"):
+                safe_item["error"] = _redact_llm_error(safe_item["error"])
+            safe_chain.append(safe_item)
+        evidence["provider_chain"] = json.loads(redact_secret_text(json.dumps(safe_chain, ensure_ascii=False)))
+        evidence["fallback_used"] = len(provider_chain) > 1
+        evidence["fallback_reason"] = (
+            _redact_llm_error(provider_chain[0].get("error"))
+            if len(provider_chain) > 1 and provider_chain[0].get("error")
+            else None
+        )
     if usage:
         evidence["usage_summary"] = {
             "prompt_units": usage.get("prompt_tokens"),
@@ -687,13 +980,7 @@ def _llm_evidence(
             "total_units": usage.get("total_tokens"),
         }
     if error:
-        redacted_error = redact_secret_text(error)
-        redacted_error = re.sub(
-            r"(?i)(\btoken\s*[:=]\s*)['\"]?[^'\"\s,;]+",
-            r"\1<redacted>",
-            redacted_error,
-        )
-        evidence["error"] = redacted_error
+        evidence["error"] = _redact_llm_error(error)
     return evidence
 
 
@@ -718,6 +1005,78 @@ def _compact_llm_messages(*, kind: str, payload: dict[str, Any]) -> list[dict[st
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
     ]
+
+
+def _extract_advisory_plan_keys(raw: Any) -> list[str]:
+    """Extract provider-suggested plan keys from common advisory JSON shapes."""
+
+    keys: list[str] = []
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            if value.strip():
+                keys.append(value.strip())
+            return
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+            return
+        if isinstance(value, dict):
+            for field in (
+                "plan_key",
+                "planKey",
+                "plan",
+                "suggested_plan_keys",
+                "plan_keys",
+                "advised_plan_keys",
+                "recommended_plan_keys",
+                "allowed_plan_keys",
+            ):
+                if field in value:
+                    add(value.get(field))
+            for field in (
+                "queue",
+                "plans",
+                "recommended_plans",
+                "scheduler_advice",
+                "test_plan_advice",
+                "advice",
+            ):
+                child = value.get(field)
+                if isinstance(child, (list, dict)):
+                    add(child)
+
+    add(raw)
+    return list(dict.fromkeys(keys))[:8]
+
+
+def _normalize_advisory_payload(raw: Any, *, purpose: str) -> dict[str, Any]:
+    """Normalize advisory-only provider JSON without broadening its authority."""
+
+    if purpose not in ADVISORY_LLM_PURPOSES:
+        if isinstance(raw, dict):
+            return raw
+        raise ProviderAdapterError("provider output JSON schema invalid")
+    if not _no_shell_commands(raw):
+        raise ProviderAdapterError("provider advice must not contain shell command fields")
+    plan_keys = _extract_advisory_plan_keys(raw)
+    if isinstance(raw, dict):
+        payload = dict(raw)
+    elif isinstance(raw, list):
+        payload = {
+            "summary": "provider returned plan list",
+            "rationale": "normalized advisory-only list response",
+            "risk": "unknown",
+        }
+    else:
+        raise ProviderAdapterError("provider output JSON schema invalid")
+    payload["suggested_plan_keys"] = plan_keys
+    payload.setdefault("summary", "provider advisory parsed")
+    payload.setdefault("rationale", "advisory-only provider response normalized")
+    payload.setdefault("risk", "unknown")
+    return payload
 
 
 def _safe_llm_advice(raw: dict[str, Any], *, allowed_plan_keys: set[str]) -> dict[str, Any]:
@@ -766,25 +1125,65 @@ def _maybe_invoke_advisory_llm(
             invoked=False,
             reason=reason,
             input_policy=input_policy,
+            provider_chain=[],
+        )
+    messages = _compact_llm_messages(kind=kind, payload=prompt_payload)
+    attempts: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    last_error: ProviderAdapterError | None = None
+    for candidate_provider in _enabled_provider_chain(config, provider):
+        candidate_summary = _provider_model_summary(config, candidate_provider)
+        try:
+            result = invoke_provider_json(
+                candidate_provider,
+                config,
+                purpose=kind,
+                messages=messages,
+            )
+            attempts.append(
+                {
+                    "provider": candidate_provider,
+                    "model": result.get("model") or candidate_summary["model"],
+                    "status": "invoked",
+                }
+            )
+            results.append(result)
+            provider_summary = {
+                **candidate_summary,
+                "model": result.get("model") or candidate_summary["model"],
+                "credential_source": result.get("credential_source") or candidate_summary["credential_source"],
+            }
+            break
+        except ProviderAdapterError as exc:
+            last_error = exc
+            attempts.append(
+                {
+                    "provider": candidate_provider,
+                    "model": candidate_summary["model"],
+                    "status": "failed",
+                    "error": redact_secret_text(str(exc)),
+                }
+            )
+    else:
+        if not fallback_on_error:
+            raise last_error or ProviderAdapterError(f"{kind} live provider failed")
+        return None, _llm_evidence(
+            provider_summary=provider_summary,
+            invoked=False,
+            reason=f"{kind}_live_provider_failed_fallback",
+            input_policy=input_policy,
+            error=str(last_error or "all providers failed"),
+            provider_chain=attempts,
         )
     try:
-        result = invoke_provider_json(
-            provider,
-            config,
-            purpose=kind,
-            messages=_compact_llm_messages(kind=kind, payload=prompt_payload),
-        )
         advice = _safe_llm_advice(result["payload"], allowed_plan_keys=allowed_plan_keys)
         return advice, _llm_evidence(
-            provider_summary={
-                **provider_summary,
-                "model": result.get("model") or provider_summary["model"],
-                "credential_source": result.get("credential_source") or provider_summary["credential_source"],
-            },
+            provider_summary=provider_summary,
             invoked=True,
             reason=f"{kind}_live_provider_json",
             input_policy=input_policy,
-            usage=result.get("usage") if isinstance(result.get("usage"), dict) else None,
+            usage=_merge_usage(results),
+            provider_chain=attempts,
         )
     except ProviderAdapterError as exc:
         if not fallback_on_error:
@@ -795,6 +1194,7 @@ def _maybe_invoke_advisory_llm(
             reason=f"{kind}_live_provider_failed_fallback",
             input_policy=input_policy,
             error=str(exc),
+            provider_chain=attempts,
         )
 
 
@@ -805,6 +1205,7 @@ def build_test_plan_advice(
     plan_keys: list[str] | None = None,
     changed_files: list[str] | None = None,
     module: str | None = None,
+    code_intelligence_refs: dict[str, Any] | None = None,
     workspace_path: str | None = None,
     root: Path = ROOT,
     catalog_path: Path | None = None,
@@ -817,6 +1218,7 @@ def build_test_plan_advice(
     validate_config(config)
     provider_summary = _provider_model_summary(config, provider)
     changed_files = [str(path) for path in changed_files or [] if str(path).strip()]
+    compact_code_refs = _compact_code_intelligence_refs(code_intelligence_refs)
     advised_keys = [str(key) for key in (plan_keys or _default_advised_plan_keys(changed_files, module))]
     plans_by_key = _catalog_plans_by_key(root, catalog_path=catalog_path, allowed_command_keys=allowed_command_keys)
     selection = _issue_flow_validation_select(changed_files, module)
@@ -841,19 +1243,35 @@ def build_test_plan_advice(
                 "recommended_plans": (selection or {}).get("recommended_plans") or [],
             },
             "workspace_path_allowed": workspace["allowed"],
+            "code_intelligence_refs": compact_code_refs,
         },
         allowed_plan_keys=set(plans_by_key),
         invoke_llm=invoke_llm,
         fallback_on_error=fallback_on_llm_error,
-        input_policy="plan_key_intent_plus_catalog_context_only",
+        input_policy="plan_key_intent_catalog_plus_code_intelligence_refs_only",
     )
     advice = {
         "schema_version": TEST_PLAN_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
         "model": provider_summary["model"],
+        "effective_provider": llm_evidence["provider"],
+        "effective_model": llm_evidence["model"],
+        "llm_gate": "ready" if llm_evidence["invoked"] else "degraded",
         "module": module,
         "changed_files": changed_files,
+        "code_intelligence_refs": compact_code_refs,
         "test_plan_advice": plan_results,
+        "deterministic_plan_keys": advised_keys,
+        "advised_plan_keys": (llm_advice or {}).get("suggested_plan_keys") or [],
+        "advice_consumption": {
+            "advice_consumed": bool(
+                set((llm_advice or {}).get("suggested_plan_keys") or [])
+                & {item["plan_key"] for item in plan_results if item.get("allowed")}
+            ),
+            "consumption_mode": "allowlisted_intersection_only",
+            "executed_plan_keys": [],
+            "warning_only": True,
+        },
         "validation_select": {
             "required_plans": (selection or {}).get("required_plans") or [],
             "recommended_plans": (selection or {}).get("recommended_plans") or [],
@@ -906,6 +1324,7 @@ def build_nightly_scheduler_advice(
     recent_failure_modules: list[str] | None = None,
     recent_failure_plan_keys: list[str] | None = None,
     codegraph_freshness: str = "unknown",
+    code_intelligence_refs: dict[str, Any] | None = None,
     resource_budget_seconds: int | None = None,
     workspace_path: str | None = None,
     root: Path = ROOT,
@@ -922,6 +1341,7 @@ def build_nightly_scheduler_advice(
     recent_failure_modules = [str(item) for item in recent_failure_modules or [] if str(item).strip()]
     recent_failure_plan_keys = [str(item) for item in recent_failure_plan_keys or [] if str(item).strip()]
     freshness = codegraph_freshness if codegraph_freshness in CODEGRAPH_FRESHNESS_VALUES else "unknown"
+    compact_code_refs = _compact_code_intelligence_refs(code_intelligence_refs)
     budget = int(resource_budget_seconds) if resource_budget_seconds is not None else 900
     budget = max(0, budget)
     intents = _nightly_scheduler_intents(
@@ -938,6 +1358,7 @@ def build_nightly_scheduler_advice(
         plan_keys=plan_keys,
         changed_files=[],
         module=None,
+        code_intelligence_refs=compact_code_refs,
         workspace_path=workspace_path,
         root=root,
         catalog_path=catalog_path,
@@ -984,6 +1405,7 @@ def build_nightly_scheduler_advice(
             "recent_failure_modules": recent_failure_modules[:20],
             "recent_failure_plan_keys": recent_failure_plan_keys[:20],
             "codegraph_freshness": freshness,
+            "code_intelligence_refs": compact_code_refs,
             "resource_budget_seconds": budget,
             "deterministic_queue": [
                 {
@@ -998,12 +1420,15 @@ def build_nightly_scheduler_advice(
         allowed_plan_keys=set(plans_by_key),
         invoke_llm=invoke_llm,
         fallback_on_error=fallback_on_llm_error,
-        input_policy="changed_files_recent_failures_codegraph_freshness_catalog_only",
+        input_policy="changed_files_recent_failures_codegraph_ua_refs_catalog_only",
     )
     advice = {
         "schema_version": NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION,
         "provider": provider_summary["provider"],
         "model": provider_summary["model"],
+        "effective_provider": llm_evidence["provider"],
+        "effective_model": llm_evidence["model"],
+        "llm_gate": "ready" if llm_evidence["invoked"] else "degraded",
         "changed_files": changed_files,
         "recent_failures": {
             "modules": recent_failure_modules,
@@ -1014,8 +1439,20 @@ def build_nightly_scheduler_advice(
             "warning_only": codegraph_warning,
             "warning": "codegraph_freshness_not_fresh" if codegraph_warning else None,
         },
+        "code_intelligence_refs": compact_code_refs,
         "resource_budget_seconds": budget,
         "queue": queue,
+        "deterministic_plan_keys": [item["plan_key"] for item in queue],
+        "advised_plan_keys": (llm_advice or {}).get("suggested_plan_keys") or [],
+        "executed_plan_keys": [item["plan_key"] for item in queue if item.get("allowed")],
+        "advice_consumption": {
+            "advice_consumed": bool(
+                set((llm_advice or {}).get("suggested_plan_keys") or [])
+                & {item["plan_key"] for item in queue if item.get("allowed")}
+            ),
+            "consumption_mode": "allowlisted_queue_intersection_only",
+            "warning_only": True,
+        },
         "test_plan_advice_gate": {
             "workflow_gate": test_plan_advice["deterministic_gate"]["workflow_gate"],
             "shell_commands_allowed": test_plan_advice["deterministic_gate"]["shell_commands_allowed"],
@@ -1532,6 +1969,11 @@ def llm_invocation_public_summary(record: dict[str, Any] | None) -> dict[str, An
             "completion": units.get("completion_units"),
             "total": units.get("total_units"),
         }
+    provider_chain = source.get("provider_chain")
+    if isinstance(provider_chain, list):
+        summary["provider_chain"] = provider_chain
+        summary["fallback_used"] = bool(source.get("fallback_used"))
+        summary["fallback_reason"] = source.get("fallback_reason")
     if source.get("error"):
         summary["error"] = redact_secret_text(str(source.get("error")))
     return json.loads(redact_secret_text(json.dumps(summary, ensure_ascii=False)))
@@ -1547,13 +1989,20 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "schema_version": payload.get("schema_version"),
             "provider": payload.get("provider"),
             "model": payload.get("model"),
+            "effective_provider": payload.get("effective_provider"),
+            "effective_model": payload.get("effective_model"),
+            "llm_gate": payload.get("llm_gate"),
             "module": payload.get("module"),
             "changed_files": payload.get("changed_files") or [],
+            "code_intelligence_refs": payload.get("code_intelligence_refs") or {},
             "test_plan_advice": payload.get("test_plan_advice") or [],
+            "deterministic_plan_keys": payload.get("deterministic_plan_keys") or [],
+            "advised_plan_keys": payload.get("advised_plan_keys") or [],
+            "advice_consumption": payload.get("advice_consumption") or {},
             "validation_select": payload.get("validation_select") or {},
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
-            "llm_invoked": bool(payload.get("llm_advice")),
+            "llm_invoked": llm_summary["invoked"],
             "llm_invocation_evidence": llm_summary,
             "deterministic_gate": gate,
         }
@@ -1562,15 +2011,23 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "schema_version": payload.get("schema_version"),
             "provider": payload.get("provider"),
             "model": payload.get("model"),
+            "effective_provider": payload.get("effective_provider"),
+            "effective_model": payload.get("effective_model"),
+            "llm_gate": payload.get("llm_gate"),
             "changed_files": payload.get("changed_files") or [],
             "recent_failures": payload.get("recent_failures") or {},
             "codegraph": payload.get("codegraph") or {},
+            "code_intelligence_refs": payload.get("code_intelligence_refs") or {},
             "resource_budget_seconds": payload.get("resource_budget_seconds"),
             "queue": payload.get("queue") or [],
+            "deterministic_plan_keys": payload.get("deterministic_plan_keys") or [],
+            "advised_plan_keys": payload.get("advised_plan_keys") or [],
+            "executed_plan_keys": payload.get("executed_plan_keys") or [],
+            "advice_consumption": payload.get("advice_consumption") or {},
             "test_plan_advice_gate": payload.get("test_plan_advice_gate") or {},
             "workspace_gate": payload.get("workspace_gate") or {},
             "llm_advice": payload.get("llm_advice"),
-            "llm_invoked": bool(payload.get("llm_advice")),
+            "llm_invoked": llm_summary["invoked"],
             "llm_invocation_evidence": llm_summary,
             "deterministic_gate": payload.get("deterministic_gate") or {},
         }
@@ -1707,6 +2164,7 @@ def cmd_test_plan_advice(args: argparse.Namespace) -> int:
         plan_keys=_split_csv(args.plan_key),
         changed_files=_split_csv(args.changed_file),
         module=args.module,
+        code_intelligence_refs=code_intelligence_refs_from_file(args.code_intelligence_json),
         workspace_path=args.workspace_path,
         invoke_llm=args.invoke_llm,
         fallback_on_llm_error=not args.fail_on_llm_error,
@@ -1740,6 +2198,7 @@ def cmd_nightly_scheduler_advice(args: argparse.Namespace) -> int:
         recent_failure_modules=_split_csv(args.recent_failure_module),
         recent_failure_plan_keys=_split_csv(args.recent_failure_plan_key),
         codegraph_freshness=args.codegraph_freshness,
+        code_intelligence_refs=code_intelligence_refs_from_file(args.code_intelligence_json),
         resource_budget_seconds=args.resource_budget_seconds,
         workspace_path=args.workspace_path,
         invoke_llm=args.invoke_llm,
@@ -1867,6 +2326,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--plan-key", action="append", default=None, help="Plan key intent; may be repeated or comma-separated.")
     plan.add_argument("--changed-file", action="append", default=None, help="Changed file; may be repeated or comma-separated.")
     plan.add_argument("--module", default=None)
+    plan.add_argument("--code-intelligence-json", default=None)
     plan.add_argument("--workspace-path", default=None)
     plan.add_argument(
         "--invoke-llm",
@@ -1898,6 +2358,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recent failed plan_key; may be repeated or comma-separated.",
     )
     scheduler.add_argument("--codegraph-freshness", choices=sorted(CODEGRAPH_FRESHNESS_VALUES), default="unknown")
+    scheduler.add_argument("--code-intelligence-json", default=None)
     scheduler.add_argument("--resource-budget-seconds", type=int, default=900)
     scheduler.add_argument("--workspace-path", default=None)
     scheduler.add_argument(

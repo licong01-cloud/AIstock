@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.mcp.tool_manifest import TOOL_MANIFEST
+from backend.mcp.tool_manifest import MODULE_TOOL_NAMES, TOOL_MANIFEST
 from backend.services.research_assistant.mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
@@ -52,17 +52,20 @@ def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
 def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() -> None:
     catalog = load_catalog()
     assert catalog["catalog_source"] == "gateway_manifest_derived_catalog"
-    assert catalog["server_count"] == 9
-    assert catalog["tool_count"] == len(TOOL_MANIFEST) == 212
+    assert catalog["server_count"] == len(default_mcp_servers())
+    assert catalog["tool_count"] == len(TOOL_MANIFEST)
     assert {item["server_key"] for item in default_mcp_servers()} == {
         "aistock-gateway-lite",
         "research-assistant",
         "aistock-research",
         "aistock-local-data",
+        "aistock-qlib-data",
         "aistock-validation",
         "aistock-qe",
         "aistock-factor",
         "aistock-trading-ops",
+        "aistock-paper-v2-monitor",
+        "aistock-paper-v2-stable",
         "aistock-external-research",
     }
     assert canonicalize_server_key("aistock-qe-archive") == "aistock-qe"
@@ -76,6 +79,10 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert "因子独立指标" in servers["aistock-factor"]["health_json"]["business_aliases_zh"]
     assert servers["aistock-trading-ops"]["health_json"]["display_name_zh"] == "策略与执行治理"
     assert "执行策略" in servers["aistock-trading-ops"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-paper-v2-monitor"]["health_json"]["display_name_zh"] == "模拟盘监控"
+    assert "MiniQMT监控" in servers["aistock-paper-v2-monitor"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-paper-v2-stable"]["health_json"]["display_name_zh"] == "模拟盘稳定能力"
+    assert "策略包管理" in servers["aistock-paper-v2-stable"]["health_json"]["business_aliases_zh"]
     assert servers["aistock-external-research"]["health_json"]["display_name_zh"] == "External Research"
 
     tools = default_mcp_tools()
@@ -91,15 +98,27 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     }
     assert all(tool["risk_level"] == "low" and tool["side_effect_level"] == "read_only" for tool in catalog_tools)
 
-    assert len([tool for tool in tools if tool["server_key"] == "aistock-local-data"]) == 47
+    assert len([tool for tool in tools if tool["server_key"] == "aistock-local-data"]) == len(MODULE_TOOL_NAMES["local_data"])
+    qlib_tools = [tool for tool in tools if tool["server_key"] == "aistock-qlib-data"]
+    assert len(qlib_tools) == len(MODULE_TOOL_NAMES["qlib_export"])
+    assert any(tool["tool_name"] == "qlib_export_list_snapshots" for tool in qlib_tools)
     qe_tools = [tool for tool in tools if tool["server_key"] == "aistock-qe"]
-    assert len(qe_tools) == 65
+    assert len(qe_tools) == 70
     assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_tools)
     assert any(tool["tool_name"] == "model_registry_list" for tool in qe_tools)
     factor_tools = [tool for tool in tools if tool["server_key"] == "aistock-factor"]
     assert len(factor_tools) == 25
     assert any(tool["tool_name"] == "factor_library_list" for tool in factor_tools)
     assert any(tool["tool_name"] == "factor_corr_plan" for tool in factor_tools)
+    paper_monitor_tools = [tool for tool in tools if tool["server_key"] == "aistock-paper-v2-monitor"]
+    assert len(paper_monitor_tools) == 42
+    assert any(tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in paper_monitor_tools)
+    assert any(tool["tool_name"] == "qmt_broker_monitoring_get_snapshot" for tool in paper_monitor_tools)
+    paper_stable_tools = [tool for tool in tools if tool["server_key"] == "aistock-paper-v2-stable"]
+    assert len(paper_stable_tools) == 86
+    assert any(tool["tool_name"] == "strategy_packages_list" for tool in paper_stable_tools)
+    assert any(tool["tool_name"] == "selection_center_run_confirmed" for tool in paper_stable_tools)
+    assert any(tool["tool_name"] == "advisory_create_program_confirmed" for tool in paper_stable_tools)
     external_tools = [tool for tool in tools if tool["server_key"] == "aistock-external-research"]
     assert len(external_tools) == 4
     assert {tool["tool_name"] for tool in external_tools} == {
@@ -122,15 +141,18 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
 def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanized() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
-    assert result["seeded"]["mcp_servers"] == 9
-    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST) == 212
+    assert result["seeded"]["mcp_servers"] == len(default_mcp_servers())
+    assert result["seeded"]["mcp_tools"] == len(TOOL_MANIFEST)
 
-    tools = svc.repository.list_records("mcp_tools", limit=300)["items"]
-    assert len(tools) == 212
+    tools = svc.repository.list_records("mcp_tools", limit=500)["items"]
+    assert len(tools) == len(TOOL_MANIFEST)
     assert any(tool["server_key"] == "aistock-gateway-lite" and tool["tool_name"] == "mcp_gateway_health" for tool in tools)
     assert any(tool["server_key"] == "aistock-factor" and tool["tool_name"] == "factor_library_list" for tool in tools)
+    assert any(tool["server_key"] == "aistock-qlib-data" and tool["tool_name"] == "qlib_export_list_snapshots" for tool in tools)
     assert any(tool["server_key"] == "aistock-qe" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-trading-ops" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
+    assert any(tool["server_key"] == "aistock-paper-v2-monitor" and tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in tools)
+    assert any(tool["server_key"] == "aistock-paper-v2-stable" and tool["tool_name"] == "strategy_packages_list" for tool in tools)
     assert any(tool["server_key"] == "aistock-external-research" and tool["tool_name"] == "external_research_search_web" for tool in tools)
     assert not any(tool["server_key"] == "aistock-qe-archive" for tool in tools)
     assert not any(tool["server_key"] == "aistock-factor-library" for tool in tools)
@@ -144,12 +166,13 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     reply = svc._render_mcp_tool_catalog_reply(catalog)
     for phrase in ["只能", "不具备", "未登记"]:
         assert phrase not in reply
-    assert "summary-first" in reply
-    assert "aistock-gateway-lite" in reply
-    assert "aistock-qe" in reply
-    assert "aistock-factor" in reply
+    assert "summary-first" not in reply
+    assert "aistock-gateway-lite" not in reply
+    assert "aistock-qe" not in reply
+    assert "aistock-factor" not in reply
+    assert "返回业务结果" in reply
     assert "模型库" in reply
     assert "策略库" in reply
     assert "因子独立指标" in reply
     assert "执行策略" in reply
-    assert "aistock-external-research" in reply
+    assert "External Research" in reply

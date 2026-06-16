@@ -1,0 +1,128 @@
+{
+  "actual": "FactorList.tsx 的 batchFetchMetrics/computeSelectedTasksMetrics 仍检查 activeSnapshot 并调用 /official-evaluation/compute；OfficialEvaluationComputeRequest 仍要求 data_date；FactorOfficialEvaluationService.compute 仍提交 task_type=official_evaluation，语义上与 official_factor_full_compute 并存，容易让官方独立指标绕开同一份 cache。",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+    "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py",
+    "tests/aistock_validation/bugs/20260615_BUG-375-official-full-compute.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-375",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T13:44:47.733547Z",
+  "description": "FactorList.tsx 的 batchFetchMetrics/computeSelectedTasksMetrics 仍检查 activeSnapshot 并调用 /official-evaluation/compute；OfficialEvaluationComputeRequest 仍要求 data_date；FactorOfficialEvaluationService.compute 仍提交 task_type=official_evaluation，语义上与 official_factor_full_compute 并存，容易让官方独立指标绕开同一份 cache。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-4f5c14ed2e19",
+      "timestamp": "2026-06-15T13:44:47.733544Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/official_factor_offline_wsl_memory_cache_design_20260615.md"
+  ],
+  "expected": "所有因子库官方独立指标重算入口统一提交 official_factor_full_compute 或等价 full-compute dispatch；UI 不再要求数据快照，不再提示实时数据/快照用于官方指标；后端 legacy official_evaluation 入口若保留只作为兼容层转发到 full compute 或显式只读查询，不得触发实时/快照语义计算；测试证明计算指标、Task 指标和全量按钮都使用同一 official offline cache 任务契约。",
+  "first_seen_at": "2026-06-15T13:44:47.733547Z",
+  "fix_branch": null,
+  "fix_commit": "bc11b17b08957b0c5b2ba3905b2fa0f34cbd3c65",
+  "fixed_at": "2026-06-15T14:59:56.188220Z",
+  "github_issue_number": 1112,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1112",
+  "last_seen_at": "2026-06-15T13:44:47.733547Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1117",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'activeSnapshot|official-evaluation/compute|official_evaluation|official_factor_full_compute|快照' frontend/src/app/quantevolver/components/FactorList.tsx backend/routers/quantevolver.py backend/services/quantevolver/factor_official_evaluation_service.py",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方独立指标计算入口仍依赖数据快照而未统一提交 official full compute",
+  "trigger_condition": {
+    "fingerprint": "4f5c14ed2e19770a240c10bd",
+    "source_event_id": "FE-20260615-4f5c14ed2e19"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/routers/quantevolver.py",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+      "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/official-evaluation/compute",
+    "ui_routes": [
+      "/official-evaluation/compute"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> 20 passed",
+    "python -m ruff check backend/services/quantevolver/factor_official_evaluation_service.py backend/routers/quantevolver.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> passed",
+    "python -m py_compile backend/services/quantevolver/factor_official_evaluation_service.py backend/routers/quantevolver.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed, 8 passed",
+    "python -m nox -s l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed, qe_read_backend 14 passed",
+    "npm --prefix frontend run lint -> passed with existing repo warnings",
+    "npm --prefix frontend run build -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

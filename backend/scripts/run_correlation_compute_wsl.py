@@ -23,6 +23,8 @@ load_dotenv(REPO_ROOT / ".env", override=True)
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
+
 
 def _emit(obj: dict) -> None:
     print(json.dumps(obj, ensure_ascii=False), flush=True)
@@ -36,6 +38,7 @@ def main() -> int:
     payload_path = Path(sys.argv[1])
     compute_service = None
     try:
+        assert_wsl_runtime("run_correlation_compute_wsl")
         from backend.services.quantevolver import correlation_compute_service as compute_service
 
         payload = json.loads(payload_path.read_text(encoding="utf-8"))

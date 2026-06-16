@@ -38,7 +38,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_memory_tree_v1_20260601"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase8_code_intelligence_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -47,6 +47,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "research_memory_items",
         "research_memory_access_log",
         "assistant_context_packs",
+        "assistant_code_context_refs",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -92,6 +93,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "requires_approval BOOLEAN NOT NULL DEFAULT FALSE" in sql
     assert "COMMENT ON TABLE assistant_capabilities" in sql
     assert "COMMENT ON TABLE assistant_action_proposals" in sql
+    assert "COMMENT ON TABLE assistant_code_context_refs" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -267,6 +269,19 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
         table_columns,
         "memory_access_log",
         {"access_id": "memacc_x", "memory_id": "mem_x", "task_id": "rat_x", "agent_id": "agent", "retrieval_reason": {}, "used_in_prompt": True, "payload_json": {}},
+    )
+    _assert_columns(
+        table_columns,
+        "code_context_refs",
+        {
+            "code_ref_id": "code_ref_x",
+            "task_id": "rat_x",
+            "query_scope": "path:backend/services/research_assistant/service.py",
+            "manifest_json": {},
+            "source": "codegraph",
+            "provenance_json": {"commit": "abc", "file": "backend/services/research_assistant/service.py", "symbol": "build_context_pack", "generated_at": "2099-12-31T00:00:00+00:00"},
+            "as_of": "2099-12-31T00:00:00+00:00",
+        },
     )
     _assert_columns(
         table_columns,

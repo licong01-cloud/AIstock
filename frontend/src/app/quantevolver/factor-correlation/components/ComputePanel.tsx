@@ -33,19 +33,33 @@ export interface ComputeStatus {
     created_at: string;
   } | null;
   in_memory_result: boolean;
-  available_snapshots?: SnapshotInfo[];
+  official_cache?: OfficialCacheStatus;
 }
 
 export type ComputeScope = "cache";
 
-export interface SnapshotInfo {
-  data_date: string;
-  status: string;
-  disk_size_mb?: number;
-  start_date?: string;
-  end_date?: string;
-  instruments_count?: number;
-  created_at?: string;
+export interface OfficialCacheStatus {
+  cached_count: number;
+  total_size_mb: number;
+  date_range: string | null;
+  as_of_date: string | null;
+  cache_root?: string | null;
+  cache_source?: string | null;
+  data_source_mode?: string | null;
+  window_train_start?: string | null;
+  window_backtest_end?: string | null;
+  disk_factor_count?: number | null;
+  meta_factor_count?: number | null;
+  orphan_parquet_count?: number | null;
+  integrity_ok?: boolean | null;
+}
+
+export interface OfficialCacheWindow {
+  start?: string | null;
+  end?: string | null;
+  date_range?: string | null;
+  cache_root?: string | null;
+  cache_source?: string | null;
 }
 
 export interface FactorStat {
@@ -83,22 +97,20 @@ interface Props {
   computing: boolean;
   scope: ComputeScope;
   includeDisabled: boolean;
-  snapshotDate: string;
-  availableSnapshots: SnapshotInfo[];
   factorStats: FactorStats | null;
-  singleCache: { cached_count: number; total_size_mb: number; date_range: string | null; as_of_date: string | null } | null;
+  singleCache: OfficialCacheStatus | null;
+  officialCacheWindow: OfficialCacheWindow | null;
   onScopeChange: (s: ComputeScope) => void;
   onIncludeDisabledChange: (v: boolean) => void;
-  onSnapshotDateChange: (d: string) => void;
   onCompute: () => void;
 }
 
 const SCOPE_OPTIONS: { value: ComputeScope; label: string; desc: string }[] = [
-  { value: "cache", label: "全量计算", desc: "清空历史数据，使用独立指标缓存全量重算相关性矩阵" },
+  { value: "cache", label: "全量计算", desc: "使用 official offline single parquet cache 全量重算相关性矩阵" },
 ];
 
 const DATASET_OPTIONS = [
-  { value: "correlation_full", label: "全量计算" },
+  { value: "correlation_full", label: "官方缓存相关性" },
 ];
 
 const FREQ_OPTIONS = [
@@ -138,10 +150,6 @@ function formatElapsed(sec: number): string {
   return `${m}m${s}s`;
 }
 
-function formatSnapshotDate(dd: string): string {
-  if (dd.length === 8) return `${dd.slice(0, 4)}-${dd.slice(4, 6)}-${dd.slice(6, 8)}`;
-  return dd;
-}
 
 function formatSize(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
@@ -153,13 +161,11 @@ export default function ComputePanel({
   computing,
   scope,
   includeDisabled,
-  snapshotDate,
-  availableSnapshots,
   factorStats,
   singleCache,
+  officialCacheWindow,
   onScopeChange,
   onIncludeDisabledChange,
-  onSnapshotDateChange,
   onCompute,
 }: Props) {
   const lc = status?.latest_computation;
@@ -269,8 +275,6 @@ export default function ComputePanel({
 
   const isComputing = computing || progress?.status === "computing";
 
-  // ── 当前快照信息 ──
-  const activeSnapshot = availableSnapshots?.find((s) => s.data_date === snapshotDate);
 
   return (
     <div
@@ -302,26 +306,21 @@ export default function ComputePanel({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {/* 快照选择 */}
-          <select
-            value={snapshotDate}
-            onChange={(e) => onSnapshotDateChange(e.target.value)}
-            disabled={isComputing}
-            title="数据快照（选择后将用于计算和统计）"
-            style={{ ...selectStyle, cursor: isComputing ? "not-allowed" : "pointer", minWidth: 180 }}
+          <div
+            title="官方相关性只读取 rdagent_assets/factor_values，不再选择 legacy realtime 缓存"
+            style={{
+              padding: "8px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.16)",
+              border: "1px solid rgba(255,255,255,0.22)",
+              color: "#fff",
+              whiteSpace: "nowrap",
+            }}
           >
-            <option value="" style={{ color: "#374151" }}>
-              自动（最新快照）
-            </option>
-            {availableSnapshots?.map((s) => (
-              <option key={s.data_date} value={s.data_date} style={{ color: "#374151" }}>
-                {formatSnapshotDate(s.data_date)}
-                {s.instruments_count ? ` (${s.instruments_count}只)` : ""}
-                {s.disk_size_mb ? ` ${formatSize(s.disk_size_mb)}` : ""}
-                {s.status === "creating" ? " [创建中]" : ""}
-              </option>
-            ))}
-          </select>
+            官方窗口 {officialCacheWindow?.start || singleCache?.window_train_start || "2018-08-01"} ~ {officialCacheWindow?.end || singleCache?.window_backtest_end || singleCache?.as_of_date || "2026-04-30"}
+          </div>
           <select
             value={scope}
             onChange={(e) => onScopeChange(e.target.value as ComputeScope)}
@@ -481,14 +480,10 @@ export default function ComputePanel({
       {factorStats && (
         <div style={{ marginTop: 20 }}>
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
-            {snapshotDate
-              ? `快照 ${formatSnapshotDate(snapshotDate)} 的因子统计`
-              : "因子统计（全部快照）"}
-            {activeSnapshot?.end_date && (
-              <span style={{ marginLeft: 8, opacity: 0.7 }}>
-                数据: {activeSnapshot.start_date?.slice(0, 10)} ~ {activeSnapshot.end_date?.slice(0, 10)}
-              </span>
-            )}
+            因子统计（官方离线缓存口径）
+            <span style={{ marginLeft: 8, opacity: 0.7 }}>
+              独立指标 / 相关性 / QE 回测共用 {officialCacheWindow?.start || singleCache?.window_train_start || "2018-08-01"} ~ {officialCacheWindow?.end || singleCache?.window_backtest_end || singleCache?.as_of_date || "2026-04-30"}
+            </span>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
             {includeDisabled ? (
@@ -535,12 +530,17 @@ export default function ComputePanel({
       >
         {singleCache && (
           <>
+            <StatItem label="缓存来源" value="官方离线缓存" />
+            <StatItem label="共用时间段" value={`${officialCacheWindow?.start || singleCache.window_train_start || "2018-08-01"} ~ ${officialCacheWindow?.end || singleCache.window_backtest_end || singleCache.as_of_date || "2026-04-30"}`} />
             <StatItem label="因子缓存文件" value={`${singleCache.cached_count} 个`} />
             {singleCache.total_size_mb > 0 && (
               <StatItem label="缓存大小" value={formatSize(singleCache.total_size_mb)} />
             )}
             {singleCache.date_range && (
-              <StatItem label="缓存时间段" value={singleCache.date_range} />
+              <StatItem label="缓存文件日期" value={singleCache.date_range} />
+            )}
+            {singleCache.cache_root && (
+              <StatItem label="缓存目录" value={singleCache.cache_root} />
             )}
           </>
         )}
@@ -588,10 +588,10 @@ export default function ComputePanel({
         }}
       >
         <strong>计算模式说明：</strong>
-        <strong>智能增量</strong>自动检测未计算相关性的新因子，执行代码生成缓存后计算完整相关性矩阵（向量化 GEMM，约1-2分钟）；
-        <strong>全量计算</strong>执行全部因子实盘代码生成缓存并计算相关性矩阵（缓存生成约1-2小时，矩阵计算约1-2分钟）；
-        <strong>缓存计算</strong>使用已有的单因子 parquet 缓存直接计算矩阵（约1-2分钟）；
-        <strong>增量计算</strong>仅对新入库因子计算与现有因子的相关性。
+        相关性计算只使用 <strong>rdagent_assets/factor_values/single</strong> official offline parquet cache，
+        与官方独立指标和 QE 回测共用同一份因子值缓存；默认展示全量数据集
+        <strong>2018-08-01 ~ 2026-04-30</strong>，缺缓存的因子不会回退到 legacy realtime 缓存或旧快照。
+        如需补齐因子值，请在因子库提交官方全量因子计算后再重新计算相关性。
       </div>
 
       {/* 调度管理面板 */}

@@ -1,0 +1,86 @@
+{
+  "actual": "Broker showed SELL fills for 000736.SZ and 603001.SH, but DB ledger still showed order_status=50/traded_volume=0/open-like for those orders. Virtual accounts retained frozen_cash even though QMT account frozen_cash=0. Historical open-like rows from 2026-06-15/2026-06-04 remained and can block future buys.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260616_BUG-382-miniqmt-broker-fills-are-not-fully-reconciled-to-qmt-strategy-ledger-and.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-382",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T02:09:47.005700Z",
+  "description": "Broker showed SELL fills for 000736.SZ and 603001.SH, but DB ledger still showed order_status=50/traded_volume=0/open-like for those orders. Virtual accounts retained frozen_cash even though QMT account frozen_cash=0. Historical open-like rows from 2026-06-15/2026-06-04 remained and can block future buys.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-e94b5795929b",
+      "timestamp": "2026-06-16T02:09:47.005700Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-16 09:45 live SIM read-only check: qmt frozen_cash=0, broker trade_count=19, DB open-like orders still include filled 000736.SZ/603001.SH and virtual frozen_cash remains"
+  ],
+  "expected": "MiniQMT unified simulation-runtime must reconcile broker-authoritative orders/trades into qmt_strategy ledger, terminalize stale/orphan open-like rows when the broker no longer reports them, release AIstock virtual frozen cash when QMT frozen_cash is zero or orders are terminal, and keep SimulationDailyRun status consistent with broker evidence without overwriting submit failures incorrectly.",
+  "first_seen_at": "2026-06-16T02:09:47.005700Z",
+  "fix_branch": null,
+  "fix_commit": "f8a97cb87370effa40ae9c305e5090a0ee88ec30",
+  "fixed_at": "2026-06-16T03:32:32.279826Z",
+  "github_issue_number": 1136,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1136",
+  "last_seen_at": "2026-06-16T02:09:47.005700Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1139",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only live check: GET /api/v1/qmt/account, GET /api/v1/qmt/trades, GET /api/v1/qmt/orders?cancelable_only=true, then query qmt_strategy.order_ledger, qmt_strategy.cash_ledger, qmt_strategy.virtual_account for trade_date=2026-06-16 and historical open-like rows.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "MiniQMT broker fills are not fully reconciled to qmt_strategy ledger and frozen cash",
+  "trigger_condition": {
+    "fingerprint": "e94b5795929b2583849237bf",
+    "source_event_id": "FE-20260616-e94b5795929b"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 76 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "python -m nox -s l0 -> passed (blocking=0)",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
