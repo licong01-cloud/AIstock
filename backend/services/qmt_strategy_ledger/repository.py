@@ -720,6 +720,26 @@ class QmtStrategyLedgerRepository:
                 )
         return order
 
+    def get_order_ledger(self, account_id: str, qmt_order_id: str) -> OrderLedgerRecord | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT intent_id, strategy_id, strategy_name,
+                           qmt_order_id, qmt_order_sysid, symbol,
+                           order_type, order_volume, traded_volume,
+                           order_status, account_id, trade_date,
+                           price_type, price, traded_price,
+                           status_msg, order_remark, raw_json,
+                           last_synced_at
+                    FROM qmt_strategy.order_ledger
+                    WHERE account_id = %s AND qmt_order_id = %s
+                    """,
+                    (account_id, qmt_order_id),
+                )
+                row = cur.fetchone()
+        return _row_to_order_ledger(dict(row)) if row else None
+
     def list_order_ledger(
         self,
         *,
@@ -1677,6 +1697,9 @@ class InMemoryQmtStrategyLedgerRepository:
     def upsert_order_ledger(self, order: OrderLedgerRecord) -> OrderLedgerRecord:
         self._order_ledgers[(order.account_id, order.qmt_order_id)] = order
         return order
+
+    def get_order_ledger(self, account_id: str, qmt_order_id: str) -> OrderLedgerRecord | None:
+        return self._order_ledgers.get((account_id, qmt_order_id))
 
     def list_order_ledger(
         self,
