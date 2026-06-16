@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase9_proactive_reports_v1_20260616"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase10_reflection_cards_v1_20260616"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -253,6 +253,17 @@ BASE_DDL: list[str] = [
         status TEXT NOT NULL DEFAULT 'generated',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT uq_apr UNIQUE (report_type, report_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_reflection_cards (
+        card_id TEXT PRIMARY KEY,
+        task_id TEXT,
+        trigger TEXT NOT NULL,
+        lesson_md TEXT NOT NULL,
+        structured_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        memory_ref TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     """
@@ -956,6 +967,7 @@ TABLE_COMMENTS = {
     "assistant_context_packs": "Deterministic memory/context bundles used by models and external agents.",
     "assistant_code_context_refs": "Code-intelligence context references injected into Research Assistant Context Packs; AST deterministic, no embedding.",
     "assistant_proactive_reports": "Proactive morning and experiment reports generated from read-only evidence providers.",
+    "assistant_reflection_cards": "Reflection Cards generated from task failure, correction, or low-confidence signals; writes personal.episodic memory only.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
     "research_memory_relations": "Native lightweight knowledge graph relations with evidence references.",
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
@@ -1136,6 +1148,13 @@ COLUMN_COMMENTS = {
     "assistant_proactive_reports.source_refs_json": "Flattened evidence references used by the report.",
     "assistant_proactive_reports.status": "Report generation status.",
     "assistant_proactive_reports.created_at": "Row creation timestamp.",
+    "assistant_reflection_cards.card_id": "Stable Reflection Card identifier.",
+    "assistant_reflection_cards.task_id": "Optional Research Assistant task that produced the reflection.",
+    "assistant_reflection_cards.trigger": "Reflection trigger: failure, correction, or low_confidence.",
+    "assistant_reflection_cards.lesson_md": "External-safe lesson without chain-of-thought disclosure.",
+    "assistant_reflection_cards.structured_json": "Structured cause, lesson, next strategy, source_refs, reason_codes, warnings, and safety flags.",
+    "assistant_reflection_cards.memory_ref": "personal.episodic.* memory_id written for L1 recall.",
+    "assistant_reflection_cards.created_at": "Row creation timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",

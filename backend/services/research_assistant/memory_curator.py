@@ -103,6 +103,18 @@ class MemoryCurator:
             approval_required_ids=approval_required_ids,
         )
 
+    def create_reflection_memory(self, memory_row: Mapping[str, Any]) -> dict[str, Any]:
+        row = dict(memory_row)
+        if row.get("source_type") != "reflection_card":
+            raise ValueError("reflection memory source_type must be reflection_card")
+        if row.get("memory_type") != "episodic":
+            raise ValueError("reflection memory_type must be episodic")
+        if row.get("scope") != "personal" or not str(row.get("tree_path") or "").startswith("personal.episodic."):
+            raise ValueError("reflection memory must target personal.episodic.*")
+        if row.get("approval_status") != "approved" or row.get("risk_level") != "low":
+            raise ValueError("reflection memory must be approved low-risk")
+        return self.repo.create_record("memory_items", row)
+
     def _extract_candidates(self, *, user_message: str, assistant_message: str) -> list[_Candidate]:
         del assistant_message
         text = user_message.strip()

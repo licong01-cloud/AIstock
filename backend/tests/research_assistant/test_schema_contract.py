@@ -38,7 +38,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase9_proactive_reports_v1_20260616"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase10_reflection_cards_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -49,6 +49,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_context_packs",
         "assistant_code_context_refs",
         "assistant_proactive_reports",
+        "assistant_reflection_cards",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -96,6 +97,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "COMMENT ON TABLE assistant_action_proposals" in sql
     assert "COMMENT ON TABLE assistant_code_context_refs" in sql
     assert "COMMENT ON TABLE assistant_proactive_reports" in sql
+    assert "COMMENT ON TABLE assistant_reflection_cards" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -215,6 +217,18 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
             "sections_json": {},
             "source_refs_json": [],
             "status": "generated",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "reflection_cards",
+        {
+            "card_id": "refcard_x",
+            "task_id": "rat_x",
+            "trigger": "failure",
+            "lesson_md": "lesson",
+            "structured_json": {},
+            "memory_ref": "mem_x",
         },
     )
     _assert_columns(
