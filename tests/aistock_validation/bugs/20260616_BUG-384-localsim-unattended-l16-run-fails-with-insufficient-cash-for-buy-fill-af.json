@@ -1,0 +1,75 @@
+{
+  "actual": "LocalSim L16 generated a buy-only submit batch and broker submit rejected the order with insufficient cash for buy fill. The daily run remains FAILED_RETRYABLE with no persisted orders/fills for that run, so unattended simulation cannot proceed safely.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260616_BUG-384-localsim-unattended-l16-run-fails-with-insufficient-cash-for-buy-fill-af.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-384",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T04:53:17.906959Z",
+  "description": "LocalSim L16 generated a buy-only submit batch and broker submit rejected the order with insufficient cash for buy fill. The daily run remains FAILED_RETRYABLE with no persisted orders/fills for that run, so unattended simulation cannot proceed safely.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-df035b3b6c5e",
+      "timestamp": "2026-06-16T04:53:17.906959Z"
+    }
+  ],
+  "evidence_uris": [
+    "live-api:simulation-runtime run simrun_88ba92d3f4432db4 2026-06-16"
+  ],
+  "expected": "LocalSim simulation-runtime must generate or submit an executable rebalance plan for low-cash/high-turnover portfolios by applying SELL-first/proceeds-aware/cash-fit semantics, or otherwise terminalize/skip non-executable residuals with explicit actionable status. It must not keep a deterministic cash-impossible batch in endless retry and must not report fake success.",
+  "first_seen_at": "2026-06-16T04:53:17.906959Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1142,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1142",
+  "last_seen_at": "2026-06-16T04:53:17.906959Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_88ba92d3f4432db4 after 2026-06-16 scheduler tick; inspect submit_failure BrokerRejectedError cause_code=RISK_RULE_ERROR insufficient cash for buy fill.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSim unattended L16 run fails with insufficient cash for buy fill after execution plan",
+  "trigger_condition": {
+    "fingerprint": "df035b3b6c5e5e1ac9bd29d2",
+    "source_event_id": "FE-20260616-df035b3b6c5e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
