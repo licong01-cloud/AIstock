@@ -1074,6 +1074,18 @@ def _events_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "events.jsonl"
 
 
+def _remove_synthetic_smoke_workflow_dir(path: Path, bug_id: str) -> None:
+    canonical_bug_id = bug_id.strip().upper()
+    expected = (REPO_ROOT / WORKFLOW_ROOT / "BUG-000").resolve()
+    if canonical_bug_id != "BUG-000" or path.resolve() != expected:
+        raise WorkflowError("refusing to remove non-synthetic workflow-smoke state")
+    if not path.exists():
+        return
+    if not path.is_dir() or path.is_symlink():
+        raise WorkflowError(f"refusing to remove unsafe workflow-smoke path: {path}")
+    shutil.rmtree(path)
+
+
 def _task_card_json_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "task-card.json"
 
@@ -4286,6 +4298,10 @@ def build_workflow_smoke_plan(
         synthetic_record = True
         smoke_bug_id = "BUG-000"
         smoke_dir = REPO_ROOT / WORKFLOW_ROOT / "smoke"
+        smoke_workflow_dir = REPO_ROOT / WORKFLOW_ROOT / smoke_bug_id
+        if smoke_workflow_dir.exists():
+            _remove_synthetic_smoke_workflow_dir(smoke_workflow_dir, smoke_bug_id)
+        cleanup_paths.append(smoke_workflow_dir)
         issue_path = smoke_dir / "synthetic-BUG-000.json"
         record = {
             "bug_id": smoke_bug_id,
@@ -4370,7 +4386,7 @@ def build_workflow_smoke_plan(
     if unexpected:
         blocking.append(f"workflow smoke created unexpected git-status paths: {unexpected}")
     if synthetic_record:
-        warnings.append("used synthetic BUG-000 record under ignored tmp/issue_workflow/smoke")
+        warnings.append("used isolated synthetic BUG-000 record under ignored tmp/issue_workflow")
     return {
         "schema_version": "aistock_issue_workflow_smoke_v1",
         "generated_at": _utc_now(),
