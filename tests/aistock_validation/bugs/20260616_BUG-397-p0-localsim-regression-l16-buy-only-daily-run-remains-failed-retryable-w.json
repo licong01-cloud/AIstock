@@ -6,7 +6,8 @@
     "backend/services/simulation_runtime/decision.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260616_BUG-397-p0-localsim-regression-l16-buy-only-daily-run-remains-failed-retryable-w.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/ops.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-397",
@@ -24,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260616-93f3588e882e",
       "timestamp": "2026-06-16T13:36:32.606894Z"
+    },
+    {
+      "action": "scope_expanded_for_fix",
+      "actor": "codex",
+      "timestamp": "2026-06-16T15:12:00Z",
+      "note": "Added backend/services/simulation_runtime/ops.py after workflow plan approved ops API diagnostics exposure for BUG-397."
     }
   ],
   "evidence_uris": [
@@ -47,7 +54,8 @@
   "reproduce_command": "Read-only: GET /api/v1/simulation-runtime/runs/simrun_88ba92d3f4432db4 and inspect run.status, broker_context, execution_plan buy/sell counts, and errors.",
   "required_verification": [
     "l0",
-    "paper_v2_l3"
+    "paper_v2_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
