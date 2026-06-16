@@ -1,5 +1,6 @@
 {
   "actual": "backend/services/miniqmt_execution_runtime/client.py:168 defaults to InMemoryMiniQMTExecutionRuntimeRepository. backend/services/simulation_runtime/bridges.py creates MiniQMTExecutionRuntimeClient() with no repository. backend/services/paper_trading_v2/day_runner.py also creates MiniQMTExecutionRuntimeClient() with no repository. JsonFileMiniQMTExecutionRuntimeRepository exists but is only injected by the simulation_runtime operator router, not the unattended product execution paths.",
+  "actual_after_fix": "MiniQMTExecutionRuntimeClient now defaults to JsonFileMiniQMTExecutionRuntimeRepository via the shared default repository factory. Product callers in simulation_runtime and PaperTradingDayRunner keep constructing MiniQMTExecutionRuntimeClient() but now receive durable runtime/event/algo/child-order storage instead of a process-local InMemory repository. Explicit InMemory injection remains test-only.",
   "allowed_write_scope": [
     "backend/services/miniqmt_execution_runtime/client.py",
     "backend/services/miniqmt_execution_runtime/repository.py",
@@ -21,6 +22,105 @@
   ],
   "created_at": "2026-06-12T07:29:11.261944Z",
   "description": "backend/services/miniqmt_execution_runtime/client.py:168 defaults to InMemoryMiniQMTExecutionRuntimeRepository. backend/services/simulation_runtime/bridges.py creates MiniQMTExecutionRuntimeClient() with no repository. backend/services/paper_trading_v2/day_runner.py also creates MiniQMTExecutionRuntimeClient() with no repository. JsonFileMiniQMTExecutionRuntimeRepository exists but is only injected by the simulation_runtime operator router, not the unattended product execution paths.",
+  "design_acceptance_matrix": [
+    {
+      "design_item": "Phase2 durable runtime skeleton: product runtime state is not memory-only",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:629",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:882"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/miniqmt_execution_runtime/repository.py:DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH",
+        "backend/services/miniqmt_execution_runtime/repository.py:default_miniqmt_execution_runtime_repository",
+        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_default_runtime_client_uses_durable_store_and_survives_client_recreation",
+        "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 51 passed"
+      ]
+    },
+    {
+      "design_item": "Product paths using default runtime client inherit durable repository without adding a second MiniQMT owner",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:547",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:548",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:652"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/simulation_runtime/bridges.py:MiniQMTExecutionBridge.__init__",
+        "backend/services/paper_trading_v2/day_runner.py:PaperTradingDayRunner.__init__",
+        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py::test_paper_v2_n1_and_simulation_runtime_n_many_share_runtime_owner_evidence",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_default_runtime_client_uses_durable_store_and_survives_client_recreation"
+      ]
+    },
+    {
+      "design_item": "InMemory repository is explicit test-only injection, not product default",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:629",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:650"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_in_memory_repository_is_explicit_test_only_and_not_default"
+      ]
+    },
+    {
+      "design_item": "Restart recovery keeps broker sync before new orders and does not duplicate active child submits",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:619",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:656"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/miniqmt_execution_runtime/runtime.py:MiniQMTExecutionRuntime.recover",
+        "backend/services/miniqmt_execution_runtime/repository.py:JsonFileMiniQMTExecutionRuntimeRepository"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_restart_recovery_rebuilds_active_state_and_syncs_broker_before_new_orders",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py::test_runtime_owned_vnpy_algo_restores_active_order_state_after_restart"
+      ]
+    }
+  ],
+  "design_compliance_required": true,
+  "design_compliance_review": [
+    {
+      "design_item": "DESIGN-COMPLIANCE-001 complete implementation within BUG scope",
+      "gap_or_exception": "Full MiniQMT Phase0-7 completion remains covered by sibling BUGs; this BUG is durability/default-repository scope only.",
+      "implementation_refs": [
+        "backend/services/miniqmt_execution_runtime/repository.py",
+        "backend/services/miniqmt_execution_runtime/client.py"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 51 passed"
+      ]
+    },
+    {
+      "design_item": "No product runtime restart or DB/DDL dependency introduced",
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/miniqmt_execution_runtime/repository.py"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "production_ddl_gate=noop; frontend/backend_dependency_gate=noop; runtime restart not performed"
+      ]
+    }
+  ],
+  "design_scope": "Phase 2 durable runtime recovery plus Phase 4 product-path durability; this BUG does not claim full MiniQMT Phase0-7 completion.",
+  "design_source": "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -35,8 +135,14 @@
   "expected": "All production MiniQMT product paths use a durable runtime repository or explicitly documented durable adapter backed by DB/approved store. Restart recovery must sync broker facts first, restore active runtime/algo/child-order mappings, and prove no duplicate submit. Tests must cover restart after active child orders, after rejected/preflight-failed batches, after PARTIAL dependent-buy state, and after operator commands.",
   "first_seen_at": "2026-06-12T07:29:11.261944Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "358afd89cc9f91871c5140fbde1910bd07bd10d6",
+  "fixed_at": "2026-06-16T10:23:50.905626Z",
+  "forbidden_closure_conditions": [
+    "Do not close if MiniQMTExecutionRuntimeClient() still defaults to InMemoryMiniQMTExecutionRuntimeRepository.",
+    "Do not close if Paper v2 or simulation_runtime product callers must manually pass an in-memory repository to work.",
+    "Do not close without restart-recovery evidence showing a recreated client can read runtime child-order evidence from the durable store.",
+    "Do not close without required validation evidence and GitHub issue sync."
+  ],
   "github_issue_number": 1010,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1010",
   "last_seen_at": "2026-06-12T07:29:11.261944Z",
@@ -44,6 +150,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1017",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +163,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -65,6 +172,9 @@
     "fingerprint": "7cd08e3ca47e8382de629420",
     "source_event_id": "FE-20260612-7cd08e3ca47e"
   },
+  "validation_evidence": [
+    "GitHub PR #1017 merged at 2026-06-16T10:21:08Z; GitHub checks all success/skipped; local targeted pytest 4 passed; ruff passed; git diff --check passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -76,129 +186,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "design_compliance_required": true,
-  "design_source": "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md",
-  "design_scope": "Phase 2 durable runtime recovery plus Phase 4 product-path durability; this BUG does not claim full MiniQMT Phase0-7 completion.",
-  "actual_after_fix": "MiniQMTExecutionRuntimeClient now defaults to JsonFileMiniQMTExecutionRuntimeRepository via the shared default repository factory. Product callers in simulation_runtime and PaperTradingDayRunner keep constructing MiniQMTExecutionRuntimeClient() but now receive durable runtime/event/algo/child-order storage instead of a process-local InMemory repository. Explicit InMemory injection remains test-only.",
-  "design_acceptance_matrix": [
-    {
-      "design_item": "Phase2 durable runtime skeleton: product runtime state is not memory-only",
-      "design_refs": [
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:629",
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:882"
-      ],
-      "implementation_refs": [
-        "backend/services/miniqmt_execution_runtime/repository.py:DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH",
-        "backend/services/miniqmt_execution_runtime/repository.py:default_miniqmt_execution_runtime_repository",
-        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
-      ],
-      "test_or_evidence": [
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_default_runtime_client_uses_durable_store_and_survives_client_recreation",
-        "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 51 passed"
-      ],
-      "status": "PASS",
-      "gap_or_exception": null
-    },
-    {
-      "design_item": "Product paths using default runtime client inherit durable repository without adding a second MiniQMT owner",
-      "design_refs": [
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:547",
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:548",
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:652"
-      ],
-      "implementation_refs": [
-        "backend/services/simulation_runtime/bridges.py:MiniQMTExecutionBridge.__init__",
-        "backend/services/paper_trading_v2/day_runner.py:PaperTradingDayRunner.__init__",
-        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
-      ],
-      "test_or_evidence": [
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py::test_paper_v2_n1_and_simulation_runtime_n_many_share_runtime_owner_evidence",
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_default_runtime_client_uses_durable_store_and_survives_client_recreation"
-      ],
-      "status": "PASS",
-      "gap_or_exception": null
-    },
-    {
-      "design_item": "InMemory repository is explicit test-only injection, not product default",
-      "design_refs": [
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:629",
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:650"
-      ],
-      "implementation_refs": [
-        "backend/services/miniqmt_execution_runtime/client.py:MiniQMTExecutionRuntimeClient.__init__"
-      ],
-      "test_or_evidence": [
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_in_memory_repository_is_explicit_test_only_and_not_default"
-      ],
-      "status": "PASS",
-      "gap_or_exception": null
-    },
-    {
-      "design_item": "Restart recovery keeps broker sync before new orders and does not duplicate active child submits",
-      "design_refs": [
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:619",
-        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:656"
-      ],
-      "implementation_refs": [
-        "backend/services/miniqmt_execution_runtime/runtime.py:MiniQMTExecutionRuntime.recover",
-        "backend/services/miniqmt_execution_runtime/repository.py:JsonFileMiniQMTExecutionRuntimeRepository"
-      ],
-      "test_or_evidence": [
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py::test_restart_recovery_rebuilds_active_state_and_syncs_broker_before_new_orders",
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py::test_runtime_owned_vnpy_algo_restores_active_order_state_after_restart"
-      ],
-      "status": "PASS",
-      "gap_or_exception": null
-    }
-  ],
-  "design_compliance_review": [
-    {
-      "design_item": "DESIGN-COMPLIANCE-001 complete implementation within BUG scope",
-      "status": "PASS",
-      "implementation_refs": [
-        "backend/services/miniqmt_execution_runtime/repository.py",
-        "backend/services/miniqmt_execution_runtime/client.py"
-      ],
-      "test_or_evidence": [
-        "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 51 passed"
-      ],
-      "gap_or_exception": "Full MiniQMT Phase0-7 completion remains covered by sibling BUGs; this BUG is durability/default-repository scope only."
-    },
-    {
-      "design_item": "No product runtime restart or DB/DDL dependency introduced",
-      "status": "PASS",
-      "implementation_refs": [
-        "backend/services/miniqmt_execution_runtime/repository.py"
-      ],
-      "test_or_evidence": [
-        "production_ddl_gate=noop; frontend/backend_dependency_gate=noop; runtime restart not performed"
-      ],
-      "gap_or_exception": null
-    }
-  ],
-  "forbidden_closure_conditions": [
-    "Do not close if MiniQMTExecutionRuntimeClient() still defaults to InMemoryMiniQMTExecutionRuntimeRepository.",
-    "Do not close if Paper v2 or simulation_runtime product callers must manually pass an in-memory repository to work.",
-    "Do not close without restart-recovery evidence showing a recreated client can read runtime child-order evidence from the durable store.",
-    "Do not close without required validation evidence and GitHub issue sync."
-  ],
-  "validation_evidence": [
-    {
-      "command": "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py -q",
-      "result": "passed: 3 passed"
-    },
-    {
-      "command": "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py -q",
-      "result": "passed: 6 passed"
-    },
-    {
-      "command": "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q",
-      "result": "passed: 51 passed"
-    },
-    {
-      "command": "git diff --check; python -m compileall -q backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py",
-      "result": "passed"
-    }
-  ]
+  }
 }
