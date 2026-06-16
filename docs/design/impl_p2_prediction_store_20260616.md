@@ -8,6 +8,25 @@
 
 ---
 
+## 0. 修订 R1（2026-06-17）—— 架构调整 + incident 处置（取代 §3 / §4 / §5① 的相关内容）
+
+> 经磁盘/共享/隔离讨论 + 一次 PG 误建 DDL incident，P2 架构调整如下。本节优先级高于下方 §3/§4/§5① 的旧表述。
+
+**A. MLflow-tracking-to-PG 整体延后到 M4。** P2 核心目标（pred/params 持久化 + 可按 run_id 查 → 解锁 P3）**不需要 MLflow-PG**：Qlib recorder 仍**文件态本地**产 pred.pkl 不变，持久化由"后端内嵌 artifact 服务 + PG 指针"承担。MLflow 实验追踪 UI / Model Registry 属 **M4 治理**。**P2 不引入 PG-MLflow，不再连 MLflow client 到生产库默认 schema。**
+
+**B. artifact 持久化 = AIstock 后端内嵌，不另起服务、不用 MinIO、不用共享挂载、不用 E: HDD（取代 §3.1/3.2/3.3 的 central artifact-root / SMB / Option 1·2 / E: 方案）：**
+- 后端新增 FastAPI artifact **上传/下载路由** + **快盘 store（F: 或 SSD，绝不用 E: 机械盘）**；run-id/内容寻址。
+- 节点 run 完成、workspace 清理前，经 **HTTP 直推** pred.pkl/params.pkl 到后端（网络直传，**无共享挂载、无 HDD 中转**）。
+- PG 指针（`qe_archive.run_source.mlflow_artifact_uri` 或新 `prediction_index` 表）记 run_id → store 位置 + 格式/行数/股票数/日期范围。
+- MLflow 原生 artifact_location 保持节点本地（**不作持久化路径**）。
+- **多节点 = 统一网络推送**（替代原 Option 1 SMB / Option 2 pull）。
+
+**C. incident 处置记录（2026-06-17 已完成）：** Task0 误触发 MlflowClient(PG) 把 **39 张 MLflow 3.8.1 模型表**建到了 PG **public**（与 AIstock + research-assistant 共用的 schema）。已**单事务 DROP 这 39 张模型表**（无 CASCADE、未动业务表；public 132→93；assistant=34/research=6/aistock=19/qe=24 等业务表数量不变）。`public.alembic_version='1bd49d398cd23'`（MLflow 的）**保留未动**，待确认"RA/任何模块是否用 alembic"后再决定是否清除（属 RA 窗口协调项，非阻塞）。**教训：MLflow-PG 验证只能连 scratch 库或预先 pin schema，绝不连生产默认 schema。** M4 重建 MLflow 用**专用 DB 用户 + 专用 mlflow schema**。
+
+**D. 工程任务调整：** 原 §5 改造点①（MLflow URI 中心化到 PG）→ **移 M4**。P2 改造点 = 后端 artifact 服务(T1) + 节点推送 hook(T2) + PG 指针(T3) + model_store(T5) + 只读 MCP(T6) + 嵌入 UI(T7)；§5②③④、§6-§8 中与 artifact/指针/model_store/MCP/UI 相关部分仍适用（去掉其中 MLflow-PG/schema 内容）。
+
+---
+
 ## 1. 背景与目标
 
 **现状**：Qlib 回测产 `pred.pkl`（全截面预测分数）+ `params.pkl`（模型权重），写在每个 workspace 的本地 `mlruns/`，**workspace 完成后被 `shutil.rmtree` 清掉**（即弃）；qe_archive 的 mlflow 指针列**已存在但全 null**。
