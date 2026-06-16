@@ -34,8 +34,8 @@
   "expected": "LocalSim same-day simulation-runtime should use TDX_REALTIME-compatible market data for minute bars plus required limit/pre_close semantics, or fail at pre-open readiness with actionable missing realtime-source diagnostics before generating submit failures. It must not depend on same-day post-market market.stk_limit DB rows during trading hours.",
   "first_seen_at": "2026-06-16T02:10:26.118408Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c781ba5a5014ba1f61b0c82747070c06ea014aca",
+  "fixed_at": "2026-06-16T03:47:28.073990Z",
   "github_issue_number": 1137,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1137",
   "last_seen_at": "2026-06-16T02:10:26.118408Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1138",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -63,6 +64,14 @@
     "fingerprint": "139980d7e26ef3232183361d",
     "source_event_id": "FE-20260616-139980d7e26e"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 91 passed",
+    "C:/Users/lc999/miniconda3/Scripts/ruff.exe check backend/services/paper_trading_v2/market_data.py backend/tests/paper_trading_v2/test_market_data.py -> All checks passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/qmt_strategy_ledger/test_sync_service.py -q -> 113 passed after merge with origin/main",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership scan mapped=12 unmapped=0 ambiguous=0)",
+    "python -m nox -s l0 -> passed (blocking=0; baseline/P2 non-blocking findings only)",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 PAPER_V2_E2E_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed (622 passed, 1 skipped, 2 xfailed; data_quality_deep 10 passed, 21 skipped; known legacy ledger warning non-blocking)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
