@@ -307,7 +307,7 @@ export default function ComputePanel({
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div
-            title="官方相关性只读取 rdagent_assets/factor_values，不再选择 legacy realtime 缓存"
+            title="官方相关性只读取 rdagent_assets/factor_values，不选择非官方缓存"
             style={{
               padding: "8px 12px",
               fontSize: 12,
@@ -590,7 +590,7 @@ export default function ComputePanel({
         <strong>计算模式说明：</strong>
         相关性计算只使用 <strong>rdagent_assets/factor_values/single</strong> official offline parquet cache，
         与官方独立指标和 QE 回测共用同一份因子值缓存；默认展示全量数据集
-        <strong>2018-08-01 ~ 2026-04-30</strong>，缺缓存的因子不会回退到 legacy realtime 缓存或旧快照。
+        <strong>2018-08-01 ~ 2026-04-30</strong>，缺缓存的因子不会回退到非官方缓存或旧快照。
         如需补齐因子值，请在因子库提交官方全量因子计算后再重新计算相关性。
       </div>
 

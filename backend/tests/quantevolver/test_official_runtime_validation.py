@@ -123,7 +123,7 @@ def test_factor_value_loader_validates_qe_subwindow_official_cache_hit(tmp_path:
     assert result["gate_status"] == "passed"
     assert result["official_cache_hit"] is True
     assert result["hit_factors"] == ["factor_a"]
-    assert "factor_values_realtime" not in result["cache_root"]
+    assert result["cache_root"].endswith("factor_values")
 
 
 def test_factor_value_loader_reports_qe_cache_miss_reasons(tmp_path: Path) -> None:

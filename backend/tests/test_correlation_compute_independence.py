@@ -68,7 +68,7 @@ def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     cache_dir = svc.get_correlation_factor_cache_dir()
 
     assert cache_dir.name == "factor_values"
-    assert "factor_values_realtime" not in str(cache_dir)
+    assert str(cache_dir).replace("\\", "/").endswith("rdagent_assets/factor_values")
     assert str(cache_dir) == os.path.normpath(_DEFAULT_PIPELINE_DIR)
 
 
@@ -150,7 +150,7 @@ def test_correlation_cache_status_reports_offline_orphan_parquets(monkeypatch, t
 
     assert status["cache_source"] == "offline_research_backtest_factor_values"
     assert status["cache_root"].endswith("factor_values")
-    assert "factor_values_realtime" not in status["cache_root"]
+    assert status["cache_root"].endswith("factor_values")
     assert status["cached_count"] == 2
     assert status["disk_factor_count"] == 2
     assert status["meta_factor_count"] == 1
@@ -198,9 +198,6 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
         def get_cached_singles(self):
             return [{"factor_name": "factor_a"}, {"factor_name": "factor_b"}]
 
-        def clear_snapshot(self):
-            raise AssertionError("correlation must not clear or use realtime snapshot cache")
-
     class FakeCursor:
         rowcount = 0
 
@@ -234,7 +231,7 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
             assert factor_names == ["factor_a", "factor_b"]
             assert kwargs["expected_as_of_date"] == "2026-04-10"
             assert str(self.loader._pipeline_dir).endswith("factor_values")
-            assert "factor_values_realtime" not in str(self.loader._pipeline_dir)
+            assert str(self.loader._pipeline_dir).replace("\\", "/").endswith("factor_values")
             return CorrelationResult(
                 matrix=np.array([[1.0, 0.1], [0.1, 1.0]], dtype=float),
                 factor_names=list(factor_names),
@@ -300,9 +297,6 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
 
         def get_cached_singles(self):
             return [{"factor_name": "factor_a"}, {"factor_name": "factor_b"}]
-
-        def clear_snapshot(self):
-            raise AssertionError("clear_snapshot should not run without data_date")
 
     class FakeCursor:
         rowcount = 0

@@ -83,7 +83,7 @@ def test_official_constructor_uses_offline_single_loader(monkeypatch):
 
     assert captured["source"] == "single"
     assert Path(captured["pipeline_dir"]).parts[-2:] == ("rdagent_assets", "factor_values")
-    assert "factor_values_realtime" not in captured["pipeline_dir"]
+    assert captured["pipeline_dir"].replace("\\", "/").endswith("rdagent_assets/factor_values")
     assert not hasattr(service, "_pipeline")
 
 
@@ -160,8 +160,6 @@ def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeyp
             return _factor_df()
 
     def _guard_import(name, *args, **kwargs):
-        if "data_snapshot_manager" in name:
-            raise AssertionError("official evaluation must not import DataSnapshotManager")
         if "factor_value_pipeline" in name:
             raise AssertionError("official evaluation must not import FactorValuePipeline")
         return real_import(name, *args, **kwargs)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from starlette.background import BackgroundTasks
 
 from backend.routers import quantevolver as router
@@ -110,17 +111,16 @@ def test_factor_cache_compute_explicit_factors_can_include_disabled(monkeypatch)
 
 def test_factor_cache_compute_blocks_legacy_resume(monkeypatch):
     monkeypatch.setattr("backend.services.quantevolver.config_composer.ConfigComposer", _FakeComposer)
-    req = router.FactorCacheComputeRequest(
-        start_date="2018-08-01",
-        end_date="2026-04-30",
-        resume_task_id="legacy",
-    )
 
-    with pytest.raises(router.HTTPException) as exc:
-        router.factor_cache_compute(req, BackgroundTasks())
+    with pytest.raises(ValidationError) as exc:
+        router.FactorCacheComputeRequest(
+            start_date="2018-08-01",
+            end_date="2026-04-30",
+            resume_task_id="legacy",
+        )
 
-    assert exc.value.status_code == 400
-    assert "legacy backfill" in str(exc.value.detail)
+    assert "resume_task_id" in str(exc.value)
+    assert "Extra inputs are not permitted" in str(exc.value)
 
 
 def test_official_evaluation_compute_forwards_to_full_compute_without_data_snapshot(monkeypatch):

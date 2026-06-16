@@ -13,10 +13,9 @@
 import os
 import sys
 import json
-import time
+import traceback
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 # ══════════════════════════════════════════════════════════════════
@@ -27,7 +26,6 @@ PROJECT_ROOT = Path("F:/Dev/AIstock")
 QE_CODE_DIR = PROJECT_ROOT / "rdagent_assets" / "qe_factors"
 CACHE_ROOTS = [
     PROJECT_ROOT / "rdagent_assets" / "factor_values",
-    PROJECT_ROOT / "rdagent_assets" / "factor_values_realtime",
 ]
 API = "http://127.0.0.1:8001/api/v1"
 
@@ -113,7 +111,6 @@ def _pit_block_for_kind(kind: str, fields: list, sign: int) -> str:
 def build_code_text(cfg: dict) -> str:
     """生成 HDF5 回测形态 (code_text): 读 bak_basic.h5, 写 result.h5"""
     name = cfg["name"]
-    fields_literal = ", ".join(f'"{f}"' for f in cfg["fields"])
     pit_block = _pit_block_for_kind(cfg["kind"], cfg["fields"], cfg["sign"])
     # 在 HDF5 版里 data_src = bb (读 bak_basic.h5)
     pit_block_hdf5 = pit_block.replace("data_src", "bb")
@@ -216,7 +213,9 @@ def _cleanup_cache_for_factor(factor_name: str, report: list):
 
 def delete_c_group():
     """删除 C 组 3 个因子 (调用 HTTP DELETE API)"""
-    import urllib.request, urllib.parse
+    import urllib.parse
+    import urllib.request
+
     for name, source in DELETE_FACTORS:
         print(f"\n--- DELETE (C-group) {name} ---")
         qs = urllib.parse.urlencode({"factor_name": name, "source": source})
@@ -239,8 +238,6 @@ def refactor_factor(cfg: dict, conn) -> dict:
     new_code_text = build_code_text(cfg)
     new_rt_code = build_realtime_code_text(cfg)
     new_qe_code_path = f"rdagent_assets/qe_factors/{name}.py"
-    now_iso = datetime.now(timezone.utc).isoformat()
-
     with conn.cursor() as cur:
         # 1. 找 catalog id
         cur.execute(
@@ -249,7 +246,7 @@ def refactor_factor(cfg: dict, conn) -> dict:
         )
         row = cur.fetchone()
         if not row:
-            report.append(f"  NOT FOUND, skip")
+            report.append("  NOT FOUND, skip")
             return {"ok": False, "report": report}
         catalog_id = row[0]
 
@@ -371,7 +368,7 @@ def main(dry_run: bool = False):
             except Exception as e:
                 conn.rollback()
                 all_reports.append(("FAIL", cfg["name"], [f"  EXCEPTION: {e}"]))
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
     finally:
         conn.close()
 

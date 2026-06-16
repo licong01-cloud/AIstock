@@ -42,12 +42,15 @@ def _win_to_wsl_guess(path: Path) -> str:
     return text
 
 
-def _is_realtime_factor_cache_path(path_value: Optional[str]) -> bool:
-    """Return True when a cache path points anywhere under factor_values_realtime."""
+def _is_official_factor_cache_path_shape(path_value: Optional[str]) -> bool:
+    """Return True for the official factor_values cache root or its single subdir."""
     if not path_value:
         return False
     normalized = str(path_value).strip().strip("\"'").replace("\\", "/").rstrip("/")
-    return any(part.lower() == "factor_values_realtime" for part in normalized.split("/") if part)
+    parts = [part.lower() for part in normalized.split("/") if part]
+    if parts and parts[-1] == "single":
+        parts = parts[:-1]
+    return bool(parts) and parts[-1] == "factor_values"
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -3551,15 +3554,17 @@ class ConfigComposer:
         lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
         lines.append("import hashlib")
         lines.append("import json as _json")
-        lines.append("def _is_forbidden_factor_cache_path(path_value):")
+        lines.append("def _is_official_factor_cache_path_shape(path_value):")
         lines.append("    _parts = [p.lower() for p in re.split(r'[/\\\\]+', str(path_value).strip().strip(\"\\\"'\").rstrip('/\\\\')) if p]")
-        lines.append("    return 'factor_values_realtime' in _parts")
+        lines.append("    if _parts and _parts[-1] == 'single':")
+        lines.append("        _parts = _parts[:-1]")
+        lines.append("    return bool(_parts) and _parts[-1] == 'factor_values'")
         lines.append("")
         lines.append("RAW_FACTOR_CACHE_DIR = os.environ.get('FACTOR_CACHE_DIR', '')")
         lines.append("if RAW_FACTOR_CACHE_DIR:")
         lines.append(r"    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
-        lines.append("    if _is_forbidden_factor_cache_path(_cache_base):")
-        lines.append("        raise RuntimeError('QE backtest must not use factor_values_realtime as FACTOR_CACHE_DIR')")
+        lines.append("    if not _is_official_factor_cache_path_shape(_cache_base):")
+        lines.append("        raise RuntimeError('QE backtest FACTOR_CACHE_DIR must point to official factor_values cache root or its single subdirectory')")
         lines.append("    if os.path.basename(_cache_base) == 'single':")
         lines.append("        FACTOR_CACHE_SINGLE_DIR = _cache_base")
         lines.append("        FACTOR_CACHE_META = os.path.join(os.path.dirname(_cache_base), '_meta.json')")
@@ -3656,8 +3661,8 @@ class ConfigComposer:
         lines.append('    if not FACTOR_CACHE_SINGLE_DIR:')
         lines.append("        top_level_errors.append('cache_dir_missing')")
         lines.append('        return contract')
-        lines.append('    if _is_forbidden_factor_cache_path(FACTOR_CACHE_SINGLE_DIR):')
-        lines.append("        top_level_errors.append('realtime_cache_forbidden')")
+        lines.append('    if not _is_official_factor_cache_path_shape(FACTOR_CACHE_SINGLE_DIR):')
+        lines.append("        top_level_errors.append('non_official_cache_root')")
         lines.append('        return contract')
         lines.append('    if not os.path.exists(cache_path):')
         lines.append("        miss_reasons['missing_from_cache'].append(factor_name)")
@@ -4310,17 +4315,17 @@ class ConfigComposer:
 
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
-            if _is_realtime_factor_cache_path(factor_cache_dir):
+            if not _is_official_factor_cache_path_shape(factor_cache_dir):
                 raise ValueError(
-                    "QE backtest factor_cache_dir must not point to factor_values_realtime"
+                    "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
             env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
-            if _is_realtime_factor_cache_path(factor_cache_wsl):
-                raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN resolves to factor_values_realtime")
+            if not _is_official_factor_cache_path_shape(factor_cache_wsl):
+                raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
             env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 

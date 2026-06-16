@@ -262,8 +262,11 @@ class FactorValueLoader:
 
         if self._source != "single":
             top_level_errors.append("source_must_be_single")
-        if any(part.lower() == "factor_values_realtime" for part in cache_root.split(os.sep)):
-            top_level_errors.append("realtime_cache_forbidden")
+        cache_parts = [part.lower() for part in cache_root.replace("\\", "/").split("/") if part]
+        if cache_parts and cache_parts[-1] == "single":
+            cache_parts = cache_parts[:-1]
+        if not cache_parts or cache_parts[-1] != "factor_values":
+            top_level_errors.append("non_official_cache_root")
         if not requested:
             top_level_errors.append("no_factors_requested")
         if not os.path.isfile(meta_path):

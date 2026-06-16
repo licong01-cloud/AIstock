@@ -551,7 +551,7 @@ class OfficialFactorBatchComputeService:
 
         checks = {
             "wsl_runtime_entered": True,
-            "official_cache_only": "factor_values_realtime" not in str(OFFICIAL_FACTOR_CACHE_ROOT),
+            "official_cache_only": OFFICIAL_FACTOR_CACHE_ROOT.name == "factor_values",
             "code_text_source": True,
             "requested_count_classified": len(requested) == success_count + fail_count + len(skipped),
             "expected_factor_count_met": (
@@ -610,8 +610,8 @@ class OfficialFactorBatchComputeService:
         }
 
     def _assert_official_cache_root(self) -> None:
-        if any(part.lower() == "factor_values_realtime" for part in OFFICIAL_FACTOR_CACHE_ROOT.parts):
-            raise RuntimeError("official factor full compute must not use factor_values_realtime")
+        if OFFICIAL_FACTOR_CACHE_ROOT.name != "factor_values":
+            raise RuntimeError("official factor full compute must use the factor_values cache root")
 
     def _emit(self, event_type: str, **payload: Any) -> None:
         event = {"type": event_type, "ts": datetime.now(timezone.utc).isoformat(), **payload}
