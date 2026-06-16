@@ -42,3 +42,9 @@ def test_phase9_proactive_report_dai_is_no_longer_future_pending() -> None:
     result = run_crosscheck(BLUEPRINT, EXPECTED, fail_on_drift=False)
 
     assert result["status"] == "passed"
+
+
+def test_phase10_reflection_card_dai_is_no_longer_future_pending() -> None:
+    result = run_crosscheck(BLUEPRINT, EXPECTED, fail_on_drift=False)
+
+    assert result["status"] == "passed"

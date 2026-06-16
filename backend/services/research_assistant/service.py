@@ -74,6 +74,7 @@ from .proactive_reports import (
     build_default_proactive_report_registry,
     generate_proactive_report,
 )
+from .reflection_card import build_reflection_artifacts, reflection_trigger_from_event
 from .react_grounding import (
     McpToolCall,
     McpToolResult,
@@ -4935,7 +4936,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return cleaned or text
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
-        if not self.repository.get_record("tasks", task_id):
+        task = self.repository.get_record("tasks", task_id)
+        if not task:
             raise KeyError(f"task not found: {task_id}")
         data = request if isinstance(request, TaskEventCreate) else TaskEventCreate(**request)
         event = self.repository.create_record("task_events", {"event_id": new_id("ratev"), "task_id": task_id, **data.model_dump()})
@@ -4957,8 +4959,36 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 updates["completed_at"] = utc_now().isoformat()
             if data.event_type in {"mcp_failed", "skill_failed", "triage_required"}:
                 updates["triage_json"] = {"last_event_id": event["event_id"], "message": data.message, "payload": data.payload_json}
-            self.repository.update_record("tasks", task_id, updates)
+            task = self.repository.update_record("tasks", task_id, updates)
+        trigger = reflection_trigger_from_event(data.event_type, message=data.message, payload_json=data.payload_json)
+        if trigger:
+            self.generate_reflection_card(task_id=task_id, trigger=trigger, source_event=event, task_snapshot=task)
         return event
+
+    def generate_reflection_card(
+        self,
+        *,
+        task_id: str,
+        trigger: str,
+        source_event: dict[str, Any] | None = None,
+        task_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task = task_snapshot or self.repository.get_record("tasks", task_id)
+        if not task:
+            raise KeyError(f"task not found: {task_id}")
+        card_id = new_id("refcard")
+        memory_id = new_id("mem")
+        artifacts = build_reflection_artifacts(
+            task=task,
+            trigger=trigger,
+            source_event=source_event,
+            card_id=card_id,
+            memory_id=memory_id,
+            created_at=utc_now().isoformat(),
+        )
+        memory = MemoryCurator(self.repository).create_reflection_memory(artifacts["memory"])
+        card = self.repository.create_record("reflection_cards", {**artifacts["card"], "memory_ref": memory["memory_id"]})
+        return card
 
     def create_memory(self, request: MemoryCreate | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, MemoryCreate) else MemoryCreate(**request)
