@@ -26,7 +26,8 @@ interface FullPipelineDialogProps {
   open: boolean;
   taskIds?: string[];
   factorNames?: string[];
-  dataDate?: string;
+  cacheStartDate: string;
+  cacheEndDate: string;
   onClose: () => void;
   onComplete: () => void;
 }
@@ -51,7 +52,7 @@ function formatTime(seconds: number): string {
   return `${m}分${s}秒`;
 }
 
-export default function FullPipelineDialog({ open, taskIds, factorNames, dataDate, onClose, onComplete }: FullPipelineDialogProps) {
+export default function FullPipelineDialog({ open, taskIds, factorNames, cacheStartDate, cacheEndDate, onClose, onComplete }: FullPipelineDialogProps) {
   const [phases, setPhases] = useState<Record<Phase, PhaseStatus>>({
     ic_metrics: "pending",
     transform: "pending",
@@ -195,8 +196,8 @@ export default function FullPipelineDialog({ open, taskIds, factorNames, dataDat
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         taskIds?.length
-          ? { task_ids: taskIds, skip_completed: true, data_date: dataDate || undefined }
-          : { factor_names: factorNames, skip_completed: true, data_date: dataDate || undefined }
+          ? { task_ids: taskIds, skip_completed: true, start_date: cacheStartDate, end_date: cacheEndDate }
+          : { factor_names: factorNames, skip_completed: true, start_date: cacheStartDate, end_date: cacheEndDate }
       ),
       signal: controller.signal,
     }).then(async (res) => {
@@ -236,7 +237,7 @@ export default function FullPipelineDialog({ open, taskIds, factorNames, dataDat
       if (timerRef.current) clearInterval(timerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, JSON.stringify(taskIds), JSON.stringify(factorNames)]);
+  }, [open, JSON.stringify(taskIds), JSON.stringify(factorNames), cacheStartDate, cacheEndDate]);
 
   const handleClose = () => {
     if (abortRef.current) abortRef.current.abort();
@@ -267,6 +268,7 @@ export default function FullPipelineDialog({ open, taskIds, factorNames, dataDat
               {taskIds?.length
                 ? `${taskIds.length} 个Task, 共 ${totalFactors} 个因子`
                 : `${factorNames?.length || 0} 个因子`}
+              {` · 官方窗口 ${cacheStartDate} ~ ${cacheEndDate}`}
             </span>
           </div>
           <button onClick={handleClose} style={{

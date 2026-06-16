@@ -120,7 +120,13 @@ class FactorValuePipeline:
     """
 
     def __init__(self, output_dir: Optional[str] = None):
-        self._output_dir = output_dir or _REALTIME_OUTPUT_DIR
+        if output_dir is None:
+            raise ValueError(
+                "FactorValuePipeline requires an explicit output_dir. "
+                "Official paths must use rdagent_assets/factor_values; "
+                "legacy factor_values_realtime callers must opt in explicitly."
+            )
+        self._output_dir = output_dir
         self._loader_instance = None
         self._static_loader_instance = None
         self._init_lock = threading.Lock()
@@ -254,7 +260,7 @@ class FactorValuePipeline:
                                     f"内存 {mem_mb:.0f}MB → 文件 {file_mb:.0f}MB (已释放内存)"
                                 )
                                 del df
-                                import gc; gc.collect()
+                                gc.collect()
                                 self._cache_key = key
                                 self._persist_key(key)
 
@@ -364,7 +370,7 @@ class FactorValuePipeline:
         RealtimeFactorDataLoader.clear_snapshot()
         self._snapshot_static_df = None
         self._snapshot_data_date = None
-        import gc; gc.collect()
+        gc.collect()
 
     # ── 公共接口 ──
 
@@ -602,7 +608,7 @@ class FactorValuePipeline:
                         df_to_save = df.reindex(cache_index)
                     df_to_save.to_parquet(single_path)
                     success_single_paths.append(single_path)
-                    # ?? meta_entry ? ? _meta.json ???????
+                    # 仅把成功因子的 meta_entry 合并回 _meta.json。
                     _dates = df_to_save.index.get_level_values(0)
                     _value_col = df_to_save.columns[0]
                     result.num_rows = len(df_to_save)
