@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-16T06:00:33.073523Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c8f2b83794c6eba65508476e2b0963d91ddc6a53",
+  "fixed_at": "2026-06-16T06:58:03.322249Z",
   "github_issue_number": 1148,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1148",
   "last_seen_at": "2026-06-16T06:00:33.073523Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1151",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "c6efc3b2dcd6daeb253f7391",
     "source_event_id": "FE-20260616-c6efc3b2dcd6"
   },
+  "validation_evidence": [
+    "PR #1151 checks green: 14 completed, 0 failed; local validation evidence recorded -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
@@ -74,14 +78,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "fix_validated",
-  "validation_evidence": [
-    "pytest targeted ci failure issue summary tests -> 3 passed",
-    "nox l0 validation_module_registry_l0 guardrail_changed_files validation_workflow_automation -> passed",
-    "nox validation_center_backend -> 435 passed, coverage gate passed",
-    "ruff changed scripts/tests -> passed",
-    "git diff --check -> passed",
-    "nightly-intake-smoke -> passed, github_writes=false, unexpected_dirty_paths=0",
-    "workflow-smoke changed validation files -> passed, unexpected_dirty_paths=0"
-  ]
+  "workflow_gate": "fix_validated"
 }
