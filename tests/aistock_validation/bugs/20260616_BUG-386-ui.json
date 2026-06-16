@@ -1,0 +1,97 @@
+{
+  "actual": "官方因子独立指标、相关性和 QE 回测缓存已经统一到 rdagent_assets/factor_values，但 UI/API 仍暴露 factor_values_realtime 快照和旧 factor-values compute 入口，导致缓存口径误导。需要统一 UI 显示官方全量数据集时间段，允许手工配置离线窗口，移除/隔离不再需要的独立回测缓存生成入口，并确保官方、相关性、QE 回测路径不得再消费旧实盘缓存目录。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260616_BUG-386-ui.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-386",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T05:45:39.109499Z",
+  "description": "官方因子独立指标、相关性和 QE 回测缓存已经统一到 rdagent_assets/factor_values，但 UI/API 仍暴露 factor_values_realtime 快照和旧 factor-values compute 入口，导致缓存口径误导。需要统一 UI 显示官方全量数据集时间段，允许手工配置离线窗口，移除/隔离不再需要的独立回测缓存生成入口，并确保官方、相关性、QE 回测路径不得再消费旧实盘缓存目录。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-b81ccf60c5f0",
+      "timestamp": "2026-06-16T05:45:39.109495Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-16T05:45:39.109499Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1147,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1147",
+  "last_seen_at": "2026-06-16T05:45:39.109499Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "统一官方因子缓存 UI 和隔离旧实盘缓存入口",
+  "trigger_condition": {
+    "fingerprint": "b81ccf60c5f0eaf65ab629c2",
+    "source_event_id": "FE-20260616-b81ccf60c5f0"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/factor_values",
+    "ui_routes": [
+      "/factor_values"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
