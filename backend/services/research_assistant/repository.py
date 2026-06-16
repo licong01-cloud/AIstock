@@ -84,6 +84,13 @@ TABLES: dict[str, dict[str, Any]] = {
         "search": {"report_id", "report_type", "report_date", "status"},
         "no_updated_at": True,
     },
+    "reflection_cards": {
+        "table": "assistant_reflection_cards",
+        "id": "card_id",
+        "json": {"structured_json"},
+        "search": {"card_id", "task_id", "trigger", "memory_ref"},
+        "no_updated_at": True,
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",
