@@ -91,6 +91,13 @@ TABLES: dict[str, dict[str, Any]] = {
         "search": {"card_id", "task_id", "trigger", "memory_ref"},
         "no_updated_at": True,
     },
+    "prompt_lab_runs": {
+        "table": "assistant_prompt_lab_runs",
+        "id": "lab_run_id",
+        "json": {"judge_score_json"},
+        "search": {"lab_run_id", "target_prompt_key", "optimizer", "eval_set_ref", "status", "approval_request_id"},
+        "no_updated_at": True,
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",

@@ -38,7 +38,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase10_reflection_cards_v1_20260616"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase11_prompt_lab_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -50,6 +50,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_code_context_refs",
         "assistant_proactive_reports",
         "assistant_reflection_cards",
+        "assistant_prompt_lab_runs",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -98,6 +99,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "COMMENT ON TABLE assistant_code_context_refs" in sql
     assert "COMMENT ON TABLE assistant_proactive_reports" in sql
     assert "COMMENT ON TABLE assistant_reflection_cards" in sql
+    assert "COMMENT ON TABLE assistant_prompt_lab_runs" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
