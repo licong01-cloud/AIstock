@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Callable, Iterator, Protocol
 
@@ -31,6 +32,7 @@ from backend.services.paper_trading_v2.day_features import DbV25DayFeatureProvid
 
 PRICE_UNIT_DIVISOR = 1000.0
 MINUTE_VOLUME_HAND_SIZE = 100
+PRICE_TICK = Decimal("0.01")
 
 TdxMinuteFetcher = Callable[[str, date], list[dict[str, Any]]]
 ConnFactory = Callable[[], Iterator[Any]]
@@ -146,6 +148,13 @@ class PreviousCloseProvider(Protocol):
     """Provider boundary for explicit previous close lookup."""
 
     def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
+        ...
+
+
+class LimitPriceProvider(Protocol):
+    """Provider boundary for daily limit prices."""
+
+    def get_limit_price(self, symbol: str, trade_date: date) -> DailyLimitPrice:
         ...
 
 
@@ -287,13 +296,35 @@ class DbPreviousCloseProvider:
             ) from exc
 
 
+class _InjectedLimitProviderPreviousCloseProvider:
+    """Use an injected non-DB limit provider only as a unit-test previous close source."""
+
+    def __init__(self, limit_price_provider: LimitPriceProvider) -> None:
+        self.limit_price_provider = limit_price_provider
+
+    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
+        limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
+        if limit_price.pre_close is None or float(limit_price.pre_close) <= 0:
+            raise DataUnavailableError(
+                "pre_close is required for minute execution context",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": "injected_limit_provider.pre_close"},
+            )
+        return PreviousClose(
+            symbol=symbol,
+            trade_date=trade_date,
+            previous_trade_date=trade_date,
+            pre_close=float(limit_price.pre_close),
+            source="injected_limit_provider.pre_close",
+        )
+
+
 class PaperV2MinuteMarketDataProvider:
     """Build strict minute execution inputs from TDX or historical DB data."""
 
     def __init__(
         self,
         *,
-        limit_price_provider: StkLimitPriceProvider | None = None,
+        limit_price_provider: LimitPriceProvider | None = None,
         suspend_status_provider: SuspendStatusProvider | None = None,
         previous_close_provider: PreviousCloseProvider | None = None,
         day_feature_provider: V25DayFeatureProvider | None = None,
@@ -303,7 +334,12 @@ class PaperV2MinuteMarketDataProvider:
         self.conn_factory = conn_factory or get_conn
         self.limit_price_provider = limit_price_provider or StkLimitPriceProvider()
         self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider(conn_factory=self.conn_factory)
-        self.previous_close_provider = previous_close_provider or DbPreviousCloseProvider(conn_factory=self.conn_factory)
+        if previous_close_provider is not None:
+            self.previous_close_provider = previous_close_provider
+        elif limit_price_provider is not None and not isinstance(limit_price_provider, StkLimitPriceProvider):
+            self.previous_close_provider = _InjectedLimitProviderPreviousCloseProvider(limit_price_provider)
+        else:
+            self.previous_close_provider = DbPreviousCloseProvider(conn_factory=self.conn_factory)
         self.day_feature_provider = day_feature_provider or DbV25DayFeatureProvider(conn_factory=self.conn_factory)
         self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
 
@@ -326,7 +362,11 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "min_bars": min_bars},
             )
 
-        limit_price, pre_close_source = self._limit_price_with_required_pre_close(symbol, trade_date)
+        limit_price, pre_close_source, limit_price_source = self._limit_price_with_required_pre_close(
+            symbol,
+            trade_date,
+            source=source,
+        )
         suspend_status = None
         if require_suspend_status:
             if self.suspend_status_provider is None:
@@ -366,6 +406,7 @@ class PaperV2MinuteMarketDataProvider:
             minute_bars=minute_bars,
             limit_price=limit_price,
             pre_close_source=pre_close_source,
+            limit_price_source=limit_price_source,
             suspend_status=suspend_status,
             day_features=day_features,
         )
@@ -433,7 +474,11 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "until_time": until_time.isoformat()},
             )
 
-        limit_price, pre_close_source = self._limit_price_with_required_pre_close(symbol, trade_date)
+        limit_price, pre_close_source, limit_price_source = self._limit_price_with_required_pre_close(
+            symbol,
+            trade_date,
+            source=source,
+        )
         suspend_status = None
         if require_suspend_status:
             if self.suspend_status_provider is None:
@@ -463,6 +508,7 @@ class PaperV2MinuteMarketDataProvider:
             minute_bars=observed,
             limit_price=limit_price,
             pre_close_source=pre_close_source,
+            limit_price_source=limit_price_source,
             suspend_status=suspend_status,
             day_features=day_features,
         )
@@ -699,6 +745,7 @@ class PaperV2MinuteMarketDataProvider:
         minute_bars: list[MinuteBar],
         limit_price: DailyLimitPrice,
         pre_close_source: str,
+        limit_price_source: str,
         suspend_status: DailySuspendStatus | None = None,
         day_features: V25DayFeatures | None = None,
     ) -> dict[str, Any]:
@@ -719,6 +766,7 @@ class PaperV2MinuteMarketDataProvider:
             "prev_close_source": pre_close_source,
             "limit_up": limit_price.up_limit,
             "limit_down": limit_price.down_limit,
+            "limit_price_source": limit_price_source,
             "suspend_status": (
                 None
                 if suspend_status is None
@@ -739,14 +787,81 @@ class PaperV2MinuteMarketDataProvider:
             context.update(day_features.market_context_payload())
         return context
 
-    def _limit_price_with_required_pre_close(self, symbol: str, trade_date: date) -> tuple[DailyLimitPrice, str]:
+    def _limit_price_with_required_pre_close(
+        self,
+        symbol: str,
+        trade_date: date,
+        *,
+        source: MinuteDataSource,
+    ) -> tuple[DailyLimitPrice, str, str]:
+        if source == MinuteDataSource.TDX_REALTIME:
+            return self._derived_realtime_limit_price_from_previous_close(symbol, trade_date)
+        return self._stk_limit_price_with_required_pre_close(symbol, trade_date)
+
+    def _stk_limit_price_with_required_pre_close(self, symbol: str, trade_date: date) -> tuple[DailyLimitPrice, str, str]:
         limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
         if limit_price.pre_close is not None and float(limit_price.pre_close) > 0:
-            return limit_price, "market.stk_limit.pre_close"
+            return limit_price, "market.stk_limit.pre_close", "market.stk_limit.limit_price"
+        previous_close = self._required_previous_close(
+            symbol,
+            trade_date,
+            requested_source="market.stk_limit.pre_close",
+        )
+        return (
+            DailyLimitPrice(
+                symbol=limit_price.symbol,
+                trade_date=limit_price.trade_date,
+                pre_close=previous_close.pre_close,
+                up_limit=limit_price.up_limit,
+                down_limit=limit_price.down_limit,
+            ),
+            previous_close.source,
+            "market.stk_limit.limit_price",
+        )
+
+    def _derived_realtime_limit_price_from_previous_close(
+        self,
+        symbol: str,
+        trade_date: date,
+    ) -> tuple[DailyLimitPrice, str, str]:
+        previous_close = self._required_previous_close(
+            symbol,
+            trade_date,
+            requested_source="TDX_REALTIME.previous_close",
+        )
+        limit_pct = self._a_share_daily_limit_pct(symbol)
+        up_limit = self._round_price_tick(previous_close.pre_close * (1.0 + limit_pct))
+        down_limit = self._round_price_tick(previous_close.pre_close * (1.0 - limit_pct))
+        if down_limit >= up_limit:
+            raise DataUnavailableError(
+                "derived realtime limit price range is invalid",
+                context={
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "pre_close": previous_close.pre_close,
+                    "limit_pct": limit_pct,
+                    "up_limit": up_limit,
+                    "down_limit": down_limit,
+                    "source": previous_close.source,
+                },
+            )
+        return (
+            DailyLimitPrice(
+                symbol=symbol,
+                trade_date=trade_date,
+                pre_close=previous_close.pre_close,
+                up_limit=up_limit,
+                down_limit=down_limit,
+            ),
+            previous_close.source,
+            f"derived_from_previous_close.{previous_close.source}.a_share_board_limit_pct_{limit_pct:.2f}",
+        )
+
+    def _required_previous_close(self, symbol: str, trade_date: date, *, requested_source: str) -> PreviousClose:
         if self.previous_close_provider is None:
             raise DataUnavailableError(
                 "pre_close is required for minute execution context",
-                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": "market.stk_limit.pre_close"},
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": requested_source},
             )
         previous_close = self.previous_close_provider.get_previous_close(symbol, trade_date)
         if previous_close.pre_close <= 0:
@@ -760,16 +875,21 @@ class PaperV2MinuteMarketDataProvider:
                     "source": previous_close.source,
                 },
             )
-        return (
-            DailyLimitPrice(
-                symbol=limit_price.symbol,
-                trade_date=limit_price.trade_date,
-                pre_close=previous_close.pre_close,
-                up_limit=limit_price.up_limit,
-                down_limit=limit_price.down_limit,
-            ),
-            previous_close.source,
-        )
+        return previous_close
+
+    @staticmethod
+    def _a_share_daily_limit_pct(symbol: str) -> float:
+        code = str(symbol or "").split(".")[0]
+        suffix = str(symbol or "").split(".")[-1].upper() if "." in str(symbol or "") else ""
+        if suffix in {"BJ", "BSE"} or code.startswith(("4", "8")):
+            return 0.30
+        if code.startswith(("300", "301", "302", "688", "689")):
+            return 0.20
+        return 0.10
+
+    @staticmethod
+    def _round_price_tick(value: float) -> float:
+        return float(Decimal(str(value)).quantize(PRICE_TICK, rounding=ROUND_HALF_UP))
 
     def _load_day_features(self, *, symbol: str, trade_date: date, required: bool) -> V25DayFeatures | None:
         if not required:
