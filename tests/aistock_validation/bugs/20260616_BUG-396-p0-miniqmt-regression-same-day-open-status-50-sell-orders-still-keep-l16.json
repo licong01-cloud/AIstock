@@ -1,0 +1,76 @@
+{
+  "actual": "2026-06-16 21:04 +08 read-only APIs: /health ok; simulation scheduler autostart=true default_submit=true provider_ready=true; QMT connected SIM 62266303, account frozen_cash=0.0; /qmt/orders?cancelable_only=true returns two status=50 SELL orders 1082157381 688368.SH and 1082157382 688689.SH; /simulation-runtime/runs/simrun_93a275d7e6df7cab reports FAILED_RETRYABLE, qmt_batch_status=PARTIAL, submitted_intents=8, failed_intents=32, submit_result_gate.status=blocked, reason=miniqmt_open_orders_remain_after_reconciliation.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "tests/aistock_validation/bugs/20260616_BUG-396-p0-miniqmt-regression-same-day-open-status-50-sell-orders-still-keep-l16.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-396",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T13:35:07.906886Z",
+  "description": "2026-06-16 21:04 +08 read-only APIs: /health ok; simulation scheduler autostart=true default_submit=true provider_ready=true; QMT connected SIM 62266303, account frozen_cash=0.0; /qmt/orders?cancelable_only=true returns two status=50 SELL orders 1082157381 688368.SH and 1082157382 688689.SH; /simulation-runtime/runs/simrun_93a275d7e6df7cab reports FAILED_RETRYABLE, qmt_batch_status=PARTIAL, submitted_intents=8, failed_intents=32, submit_result_gate.status=blocked, reason=miniqmt_open_orders_remain_after_reconciliation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-40c2f5fae88e",
+      "timestamp": "2026-06-16T13:35:07.906882Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-16T21:04+08/simrun_93a275d7e6df7cab; qmt-order://1082157381; qmt-order://1082157382; related-fixed-bugs://BUG-369,BUG-374,BUG-381,BUG-382,BUG-338"
+  ],
+  "expected": "After restart and before the next trading day, MiniQMT simulation runtime should expose an actionable readiness state and must not let same-day unfilled status-50 SELL orders keep the strategy slot indefinitely FAILED_RETRYABLE. At daily boundary, unfilled broker orders should be reconciled/terminalized or carried as explicit next-day recovery evidence without blocking new-day unattended simulation; capacity residual BUY skips must remain explicit and must not be treated as fake full success.",
+  "first_seen_at": "2026-06-16T13:35:07.906886Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1181,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1181",
+  "last_seen_at": "2026-06-16T13:35:07.906886Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/simulation-runtime/runs/simrun_93a275d7e6df7cab; GET /api/v1/qmt/orders?cancelable_only=true; GET /api/v1/qmt/account; verify submit_result_gate and open_order_evidence.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT][Regression] same-day open status-50 sell orders still keep L16 FAILED_RETRYABLE after restart",
+  "trigger_condition": {
+    "fingerprint": "40c2f5fae88e10638a146eda",
+    "source_event_id": "FE-20260616-40c2f5fae88e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

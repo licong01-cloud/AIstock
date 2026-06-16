@@ -1589,6 +1589,7 @@ class SimulationSchedulerRunOnceResult:
             in {
                 "SUBMITTED",
                 "RECONCILED",
+                "RECONCILIATION_PENDING_OPEN_ORDERS",
                 "TAIL_HANDLED",
                 "RECONCILIATION_WARNING",
                 "NO_REBALANCE",
@@ -3569,6 +3570,7 @@ class SimulationLifecycleScheduler:
                 binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
                 and run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
                 and SimulationLifecycleScheduler._mini_qmt_batch_has_deferred_dependent_buy(run.run_payload_json)
+                and not SimulationLifecycleScheduler._mini_qmt_batch_has_open_order_evidence(run.run_payload_json)
             )
         if (
             binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
@@ -3638,12 +3640,27 @@ class SimulationLifecycleScheduler:
             and (
                 SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
                 or SimulationLifecycleScheduler._mini_qmt_batch_has_terminal_capacity_residual(run.run_payload_json)
+                or SimulationLifecycleScheduler._mini_qmt_batch_has_open_order_evidence(run.run_payload_json)
                 or (
                     run.status != SimulationDailyRunStatus.FAILED_RETRYABLE
                     and SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(run.run_payload_json)
                 )
             )
         )
+
+    @staticmethod
+    def _mini_qmt_batch_has_open_order_evidence(payload: dict[str, Any]) -> bool:
+        for container_key in ("reconcile_after_submit", "sync_after_submit", "sync_before_submit"):
+            container = payload.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            open_order_evidence = container.get("open_order_evidence")
+            if (
+                isinstance(open_order_evidence, dict)
+                and int(open_order_evidence.get("open_order_count") or 0) > 0
+            ):
+                return True
+        return False
 
     @staticmethod
     def _mini_qmt_batch_has_deferred_dependent_buy(payload: dict[str, Any]) -> bool:
@@ -3927,6 +3944,8 @@ class SimulationLifecycleScheduler:
         }
         if submit_result_gate["status"] == "SUCCEEDED":
             next_status = SimulationDailyRunStatus.SUCCEEDED
+        elif submit_result_gate["status"] == "PENDING":
+            next_status = SimulationDailyRunStatus.INTRADAY_RUNNING
         else:
             next_status = SimulationDailyRunStatus.FAILED_RETRYABLE
         self.repository.update_simulation_daily_run(
@@ -3961,8 +3980,8 @@ class SimulationLifecycleScheduler:
             status = "blocked"
             reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
         elif open_order_count > 0:
-            status = "blocked"
-            reason = "miniqmt_open_orders_remain_after_reconciliation"
+            status = "PENDING"
+            reason = "miniqmt_open_orders_pending_after_reconciliation"
         elif batch_succeeded:
             status = "SUCCEEDED"
             reason = "miniqmt_batch_succeeded_and_reconciled"
@@ -3984,6 +4003,7 @@ class SimulationLifecycleScheduler:
             "batch_succeeded": batch_succeeded,
             "terminal_capacity_residual": terminal_capacity_residual,
             "open_order_count": open_order_count,
+            "pending_open_orders": open_order_count > 0,
             "broker_side_effect_count": broker_side_effect_count,
         }
 
@@ -4404,6 +4424,8 @@ class SimulationLifecycleScheduler:
                 else {}
             )
             status = submit_result_gate.get("status") or run_status_gate.get("status") or run.get("status")
+            if status == "PENDING":
+                return "RECONCILIATION_PENDING_OPEN_ORDERS"
             if execution_status not in {"SUBMITTED", "RECOVERED"}:
                 return "BROKER_SUBMIT_FAILED_RECONCILED" if status == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
             return "RECONCILED" if status == "SUCCEEDED" else "RECONCILIATION_WARNING"
