@@ -40,7 +40,7 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
-from backend.services.trading_core.models import AccountSnapshot, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
@@ -105,6 +105,11 @@ _MINIQMT_STALE_ACTIVE_STATUSES = (
 
 _LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
 _MINIQMT_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.miniqmt_roll_forward"
+_LOCALSIM_CASH_FIT_BUY_BUFFER_RATIO = 1.02
+_LOCALSIM_CASH_FIT_SELL_PROCEEDS_BUFFER_RATIO = 0.98
+_LOCALSIM_DEFAULT_OPEN_COST = 0.000095
+_LOCALSIM_DEFAULT_CLOSE_COST = 0.000595
+_LOCALSIM_DEFAULT_MIN_FEE = 5.0
 
 
 @dataclass(frozen=True)
@@ -347,6 +352,12 @@ class ProductionSimulationRunContextProvider:
                 if self._position_loader is not None
                 else paper_repository.load_latest_positions(portfolio_id, trade_date)
             )
+            positions, settlement_diagnostics = self._settle_local_sim_positions_for_trade_date(
+                positions=positions,
+                trade_date=trade_date,
+                strategy_id=binding.strategy_id,
+                binding_id=binding.binding_id,
+            )
             cash = float(paper_repository.load_latest_cash(portfolio, trade_date))
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
@@ -403,12 +414,47 @@ class ProductionSimulationRunContextProvider:
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
+            context_diagnostics={"localsim_tplus1_settlement": settlement_diagnostics},
             market_data_source=(
                 getattr(local_broker, "data_source").value
                 if local_broker is not None and getattr(local_broker, "data_source", None) is not None
                 else self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date).value
             ),
         )
+
+    @staticmethod
+    def _settle_local_sim_positions_for_trade_date(
+        *,
+        positions: dict[str, PositionLot],
+        trade_date: date,
+        strategy_id: str,
+        binding_id: str,
+    ) -> tuple[dict[str, PositionLot], dict[str, Any]]:
+        settled: dict[str, PositionLot] = {}
+        adjusted: list[dict[str, Any]] = []
+        for symbol, position in positions.items():
+            updated = position
+            if position.trade_date < trade_date and int(position.available_quantity) < int(position.quantity):
+                updated = position.model_copy(update={"available_quantity": int(position.quantity)})
+                adjusted.append(
+                    {
+                        "symbol": symbol,
+                        "trade_date": position.trade_date.isoformat(),
+                        "previous_available_quantity": int(position.available_quantity),
+                        "settled_available_quantity": int(updated.available_quantity),
+                        "quantity": int(position.quantity),
+                    }
+                )
+            settled[symbol] = updated
+        return settled, {
+            "schema_version": "localsim_tplus1_settlement_v1",
+            "strategy_id": strategy_id,
+            "binding_id": binding_id,
+            "trade_date": trade_date.isoformat(),
+            "position_count": len(positions),
+            "settled_position_count": len(adjusted),
+            "settled_positions": adjusted,
+        }
 
     def _load_miniqmt_context(
         self,
@@ -2031,6 +2077,19 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
         )
         if existing is not None and existing.execution_plan_id:
+            if self._should_rebuild_localsim_plan_after_side_effect_free_failure(binding=binding, run=existing):
+                return self._rebuild_localsim_plan_after_side_effect_free_failure(
+                    binding=binding,
+                    run=existing,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    submit=submit,
+                    mode=mode,
+                    created_by=created_by,
+                    selection_cache=selection_cache,
+                    shared_selection_keys=shared_selection_keys,
+                )
             if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=existing):
                 return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
                     binding=binding,
@@ -2103,6 +2162,28 @@ class SimulationLifecycleScheduler:
             )
 
         sync_result = self._sync_before_submit(binding=binding, run=build_result.run, context=context)
+        build_result, residual_only = self._prepare_localsim_build_result_for_submit(
+            binding=binding,
+            build_result=build_result,
+            context=context,
+        )
+        if residual_only is not None:
+            self._persist_strategy_performance(binding=binding, run=build_result.run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(build_result.run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="LOCALSIM_CAPACITY_RESIDUAL_SKIPPED",
+                run=latest_run,
+                execution_plan=build_result.execution_plan,
+                sync_result=sync_result,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         execution = self.orchestrator.submit_execution_plan(
             build_result=build_result,
             local_broker=context.local_broker,
@@ -2144,6 +2225,7 @@ class SimulationLifecycleScheduler:
         )
         latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
         status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
+        status = self._local_sim_terminal_capacity_residual_status(latest_run, fallback=status)
         return SimulationSchedulerBindingResult(
             binding_id=binding.binding_id,
             strategy_id=binding.strategy_id,
@@ -2290,6 +2372,154 @@ class SimulationLifecycleScheduler:
         )
         latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
         status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
+        status = self._local_sim_terminal_capacity_residual_status(latest_run, fallback=status)
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status=status,
+            run=latest_run,
+            execution_plan=execution.execution_plan,
+            execution_result=execution,
+            sync_result=sync_result,
+            reconciliation_result=reconciliation,
+            data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=trade_date,
+                default_data_source=data_source,
+            ),
+        )
+
+    def _rebuild_localsim_plan_after_side_effect_free_failure(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        submit: bool,
+        mode: str,
+        created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
+        shared_selection_keys: set[tuple[Any, ...]] | None,
+    ) -> SimulationSchedulerBindingResult:
+        context = self.context_provider.load_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+        )
+        selection = self._run_selection_once_per_release(
+            binding=binding,
+            runtime_release=runtime_release,
+            trade_date=trade_date,
+            data_source=data_source,
+            created_by=created_by,
+            selection_cache=selection_cache,
+            shared_selection_keys=shared_selection_keys,
+        )
+        self._validate_fresh_selection_evidence(
+            binding=binding,
+            runtime_release=runtime_release,
+            selection=selection,
+            trade_date=trade_date,
+        )
+        build_result = self._build_plan_from_selection(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+            data_source=data_source,
+            selection=selection,
+            context=context,
+            created_by=created_by,
+        )
+        build_result = self._persist_no_rebalance_evidence(
+            build_result=build_result,
+            current_positions=context.current_positions,
+        )
+        build_result = replace(
+            build_result,
+            run=self.repository.update_simulation_daily_run(
+                run.run_id,
+                status=SimulationDailyRunStatus.PLANNING_EXECUTION,
+                selection_evidence=build_result.selection_evidence,
+                execution_plan=build_result.execution_plan,
+                payload_patch={
+                    "last_stage": "PLANNING_EXECUTION",
+                    "rebuilt_after_side_effect_free_failure": True,
+                    "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+                    "rebuilt_from_execution_plan_id": run.execution_plan_id,
+                    "rebuilt_execution_plan_id": build_result.execution_plan.plan_id,
+                    "localsim_context_diagnostics": context.context_diagnostics,
+                    "broker_called": False,
+                    "submitted_intents": 0,
+                },
+                payload_unset=("submit_failure",),
+            ),
+        )
+        if not submit:
+            self._persist_strategy_performance(binding=binding, run=build_result.run, context=context)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="REBUILT_EXISTING_PLAN",
+                run=build_result.run,
+                execution_plan=build_result.execution_plan,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
+
+        sync_result = self._sync_before_submit(binding=binding, run=build_result.run, context=context)
+        build_result, residual_only = self._prepare_localsim_build_result_for_submit(
+            binding=binding,
+            build_result=build_result,
+            context=context,
+        )
+        if residual_only is not None:
+            self._persist_strategy_performance(binding=binding, run=build_result.run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(build_result.run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="LOCALSIM_CAPACITY_RESIDUAL_SKIPPED",
+                run=latest_run,
+                execution_plan=build_result.execution_plan,
+                sync_result=sync_result,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
+        execution = self.orchestrator.submit_execution_plan(
+            build_result=build_result,
+            local_broker=context.local_broker,
+            managed_order_service=context.managed_order_service,
+            mode=mode,
+            price_by_symbol=context.price_by_symbol or context.current_prices,
+        )
+        local_persistence = self._persist_local_sim_execution_result(
+            binding=binding,
+            run=execution.run,
+            execution=execution,
+            context=context,
+        )
+        tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
+        reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
+        self._persist_strategy_performance(
+            binding=binding,
+            run=execution.run,
+            context=context,
+            local_persistence=local_persistence,
+        )
+        latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+        status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
+        status = self._local_sim_terminal_capacity_residual_status(latest_run, fallback=status)
         return SimulationSchedulerBindingResult(
             binding_id=binding.binding_id,
             strategy_id=binding.strategy_id,
@@ -2410,6 +2640,29 @@ class SimulationLifecycleScheduler:
                 trade_date=trade_date,
             )
             sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
+            run, plan, residual_only = self._prepare_localsim_execution_plan_for_submit(
+                binding=binding,
+                run=run,
+                plan=plan,
+                context=context,
+            )
+            if residual_only is not None:
+                self._persist_strategy_performance(binding=binding, run=run, context=context)
+                latest_run = self.repository.get_simulation_daily_run(run.run_id)
+                return SimulationSchedulerBindingResult(
+                    binding_id=binding.binding_id,
+                    strategy_id=binding.strategy_id,
+                    broker_backend=binding.broker_backend,
+                    status="LOCALSIM_CAPACITY_RESIDUAL_SKIPPED",
+                    run=latest_run,
+                    execution_plan=plan,
+                    sync_result=sync_result,
+                    data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                        binding=binding,
+                        trade_date=trade_date,
+                        default_data_source=data_source,
+                    ),
+                )
             execution = self.orchestrator.submit_persisted_execution_plan(
                 run=run,
                 binding=binding,
@@ -2453,6 +2706,7 @@ class SimulationLifecycleScheduler:
             )
             latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
             status = self._result_status_after_post_submit(execution.status, tail_result=tail_result, reconciliation=reconciliation)
+            status = self._local_sim_terminal_capacity_residual_status(latest_run, fallback=status)
             return SimulationSchedulerBindingResult(
                 binding_id=binding.binding_id,
                 strategy_id=binding.strategy_id,
@@ -2502,6 +2756,212 @@ class SimulationLifecycleScheduler:
             "context": failure.get("context") if isinstance(failure, dict) else {"run_id": run.run_id},
         }
 
+    def _prepare_localsim_build_result_for_submit(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        build_result: SimulationPlanBuildResult,
+        context: SimulationRunContext,
+    ) -> tuple[SimulationPlanBuildResult, dict[str, Any] | None]:
+        run, plan, residual_only = self._prepare_localsim_execution_plan_for_submit(
+            binding=binding,
+            run=build_result.run,
+            plan=build_result.execution_plan,
+            context=context,
+        )
+        if run is build_result.run and plan is build_result.execution_plan:
+            return build_result, residual_only
+        return replace(build_result, run=run, execution_plan=plan), residual_only
+
+    def _prepare_localsim_execution_plan_for_submit(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+    ) -> tuple[SimulationDailyRun, ExecutionPlan, dict[str, Any] | None]:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or not plan.intents:
+            return run, plan, None
+        prepared_plan, fit_payload = self._cash_fit_localsim_execution_plan(plan=plan, context=context)
+        if fit_payload["status"] == "UNCHANGED":
+            return run, plan, None
+        if fit_payload["prepared_intent_count"] > 0:
+            prepared_plan = self.repository.save_execution_plan(prepared_plan)
+            updated = self.repository.update_simulation_daily_run(
+                run.run_id,
+                execution_plan=prepared_plan,
+                payload_patch={
+                    "local_sim_cash_fit": fit_payload,
+                    "execution_plan_intent_count": len(prepared_plan.intents),
+                    "order_intent_count": len(prepared_plan.intents),
+                },
+            )
+            return updated, prepared_plan, None
+
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_TERMINAL,
+            payload_patch={
+                "local_sim_cash_fit": fit_payload,
+                "no_rebalance_required": False,
+                "broker_called": False,
+                "submitted_intents": 0,
+                "last_stage": "FAILED_TERMINAL",
+            },
+            payload_unset=("submit_failure",),
+        )
+        return updated, plan, fit_payload
+
+    def _cash_fit_localsim_execution_plan(
+        self,
+        *,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+    ) -> tuple[ExecutionPlan, dict[str, Any]]:
+        cash = float(context.cash if context.cash is not None else 0.0)
+        running_cash = max(0.0, cash)
+        sells = [intent for intent in plan.intents if intent.side == OrderSide.SELL]
+        buys = [intent for intent in plan.intents if intent.side == OrderSide.BUY]
+        prepared = [*sells]
+        simulated_sell_proceeds = 0.0
+        for intent in sells:
+            price = self._reference_price_for_localsim_cash_fit(intent, context=context)
+            proceeds = max(0.0, int(intent.order_quantity) * price - self._estimated_localsim_fee(intent, price))
+            proceeds *= _LOCALSIM_CASH_FIT_SELL_PROCEEDS_BUFFER_RATIO
+            simulated_sell_proceeds += proceeds
+            running_cash += proceeds
+
+        skipped: list[dict[str, Any]] = []
+        submitted_buy_count = 0
+        for intent in buys:
+            price = self._reference_price_for_localsim_cash_fit(intent, context=context)
+            required_cash = (
+                int(intent.order_quantity) * price + self._estimated_localsim_fee(intent, price)
+            ) * _LOCALSIM_CASH_FIT_BUY_BUFFER_RATIO
+            if required_cash <= running_cash + 1e-8:
+                prepared.append(intent)
+                submitted_buy_count += 1
+                running_cash -= required_cash
+                continue
+            skipped.append(
+                {
+                    "intent_id": intent.intent_id,
+                    "symbol": intent.symbol,
+                    "side": intent.side.value,
+                    "order_quantity": int(intent.order_quantity),
+                    "required_cash": round(required_cash, 6),
+                    "cash_before_intent": round(running_cash, 6),
+                    "reason_code": "SKIPPED_INSUFFICIENT_CAPITAL",
+                    "next_action": "rebuild the daily LocalSim plan on the next scheduler tick after sell proceeds or cash state changes",
+                }
+            )
+
+        payload = {
+            "schema_version": "localsim_cash_fit_v1",
+            "status": "UNCHANGED",
+            "reason": "localsim_cash_fit_sell_first_proceeds_aware",
+            "initial_cash": round(cash, 6),
+            "simulated_sell_proceeds": round(simulated_sell_proceeds, 6),
+            "remaining_cash_buffer": round(running_cash, 6),
+            "original_intent_count": len(plan.intents),
+            "prepared_intent_count": len(prepared),
+            "sell_intent_count": len(sells),
+            "buy_intent_count": len(buys),
+            "submitted_buy_count": submitted_buy_count,
+            "skipped_buy_count": len(skipped),
+            "skipped_buy_intents": skipped,
+        }
+        original_ids = [intent.intent_id for intent in plan.intents]
+        prepared_ids = [intent.intent_id for intent in prepared]
+        if not skipped and prepared_ids == original_ids:
+            return plan, payload
+        if skipped:
+            payload["status"] = "CAPACITY_RESIDUAL_SKIPPED"
+        else:
+            payload["status"] = "SELL_FIRST_REORDERED"
+        prepared_plan = self._copy_localsim_plan_with_intents(
+            plan=plan,
+            intents=prepared,
+            cash_fit_payload=payload,
+        )
+        return prepared_plan, payload
+
+    @staticmethod
+    def _reference_price_for_localsim_cash_fit(intent: Any, *, context: SimulationRunContext) -> float:
+        for value in (
+            intent.price_policy.get("reference_price"),
+            intent.price_policy.get("limit_price"),
+            (context.price_by_symbol or {}).get(intent.symbol),
+            context.current_prices.get(intent.symbol),
+        ):
+            if value is None:
+                continue
+            price = float(value)
+            if price > 0:
+                return price
+        raise DataUnavailableError(
+            "LocalSim cash-fit requires a positive reference price",
+            context={
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "plan_id": intent.plan_id,
+            },
+        )
+
+    @staticmethod
+    def _estimated_localsim_fee(intent: Any, price: float) -> float:
+        rate = _LOCALSIM_DEFAULT_OPEN_COST if intent.side == OrderSide.BUY else _LOCALSIM_DEFAULT_CLOSE_COST
+        return max(int(intent.order_quantity) * price * rate, _LOCALSIM_DEFAULT_MIN_FEE)
+
+    @staticmethod
+    def _copy_localsim_plan_with_intents(
+        *,
+        plan: ExecutionPlan,
+        intents: list[Any],
+        cash_fit_payload: dict[str, Any],
+    ) -> ExecutionPlan:
+        payload = deepcopy(plan.plan_payload_json)
+        payload["intents"] = [
+            {
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                "target_quantity": intent.target_quantity,
+                "delta_quantity": intent.delta_quantity,
+                "order_quantity": intent.order_quantity,
+                "target_weight": intent.target_weight,
+                "reference_price": intent.price_policy.get("reference_price"),
+                "current_quantity": intent.current_quantity,
+                "current_available_quantity": intent.current_available_quantity,
+                "rebalance_reason": intent.rebalance_reason,
+                "trading_rule_decision_id": intent.trading_rule_decision_id,
+                "order_type": intent.price_policy.get("order_type"),
+                "limit_price": intent.price_policy.get("limit_price"),
+                "schedule_window": intent.schedule_window,
+                "price_policy": intent.price_policy,
+                "risk_context": intent.risk_context,
+                "metadata": intent.metadata,
+            }
+            for intent in intents
+        ]
+        payload["local_sim_cash_fit"] = cash_fit_payload
+        plan_hash = canonical_json_sha256(payload)
+        plan_id = f"plan_{plan_hash[:16]}"
+        plan_intents = [
+            intent.model_copy(update={"plan_id": plan_id})
+            for intent in intents
+        ]
+        return plan.model_copy(
+            update={
+                "plan_id": plan_id,
+                "intents": plan_intents,
+                "plan_payload_json": payload,
+                "plan_hash": plan_hash,
+                "created_at": datetime.now(UTC),
+            }
+        )
+
     @staticmethod
     def _effective_market_data_source_for_binding(
         *,
@@ -2526,6 +2986,32 @@ class SimulationLifecycleScheduler:
             and run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.SUCCEEDED}
             and SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(run.run_payload_json)
         )
+
+    @staticmethod
+    def _should_rebuild_localsim_plan_after_side_effect_free_failure(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+    ) -> bool:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return False
+        if run.status != SimulationDailyRunStatus.FAILED_RETRYABLE:
+            return False
+        if bool(run.run_payload_json.get("broker_called")):
+            return False
+        failure = run.run_payload_json.get("submit_failure")
+        if not isinstance(failure, dict) or failure.get("stage") != "LOCAL_SIM_SUBMIT_FAILED":
+            return False
+        context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
+        text = " ".join(
+            str(item or "")
+            for item in (
+                failure.get("message"),
+                context.get("cause"),
+                context.get("cause_code"),
+            )
+        ).lower()
+        return "insufficient cash" in text
 
     @staticmethod
     def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:
@@ -2795,10 +3281,15 @@ class SimulationLifecycleScheduler:
                     "position_count": len(positions),
                 },
             )
+            cash_fit_residual = self._local_sim_cash_fit_residual_payload(run)
             paper_repository.save_run_event(
                 run_id=run.run_id,
-                event_type="RUN_SUCCEEDED",
-                message="simulation runtime LocalSim execution persisted to Paper v2",
+                event_type="RUN_CAPACITY_RESIDUAL_SKIPPED" if cash_fit_residual else "RUN_SUCCEEDED",
+                message=(
+                    "simulation runtime LocalSim execution persisted with capacity residual skipped"
+                    if cash_fit_residual
+                    else "simulation runtime LocalSim execution persisted to Paper v2"
+                ),
                 context={
                     "source": "simulation_runtime_local_sim",
                     "simulation_run_id": run.run_id,
@@ -2808,28 +3299,55 @@ class SimulationLifecycleScheduler:
                     "cash_ledger_count": len(cash_entries),
                     "position_count": len(positions),
                     "snapshot_time": snapshot_time.isoformat(),
+                    "local_sim_cash_fit": cash_fit_residual,
                 },
             )
-            paper_repository.update_run_status(paper_repository.get_run(run.run_id), RunStatus.SUCCEEDED)
+            paper_repository.update_run_status(
+                paper_repository.get_run(run.run_id),
+                RunStatus.FAILED if cash_fit_residual else RunStatus.SUCCEEDED,
+                error={
+                    "code": "LOCALSIM_CAPACITY_RESIDUAL_SKIPPED",
+                    "message": "LocalSim skipped non-executable BUY residual after cash-fit planning",
+                    "context": cash_fit_residual,
+                }
+                if cash_fit_residual
+                else None,
+            )
+            next_status = (
+                SimulationDailyRunStatus.FAILED_TERMINAL
+                if cash_fit_residual
+                else SimulationDailyRunStatus.SUCCEEDED
+            )
+            local_sim_persistence_payload = {
+                "schema_version": "local_sim_persistence_v1",
+                "status": "PERSISTED_WITH_CAPACITY_RESIDUAL" if cash_fit_residual else "PERSISTED",
+                "paper_v2_run_id": run.run_id,
+                "order_count": len(orders),
+                "fill_count": len(fills),
+                "order_event_count": len(events),
+                "cash_ledger_count": len(cash_entries),
+                "position_count": len(positions),
+                "snapshot_time": snapshot_time.isoformat(),
+                "cash": cash,
+                "nav": account_snapshot.nav,
+            }
+            payload_patch = {
+                "local_sim_persistence": local_sim_persistence_payload,
+                "last_stage": next_status.value,
+            }
+            if cash_fit_residual:
+                payload_patch["local_sim_capacity_residual_terminalization"] = {
+                    "schema_version": "localsim_capacity_residual_terminalization_v1",
+                    "reason": "cash_fit_skipped_non_executable_buy_residual",
+                    "status": next_status.value,
+                    "skipped_buy_count": int(cash_fit_residual.get("skipped_buy_count") or 0),
+                    "prepared_intent_count": int(cash_fit_residual.get("prepared_intent_count") or 0),
+                    "terminalized_at": datetime.now(UTC).isoformat(),
+                }
             self.repository.update_simulation_daily_run(
                 run.run_id,
-                status=SimulationDailyRunStatus.SUCCEEDED,
-                payload_patch={
-                    "local_sim_persistence": {
-                        "schema_version": "local_sim_persistence_v1",
-                        "status": "PERSISTED",
-                        "paper_v2_run_id": run.run_id,
-                        "order_count": len(orders),
-                        "fill_count": len(fills),
-                        "order_event_count": len(events),
-                        "cash_ledger_count": len(cash_entries),
-                        "position_count": len(positions),
-                        "snapshot_time": snapshot_time.isoformat(),
-                        "cash": cash,
-                        "nav": account_snapshot.nav,
-                    },
-                    "last_stage": "SUCCEEDED",
-                },
+                status=next_status,
+                payload_patch=payload_patch,
                 payload_unset=("submit_failure",),
             )
             return LocalSimPersistenceResult(
@@ -2885,6 +3403,13 @@ class SimulationLifecycleScheduler:
             entry for entry in cash_entries if getattr(entry, "fill_id", None) in selected_fill_ids
         )
         return selected_orders, selected_fills, selected_events, selected_cash_entries
+
+    @staticmethod
+    def _local_sim_cash_fit_residual_payload(run: SimulationDailyRun) -> dict[str, Any] | None:
+        payload = run.run_payload_json.get("local_sim_cash_fit")
+        if not isinstance(payload, dict) or payload.get("status") != "CAPACITY_RESIDUAL_SKIPPED":
+            return None
+        return payload
 
     def _paper_repository_for_local_sim(
         self,
@@ -3883,6 +4408,17 @@ class SimulationLifecycleScheduler:
                 return "BROKER_SUBMIT_FAILED_RECONCILED" if status == "SUCCEEDED" else "BROKER_SUBMIT_FAILED"
             return "RECONCILED" if status == "SUCCEEDED" else "RECONCILIATION_WARNING"
         return execution_status
+
+    @staticmethod
+    def _local_sim_terminal_capacity_residual_status(run: SimulationDailyRun, *, fallback: str) -> str:
+        if run.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return fallback
+        if run.status != SimulationDailyRunStatus.FAILED_TERMINAL:
+            return fallback
+        terminalization = run.run_payload_json.get("local_sim_capacity_residual_terminalization")
+        if isinstance(terminalization, dict):
+            return "LOCALSIM_CAPACITY_RESIDUAL_TERMINAL"
+        return fallback
 
     @staticmethod
     def _compute_schedule_windows(*, trade_date: date, as_of_time: datetime | None) -> tuple[dict[str, Any], ...]:
