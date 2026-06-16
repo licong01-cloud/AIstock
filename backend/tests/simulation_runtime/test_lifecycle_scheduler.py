@@ -39,6 +39,7 @@ from backend.services.simulation_runtime import (
     SimulationDailyRunStatus,
     SimulationLifecycleScheduler,
     SimulationRunContext,
+    SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
     StrategyPackageSelectionResult,
     StrategyPackageSelectionService,
@@ -1255,6 +1256,163 @@ def test_scheduler_rebuilds_localsim_insufficient_cash_failure_with_fresh_contex
     assert latest_run.run_payload_json["local_sim_cash_fit"]["status"] == "CAPACITY_RESIDUAL_SKIPPED"
     assert latest_run.run_payload_json["local_sim_persistence"]["status"] == "PERSISTED_WITH_CAPACITY_RESIDUAL"
     assert len(fake_selection.calls) == 2
+    assert paper_repo.list_fills_for_run(latest_run.run_id)
+
+
+def test_scheduler_marks_localsim_buy_only_retry_failure_with_actionable_context() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_buy_only_retry",
+                    current_positions={},
+                    current_prices={"000001.SZ": 10.0, "688001.SH": 20.0},
+                )
+            }
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    planned_run = planned.results[0].run
+    assert planned_run is not None
+    plan = planned.results[0].execution_plan
+    assert plan is not None
+    assert all(intent.side == OrderSide.BUY for intent in plan.intents)
+    failed_run = repo.update_simulation_daily_run(
+        planned_run.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "FAILED_RETRYABLE",
+            "broker_called": False,
+            "no_rebalance_required": False,
+        },
+    )
+
+    class FailingLocalSimContextProvider:
+        def load_context(self, *, runtime_release, binding, trade_date):
+            raise DataUnavailableError(
+                "LocalSim could not load minute market data",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "trade_date": trade_date.isoformat(),
+                    "source": "TDX_REALTIME",
+                },
+            )
+
+    scheduler.context_provider = FailingLocalSimContextProvider()
+
+    retried = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert retried.failed_count == 1
+    assert retried.results[0].error["context"]["stage"] == "LOCAL_SIM_MARKET_DATA_UNAVAILABLE"
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest_run.run_payload_json["broker_called"] is False
+    assert latest_run.run_payload_json["failed_intents"] == len(plan.intents)
+    diagnostics = latest_run.run_payload_json["local_sim_retry_diagnostics"]
+    assert diagnostics["buy_intent_count"] == len(plan.intents)
+    assert diagnostics["sell_intent_count"] == 0
+    assert diagnostics["next_action"]
+
+    detail = SimulationRuntimeOpsService(repository=repo).get_run_detail(latest_run.run_id)
+    assert detail["run"]["broker_context"]["local_sim_retry_diagnostics"]["plan_id"] == plan.plan_id
+    assert detail["run"]["errors"][0]["source"] == "local_sim_submit_failure"
+    assert detail["run"]["errors"][0]["code"] == "LOCAL_SIM_MARKET_DATA_UNAVAILABLE"
+
+
+def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    candidates = _candidate_rows()[:1]
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=candidates),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_retry_clears_diagnostics",
+                    current_positions={},
+                    current_prices={"000001.SZ": 10.0, "688001.SH": 20.0},
+                    top_k=1,
+                )
+            }
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    planned_run = planned.results[0].run
+    assert planned_run is not None
+    plan = planned.results[0].execution_plan
+    assert plan is not None
+    failed_run = repo.update_simulation_daily_run(
+        planned_run.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "FAILED_RETRYABLE",
+            "broker_called": False,
+            "no_rebalance_required": False,
+        },
+    )
+
+    class FailingLocalSimContextProvider:
+        def load_context(self, *, runtime_release, binding, trade_date):
+            raise DataUnavailableError(
+                "LocalSim could not load minute market data",
+                context={"trade_date": trade_date.isoformat()},
+            )
+
+    scheduler.context_provider = FailingLocalSimContextProvider()
+    failed_retry = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+    assert failed_retry.failed_count == 1
+    retry_payload = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json
+    assert retry_payload["local_sim_retry_diagnostics"]["stage"] == "LOCAL_SIM_MARKET_DATA_UNAVAILABLE"
+
+    paper_repo = InMemoryPaperTradingV2Repository()
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={
+            local_binding.binding_id: _local_sim_context_with_real_broker(
+                portfolio_id="portfolio_retry_clears_diagnostics",
+                release=release,
+                paper_repository=paper_repo,
+            )
+        }
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered.results[0].status == "SUBMITTED"
+    assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest_run.execution_plan_id == plan.plan_id
+    assert "submit_failure" not in latest_run.run_payload_json
+    assert "local_sim_retry_diagnostics" not in latest_run.run_payload_json
     assert paper_repo.list_fills_for_run(latest_run.run_id)
 
 
