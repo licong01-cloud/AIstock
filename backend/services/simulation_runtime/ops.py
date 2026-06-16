@@ -443,7 +443,10 @@ class SimulationRuntimeOpsService:
             "account_group_id": run.account_group_id or payload.get("account_group_id"),
             "strategy_slot_id": run.strategy_slot_id or payload.get("strategy_slot_id"),
             "sync_before_submit": payload.get("sync_before_submit"),
+            "local_sim_cash_fit": payload.get("local_sim_cash_fit"),
+            "local_sim_retry_diagnostics": payload.get("local_sim_retry_diagnostics"),
             "local_sim_persistence": payload.get("local_sim_persistence"),
+            "submit_failure": payload.get("submit_failure"),
             "reconcile_after_submit": payload.get("reconcile_after_submit"),
             "tail_handling": payload.get("tail_handling"),
         }
@@ -585,6 +588,18 @@ class SimulationRuntimeOpsService:
                             "context": issue.get("context") or {},
                         }
                     )
+        submit_failure = broker_context.get("submit_failure")
+        if isinstance(submit_failure, dict):
+            errors.append(
+                {
+                    "source": "local_sim_submit_failure"
+                    if run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                    else "simulation_submit_failure",
+                    "code": submit_failure.get("stage") or run.status.value,
+                    "message": submit_failure.get("message") or run.status.value,
+                    "context": submit_failure.get("context") or {},
+                }
+            )
         if run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL} and not errors:
             errors.append(
                 {

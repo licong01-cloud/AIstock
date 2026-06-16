@@ -1707,7 +1707,7 @@ class SimulationLifecycleScheduler:
                         shared_selection_keys=shared_selection_keys,
                     )
                 )
-            except Exception as exc:
+            except (DataUnavailableError, RuntimeConfigInvalidError) as exc:
                 if raise_on_error:
                     raise
                 results.append(
@@ -2635,18 +2635,43 @@ class SimulationLifecycleScheduler:
             )
         if self._should_submit_existing_plan(binding=binding, run=run, plan=plan, submit=submit):
             runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
-            context = self.context_provider.load_context(
-                runtime_release=runtime_release,
-                binding=binding,
-                trade_date=trade_date,
-            )
-            sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
-            run, plan, residual_only = self._prepare_localsim_execution_plan_for_submit(
-                binding=binding,
-                run=run,
-                plan=plan,
-                context=context,
-            )
+            try:
+                context = self.context_provider.load_context(
+                    runtime_release=runtime_release,
+                    binding=binding,
+                    trade_date=trade_date,
+                )
+                sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
+                run, plan, residual_only = self._prepare_localsim_execution_plan_for_submit(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    context=context,
+                )
+            except (DataUnavailableError, RuntimeConfigInvalidError) as exc:
+                if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+                    raise
+                marked = self._mark_localsim_pre_submit_retry_failure(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    trade_date=trade_date,
+                    exc=exc,
+                )
+                return SimulationSchedulerBindingResult(
+                    binding_id=binding.binding_id,
+                    strategy_id=binding.strategy_id,
+                    broker_backend=binding.broker_backend,
+                    status=marked.status.value,
+                    run=marked,
+                    execution_plan=plan,
+                    error=self._localsim_pre_submit_error_payload(marked),
+                    data_source=self._effective_market_data_source_for_binding(
+                        binding=binding,
+                        trade_date=trade_date,
+                        default_data_source=data_source,
+                    ),
+                )
             if residual_only is not None:
                 self._persist_strategy_performance(binding=binding, run=run, context=context)
                 latest_run = self.repository.get_simulation_daily_run(run.run_id)
@@ -2738,6 +2763,90 @@ class SimulationLifecycleScheduler:
             ),
         )
 
+    def _mark_localsim_pre_submit_retry_failure(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        trade_date: date,
+        exc: BaseException,
+    ) -> SimulationDailyRun:
+        plan_counts = self._execution_plan_side_counts(plan)
+        context = getattr(exc, "context", None)
+        if not isinstance(context, dict):
+            context = {}
+        diagnostic = {
+            "schema_version": "localsim_pre_submit_retry_diagnostics_v1",
+            "stage": self._localsim_pre_submit_failure_stage(exc),
+            "reason": "local_sim_retry_failed_before_broker_submit",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "strategy_id": binding.strategy_id,
+            "binding_id": binding.binding_id,
+            "trade_date": trade_date.isoformat(),
+            "plan_intent_count": plan_counts["intent_count"],
+            "buy_intent_count": plan_counts["buy_intent_count"],
+            "sell_intent_count": plan_counts["sell_intent_count"],
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "context": context,
+            "next_action": (
+                "fix the LocalSim context, cash, price, or market-data dependency and rerun the next scheduler "
+                "execution tick; no broker order was submitted in this failed retry"
+            ),
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "no_rebalance_required": False,
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": plan_counts["intent_count"],
+                "local_sim_retry_diagnostics": diagnostic,
+                "submit_failure": {
+                    "stage": diagnostic["stage"],
+                    "type": diagnostic["error_type"],
+                    "message": diagnostic["message"],
+                    "context": diagnostic,
+                },
+            },
+        )
+
+    @staticmethod
+    def _execution_plan_side_counts(plan: ExecutionPlan) -> dict[str, int]:
+        return {
+            "intent_count": len(plan.intents),
+            "buy_intent_count": sum(1 for intent in plan.intents if intent.side == OrderSide.BUY),
+            "sell_intent_count": sum(1 for intent in plan.intents if intent.side == OrderSide.SELL),
+        }
+
+    @staticmethod
+    def _localsim_pre_submit_failure_stage(exc: BaseException) -> str:
+        message = str(exc).lower()
+        if "market data" in message or "minute" in message:
+            return "LOCAL_SIM_MARKET_DATA_UNAVAILABLE"
+        if "price" in message:
+            return "LOCAL_SIM_PRICE_UNAVAILABLE"
+        return "LOCAL_SIM_CONTEXT_UNAVAILABLE"
+
+    @staticmethod
+    def _localsim_pre_submit_error_payload(run: SimulationDailyRun) -> dict[str, Any]:
+        failure = run.run_payload_json.get("submit_failure")
+        if not isinstance(failure, dict):
+            return {
+                "type": run.status.value,
+                "message": run.status.value,
+                "context": {"run_id": run.run_id},
+            }
+        return {
+            "type": str(failure.get("type") or run.status.value),
+            "message": str(failure.get("message") or run.status.value),
+            "context": failure.get("context") if isinstance(failure.get("context"), dict) else {"run_id": run.run_id},
+        }
+
     @staticmethod
     def _local_sim_broker_called_failure_error(
         *,
@@ -2797,6 +2906,7 @@ class SimulationLifecycleScheduler:
                     "execution_plan_intent_count": len(prepared_plan.intents),
                     "order_intent_count": len(prepared_plan.intents),
                 },
+                payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
             )
             return updated, prepared_plan, None
 
@@ -2810,7 +2920,7 @@ class SimulationLifecycleScheduler:
                 "submitted_intents": 0,
                 "last_stage": "FAILED_TERMINAL",
             },
-            payload_unset=("submit_failure",),
+            payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
         )
         return updated, plan, fit_payload
 
@@ -3349,7 +3459,7 @@ class SimulationLifecycleScheduler:
                 run.run_id,
                 status=next_status,
                 payload_patch=payload_patch,
-                payload_unset=("submit_failure",),
+                payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
             )
             return LocalSimPersistenceResult(
                 payload={

@@ -1,0 +1,84 @@
+{
+  "actual": "2026-06-16 21:04 +08 read-only APIs: /simulation-runtime/runs/simrun_88ba92d3f4432db4 reports broker_backend=local_sim, status=FAILED_RETRYABLE, last_stage=FAILED_RETRYABLE, stage_counts target_count=75/order_intent_count=17/execution_plan_intent_count=17; execution plan has 17 BUY intents and 0 SELL intents; broker_context only contains no_rebalance_required=false; errors contain only generic FAILED_RETRYABLE.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260616_BUG-397-p0-localsim-regression-l16-buy-only-daily-run-remains-failed-retryable-w.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/ops.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-397",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T13:36:32.606898Z",
+  "description": "2026-06-16 21:04 +08 read-only APIs: /simulation-runtime/runs/simrun_88ba92d3f4432db4 reports broker_backend=local_sim, status=FAILED_RETRYABLE, last_stage=FAILED_RETRYABLE, stage_counts target_count=75/order_intent_count=17/execution_plan_intent_count=17; execution plan has 17 BUY intents and 0 SELL intents; broker_context only contains no_rebalance_required=false; errors contain only generic FAILED_RETRYABLE.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260616-93f3588e882e",
+      "timestamp": "2026-06-16T13:36:32.606894Z"
+    },
+    {
+      "action": "scope_expanded_for_fix",
+      "actor": "codex",
+      "timestamp": "2026-06-16T15:12:00Z",
+      "note": "Added backend/services/simulation_runtime/ops.py after workflow plan approved ops API diagnostics exposure for BUG-397."
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-16T21:04+08/simrun_88ba92d3f4432db4; execution-plan://plan_6ce5c83aca7f8fcf; related-fixed-bug://BUG-384"
+  ],
+  "expected": "LocalSim unattended simulation should either submit/persist an executable cash-fit plan or terminalize non-executable BUY residuals with explicit capacity diagnostics. It must not leave deterministic buy-only plans in opaque FAILED_RETRYABLE without broker context, persistence evidence, or actionable cash/market-data error details after restart.",
+  "first_seen_at": "2026-06-16T13:36:32.606898Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1183,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1183",
+  "last_seen_at": "2026-06-16T13:36:32.606898Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/simulation-runtime/runs/simrun_88ba92d3f4432db4 and inspect run.status, broker_context, execution_plan buy/sell counts, and errors.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][LocalSim][Regression] L16 buy-only daily run remains FAILED_RETRYABLE with no broker context after restart",
+  "trigger_condition": {
+    "fingerprint": "93f3588e882e275340872967",
+    "source_event_id": "FE-20260616-93f3588e882e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
