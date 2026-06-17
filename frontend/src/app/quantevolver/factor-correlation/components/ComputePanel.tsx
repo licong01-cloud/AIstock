@@ -533,6 +533,12 @@ export default function ComputePanel({
             <StatItem label="缓存来源" value="官方离线缓存" />
             <StatItem label="共用时间段" value={`${officialCacheWindow?.start || singleCache.window_train_start || "2018-08-01"} ~ ${officialCacheWindow?.end || singleCache.window_backtest_end || singleCache.as_of_date || "2026-04-30"}`} />
             <StatItem label="因子缓存文件" value={`${singleCache.cached_count} 个`} />
+            {singleCache.disk_factor_count != null && (
+              <StatItem label="磁盘/Meta" value={`${singleCache.disk_factor_count} / ${singleCache.meta_factor_count ?? "-"}`} />
+            )}
+            {(singleCache.orphan_parquet_count || 0) > 0 && (
+              <StatItem label="待补元数据" value={`${singleCache.orphan_parquet_count} 个`} />
+            )}
             {singleCache.total_size_mb > 0 && (
               <StatItem label="缓存大小" value={formatSize(singleCache.total_size_mb)} />
             )}

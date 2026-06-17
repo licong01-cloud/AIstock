@@ -107,48 +107,126 @@ class FactorValuePipeline:
                     ) from exc
             return {"factors": {}}
 
+    def _disk_single_files(self) -> Dict[str, str]:
+        """Return disk-backed single-factor parquet files keyed by factor name."""
+        single_dir = os.path.join(self._output_dir, "single")
+        if not os.path.isdir(single_dir):
+            return {}
+        result: Dict[str, str] = {}
+        for filename in os.listdir(single_dir):
+            if not filename.endswith(".parquet") or filename.startswith("_"):
+                continue
+            factor_name = filename[:-8]
+            result[factor_name] = os.path.join(single_dir, filename)
+        return result
+
+    def get_cache_inventory(self) -> Dict[str, Any]:
+        """Return a read-only inventory for disk parquet files and meta entries.
+
+        Disk parquet existence is the physical cache source of truth.  The meta
+        registry is a contract layer used for hash/window/universe validation,
+        so missing meta is reported as reconcile-required rather than no-cache.
+        """
+        meta = self._load_meta()
+        factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        disk_files = self._disk_single_files()
+        disk_names = set(disk_files)
+        meta_names = set(factors)
+        total_size_bytes = 0
+        for path in disk_files.values():
+            try:
+                total_size_bytes += os.path.getsize(path)
+            except OSError:
+                continue
+
+        def _first_meta_value(*keys: str) -> Any:
+            for key in keys:
+                value = meta.get(key)
+                if value:
+                    return value
+            for entry in factors.values():
+                if not isinstance(entry, dict):
+                    continue
+                for key in keys:
+                    value = entry.get(key)
+                    if value:
+                        return value
+            return None
+
+        return {
+            "cache_root": self._output_dir,
+            "single_dir": os.path.join(self._output_dir, "single"),
+            "meta_path": self._meta_path(),
+            "disk_factor_count": len(disk_names),
+            "meta_factor_count": len(meta_names),
+            "orphan_parquet_count": len(disk_names - meta_names),
+            "orphan_meta_count": len(meta_names - disk_names),
+            "orphan_parquets": sorted(disk_names - meta_names),
+            "orphan_meta_entries": sorted(meta_names - disk_names),
+            "total_size_mb": round(total_size_bytes / 1024 / 1024, 1),
+            "as_of_date": _first_meta_value("as_of_date"),
+            "generated_at": meta.get("generated_at"),
+            "date_range": _first_meta_value("date_range"),
+            "data_source_mode": _first_meta_value("data_source_mode", "source_system"),
+            "data_freshness_profile": _first_meta_value("data_freshness_profile"),
+            "window_train_start": _first_meta_value("window_train_start"),
+            "window_backtest_end": _first_meta_value("window_backtest_end"),
+        }
+
     def validate_meta_integrity(self) -> Dict[str, Any]:
         """Return read-only consistency checks for single/*.parquet and _meta.json."""
         single_dir = os.path.join(self._output_dir, "single")
         meta_path = self._meta_path()
-
-        if not os.path.isfile(meta_path):
-            return {
-                "ok": False,
-                "error": f"_meta.json does not exist: {meta_path}",
-                "orphan_parquets": [],
-                "orphan_meta_entries": [],
-                "as_of_date_distribution": {},
-                "top_level_as_of_date": None,
-                "top_level_aod_mismatch": False,
-                "incomplete_entries": [],
-                "factor_count": 0,
-                "meta_path": meta_path,
-            }
-
-        if not os.path.isdir(single_dir):
-            return {
-                "ok": False,
-                "error": f"single cache directory does not exist: {single_dir}",
-                "orphan_parquets": [],
-                "orphan_meta_entries": [],
-                "as_of_date_distribution": {},
-                "top_level_as_of_date": None,
-                "top_level_aod_mismatch": False,
-                "incomplete_entries": [],
-                "factor_count": 0,
-                "meta_path": meta_path,
-            }
-
-        meta = self._load_meta()
-        factors = meta.get("factors", {})
-        top_aod = meta.get("as_of_date")
-
         disk_names = {
             f[:-8]
             for f in os.listdir(single_dir)
             if f.endswith(".parquet") and not f.startswith("_")
-        }
+        } if os.path.isdir(single_dir) else set()
+
+        if not os.path.isfile(meta_path):
+            orphan_parquets = sorted(disk_names)
+            return {
+                "ok": False,
+                "error": f"_meta.json does not exist: {meta_path}",
+                "orphan_parquets": orphan_parquets,
+                "orphan_meta_entries": [],
+                "as_of_date_distribution": {},
+                "top_level_as_of_date": None,
+                "top_level_aod_mismatch": False,
+                "incomplete_entries": [],
+                "factor_count": 0,
+                "disk_factor_count": len(disk_names),
+                "meta_factor_count": 0,
+                "orphan_parquet_count": len(orphan_parquets),
+                "orphan_meta_count": 0,
+                "meta_path": meta_path,
+            }
+
+        if not os.path.isdir(single_dir):
+            meta = self._load_meta()
+            factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+            meta_names = set(factors.keys())
+            return {
+                "ok": False,
+                "error": f"single cache directory does not exist: {single_dir}",
+                "orphan_parquets": [],
+                "orphan_meta_entries": sorted(meta_names),
+                "as_of_date_distribution": {},
+                "top_level_as_of_date": None,
+                "top_level_aod_mismatch": False,
+                "incomplete_entries": [],
+                "factor_count": len(factors),
+                "disk_factor_count": 0,
+                "meta_factor_count": len(meta_names),
+                "orphan_parquet_count": 0,
+                "orphan_meta_count": len(meta_names),
+                "meta_path": meta_path,
+            }
+
+        meta = self._load_meta()
+        factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        top_aod = meta.get("as_of_date")
+
         meta_names = set(factors.keys())
 
         orphan_parquets = sorted(disk_names - meta_names)
@@ -187,6 +265,10 @@ class FactorValuePipeline:
             "top_level_aod_mismatch": top_mismatch,
             "incomplete_entries": incomplete,
             "factor_count": len(factors),
+            "disk_factor_count": len(disk_names),
+            "meta_factor_count": len(meta_names),
+            "orphan_parquet_count": len(orphan_parquets),
+            "orphan_meta_count": len(orphan_meta_entries),
             "meta_path": meta_path,
         }
 

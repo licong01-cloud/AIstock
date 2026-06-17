@@ -251,6 +251,7 @@ class FactorValueLoader:
         miss_reasons: Dict[str, List[str]] = {
             "missing_from_cache": [],
             "missing_meta": [],
+            "missing_meta_reconcile_required": [],
             "as_of_date_mismatch": [],
             "window_not_covered": [],
             "universe_mismatch": [],
@@ -290,6 +291,7 @@ class FactorValueLoader:
             entry = factors_meta.get(factor_name)
             if not isinstance(entry, dict):
                 miss_reasons["missing_meta"].append(factor_name)
+                miss_reasons["missing_meta_reconcile_required"].append(factor_name)
                 continue
             if expected_as_of_date and str(entry.get("as_of_date") or meta.get("as_of_date")) != expected_as_of_date:
                 miss_reasons["as_of_date_mismatch"].append(factor_name)
