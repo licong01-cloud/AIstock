@@ -34,7 +34,7 @@
   "expected": "LocalSim same-day TDX_REALTIME simulation should either obtain finite validated V25 day_features from an authoritative realtime-compatible source or fail at readiness with actionable data context before entering repeated scheduler submit failures; unattended simulation must not loop on non-finite turnover_rate_f.",
   "first_seen_at": "2026-06-17T03:25:18.070706Z",
   "fix_branch": "bug/BUG-399-p0-paper-v2-localsim-tdx-realtime-v25-day-featur-20260617",
-  "fix_commit": null,
+  "fix_commit": "ab8aee95d305eb1db68e9ea08491a202c69745a3",
   "fixed_at": "2026-06-17T04:17:00Z",
   "github_issue_number": 1196,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1196",
