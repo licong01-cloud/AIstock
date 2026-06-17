@@ -32,8 +32,8 @@
   "expected": "MiniQMT account ledger is the only authoritative source for account cash, frozen cash, holdings, can_sell, orders and trades. AIstock persists a MiniQMT total-ledger mirror from MiniQMT APIs and derives strategy-slot position projections from that ledger plus deterministic attribution. Strategy-slot projections cannot exist as independent position facts; if attribution is incomplete, unmatched quantities must be reported as unattributed/pending instead of being treated as strategy-owned holdings. Execution preflight, sell-first proceeds, run status and reconciliation must use broker-authoritative positions, and POSITION_MISMATCH cannot coexist with SUCCEEDED unless proven out-of-scope and moved to unattributed evidence.",
   "first_seen_at": "2026-06-17T05:35:47.630962Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6df679dc8d38ceb8a7366f72187cc597444bf378",
+  "fixed_at": "2026-06-17T07:10:46.274210Z",
   "github_issue_number": 1202,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1202",
   "last_seen_at": "2026-06-17T05:35:47.630962Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1204",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,14 @@
     "fingerprint": "ea3c6f53279ec76becae9a9b",
     "source_event_id": "FE-20260617-ea3c6f53279e"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_strategy_performance_projection.py backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 70 passed",
+    "python -m py_compile backend/services/qmt_strategy_ledger/reconciliation.py backend/services/simulation_runtime/scheduler.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 --no-error-on-missing-interpreters -> passed",
+    "python -m nox -s paper_v2_backend --no-error-on-missing-interpreters -> 624 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 --no-error-on-missing-interpreters -> passed; paper_v2_data_quality legacy WARN only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
