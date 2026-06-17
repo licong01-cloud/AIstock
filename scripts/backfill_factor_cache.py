@@ -1,16 +1,10 @@
-"""一次性脚本：回测口径回填/增量补齐因子缓存。
+"""Retired legacy script for historical factor-cache diagnostics.
 
-用途：
-- 扫描 rdagent_assets/qe_factors/*.py 所有因子代码（fallback 模式）
-- 或通过 --code-manifest 接收 {factor_name: code_text} JSON 文件（推荐模式）
-- 严格基于 experiment factor_data_dir 的历史 h5/parquet 文件执行 factor.py
-- 推荐模式使用原始 code_text + subprocess 执行（与回测 prepare_factors.py 完全一致）
-- 输出 single/{name}.parquet、_meta.json、_tasks/{task_id}.json、_tasks/{task_id}.failed.ndjson
-- 不走 realtime loader / DB loader 作为主计算来源
+The manual CLI entry point is disabled. Official factor-cache generation must
+use the UI/API official full-compute flow and WSL dispatch. Importable helper
+functions remain temporarily for cache-contract tests and historical diagnostics;
+they must not be used as an operator backfill path.
 
-运行：
-  python scripts/backfill_factor_cache.py --experiment-id qe_xxx --code-manifest manifest.json --workers 4
-  python scripts/backfill_factor_cache.py --experiment-id qe_xxx --resume-task-id cache_xxx --retry-failed-only --code-manifest manifest.json
 """
 from __future__ import annotations
 
@@ -37,7 +31,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend.services.quantevolver.config_composer import ConfigComposer  # noqa: E402
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window  # noqa: E402
-from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +38,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("backfill")
+LEGACY_BACKFILL_RETIRED = True
 
 
 @dataclass
@@ -717,7 +711,10 @@ def run_plan_action(
 
 
 def main():
-    assert_wsl_runtime("legacy_backfill_factor_cache")
+    raise SystemExit(
+        "scripts/backfill_factor_cache.py is retired. Use the official "
+        "factor-cache compute API / official_factor_full_compute WSL dispatch instead."
+    )
     ap = argparse.ArgumentParser(
         description="Legacy/manual migration tool only. Official full factor compute must use official_factor_full_compute dispatch."
     )

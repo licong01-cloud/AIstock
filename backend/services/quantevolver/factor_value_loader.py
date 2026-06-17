@@ -86,9 +86,17 @@ class FactorValueLoader:
     def __init__(
         self,
         parquet_path: Optional[str] = None,
-        source: str = "auto",
+        source: Optional[str] = None,
         pipeline_dir: Optional[str] = None,
     ):
+        if source is None:
+            raise ValueError(
+                "FactorValueLoader source must be explicit. Use source='single' "
+                "for official rdagent_assets/factor_values cache, or explicitly "
+                "choose 'parquet'/'auto' for legacy diagnostics."
+            )
+        if source not in {"parquet", "auto", "single"}:
+            raise ValueError(f"unsupported FactorValueLoader source: {source}")
         self._path = os.path.normpath(parquet_path or _DEFAULT_PARQUET)
         self._source = source  # "parquet" | "auto" | "single"
         self._pipeline_dir = os.path.normpath(pipeline_dir or _DEFAULT_PIPELINE_DIR)

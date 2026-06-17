@@ -2453,7 +2453,7 @@ def _run_correlation_compute(factor_names: list, as_of_date: str = None, job_id:
     )
 
 
-def _get_loader(source: str = "auto") -> FactorValueLoader:
+def _get_loader(source: str = "single") -> FactorValueLoader:
     global _correlation_loader
     if _correlation_loader is None or getattr(_correlation_loader, '_source', None) != source:
         _correlation_loader = _correlation_compute_service.get_correlation_factor_value_loader(source=source)
@@ -3116,7 +3116,7 @@ async def get_correlation_pair(
                 for fn in [fa, fb]:
                     cur.execute("""
                         SELECT factor_name, source, is_sota_factor, is_available,
-                               realtime_code_text, asset_path, qe_code_path
+                               code_text, asset_path
                         FROM aistock_factor_catalog WHERE factor_name = %s LIMIT 1
                     """, (fn,))
                     catalog_row = cur.fetchone()
@@ -3158,30 +3158,29 @@ async def get_correlation_pair(
                     """, (fn,))
                     cl_row = cur.fetchone()
 
-                    # 读取源代码: DB realtime_code_text → 文件系统 qe_code_path → asset_path
+                    # 读取源代码: asset_path（官方原始源码文件）→ code_text（DB 展示兜底）
+                    # 相关性详情不得读取非官方 live/simulation 改造代码路径。
                     source_code = None
                     if catalog_row:
-                        code_text = catalog_row.get("realtime_code_text")
-                        if code_text and code_text.strip():
-                            source_code = code_text
-                        else:
-                            for path_key in ["qe_code_path", "asset_path"]:
-                                rel_path = catalog_row.get(path_key)
-                                if rel_path:
-                                    full_path = os.path.join(_PROJECT_ROOT, rel_path)
-                                    if os.path.isfile(full_path):
-                                        try:
-                                            with open(full_path, "r", encoding="utf-8") as f:
-                                                source_code = f.read()
-                                        except Exception as e:
-                                            logger.warning(f"读取因子源码文件失败 {full_path}: {e}")
-                                        break
+                        rel_path = catalog_row.get("asset_path")
+                        if rel_path:
+                            full_path = os.path.join(_PROJECT_ROOT, rel_path)
+                            if os.path.isfile(full_path):
+                                try:
+                                    with open(full_path, "r", encoding="utf-8") as f:
+                                        source_code = f.read()
+                                except Exception as e:
+                                    logger.warning(f"读取官方因子源码文件失败 {full_path}: {e}")
+                        if source_code is None:
+                            code_text = catalog_row.get("code_text")
+                            if code_text and code_text.strip():
+                                source_code = code_text
 
                     # 构建 catalog dict，移除内部字段
                     catalog_dict = None
                     if catalog_row:
                         catalog_dict = dict(catalog_row)
-                        for k in ("realtime_code_text", "asset_path", "qe_code_path"):
+                        for k in ("code_text", "asset_path"):
                             catalog_dict.pop(k, None)
 
                     factor_metrics[fn] = {
@@ -3510,7 +3509,7 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
         if row.get("id") is not None
     }
     if not catalog_name_to_id:
-        raise RuntimeError("catalog 中无可用于写入相关性的因子 (transformation_status=SUCCESS 且 qe_code_path 存在)")
+        raise RuntimeError("catalog 中无可用于写入相关性的因子")
 
     with get_conn() as conn:
         with conn.cursor() as cur:

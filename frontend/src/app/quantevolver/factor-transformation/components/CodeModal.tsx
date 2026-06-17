@@ -51,7 +51,7 @@ export function CodeModal({ data, tab, onTabChange, onClose }: Props) {
                     : "bg-white text-gray-600 hover:bg-gray-50"
                 }`}
               >
-                改造后代码
+                非官方改造代码
               </button>
             </div>
             <button
@@ -81,7 +81,7 @@ export function CodeModal({ data, tab, onTabChange, onClose }: Props) {
           )}
           {tab === "realtime" && data.qe_code_path && (
             <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
-              <span className="text-xs text-green-600 font-medium shrink-0">📄 改造后文件路径:</span>
+              <span className="text-xs text-green-600 font-medium shrink-0">📄 非官方改造文件路径:</span>
               <span className="text-xs font-mono text-green-800 truncate" title={data.qe_code_path}>
                 {data.qe_code_path}
               </span>
@@ -92,7 +92,7 @@ export function CodeModal({ data, tab, onTabChange, onClose }: Props) {
           )}
           {tab === "realtime" && data._transformed_code_error && (
             <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
-              <span className="text-xs text-red-600">⚠ 读取改造后代码失败: {data._transformed_code_error}</span>
+              <span className="text-xs text-red-600">⚠ 读取非官方改造代码失败: {data._transformed_code_error}</span>
             </div>
           )}
           <pre className="text-xs font-mono bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap min-h-32 flex-1">
