@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
+import pytest
+
 from backend.services.quantevolver.payload_summary import (
     compact_config_summary,
     compact_enhanced_metric_summary,
@@ -10,6 +15,7 @@ from backend.services.quantevolver.payload_summary import (
     compact_metric_summary,
     derive_position_summary_from_enhanced_metrics,
 )
+from backend.services.quantevolver.qe_evolution_agents import EvolutionAgents
 
 
 def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
@@ -194,6 +200,109 @@ def test_compact_loop_row_accepts_sql_projected_summary_fields() -> None:
     assert compact["annualized_return"] == 0.12
     assert "config_json" not in compact
     assert "metrics_json" not in compact
+
+
+def test_compact_loop_row_sota_summary_is_null_tolerant_without_topk() -> None:
+    row = {
+        "loop_id": "task_1_Loop4",
+        "task_id": "task_1",
+        "loop_index": 4,
+        "metrics_json": {
+            "IC": 0.01,
+            "enhanced_metrics": {
+                "absolute_returns": {
+                    "cagr": 0.60,
+                    "max_drawdown": -0.12,
+                }
+            },
+        },
+    }
+
+    compact = compact_loop_row(row)
+    sota = compact["sota_metric_summary"]
+
+    assert compact["cagr"] == 0.60
+    assert compact["max_drawdown"] == -0.12
+    assert compact["calmar"] == pytest.approx(5.0)
+    assert compact["metrics_summary"]["calmar"] == pytest.approx(5.0)
+    assert "topk_return_20" not in compact
+    assert "topk_return_20" not in compact["metrics_summary"]
+    assert sota["primary"] == {"cagr": 0.60, "max_drawdown": -0.12, "calmar": pytest.approx(5.0)}
+    assert sota["topk"] == {}
+    assert sota["topk_present"] is False
+    assert sota["topk_status"] == "not_present"
+    assert sota["topk_policy"] == "present_only_not_zero_fallback"
+    assert sota["signal_diagnostics"] == {"ic": 0.01}
+    assert sota["signal_policy"] == "diagnostic_only_not_primary"
+
+
+def test_compact_loop_row_sota_summary_includes_topk_only_when_present() -> None:
+    row = {
+        "loop_id": "task_1_Loop5",
+        "task_id": "task_1",
+        "loop_index": 5,
+        "metrics_json": {
+            "enhanced_metrics": {
+                "absolute_returns": {
+                    "cagr": 0.72,
+                    "max_drawdown": -0.18,
+                },
+                "prediction_diagnostics": {
+                    "topk_quality_status": "ok",
+                    "topk_return_20": 0.012,
+                    "topk_return_50": 0.007,
+                    "topk_hit_rate_20": 0.61,
+                    "topk_decay": 0.005,
+                    "within_portfolio_rankic": 0.08,
+                },
+            },
+        },
+    }
+
+    compact = compact_loop_row(row)
+    sota = compact["sota_metric_summary"]
+
+    assert compact["calmar"] == pytest.approx(4.0)
+    assert compact["topk_return_20"] == 0.012
+    assert compact["topk_hit_rate_20"] == 0.61
+    assert compact["topk_decay"] == 0.005
+    assert sota["topk_present"] is True
+    assert sota["topk_status"] == "ok"
+    assert sota["topk"]["topk_return_20"] == 0.012
+    assert sota["topk"]["topk_return_50"] == 0.007
+    assert sota["topk"]["topk_hit_rate_20"] == 0.61
+    assert sota["topk"]["topk_decay"] == 0.005
+    assert sota["topk"]["within_portfolio_rankic"] == 0.08
+
+
+def test_evaluate_sota_prompt_uses_cagr_mdd_topk_null_tolerant_rubric() -> None:
+    prompt_source = Path("backend/register_evolution_v2_prompts.py").read_text(encoding="utf-8")
+
+    assert "CAGR/annualized_return" in prompt_source
+    assert "MDD/max_drawdown" in prompt_source
+    assert "Top-K 缺失、为 null 或未提供时，不报错、不降级、不按 0 处理" in prompt_source
+    assert "IC/RankIC/ICIR 仅作信号广度诊断" in prompt_source
+    assert "IC 提升 > 0.002" not in prompt_source
+
+
+def test_run_evaluator_baseline_does_not_require_ic_or_topk() -> None:
+    evaluator = EvolutionAgents()
+
+    result = asyncio.run(
+        evaluator.run_evaluator(
+            {
+                "annualized_return": 0.62,
+                "max_drawdown": -0.18,
+                "IC": None,
+                "topk_return_20": None,
+            },
+            None,
+        )
+    )
+
+    assert result["is_sota"] is True
+    assert result["method"] == "baseline"
+    assert "AnnRet/CAGR" in result["reason"]
 
 
 def test_compact_experiment_row_uses_existing_scalar_columns_without_result_metrics() -> None:

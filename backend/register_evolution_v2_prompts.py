@@ -22,8 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-import psycopg2
-from backend.db.pg_pool import _db_cfg
+# Delayed until after sys.path and .env setup so the script works when run directly.
+import psycopg2  # noqa: E402
+from backend.db.pg_pool import _db_cfg  # noqa: E402
 
 conn = psycopg2.connect(**_db_cfg())
 cur = conn.cursor()
@@ -169,10 +170,11 @@ prompts.append((
 
 ## 评估标准
 
-1. IC 提升 > 0.002 → SOTA
-2. IC 持平（差距 < 0.005）但 ICIR 提升 > 0.05 → SOTA
-3. IC 和 ICIR 均无显著提升 → 非 SOTA
-4. 无历史 SOTA 记录 → 自动为 SOTA（首轮基准）
+1. 主判据是年化收益(CAGR/annualized_return)、最大回撤(MDD/max_drawdown)和 Calmar：CAGR 越高越好，MDD 取绝对值越小越好，Calmar 越高越好。
+2. 若该 run 含 Top-K 指标(topk_return_20 / topk_hit_rate_20 / topk_decay)，则进一步优先 top-heavy 质量更好的：前 20 实际收益更高、hit_rate 更高、topk_decay 为正或更高。
+3. 多数历史 run 暂无 Top-K。Top-K 缺失、为 null 或未提供时，不报错、不降级、不按 0 处理；此时仅依据 CAGR/MDD/Calmar 判断。
+4. IC/RankIC/ICIR 仅作信号广度诊断，不作 SOTA 主判据；不得因为 IC/ICIR 单独提升就判 SOTA，也不得因为 IC 缺失而否定 CAGR/MDD/Calmar 明显更优的结果。
+5. 无历史 SOTA 记录时，用当前 CAGR/MDD/Calmar 是否足以成为首个基准来判断；Top-K 缺失不影响首轮判断。
 
 ## 输出 JSON
 

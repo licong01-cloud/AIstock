@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 354
+    assert legacy_tool_count() == 355
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 360
-    assert len(TOOL_MANIFEST_BY_NAME) == 360
+    assert len(TOOL_MANIFEST) == 361
+    assert len(TOOL_MANIFEST_BY_NAME) == 361
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -91,6 +91,7 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "qe_archive_list_backfill_runs",
         "qe_archive_get_backfill_run",
         "qe_archive_query_run_leaderboard",
+        "qe_archive_query_topk_quality",
         "list_validation_runs",
         "get_validation_run",
     } <= read_only_exemptions

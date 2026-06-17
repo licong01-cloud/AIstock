@@ -287,7 +287,7 @@ def qe_archive_query_run_leaderboard(
     min_icir: float | None = None,
     min_ir: float | None = None,
     limit: int = 20,
-    order_by: str = "cagr",
+    order_by: str = "calmar",
 ) -> dict[str, Any]:
     """Query compact run-level signal/return leaderboard rows."""
 
@@ -300,6 +300,21 @@ def qe_archive_query_run_leaderboard(
             "limit": limit,
             "order_by": order_by,
         },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_topk_quality(
+    run_id: str | None = None,
+    task_id: str | None = None,
+    k: int | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Query forward-only prediction-rank Top-K quality rows."""
+
+    return _client().get(
+        "/analytics/topk-quality",
+        params={"run_id": run_id, "task_id": task_id, "k": k, "limit": limit},
     )
 
 
@@ -379,7 +394,7 @@ def qe_archive_query_promotion_candidates(
     model_type: str | None = None,
     min_seed_count: int = 5,
     limit: int = 20,
-    order_by: str = "cagr_mean",
+    order_by: str = "calmar",
 ) -> dict[str, Any]:
     """Query compact multi-seed promotion candidate configs."""
 

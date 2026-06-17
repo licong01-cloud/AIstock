@@ -17,21 +17,42 @@ SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "icir": ("icir", "ICIR"),
     "rank_ic": ("rank_ic", "Rank_IC", "Rank IC"),
     "rank_icir": ("rank_icir", "Rank_ICIR", "Rank ICIR"),
+    "cagr": (
+        "cagr",
+        "CAGR",
+        "cagr_absolute",
+        "annualized_return_absolute",
+        "absolute_returns.cagr",
+        "enhanced_metrics.absolute_returns.cagr",
+    ),
     "annualized_return": (
         "annualized_return",
+        "annualized_return_with_cost",
         "excess_return_with_cost_annualized",
         "1day.excess_return_with_cost.annualized_return",
     ),
     "max_drawdown": (
         "max_drawdown",
+        "max_drawdown_absolute",
         "excess_return_with_cost_max_drawdown",
         "1day.excess_return_with_cost.max_drawdown",
+        "absolute_returns.max_drawdown",
+        "enhanced_metrics.absolute_returns.max_drawdown",
     ),
     "information_ratio": (
         "information_ratio",
         "sharpe",
         "excess_return_with_cost_IR",
         "1day.excess_return_with_cost.information_ratio",
+    ),
+    "calmar": (
+        "calmar",
+        "calmar_ratio",
+        "calmar_absolute",
+        "absolute_returns.calmar",
+        "absolute_returns.calmar_ratio",
+        "enhanced_metrics.absolute_returns.calmar",
+        "enhanced_metrics.absolute_returns.calmar_ratio",
     ),
     "annualized_return_no_cost": (
         "annualized_return_no_cost",
@@ -59,7 +80,78 @@ SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "val_loss_final": ("val_loss_final", "final_val_loss", "final_valid_loss"),
     "overfit_ratio": ("overfit_ratio",),
     "best_epoch": ("best_epoch",),
+    "topk_return_20": (
+        "topk_return_20",
+        "topk_return@20",
+        "topk_return_at_20",
+        "prediction_diagnostics.topk_return_20",
+        "enhanced_metrics.prediction_diagnostics.topk_return_20",
+    ),
+    "topk_return_50": (
+        "topk_return_50",
+        "topk_return@50",
+        "topk_return_at_50",
+        "prediction_diagnostics.topk_return_50",
+        "enhanced_metrics.prediction_diagnostics.topk_return_50",
+    ),
+    "topk_hit_rate_20": (
+        "topk_hit_rate_20",
+        "topk_hit_rate@20",
+        "topk_hit_rate_at_20",
+        "prediction_diagnostics.topk_hit_rate_20",
+        "enhanced_metrics.prediction_diagnostics.topk_hit_rate_20",
+    ),
+    "topk_hit_rate_50": (
+        "topk_hit_rate_50",
+        "topk_hit_rate@50",
+        "topk_hit_rate_at_50",
+        "prediction_diagnostics.topk_hit_rate_50",
+        "enhanced_metrics.prediction_diagnostics.topk_hit_rate_50",
+    ),
+    "topk_decay": (
+        "topk_decay",
+        "topk_return_decay",
+        "prediction_diagnostics.topk_decay",
+        "enhanced_metrics.prediction_diagnostics.topk_decay",
+    ),
+    "within_portfolio_rankic": (
+        "within_portfolio_rankic",
+        "within_rankic",
+        "prediction_diagnostics.within_portfolio_rankic",
+        "enhanced_metrics.prediction_diagnostics.within_portfolio_rankic",
+    ),
+    "topk_dispersion_20": (
+        "topk_dispersion_20",
+        "topk_dispersion@20",
+        "prediction_diagnostics.topk_dispersion_20",
+        "enhanced_metrics.prediction_diagnostics.topk_dispersion_20",
+    ),
+    "topk_dispersion_50": (
+        "topk_dispersion_50",
+        "topk_dispersion@50",
+        "prediction_diagnostics.topk_dispersion_50",
+        "enhanced_metrics.prediction_diagnostics.topk_dispersion_50",
+    ),
 }
+
+PRIMARY_SOTA_METRIC_KEYS = ("cagr", "annualized_return", "max_drawdown", "calmar")
+TOPK_SOTA_METRIC_KEYS = ("topk_return_20", "topk_hit_rate_20", "topk_decay")
+TOPK_QUALITY_METRIC_KEYS = (
+    "topk_return_20",
+    "topk_return_50",
+    "topk_hit_rate_20",
+    "topk_hit_rate_50",
+    "topk_decay",
+    "within_portfolio_rankic",
+    "topk_dispersion_20",
+    "topk_dispersion_50",
+)
+SIGNAL_DIAGNOSTIC_METRIC_KEYS = ("ic", "rank_ic", "icir", "rank_icir")
+TOPK_STATUS_ALIASES = (
+    "topk_quality_status",
+    "prediction_diagnostics.topk_quality_status",
+    "enhanced_metrics.prediction_diagnostics.topk_quality_status",
+)
 
 SUMMARY_CONFIG_KEYS = (
     "model_id",
@@ -106,6 +198,7 @@ COMPACT_ABSOLUTE_RETURN_KEYS: dict[str, tuple[str, ...]] = {
     "cagr": ("cagr", "cagr_absolute", "annualized_return_absolute"),
     "sharpe": ("sharpe", "sharpe_absolute", "information_ratio"),
     "max_drawdown": ("max_drawdown", "max_drawdown_absolute"),
+    "calmar": ("calmar", "calmar_ratio", "calmar_absolute"),
     "total_return": ("total_return", "absolute_total_return"),
     "annualized_volatility": ("annualized_volatility", "volatility"),
     "avg_cash_ratio": ("avg_cash_ratio", "average_cash_ratio"),
@@ -262,6 +355,44 @@ def _first_by_alias(containers: list[Mapping[str, Any]], aliases: tuple[str, ...
     return None
 
 
+def _apply_calmar_if_available(summary: dict[str, Any]) -> None:
+    """Derive Calmar only from present return/MDD values; missing inputs stay absent."""
+    if summary.get("calmar") is not None:
+        return
+    annual_return = first_number(summary.get("cagr"), summary.get("annualized_return"))
+    max_drawdown = first_number(summary.get("max_drawdown"))
+    if annual_return is None or max_drawdown is None:
+        return
+    drawdown_abs = abs(max_drawdown)
+    if drawdown_abs == 0:
+        return
+    summary["calmar"] = annual_return / drawdown_abs
+
+
+def _topk_status(metrics: Any, summary: Mapping[str, Any]) -> str:
+    containers = _containers(_mapping(metrics))
+    status = _first_by_alias(containers, TOPK_STATUS_ALIASES)
+    if isinstance(status, (str, int, float, bool)) and str(status).strip():
+        return str(status)
+    return "present" if any(summary.get(key) is not None for key in TOPK_QUALITY_METRIC_KEYS) else "not_present"
+
+
+def compact_sota_metric_summary(metrics: Mapping[str, Any], *, raw_metrics: Any = None) -> dict[str, Any]:
+    primary = {key: metrics[key] for key in PRIMARY_SOTA_METRIC_KEYS if metrics.get(key) is not None}
+    topk = {key: metrics[key] for key in TOPK_QUALITY_METRIC_KEYS if metrics.get(key) is not None}
+    diagnostics = {key: metrics[key] for key in SIGNAL_DIAGNOSTIC_METRIC_KEYS if metrics.get(key) is not None}
+    topk_present = any(topk.get(key) is not None for key in TOPK_SOTA_METRIC_KEYS)
+    return {
+        "primary": primary,
+        "topk": topk,
+        "topk_present": topk_present,
+        "topk_status": _topk_status(raw_metrics, metrics),
+        "topk_policy": "present_only_not_zero_fallback",
+        "signal_diagnostics": diagnostics,
+        "signal_policy": "diagnostic_only_not_primary",
+    }
+
+
 def _trade_action(value: Any) -> str | None:
     text = str(value or "").strip().lower()
     if text in {"buy", "b", "open", "long", "entry"} or "buy" in text:
@@ -393,6 +524,7 @@ def compact_metric_summary(metrics: Any, *, row: Mapping[str, Any] | None = None
         value = first_number(row_map.get(canonical), _first_by_alias(containers, aliases))
         if value is not None:
             summary[canonical] = value
+    _apply_calmar_if_available(summary)
 
     for container in containers:
         training = container.get("training_diagnostics")
@@ -537,9 +669,11 @@ def compact_loop_row(row: Mapping[str, Any]) -> dict[str, Any]:
     item = {key: row.get(key) for key in base_keys if key in row}
     config_source = row.get("config_json") if row.get("config_json") is not None else row
     config_summary = compact_config_summary(config_source)
+    raw_metrics = row.get("metrics_json") if row.get("metrics_json") is not None else row
     metrics = compact_metric_summary(row.get("metrics_json"), row=row)
     factors = factors_from_config(config_source)
     item.update(metrics)
+    item["sota_metric_summary"] = compact_sota_metric_summary(metrics, raw_metrics=raw_metrics)
     if factors:
         item["factors"] = factors
         item["factor_count"] = len(factors)

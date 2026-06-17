@@ -17,7 +17,10 @@ import {
   type BackfillCandidateLoop,
   type BackfillReport,
   type OutboxEvent,
+  type PromotionCandidateItem,
+  type RunLeaderboardItem,
   type RunQuality,
+  type TopKQualityItem,
   type WorkerRunReport,
   qeArchiveApi,
 } from "@/lib/qe-archive/api";
@@ -39,6 +42,34 @@ function n(value: unknown): number {
 function formatDateTime(value: unknown): string {
   const text = String(value || "");
   return text ? text.replace("T", " ").slice(0, 19) : "-";
+}
+
+function formatPct(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(digits)}%` : "-";
+}
+
+function formatSignedPct(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "-";
+  const prefix = parsed > 0 ? "+" : "";
+  return `${prefix}${(parsed * 100).toFixed(digits)}%`;
+}
+
+function topkStatusLabel(status?: string | null): string {
+  if (!status) return "missing";
+  if (status === "ok") return "ok";
+  if (status === "missing_label") return "缺 label";
+  if (status === "missing_pred") return "缺 pred";
+  return status;
+}
+
+function gateText(pass?: boolean | null): string {
+  if (pass === true) return "PASSED";
+  if (pass === false) return "FAILED";
+  return "NO_DATA";
 }
 
 function statusCounts(counts?: Record<string, number>): { status: string; count: number }[] {
@@ -220,6 +251,34 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
   );
 }
 
+function TopKQualityCards({ rows }: { rows: TopKQualityItem[] }) {
+  const current = rows[0];
+  if (!current) {
+    return (
+      <div className="pv2-help">
+        Top-K 为前向 only：存量 616 run 无 pred.pkl 源数据时会显示缺失；新 run 完成归档后在这里展示 prediction-rank @20/@50 质量。
+      </div>
+    );
+  }
+  return (
+    <div className="pv2-readable-list">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="topk_return@20" value={formatSignedPct(current.topk_return_20)} hint={`@50 ${formatSignedPct(current.topk_return_50)}`} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="Hit Rate@20" value={formatPct(current.topk_hit_rate_20)} hint={`@50 ${formatPct(current.topk_hit_rate_50)}`} tone="info" />
+        <MetricCard label="@20-@50 Decay" value={formatSignedPct(current.topk_decay)} hint="rank<=20 均值 - rank<=50 均值" tone="neutral" />
+        <MetricCard label="Within RankIC" value={formatNumber(current.within_portfolio_rankic, 4)} hint={current.topk_rank_direction || "rank 1=best"} tone="neutral" />
+      </div>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Dispersion@20" value={formatPct(current.topk_dispersion_20)} hint="Top20 realized return std" />
+        <MetricCard label="覆盖交易日" value={formatCompact(current.topk_date_count || 0, 0)} hint={`joined ${formatCompact(current.topk_joined_observation_count || 0, 0)}`} />
+        <MetricCard label="Top-K 状态" value={topkStatusLabel(current.topk_quality_status)} hint={current.topk_source || "pred_label_artifacts"} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="历史回填" value="前向 only" hint="不做 616 存量 SQL 回填" tone="info" />
+      </div>
+      {current.topk_error ? <div className="pv2-help" style={{ color: "#b91c1c" }}>Top-K 缺失原因：{current.topk_error}</div> : null}
+    </div>
+  );
+}
+
 export default function QEArchivePage() {
   const [summary, setSummary] = useState<ArchiveSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxEvent[]>([]);
@@ -245,22 +304,31 @@ export default function QEArchivePage() {
   const [workerBusy, setWorkerBusy] = useState(false);
   const [qualityRunId, setQualityRunId] = useState("");
   const [quality, setQuality] = useState<RunQuality | null>(null);
+  const [leaderboard, setLeaderboard] = useState<RunLeaderboardItem[]>([]);
+  const [promotionCandidates, setPromotionCandidates] = useState<PromotionCandidateItem[]>([]);
+  const [topkRows, setTopkRows] = useState<TopKQualityItem[]>([]);
   const [qualityBusy, setQualityBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextOutbox, nextJobs, nextCandidates] = await Promise.all([
+      const [nextSummary, nextOutbox, nextJobs, nextCandidates, nextLeaderboard, nextPromotionCandidates, nextTopkRows] = await Promise.all([
         qeArchiveApi.health(),
         qeArchiveApi.outbox(30),
         qeArchiveApi.jobs(30),
         qeArchiveApi.backfillCandidates({ page: candidatePage, page_size: candidatePageSize, status: candidateStatus, include_archived: includeArchived }),
+        qeArchiveApi.runLeaderboard({ limit: 20, order_by: "calmar" }),
+        qeArchiveApi.promotionCandidates({ limit: 20, order_by: "calmar" }),
+        qeArchiveApi.topkQuality({ limit: 20, k: 20 }),
       ]);
       setSummary(nextSummary);
       setOutbox(nextOutbox);
       setJobs(nextJobs);
       setCandidates(nextCandidates.candidates || []);
+      setLeaderboard(nextLeaderboard || []);
+      setPromotionCandidates(nextPromotionCandidates || []);
+      setTopkRows(nextTopkRows || []);
       setCandidateHasMore(Boolean(nextCandidates.has_more));
       setSelectedIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
       const visibleLoopIds = new Set((nextCandidates.candidates || []).flatMap((item) => (item.loops || []).map((loop) => String(loop.loop_id || ""))));
@@ -279,8 +347,6 @@ export default function QEArchivePage() {
 
   const validRuns = n(summary?.research_valid_counts?.true);
   const invalidRuns = n(summary?.research_valid_counts?.false);
-  const completedJobs = n(summary?.archive_job_status_counts?.completed);
-  const failedJobs = n(summary?.archive_job_status_counts?.failed);
   const pendingOutbox = n(summary?.pending_outbox_count);
 
   const latestRows = useMemo(() => outbox.slice(0, 12), [outbox]);
@@ -308,7 +374,6 @@ export default function QEArchivePage() {
   );
   const selectedLoopIdList = selectedLoopList.map((loop) => String(loop.loop_id));
   const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.pending_run_count), 0) + selectedLoopIdList.length;
-  const pendingCandidateCount = candidates.filter((item) => n(item.pending_run_count) > 0).length;
   const selectionCount = selectedCandidates.length + selectedLoopIdList.length;
   const writeDisabledReason = backfillBusy
     ? "补录处理中"
@@ -488,7 +553,12 @@ export default function QEArchivePage() {
     setQualityBusy(true);
     setError(null);
     try {
-      setQuality(await qeArchiveApi.quality(runId));
+      const [nextQuality, nextTopkRows] = await Promise.all([
+        qeArchiveApi.quality(runId),
+        qeArchiveApi.topkQuality({ run_id: runId, k: 20, limit: 5 }),
+      ]);
+      setQuality(nextQuality);
+      setTopkRows(nextTopkRows);
     } catch (err) {
       setError(err);
     } finally {
@@ -521,8 +591,49 @@ export default function QEArchivePage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="归档 Run" value={formatCompact(summary?.run_count || 0, 0)} hint={`有效 ${formatCompact(validRuns, 0)} / 无效 ${formatCompact(invalidRuns, 0)}`} tone="info" />
         <MetricCard label="待处理 Outbox" value={formatCompact(pendingOutbox, 0)} hint="loop/experiment 完成后进入 outbox" tone={pendingOutbox > 0 ? "warning" : "success"} />
-        <MetricCard label="待补录候选" value={formatCompact(pendingCandidateCount, 0)} hint={`当前 ${formatCompact(candidates.length, 0)} 条`} tone={pendingCandidateCount > 0 ? "warning" : "success"} />
+        <MetricCard label="Top-K 前向状态" value={formatCompact(topkRows.filter((row) => row.topk_quality_status === "ok").length, 0)} hint="历史不回填；新 run 才有 topk" tone="info" />
         <MetricCard label="最近归档" value={formatDateTime(summary?.latest_archived_at).slice(0, 10)} hint={formatDateTime(summary?.latest_archived_at)} />
+      </div>
+
+      <SectionCard title="CAGR/MDD 主榜" eyebrow="default order: Calmar; IC moved to diagnostics">
+        <PaperTable
+          rows={leaderboard}
+          empty="暂无 leaderboard 数据"
+          columns={[
+            { key: "run", header: "Run", render: (row) => <><div className="pv2-mono">{shortHash(row.run_id)}</div><div className="pv2-muted">{row.task_id || row.experiment_id || "-"}</div></> },
+            { key: "model", header: "模型/标签", render: (row) => <><div>{row.model_type || "-"}</div><div className="pv2-muted">horizon {row.label_horizon ?? "-"} / 因子 {row.factor_count ?? "-"}</div></> },
+            { key: "return", header: "CAGR / MDD / Calmar", render: (row) => <><div>{formatPct(row.cagr)} / {formatPct(row.max_drawdown)}</div><div className="pv2-muted">Calmar {formatNumber(row.calmar, 2)}</div></> },
+            { key: "topk", header: "Top-K @20", render: (row) => <><div>return {formatSignedPct(row.topk_return_20)} / hit {formatPct(row.topk_hit_rate_20)}</div><div className="pv2-muted">@50 {formatSignedPct(row.topk_return_50)} / decay {formatSignedPct(row.topk_decay)}</div></> },
+            { key: "quality", header: "Top-K 质量", render: (row) => <><StatusBadge status={topkStatusLabel(row.topk_quality_status)} /><div className="pv2-muted">days {formatCompact(row.topk_date_count || 0, 0)} / joined {formatCompact(row.topk_joined_observation_count || 0, 0)}</div></> },
+            { key: "diagnostics", header: "IC 诊断", render: (row) => (
+              <details>
+                <summary className="pv2-muted">展开 IC/RankIC</summary>
+                <div className="pv2-muted">IC {formatNumber(row.ic, 4)} / ICIR {formatNumber(row.icir, 3)}</div>
+                <div className="pv2-muted">RankIC {formatNumber(row.rank_ic, 4)} / RankICIR {formatNumber(row.rank_icir, 3)}</div>
+                <div className="pv2-muted">IR {formatNumber(row.information_ratio, 3)} / Sharpe {formatNumber(row.sharpe, 3)}</div>
+              </details>
+            ) },
+          ]}
+        />
+      </SectionCard>
+
+      <div className="pv2-grid pv2-grid-2">
+        <SectionCard title="Top-K 质量卡" eyebrow="@20 vs @50 / hit / decay / rankic / dispersion">
+          <TopKQualityCards rows={topkRows} />
+        </SectionCard>
+        <SectionCard title="晋升候选新门" eyebrow="hard: CAGR/MDD/CV; soft: Top-K present only">
+          <PaperTable
+            rows={promotionCandidates}
+            empty="暂无晋升候选"
+            columns={[
+              { key: "config", header: "配置", render: (row) => <><div className="pv2-mono">{shortHash(row.factor_set_hash)}</div><div className="pv2-muted">{row.model_type || "-"} / horizon {row.label_horizon ?? "-"}</div></> },
+              { key: "tier0", header: "硬门实际值", render: (row) => <><div>CAGR {formatPct(row.cagr_mean)} ≥ {formatPct(row.cagr_gate_threshold)}</div><div>MDD {formatPct(row.max_drawdown_mean)} ≥ {formatPct(row.max_drawdown_gate_threshold)}</div><div>CV {formatPct(row.cagr_cv)} &lt; {formatPct(row.cagr_cv_gate_threshold)}</div></> },
+              { key: "gate", header: "门状态", render: (row) => <><StatusBadge status={gateText(row.passes_gate)} /><div className="pv2-muted">CAGR <StatusBadge status={gateText(row.cagr_gate_passes)} /> MDD <StatusBadge status={gateText(row.max_drawdown_gate_passes)} /> CV <StatusBadge status={gateText(row.cagr_cv_gate_passes)} /></div></> },
+              { key: "topk", header: "Top-K 软门", render: (row) => <><div>return@20 {formatSignedPct(row.topk_return_20_mean)} / hit {formatPct(row.topk_hit_rate_20_mean)}</div><div className="pv2-muted">{row.topk_soft_gate_status || "missing_forward_only"} / sample {formatCompact(row.topk_return_20_sample_count || 0, 0)}</div></> },
+              { key: "diagnostics", header: "诊断", render: (row) => <><div>Calmar {formatNumber(row.calmar ?? row.calmar_mean, 2)}</div><div className="pv2-muted">ICIR {formatNumber(row.icir_mean, 3)} / RankICIR {formatNumber(row.rank_icir_mean, 3)}</div></> },
+            ]}
+          />
+        </SectionCard>
       </div>
 
       <SectionCard title="历史补录候选列表" eyebrow="select experiments / archive all loops">
@@ -550,7 +661,7 @@ export default function QEArchivePage() {
         <div className="pv2-row-actions" style={{ marginTop: 12, marginBottom: 12 }}>
           <button className="pv2-button" type="button" onClick={selectPendingCandidates}>选择全部待入库</button>
           <button className="pv2-button-ghost" type="button" onClick={() => { setSelectedIds(new Set()); setSelectedLoopIds(new Set()); }}>清空选择</button>
-          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选、{selectedLoopIdList.length} 个精确 loop，预计写入 {selectedRunCount} 个 run；可展开 task 后只选推荐或指定 loop。</span>
+          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选、{selectedLoopIdList.length} 个精确 loop，预计写入 {selectedRunCount} 个 run；Top-K 历史不回填，补录存量仅补 Tier-0/既有指标。</span>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 8, marginBottom: 12 }}>
           <button className="pv2-button-ghost" type="button" aria-label="previous candidate page" onClick={() => setCandidatePage((page) => Math.max(1, page - 1))} disabled={candidatePage <= 1 || loading}>上一页</button>

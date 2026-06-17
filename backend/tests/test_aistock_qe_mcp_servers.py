@@ -400,6 +400,7 @@ def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
 
     archive_mcp.qe_archive_query_analytics_view_status()
     archive_mcp.qe_archive_query_run_leaderboard(model_type="LSTM", min_icir=0.5, limit=6, order_by="icir")
+    archive_mcp.qe_archive_query_topk_quality(run_id="run_1", k=20, limit=6)
     archive_mcp.qe_archive_query_seed_robustness(min_seed_count=3, stable_only=True, limit=7)
     archive_mcp.qe_archive_query_factor_performance(factor_name="alpha_001", min_runs=2, limit=8)
     archive_mcp.qe_archive_query_model_hyperparam_seed_perf(model_type="XGBoost", hyperparam_hash="abc", limit=9)
@@ -413,26 +414,30 @@ def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
         {"model_type": "LSTM", "min_icir": "0.5", "limit": "6", "order_by": "icir"},
     )
     assert captured[2] == (
+        "/api/v1/qe-archive/analytics/topk-quality",
+        {"run_id": "run_1", "k": "20", "limit": "6"},
+    )
+    assert captured[3] == (
         "/api/v1/qe-archive/analytics/seed-robustness",
         {"min_seed_count": "3", "stable_only": "true", "limit": "7", "order_by": "cagr_mean"},
     )
-    assert captured[3] == (
+    assert captured[4] == (
         "/api/v1/qe-archive/analytics/factor-performance",
         {"factor_name": "alpha_001", "min_runs": "2", "limit": "8", "order_by": "best_cagr"},
     )
-    assert captured[4] == (
+    assert captured[5] == (
         "/api/v1/qe-archive/analytics/model-hyperparam-seed-perf",
         {"model_type": "XGBoost", "hyperparam_hash": "abc", "limit": "9", "order_by": "cagr"},
     )
-    assert captured[5] == (
+    assert captured[6] == (
         "/api/v1/qe-archive/analytics/overfit-flags",
         {"suspicious_only": "true", "limit": "10"},
     )
-    assert captured[6] == (
+    assert captured[7] == (
         "/api/v1/qe-archive/analytics/promotion-candidates",
         {"min_seed_count": "5", "limit": "11", "order_by": "ir_mean"},
     )
-    assert captured[7] == (
+    assert captured[8] == (
         "/api/v1/qe-archive/analytics/evolution-lineage",
         {"task_id": "task_1", "limit": "12"},
     )
@@ -453,6 +458,7 @@ def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
     archive_mcp.qe_archive_query_factor_importance_stability()
     archive_mcp.qe_archive_query_seed_trials()
     archive_mcp.qe_archive_query_run_leaderboard()
+    archive_mcp.qe_archive_query_topk_quality()
     archive_mcp.qe_archive_query_factor_performance()
 
     assert captured[0][1]["limit"] == "20"
@@ -462,6 +468,8 @@ def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
     assert captured[4][1]["limit"] == "20"
     assert captured[5][1]["limit"] == "20"
     assert captured[6][1]["limit"] == "20"
+    assert captured[7][1]["limit"] == "20"
+    assert captured[7][0].endswith("/analytics/factor-performance")
 
 
 def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:

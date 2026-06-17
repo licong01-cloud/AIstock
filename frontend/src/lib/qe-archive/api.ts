@@ -294,6 +294,86 @@ export type RunQuality = {
   passed?: boolean;
 };
 
+export type RunLeaderboardItem = {
+  run_id: string;
+  task_id?: string | null;
+  loop_index?: number | null;
+  experiment_id?: string | null;
+  model_type?: string | null;
+  factor_count?: number | null;
+  label_horizon?: number | null;
+  cagr?: number | null;
+  max_drawdown?: number | null;
+  calmar?: number | null;
+  sharpe?: number | null;
+  information_ratio?: number | null;
+  ic?: number | null;
+  icir?: number | null;
+  rank_ic?: number | null;
+  rank_icir?: number | null;
+  topk_return_20?: number | null;
+  topk_return_50?: number | null;
+  topk_hit_rate_20?: number | null;
+  topk_hit_rate_50?: number | null;
+  topk_decay?: number | null;
+  within_portfolio_rankic?: number | null;
+  topk_dispersion_20?: number | null;
+  topk_dispersion_50?: number | null;
+  topk_quality_status?: string | null;
+  topk_source?: string | null;
+  topk_date_count?: number | null;
+  topk_joined_observation_count?: number | null;
+  completed_at?: string | null;
+};
+
+export type TopKQualityItem = RunLeaderboardItem & {
+  topk_error?: string | null;
+  topk_label_source?: string | null;
+  topk_rank_direction?: string | null;
+  topk_pred_observation_count?: number | null;
+  topk_label_observation_count?: number | null;
+  topk_rankic_date_count?: number | null;
+  topk_observation_count_20?: number | null;
+  topk_observation_count_50?: number | null;
+  selected_topk_return?: number | null;
+  selected_topk_hit_rate?: number | null;
+  selected_topk_dispersion?: number | null;
+};
+
+export type PromotionCandidateItem = {
+  factor_set_hash: string;
+  model_type?: string | null;
+  label_horizon?: number | null;
+  undertrain_mode?: string | null;
+  topk?: string | null;
+  run_count?: number | null;
+  distinct_seed_count?: number | null;
+  cagr_mean?: number | null;
+  max_drawdown_mean?: number | null;
+  cagr_cv?: number | null;
+  calmar?: number | null;
+  calmar_mean?: number | null;
+  icir_mean?: number | null;
+  rank_icir_mean?: number | null;
+  topk_return_20_mean?: number | null;
+  topk_hit_rate_20_mean?: number | null;
+  within_portfolio_rankic_mean?: number | null;
+  topk_dispersion_20_mean?: number | null;
+  topk_decay_mean?: number | null;
+  topk_return_20_sample_count?: number | null;
+  topk_return_20_present?: boolean | null;
+  topk_soft_gate_status?: string | null;
+  cagr_gate_passes?: boolean | null;
+  max_drawdown_gate_passes?: boolean | null;
+  cagr_cv_gate_passes?: boolean | null;
+  overfit_gate_passes?: boolean | null;
+  cagr_gate_threshold?: number | null;
+  max_drawdown_gate_threshold?: number | null;
+  cagr_cv_gate_threshold?: number | null;
+  passes_gate?: boolean | null;
+  latest_completed_at?: string | null;
+};
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -422,6 +502,32 @@ export const qeArchiveApi = {
   async quality(runId: string): Promise<RunQuality> {
     const response = await apiFetch<{ status: string; data: RunQuality }>(`/qe-archive/runs/${encodeURIComponent(runId)}/quality`);
     return response.data;
+  },
+  async runLeaderboard(payload: { limit?: number; model_type?: string; min_icir?: number; min_ir?: number; order_by?: string } = {}): Promise<RunLeaderboardItem[]> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 20), order_by: payload.order_by || "calmar" });
+    if (payload.model_type) qs.set("model_type", payload.model_type);
+    if (payload.min_icir !== undefined) qs.set("min_icir", String(payload.min_icir));
+    if (payload.min_ir !== undefined) qs.set("min_ir", String(payload.min_ir));
+    const response = await apiFetch<{ status: string; data: RunLeaderboardItem[] }>(`/qe-archive/analytics/run-leaderboard?${qs.toString()}`);
+    return response.data || [];
+  },
+  async topkQuality(payload: { run_id?: string; task_id?: string; k?: number; limit?: number } = {}): Promise<TopKQualityItem[]> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 20) });
+    if (payload.run_id) qs.set("run_id", payload.run_id);
+    if (payload.task_id) qs.set("task_id", payload.task_id);
+    if (payload.k !== undefined) qs.set("k", String(payload.k));
+    const response = await apiFetch<{ status: string; data: TopKQualityItem[] }>(`/qe-archive/analytics/topk-quality?${qs.toString()}`);
+    return response.data || [];
+  },
+  async promotionCandidates(payload: { limit?: number; model_type?: string; min_seed_count?: number; order_by?: string } = {}): Promise<PromotionCandidateItem[]> {
+    const qs = new URLSearchParams({
+      limit: String(payload.limit ?? 20),
+      min_seed_count: String(payload.min_seed_count ?? 5),
+      order_by: payload.order_by || "calmar",
+    });
+    if (payload.model_type) qs.set("model_type", payload.model_type);
+    const response = await apiFetch<{ status: string; data: PromotionCandidateItem[] }>(`/qe-archive/analytics/promotion-candidates?${qs.toString()}`);
+    return response.data || [];
   },
 };
 

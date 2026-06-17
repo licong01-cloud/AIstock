@@ -2819,7 +2819,43 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json, metrics_json,
+                               COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
+                               config_json->>'model_id' AS model_id,
+                               config_json->>'strategy_id' AS strategy_id,
+                               config_json->>'label_horizon' AS label_horizon,
+                               config_json->>'execution_algo' AS execution_algo,
+                               COALESCE(metrics_json->>'ic', metrics_json->>'IC') AS ic,
+                               COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
+                               COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
+                               COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
+                               COALESCE(
+                                   metrics_json->>'cagr',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                               ) AS cagr,
+                               COALESCE(
+                                   metrics_json->>'annualized_return',
+                                   metrics_json->>'1day.excess_return_with_cost.annualized_return'
+                               ) AS annualized_return,
+                               COALESCE(
+                                   metrics_json->>'max_drawdown',
+                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                               ) AS max_drawdown,
+                               COALESCE(
+                                   metrics_json->>'calmar',
+                                   metrics_json->>'calmar_ratio',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                               ) AS calmar,
+                               COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
+                               COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
+                               COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
+                               COALESCE(metrics_json->>'topk_hit_rate_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_50}') AS topk_hit_rate_50,
+                               COALESCE(metrics_json->>'topk_decay', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_decay}') AS topk_decay,
+                               COALESCE(metrics_json->>'within_portfolio_rankic', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,within_portfolio_rankic}') AS within_portfolio_rankic,
+                               COALESCE(metrics_json->>'topk_dispersion_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_20}') AS topk_dispersion_20,
+                               COALESCE(metrics_json->>'topk_dispersion_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_50}') AS topk_dispersion_50,
+                               COALESCE(metrics_json->>'topk_quality_status', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_quality_status}') AS topk_quality_status,
                                is_sota, status,
                                node_id, experiment_id, created_at, updated_at
                         FROM qe_evolution_loops
@@ -2959,7 +2995,43 @@ class AutoEvolutionScheduler:
                     return None
                 cur.execute("""
                     SELECT loop_id, task_id, loop_index, action_type,
-                           config_json, metrics_json,
+                           COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
+                           config_json->>'model_id' AS model_id,
+                           config_json->>'strategy_id' AS strategy_id,
+                           config_json->>'label_horizon' AS label_horizon,
+                           config_json->>'execution_algo' AS execution_algo,
+                           COALESCE(metrics_json->>'ic', metrics_json->>'IC') AS ic,
+                           COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
+                           COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
+                           COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
+                           COALESCE(
+                               metrics_json->>'cagr',
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                           ) AS cagr,
+                           COALESCE(
+                               metrics_json->>'annualized_return',
+                               metrics_json->>'1day.excess_return_with_cost.annualized_return'
+                           ) AS annualized_return,
+                           COALESCE(
+                               metrics_json->>'max_drawdown',
+                               metrics_json->>'1day.excess_return_with_cost.max_drawdown',
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                           ) AS max_drawdown,
+                           COALESCE(
+                               metrics_json->>'calmar',
+                               metrics_json->>'calmar_ratio',
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                           ) AS calmar,
+                           COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
+                           COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
+                           COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
+                           COALESCE(metrics_json->>'topk_hit_rate_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_50}') AS topk_hit_rate_50,
+                           COALESCE(metrics_json->>'topk_decay', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_decay}') AS topk_decay,
+                           COALESCE(metrics_json->>'within_portfolio_rankic', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,within_portfolio_rankic}') AS within_portfolio_rankic,
+                           COALESCE(metrics_json->>'topk_dispersion_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_20}') AS topk_dispersion_20,
+                           COALESCE(metrics_json->>'topk_dispersion_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_50}') AS topk_dispersion_50,
+                           COALESCE(metrics_json->>'topk_quality_status', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_quality_status}') AS topk_quality_status,
                            is_sota, status,
                            node_id, experiment_id, created_at, updated_at
                     FROM qe_evolution_loops
