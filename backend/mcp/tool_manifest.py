@@ -241,7 +241,10 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_model_hyperparam_seed_perf',
                 'qe_archive_query_overfit_flags',
                 'qe_archive_query_promotion_candidates',
-                'qe_archive_query_evolution_lineage'),
+                'qe_archive_query_evolution_lineage',
+                'prediction_store_get_pointer',
+                'prediction_store_pull_pred',
+                'model_store_health'),
  'qe_experiment': ('qe_experiment_list',
                    'qe_experiment_get',
                    'qe_experiment_get_status',
@@ -813,6 +816,8 @@ def _backend_endpoint_for(tool_name: str, module: str) -> str:
     if module == "qe_experiment":
         return "quantevolver/*"
     if module == "qe_archive":
+        if tool_name.startswith("prediction_store_") or tool_name == "model_store_health":
+            return "prediction-store/*"
         return "qe-archive/*"
     if module == "strategy_packages":
         return "strategy-packages/*"

@@ -74,6 +74,7 @@ class ExtractedArchivePayload:
     source: RunSourceRecord
     config: RunConfigRecord
     reproducibility_manifest: ReproducibilityManifestRecord
+    artifact_manifest: list[dict[str, Any]]
     data_contexts: list[DataContextRecord]
     account_summary: AccountSummaryRecord | None
     metrics: list[MetricRecord]
@@ -221,6 +222,8 @@ class QEArchivePayloadExtractor:
             trade_count=len(trades),
         )
         raw_payloads = self._raw_payloads(run_id, source_system, source_id, data, metrics, enhanced)
+        artifact_manifest = _extract_artifact_manifest_items(run_id, data, config_source, metrics, enhanced)
+        prediction_store_manifest = _extract_prediction_store_manifest(data, config_source, metrics, enhanced)
 
         random_seed = _extract_random_seed(data, config)
         seed_policy = "fixed" if random_seed is not None else "unset_legacy"
@@ -281,7 +284,7 @@ class QEArchivePayloadExtractor:
             data_context_sha256=sha256_json(data_context),
             metrics_payload_sha256=sha256_json(metrics) if metrics else None,
             enhanced_metrics_sha256=sha256_json(enhanced) if enhanced else None,
-            artifact_manifest_sha256=sha256_json(data.get("artifact_manifest")) if data.get("artifact_manifest") else None,
+            artifact_manifest_sha256=sha256_json(artifact_manifest) if artifact_manifest else None,
             git_commit=runtime_metadata["git_commit"],
             git_dirty=runtime_metadata["git_dirty"],
             runner_script=runtime_metadata["runner_script"],
@@ -306,13 +309,27 @@ class QEArchivePayloadExtractor:
             source_sub_id=source_sub_id,
             source_status=run.status,
             source_uri=_optional_str(data.get("source_uri")),
-            recorder_experiment_id=_optional_str(data.get("recorder_experiment_id")),
-            recorder_id=_optional_str(data.get("recorder_id")),
+            recorder_experiment_id=_optional_str(
+                data.get("recorder_experiment_id")
+                or prediction_store_manifest.get("recorder_experiment_id")
+                or _prediction_store_metadata(prediction_store_manifest).get("recorder_experiment_id")
+            ),
+            recorder_id=_optional_str(
+                data.get("recorder_id")
+                or prediction_store_manifest.get("recorder_id")
+                or _prediction_store_metadata(prediction_store_manifest).get("recorder_id")
+            ),
             mlflow_tracking_uri=_optional_str(data.get("mlflow_tracking_uri")),
-            mlflow_artifact_uri=_optional_str(data.get("mlflow_artifact_uri")),
+            mlflow_artifact_uri=_optional_str(data.get("mlflow_artifact_uri") or prediction_store_manifest.get("mlflow_artifact_uri")),
             qlib_recorder_name=_optional_str(data.get("qlib_recorder_name")),
             node_api_base_url=_optional_str(data.get("node_api_base_url")),
-            metadata={"event_type": event_type, "source_keys": sorted(str(k) for k in data.keys())},
+            metadata=_compact_mapping(
+                {
+                    "event_type": event_type,
+                    "source_keys": sorted(str(k) for k in data.keys()),
+                    "prediction_store": _source_prediction_store_metadata(prediction_store_manifest, artifact_manifest),
+                }
+            ),
         )
 
         return ExtractedArchivePayload(
@@ -320,6 +337,7 @@ class QEArchivePayloadExtractor:
             source=source,
             config=config,
             reproducibility_manifest=manifest,
+            artifact_manifest=artifact_manifest,
             data_contexts=[data_context],
             account_summary=account_summary,
             metrics=metric_records,
@@ -339,6 +357,7 @@ class QEArchivePayloadExtractor:
                 "symbol_summary_count": len(symbol_summaries),
                 "trade_count": len(trades),
                 "execution_event_count": len(execution_events),
+                "artifact_count": len(artifact_manifest),
                 "raw_payload_count": len(raw_payloads),
                 "research_valid": research_valid,
             },
@@ -1116,6 +1135,132 @@ def _merge_mappings(*values: Any) -> dict[str, Any]:
             if item not in (None, "", [], {}):
                 merged[str(key)] = item
     return merged
+
+
+def _compact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): item for key, item in value.items() if item not in (None, "", [], {})}
+
+
+def _extract_prediction_store_manifest(
+    data: Mapping[str, Any],
+    config: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    enhanced: Mapping[str, Any],
+) -> dict[str, Any]:
+    sources = (
+        data.get("prediction_store_manifest"),
+        data.get("prediction_store"),
+        data.get("artifact_manifest"),
+        config.get("prediction_store_manifest"),
+        config.get("prediction_store"),
+        metrics.get("prediction_store_manifest"),
+        metrics.get("prediction_store"),
+        enhanced.get("prediction_store_manifest"),
+        enhanced.get("prediction_store"),
+    )
+    for source in sources:
+        mapping = _ensure_mapping(source)
+        if mapping and (mapping.get("mlflow_artifact_uri") or mapping.get("uri") or mapping.get("artifacts")):
+            result = dict(mapping)
+            if result.get("uri") and not result.get("mlflow_artifact_uri"):
+                result["mlflow_artifact_uri"] = result.get("uri")
+            return result
+    manifest_items = _as_list(data.get("artifact_manifest") or config.get("artifact_manifest") or [])
+    for item in manifest_items:
+        if isinstance(item, Mapping):
+            uri = item.get("uri") or item.get("artifact_uri")
+            if isinstance(uri, str) and uri.startswith("aistock-prediction-store://"):
+                return {
+                    "mlflow_artifact_uri": uri.rsplit("/", 1)[0] if "/prediction" in uri or "/model_params" in uri else uri,
+                    "artifacts": manifest_items,
+                }
+    return {}
+
+
+def _prediction_store_metadata(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = _ensure_mapping(manifest.get("metadata"))
+    if not metadata:
+        artifacts = _as_list(manifest.get("artifacts"))
+        for item in artifacts:
+            if isinstance(item, Mapping):
+                metadata = _ensure_mapping(item.get("metadata")).get("upload_metadata") or {}
+                if isinstance(metadata, Mapping) and metadata:
+                    return dict(metadata)
+    return dict(metadata)
+
+
+def _source_prediction_store_metadata(
+    manifest: Mapping[str, Any],
+    artifact_manifest: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    if not manifest and not artifact_manifest:
+        return None
+    return {
+        "uri": manifest.get("uri") or manifest.get("mlflow_artifact_uri"),
+        "mlflow_artifact_uri": manifest.get("mlflow_artifact_uri") or manifest.get("uri"),
+        "schema_version": manifest.get("schema_version"),
+        "artifact_count": len(artifact_manifest),
+        "updated_at": manifest.get("updated_at"),
+        "forward_only": True,
+    }
+
+
+def _extract_artifact_manifest_items(
+    run_id: str,
+    data: Mapping[str, Any],
+    config: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    enhanced: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    manifest = _extract_prediction_store_manifest(data, config, metrics, enhanced)
+    raw_items = _as_list(manifest.get("artifacts") or data.get("artifact_manifest") or config.get("artifact_manifest"))
+    records: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, Mapping):
+            continue
+        artifact = _normalize_artifact_manifest_item(run_id, item)
+        if artifact:
+            records.append(artifact)
+    return records
+
+
+def _normalize_artifact_manifest_item(run_id: str, item: Mapping[str, Any]) -> dict[str, Any] | None:
+    artifact_type = _optional_str(item.get("artifact_type") or item.get("type"))
+    artifact_uri = _optional_str(item.get("uri") or item.get("artifact_uri"))
+    if not artifact_type or not artifact_uri:
+        return None
+    metadata = _ensure_mapping(item.get("metadata"))
+    row_count = item.get("row_count")
+    symbol_count = item.get("symbol_count")
+    date_start = item.get("date_start")
+    date_end = item.get("date_end")
+    if row_count is not None:
+        metadata.setdefault("row_count", row_count)
+    if symbol_count is not None:
+        metadata.setdefault("symbol_count", symbol_count)
+    if date_start is not None:
+        metadata.setdefault("date_start", date_start)
+    if date_end is not None:
+        metadata.setdefault("date_end", date_end)
+    parser_error = metadata.get("parser_error") or item.get("parser_error")
+    return {
+        "run_id": run_id,
+        "artifact_type": artifact_type,
+        "artifact_name": _optional_str(item.get("artifact_name") or item.get("name")) or artifact_type,
+        "storage_tier": _optional_str(item.get("storage_tier")) or "hot",
+        "artifact_uri": artifact_uri,
+        "source_system": _optional_str(item.get("source_system")) or "prediction_store",
+        "source_uri": _optional_str(item.get("source_api") or item.get("source_uri")),
+        "source_node_id": _optional_str(item.get("source_node_id")),
+        "sha256": _optional_str(item.get("sha256")),
+        "size_bytes": _as_int(item.get("size_bytes")),
+        "content_type": _optional_str(item.get("content_type")),
+        "collected_status": _optional_str(item.get("collection_status") or item.get("collected_status")) or "available",
+        "collected_at": _as_datetime(item.get("created_at") or item.get("collected_at")),
+        "parser_status": _optional_str(item.get("parser_status")) or "not_required",
+        "parser_error": _optional_str(parser_error),
+        "metadata": metadata,
+    }
 
 
 def _as_list(value: Any) -> list[Any]:

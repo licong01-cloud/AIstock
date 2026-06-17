@@ -23,6 +23,13 @@ from qlib.workflow.cli import sys_config, task_train
 import qlib
 from qlib.config import C
 
+try:
+    from qe_prediction_store_client import maybe_upload_prediction_artifacts
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_prediction_store_client":
+        raise
+    maybe_upload_prediction_artifacts = None
+
 
 RECORDER_REF_FILE = "qe_current_recorder.json"
 
@@ -54,6 +61,19 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
     tmp.replace(path)
     print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
     return payload
+
+
+def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment_name: str, config: dict):
+    if maybe_upload_prediction_artifacts is None:
+        print("[INFO] Prediction-store uploader helper not present; skipping upload")
+        return None
+    return maybe_upload_prediction_artifacts(
+        recorder=recorder,
+        recorder_ref=recorder_ref,
+        experiment_name=experiment_name,
+        mode=mode,
+        config=config,
+    )
 
 
 def render_yaml_template(yaml_path: str) -> str:
@@ -227,8 +247,9 @@ def main():
     # Run training + backtesting
     experiment_name = config.get("experiment_name", "workflow")
     recorder = task_train(config.get("task"), experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, "full", experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, "full", experiment_name, config)
 
 
 if __name__ == '__main__':

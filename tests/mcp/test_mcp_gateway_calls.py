@@ -181,3 +181,25 @@ def test_paper_v2_confirmed_tools_require_confirmation_before_http() -> None:
             {"experiment_id": "exp-1", "resolve_runtime_assets": False},
         )
     ]
+
+def test_qe_gateway_prediction_store_tools_use_readonly_backend_paths() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, str(request.url)))
+        return httpx.Response(200, json={"status": "success", "data": {}})
+
+    async def exercise() -> None:
+        mcp, _registry = create_gateway(profile="qe", transport=httpx.MockTransport(handler))
+        await mcp.call_tool("model_store_health", {})
+        await mcp.call_tool("prediction_store_get_pointer", {"run_id": "qear_run_1"})
+        await mcp.call_tool("prediction_store_get_pointer", {"experiment_id": "qe_exp_1"})
+        await mcp.call_tool("prediction_store_pull_pred", {"run_id": "qear_run_1", "head": 3})
+
+    _run(exercise())
+    assert seen == [
+        ("GET", "http://127.0.0.1:8001/api/v1/prediction-store/health"),
+        ("GET", "http://127.0.0.1:8001/api/v1/prediction-store/pointers/qear_run_1"),
+        ("GET", "http://127.0.0.1:8001/api/v1/prediction-store/pointers/by-experiment/qe_exp_1"),
+        ("GET", "http://127.0.0.1:8001/api/v1/prediction-store/pred/qear_run_1?head=3"),
+    ]

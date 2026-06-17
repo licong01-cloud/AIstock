@@ -53,6 +53,13 @@ except ModuleNotFoundError:
 import qlib
 from qlib.config import C
 
+try:
+    from qe_prediction_store_client import maybe_upload_prediction_artifacts
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_prediction_store_client":
+        raise
+    maybe_upload_prediction_artifacts = None
+
 
 
 # === 分钟级交易记录功能（环境变量控制）===
@@ -132,6 +139,19 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
     tmp.replace(path)
     print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
     return payload
+
+
+def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment_name: str, config: dict):
+    if maybe_upload_prediction_artifacts is None:
+        print("[INFO] Prediction-store uploader helper not present; skipping upload")
+        return None
+    return maybe_upload_prediction_artifacts(
+        recorder=recorder,
+        recorder_ref=recorder_ref,
+        experiment_name=experiment_name,
+        mode=mode,
+        config=config,
+    )
 
 
 class BacktestRecorderIsolationError(RuntimeError):
@@ -1057,8 +1077,9 @@ def _run_seed_analysis_records(config: dict, recorder, label_obj) -> None:
 
 def _run_full_backtest(config: dict, experiment_name: str, *, mode: str = "full", output_dir: Path | str | None = None):
     recorder = task_train(config.get("task"), experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, mode, experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, mode, experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, mode, experiment_name, config)
     save_minute_trades_from_recorder(recorder, output_dir=output_dir or os.getcwd())
     return recorder
 
@@ -1222,7 +1243,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
     )
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "seed_portfolio_ensemble", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "seed_portfolio_ensemble", experiment_name)
         save_payload = {
             "pred.pkl": combined_pred,
             "config": config,
@@ -1239,6 +1260,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
         if "label.pkl" in save_payload:
             _run_seed_analysis_records(config, recorder, label_obj)
         recorder.save_objects(config=config)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "seed_portfolio_ensemble", experiment_name, config)
         manifest["final_recorder_id"] = str((getattr(recorder, "info", {}) or {}).get("id") or "")
 
     manifest["combined_rows"] = int(combined_pred.shape[0])
@@ -1433,7 +1455,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
 
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "pred_backtest", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "pred_backtest", experiment_name)
         # 注入 prediction 和 label 到 recorder
         # SigAnaRecord 依赖: pred.pkl + label.pkl（check() 验证两者都存在）
         # PortAnaRecord 依赖: pred.pkl（从 recorder 加载预测信号）
@@ -1453,6 +1475,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             print(f"[INFO] Completed: {rec_class}")
 
         recorder.save_objects(config=config)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "pred_backtest", experiment_name, config)
         
         # 保存分钟级交易记录（环境变量控制）
         save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
@@ -1489,8 +1512,9 @@ def _run_train_only(config: dict, experiment_name: str):
 
     # 执行训练（task_train 内部会执行 filtered_records 中的 SignalRecord + SigAnaRecord）
     recorder = task_train(task_config, experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, "train_only", experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, "train_only", experiment_name, config)
     print("[INFO] Train-only completed: model trained, pred.pkl generated")
     return recorder
 
@@ -1560,7 +1584,7 @@ def _run_backtest_only(config: dict, experiment_name: str):
 
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "backtest_only", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "backtest_only", experiment_name)
         for record_config in records:
             r = init_instance_by_config(
                 record_config,
@@ -1570,6 +1594,7 @@ def _run_backtest_only(config: dict, experiment_name: str):
             )
             r.generate()
         recorder.save_objects(config=config, params_pkl=model)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "backtest_only", experiment_name, config)
 
     print("[INFO] Backtest-only completed successfully")
 

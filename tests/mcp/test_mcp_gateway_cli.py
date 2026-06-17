@@ -23,10 +23,10 @@ def test_gateway_cli_list_tools_profiles() -> None:
     qlib = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qlib_data")
     data_full = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=data_full")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 355
-    assert full["tool_count"] == 361
+    assert full["legacy_tool_count"] == 365
+    assert full["tool_count"] == 371
     assert validation["tool_count"] == 20
-    assert qe["tool_count"] == 71
+    assert qe["tool_count"] == 74
     assert qlib["modules"] == ["qlib_export"]
     assert qlib["tool_count"] == 15
     assert data_full["modules"] == ["local_data", "qlib_export"]
@@ -228,3 +228,4 @@ def test_process_inventory_does_not_match_bun_inside_unrelated_words() -> None:
 
     assert payload["status"] == "pass"
     assert payload["relevant_process_count"] == 0
+
