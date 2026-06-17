@@ -45,7 +45,12 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
         "qe_custom_evo_create_pending",
         "qe_custom_evo_update_config_confirmed",
     }
-    assert qe_archive == set(MODULE_TOOL_NAMES["qe_archive"])
+    assert qe_archive < set(MODULE_TOOL_NAMES["qe_archive"])
+    assert set(MODULE_TOOL_NAMES["qe_archive"]) - qe_archive == {
+        "prediction_store_get_pointer",
+        "prediction_store_pull_pred",
+        "model_store_health",
+    }
 
 
 def test_mcp_modules_do_not_import_backend_services_directly() -> None:

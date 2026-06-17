@@ -42,6 +42,9 @@ TOOL_NAMES = (
     "qe_archive_query_overfit_flags",
     "qe_archive_query_promotion_candidates",
     "qe_archive_query_evolution_lineage",
+    "prediction_store_get_pointer",
+    "prediction_store_pull_pred",
+    "model_store_health",
 )
 TOOL_COUNT = len(TOOL_NAMES)
 
@@ -50,6 +53,7 @@ def register(registry: "ModuleRegistry") -> None:
     """Register QE Archive tools on the shared MCP gateway."""
 
     client = registry.client("qe-archive")
+    prediction_store_client = registry.client("prediction-store")
 
     def _sanitize_ids(values: list[str] | None, field_name: str) -> list[str]:
         return [registry.sanitize(value, field_name) for value in (values or []) if str(value or "").strip()]
@@ -367,5 +371,25 @@ def register(registry: "ModuleRegistry") -> None:
             "/analytics/evolution-lineage",
             params={"task_id": task_id, "experiment_id": experiment_id, "model_type": model_type, "limit": limit},
         )
+
+    @registry.mcp.tool(name="prediction_store_get_pointer")
+    def prediction_store_get_pointer(run_id: str | None = None, experiment_id: str | None = None) -> Any:
+        if run_id:
+            safe_run_id = registry.sanitize(run_id, "run_id")
+            return prediction_store_client.get(f"/pointers/{safe_run_id}", params={"experiment_id": experiment_id})
+        if experiment_id:
+            safe_experiment_id = registry.sanitize(experiment_id, "experiment_id")
+            return prediction_store_client.get(f"/pointers/by-experiment/{safe_experiment_id}")
+        raise ValueError("run_id or experiment_id is required")
+
+    @registry.mcp.tool(name="prediction_store_pull_pred")
+    def prediction_store_pull_pred(run_id: str, head: int = 5) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        bounded_head = max(0, min(int(head), 1000))
+        return prediction_store_client.get(f"/pred/{safe_run_id}", params={"head": bounded_head})
+
+    @registry.mcp.tool(name="model_store_health")
+    def model_store_health() -> Any:
+        return prediction_store_client.get("/health")
 
     registry.register_tool_count("qe_archive", TOOL_COUNT)

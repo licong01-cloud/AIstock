@@ -97,6 +97,7 @@ class QEArchiveService:
         repo.upsert_run_source(extracted.source)
         repo.upsert_run_config(extracted.config)
         repo.upsert_reproducibility_manifest(extracted.reproducibility_manifest)
+        repo.upsert_artifact_manifest(run_id, extracted.artifact_manifest, replace_existing=True)
         for context in extracted.data_contexts:
             repo.upsert_data_context(context)
         if extracted.account_summary is not None:

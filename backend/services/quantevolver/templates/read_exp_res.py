@@ -117,6 +117,48 @@ def _write_extracted_recorder_ref(recorder, experiment_name: str, binding: dict)
     tmp.replace(path)
 
 
+def _load_prediction_store_upload_marker() -> dict:
+    marker_path = Path.cwd() / "qe_prediction_store_upload.json"
+    if not marker_path.exists():
+        return {}
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "schema_version": "qe_prediction_store_upload_marker_v1",
+            "status": "unreadable",
+            "marker_path": str(marker_path),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if not isinstance(marker, dict):
+        return {
+            "schema_version": "qe_prediction_store_upload_marker_v1",
+            "status": "invalid",
+            "marker_path": str(marker_path),
+            "error": "marker JSON must be an object",
+        }
+    marker.setdefault("marker_path", str(marker_path))
+    return marker
+
+
+def _attach_prediction_store_upload(enhanced: dict) -> None:
+    marker = _load_prediction_store_upload_marker()
+    if not marker:
+        return
+    enhanced["prediction_store_upload"] = marker
+    manifest = marker.get("prediction_store_manifest")
+    if isinstance(manifest, dict):
+        enhanced["prediction_store_manifest"] = manifest
+        if manifest.get("mlflow_artifact_uri") or manifest.get("uri"):
+            enhanced["mlflow_artifact_uri"] = manifest.get("mlflow_artifact_uri") or manifest.get("uri")
+    else:
+        enhanced["prediction_store_manifest"] = {
+            "status": marker.get("status"),
+            "error": marker.get("error"),
+            "run_key": marker.get("run_key"),
+        }
+
+
 _binding = _load_bound_recorder_ref()
 _target_rid = str(_binding.get("recorder_id") or "").strip()
 _require_bound_recorder = _truthy_env("QE_REQUIRE_RECORDER_ID")
@@ -1926,6 +1968,7 @@ if latest_recorder is not None:
         _enhanced["trade_diagnostics"] = _extract_trade_diagnostics(latest_recorder, _summary_dict)
         _enhanced["prediction_diagnostics"] = _extract_prediction_diagnostics(latest_recorder)
         _enhanced.update(_extract_top_stocks(latest_recorder))
+        _attach_prediction_store_upload(_enhanced)
 
         # Feature importance (LightGBM gain/split)
         _fi = _extract_feature_importance(latest_recorder)

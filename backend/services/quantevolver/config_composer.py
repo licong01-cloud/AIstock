@@ -1392,6 +1392,9 @@ class ConfigComposer:
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        uploader_src = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_src.exists():
+            shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace（qrun_limit.py 同样需要）
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
@@ -1683,6 +1686,9 @@ class ConfigComposer:
         qrun_limit_path = scripts_dir / "qrun_limit.py"
         if qrun_limit_path.exists():
             experiment_files["qrun_limit.py"] = qrun_limit_path.read_text(encoding="utf-8")
+        uploader_path = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_path.exists():
+            experiment_files["qe_prediction_store_client.py"] = uploader_path.read_text(encoding="utf-8")
         if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             minute_path = scripts_dir / "qrun_limit_minute.py"
             if minute_path.exists():
@@ -2378,6 +2384,9 @@ class ConfigComposer:
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        uploader_src = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_src.exists():
+            shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():

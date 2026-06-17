@@ -186,6 +186,25 @@ targets:
   - Review QE Archive Warehouse state
   - Validate QE Archive Warehouse primary workflow
   coverage_status: partial
+- route_id: qe.prediction_store
+  href: /qe-archive/prediction-store
+  label: QE Pred Store
+  nav_group: QuantEvolver
+  primary_module: qe.archive
+  impact_modules:
+  - qe.data_completeness
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_archive_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open QE Pred Store
+  - Review prediction artifact pointers and manifests
+  - Validate prediction store health and coverage visibility
+  coverage_status: planned
 - route_id: strategy_package.governance
   href: /strategy-package-governance
   label: Strategy Package Governance
