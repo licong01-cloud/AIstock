@@ -1,0 +1,100 @@
+{
+  "actual": "Research Assistant chat page 'Phase 7 Evidence / Blockers' panel (frontend/src/app/research-assistant/chat/page.tsx:646) renders Blocker/Evidence cards with two defects. (1) Layout breaks into per-character wrapping: .ra-evidence-ref-grid (research-assistant.css:254, grid-template-columns minmax(96px,0.28fr) 1fr) starves the value column inside the narrow side panel so long text degrades to per-char break; should stack to single column (label above value) at narrow width or fix column sizing. (2) Raw JSON shown on main UI: BlockerCard.tsx and EvidenceCard.tsx render <DiagnosticLogBlock data={card}> which via AssistantShared.tsx:101 prints the whole card object as <pre class=ra-json-preview>{JSON.stringify(card,null,2)}</pre>; should remove or collapse behind a developer-details toggle and show human-readable fields in main view. Minor: provenance shows only Object.keys(...).join(', ') (key names), should show source value. NOTE: as_of showing '-' is intended honest behavior, not a bug; do not change it.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-402",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T08:12:13.445098Z",
+  "description": "Research Assistant chat page 'Phase 7 Evidence / Blockers' panel (frontend/src/app/research-assistant/chat/page.tsx:646) renders Blocker/Evidence cards with two defects. (1) Layout breaks into per-character wrapping: .ra-evidence-ref-grid (research-assistant.css:254, grid-template-columns minmax(96px,0.28fr) 1fr) starves the value column inside the narrow side panel so long text degrades to per-char break; should stack to single column (label above value) at narrow width or fix column sizing. (2) Raw JSON shown on main UI: BlockerCard.tsx and EvidenceCard.tsx render <DiagnosticLogBlock data={card}> which via AssistantShared.tsx:101 prints the whole card object as <pre class=ra-json-preview>{JSON.stringify(card,null,2)}</pre>; should remove or collapse behind a developer-details toggle and show human-readable fields in main view. Minor: provenance shows only Object.keys(...).join(', ') (key names), should show source value. NOTE: as_of showing '-' is intended honest behavior, not a bug; do not change it.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-65d1b27062d7",
+      "timestamp": "2026-06-17T08:12:13.445093Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-17T08:12:13.445098Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1206,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1206",
+  "last_seen_at": "2026-06-17T08:12:13.445098Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA Phase 7 evidence/blocker cards render broken in narrow panel and dump raw JSON to main UI",
+  "trigger_condition": {
+    "fingerprint": "65d1b27062d7ebbfdd0fb260",
+    "source_event_id": "FE-20260617-65d1b27062d7"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/blocker",
+    "ui_routes": [
+      "/blocker"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
