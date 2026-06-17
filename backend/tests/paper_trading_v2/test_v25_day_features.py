@@ -42,6 +42,10 @@ class FakeAudit:
 
 
 class StaticV25Provider(DbV25DayFeatureProvider):
+    def __init__(self, *, turnover_rate_f: Any = 6.0, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.turnover_rate_f = turnover_rate_f
+
     def _previous_trading_day(self, before_date: date) -> date:
         if before_date == date(2024, 1, 3):
             return date(2024, 1, 2)
@@ -55,7 +59,7 @@ class StaticV25Provider(DbV25DayFeatureProvider):
         return {"open_li": 9000, "high_li": 11000, "low_li": 8000, "close_li": 10000, "volume_hand": 100, "amount_li": 1_000_000}
 
     def _load_daily_basic_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
-        return {"turnover_rate": 5.0, "turnover_rate_f": 6.0, "pb": 2.0}
+        return {"turnover_rate": 5.0, "turnover_rate_f": self.turnover_rate_f, "pb": 2.0}
 
     def _load_moneyflow_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         return {"net_mf_amount": 50.0}
@@ -107,6 +111,36 @@ def test_db_v25_day_feature_provider_fails_when_required_audit_is_missing() -> N
     provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(missing_dataset="sector_data"))
 
     with pytest.raises(DataUnavailableError, match="refresh status"):
+        provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+
+def test_db_v25_day_feature_provider_substitutes_non_finite_free_turnover_with_audit() -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=float("nan"))
+
+    features = provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+    assert all(math.isfinite(value) for value in features.values)
+    assert features.values[4] == pytest.approx(0.05)
+    assert features.values[5] == pytest.approx(0.05)
+    repairs = [row for row in features.audit or [] if row.get("role") == "field_repair"]
+    assert repairs == [
+        {
+            "role": "field_repair",
+            "dataset": "daily_basic",
+            "trade_date": "2024-01-02",
+            "field": "turnover_rate_f",
+            "source_field": "turnover_rate",
+            "status": "substituted",
+            "reason": "non_finite_source_value",
+            "source_value": "nan",
+        }
+    ]
+
+
+def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover() -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f="bad")
+
+    with pytest.raises(DataUnavailableError, match="turnover_rate_f is invalid"):
         provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
 
 

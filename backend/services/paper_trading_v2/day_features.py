@@ -112,13 +112,15 @@ class DbV25DayFeatureProvider:
             normalized_symbol,
             feature_date,
         )
-        turnover_rate = self._required_float(basic["turnover_rate"], "turnover_rate", normalized_symbol, feature_date) / 100.0
-        free_float_turnover_rate = self._required_float(
+        turnover_rate_raw = self._required_float(basic["turnover_rate"], "turnover_rate", normalized_symbol, feature_date)
+        turnover_rate = turnover_rate_raw / 100.0
+        free_float_turnover_rate = self._free_float_turnover_rate(
             basic["turnover_rate_f"],
-            "turnover_rate_f",
-            normalized_symbol,
-            feature_date,
-        ) / 100.0
+            turnover_rate_raw=turnover_rate_raw,
+            symbol=normalized_symbol,
+            trade_date=feature_date,
+            audit=audit,
+        )
         pb = self._required_float(basic["pb"], "pb", normalized_symbol, feature_date)
         if pb <= -1:
             raise DataUnavailableError(
@@ -321,6 +323,43 @@ class DbV25DayFeatureProvider:
             "V25 day_features source row is missing",
             context={"table": table, "symbol": symbol, "trade_date": trade_date.isoformat()},
         )
+
+    @classmethod
+    def _free_float_turnover_rate(
+        cls,
+        value: Any,
+        *,
+        turnover_rate_raw: float,
+        symbol: str,
+        trade_date: date,
+        audit: list[dict[str, Any]],
+    ) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "V25 day_features turnover_rate_f is invalid",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "value": value},
+            ) from exc
+        if math.isfinite(parsed):
+            return parsed / 100.0
+
+        # Some daily_basic rows contain PostgreSQL numeric NaN for turnover_rate_f
+        # while same-row turnover_rate is valid. Keep the vector finite and audited
+        # without introducing neutral/zero defaults or reading future intraday data.
+        audit.append(
+            {
+                "role": "field_repair",
+                "dataset": "daily_basic",
+                "trade_date": trade_date.isoformat(),
+                "field": "turnover_rate_f",
+                "source_field": "turnover_rate",
+                "status": "substituted",
+                "reason": "non_finite_source_value",
+                "source_value": str(value),
+            }
+        )
+        return turnover_rate_raw / 100.0
 
     @classmethod
     def _positive_li_price(cls, value: Any, field: str, symbol: str, trade_date: date) -> float:
