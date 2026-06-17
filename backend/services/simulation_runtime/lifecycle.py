@@ -23,7 +23,13 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.models import PositionLot
 
 from .bridges import LocalSimExecutionBridge, MiniQMTExecutionBridge
-from .decision import ExecutionPlanCompiler, RebalanceIntentResult, RebalanceIntentService, TargetPositionService
+from .decision import (
+    TRADABILITY_BLOCK_REASON_CODES,
+    ExecutionPlanCompiler,
+    RebalanceIntentResult,
+    RebalanceIntentService,
+    TargetPositionService,
+)
 from .models import (
     DailySelectionEvidence,
     ExecutionPlan,
@@ -59,6 +65,43 @@ class SimulationExecutionResult:
     broker_result: Any | None = None
 
 
+def _pre_trade_blocked_symbol_count(pre_trade_tradability: dict[str, dict[str, Any]] | None) -> int:
+    if not pre_trade_tradability:
+        return 0
+    return sum(
+        1
+        for status in pre_trade_tradability.values()
+        if isinstance(status, dict) and not bool(status.get("is_tradable", True))
+    )
+
+
+def _pre_trade_blocked_order_generation_payload(plan: ExecutionPlan) -> dict[str, Any] | None:
+    blocked = []
+    for decision in plan.trading_rule_decisions:
+        if decision.reason_code not in TRADABILITY_BLOCK_REASON_CODES and decision.reason_code != "SUSPENDED_OR_NO_QUOTE_BLOCKED":
+            continue
+        tradability = decision.price_limit_rule.get("pre_trade_tradability")
+        blocked.append(
+            {
+                "symbol": decision.symbol,
+                "side": decision.side.value,
+                "requested_quantity": int(decision.requested_quantity),
+                "legal_quantity": int(decision.legal_quantity),
+                "reason_code": decision.reason_code,
+                "pre_trade_tradability": tradability if isinstance(tradability, dict) else None,
+            }
+        )
+    if not blocked:
+        return None
+    return {
+        "schema_version": "pre_trade_blocked_order_generation_v1",
+        "reason_code": "SUSPENDED_OR_NO_QUOTE_BLOCKED",
+        "blocked_intent_count": len(blocked),
+        "blocked_symbols": sorted({item["symbol"] for item in blocked}),
+        "blocked_orders": blocked,
+    }
+
+
 class SimulationLifecycleOrchestrator:
     """Build and submit one broker-neutral simulation day lifecycle."""
 
@@ -86,6 +129,7 @@ class SimulationLifecycleOrchestrator:
         signal_snapshot: SignalSnapshot,
         current_positions: dict[str, PositionLot] | None = None,
         current_prices: dict[str, float] | None = None,
+        pre_trade_tradability: dict[str, dict[str, Any]] | None = None,
         manifest: StrategyPackageManifest | None = None,
         portfolio_id: str | None = None,
         top_k: int | None = None,
@@ -126,6 +170,7 @@ class SimulationLifecycleOrchestrator:
             trade_date=selection_evidence.target_trade_date,
             current_positions=current_positions or {},
             target_positions=targets,
+            pre_trade_tradability=pre_trade_tradability,
         )
         self.repository.update_simulation_daily_run(
             run.run_id,
@@ -134,6 +179,7 @@ class SimulationLifecycleOrchestrator:
                 "target_count": len(targets),
                 "order_intent_count": len(rebalance.order_intents),
                 "trading_rule_decision_count": len(rebalance.trading_rule_decisions),
+                "pre_trade_blocked_symbol_count": _pre_trade_blocked_symbol_count(pre_trade_tradability),
                 "last_stage": "PLANNING_EXECUTION",
             },
         )
@@ -206,17 +252,28 @@ class SimulationLifecycleOrchestrator:
         )
         plan = execution_plan
         if not plan.intents:
+            blocked_payload = _pre_trade_blocked_order_generation_payload(plan)
+            terminal_payload = (
+                {
+                    "no_rebalance_required": False,
+                    "broker_called": False,
+                    "pre_trade_blocked_order_generation": blocked_payload,
+                    "last_stage": "SUCCEEDED",
+                }
+                if blocked_payload
+                else {"no_rebalance_required": True, "broker_called": False, "last_stage": "SUCCEEDED"}
+            )
             succeeded = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=SimulationDailyRunStatus.SUCCEEDED,
-                payload_patch={"no_rebalance_required": True, "broker_called": False, "last_stage": "SUCCEEDED"},
+                payload_patch=terminal_payload,
                 payload_unset=("submit_failure",),
             )
             return SimulationExecutionResult(
                 run=succeeded,
                 execution_plan=plan,
                 broker_backend=binding.broker_backend,
-                status="NO_REBALANCE",
+                status="PRE_TRADE_BLOCKED" if blocked_payload else "NO_REBALANCE",
                 intent_count=0,
                 broker_result=None,
             )

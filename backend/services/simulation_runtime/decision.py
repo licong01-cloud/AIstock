@@ -34,6 +34,13 @@ from .models import (
 
 
 TRADING_RULE_SOURCE_VERSION = "a_share_board_lot_v20260504"
+TRADABILITY_BLOCK_REASON_CODES = frozenset(
+    {
+        "SUSPENDED_BY_SUSPEND_D",
+        "NO_TRADABLE_REALTIME_QUOTE",
+        "REALTIME_QUOTE_MISSING",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -138,12 +145,29 @@ class TradingRuleService:
         requested_quantity: int,
         tplus1_available_quantity: int | None = None,
         price_limit_rule: dict[str, Any] | None = None,
+        tradability_status: dict[str, Any] | None = None,
     ) -> TradingRuleDecision:
         side_value = side if isinstance(side, OrderSide) else OrderSide(str(side).upper())
         requested = int(requested_quantity)
         min_qty, increment = board_lot_rule(symbol)
         market_board = self.market_board(symbol)
         available = int(tplus1_available_quantity) if tplus1_available_quantity is not None else None
+        effective_price_limit_rule = dict(price_limit_rule or {})
+        if tradability_status:
+            effective_price_limit_rule["pre_trade_tradability"] = dict(tradability_status)
+            if not bool(tradability_status.get("is_tradable", True)):
+                return self._build_decision(
+                    symbol=symbol,
+                    market_board=market_board,
+                    side=side_value,
+                    requested_quantity=max(requested, 0),
+                    legal_quantity=0,
+                    lot_rule={"min_quantity": min_qty, "increment": increment},
+                    price_limit_rule=effective_price_limit_rule,
+                    tplus1_available_quantity=available,
+                    decision="REJECT",
+                    reason_code=_tradability_reason_code(tradability_status),
+                )
 
         if requested <= 0:
             return self._build_decision(
@@ -153,7 +177,7 @@ class TradingRuleService:
                 requested_quantity=max(requested, 0),
                 legal_quantity=0,
                 lot_rule={"min_quantity": min_qty, "increment": increment},
-                price_limit_rule=price_limit_rule or {},
+                price_limit_rule=effective_price_limit_rule,
                 tplus1_available_quantity=available,
                 decision="REJECT",
                 reason_code="INVALID_QUANTITY",
@@ -183,7 +207,7 @@ class TradingRuleService:
             requested_quantity=requested,
             legal_quantity=legal_quantity,
             lot_rule={"min_quantity": min_qty, "increment": increment},
-            price_limit_rule=price_limit_rule or {},
+            price_limit_rule=effective_price_limit_rule,
             tplus1_available_quantity=available,
             decision=decision,
             reason_code=reason_code,
@@ -246,6 +270,13 @@ class TradingRuleService:
         )
 
 
+def _tradability_reason_code(status: dict[str, Any]) -> str:
+    raw_reason = str(status.get("reason_code") or "").strip().upper()
+    if raw_reason in TRADABILITY_BLOCK_REASON_CODES:
+        return raw_reason
+    return "SUSPENDED_OR_NO_QUOTE_BLOCKED"
+
+
 class RebalanceIntentService:
     """Diff current strategy positions and shared targets into order intents."""
 
@@ -261,6 +292,7 @@ class RebalanceIntentService:
         trade_date: date,
         current_positions: dict[str, PositionLot],
         target_positions: list[TargetPosition],
+        pre_trade_tradability: dict[str, dict[str, Any]] | None = None,
     ) -> RebalanceIntentResult:
         if not target_positions and not current_positions:
             return RebalanceIntentResult(order_intents=[], trading_rule_decisions=[])
@@ -294,6 +326,7 @@ class RebalanceIntentService:
                 side=side,
                 requested_quantity=requested_quantity,
                 tplus1_available_quantity=current_available if side == OrderSide.SELL else None,
+                tradability_status=(pre_trade_tradability or {}).get(symbol),
             )
             trading_rule_decisions.append(decision)
             if decision.legal_quantity <= 0 or decision.decision == "REJECT":

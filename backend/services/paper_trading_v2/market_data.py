@@ -14,7 +14,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Callable, Iterator, Protocol
 
-from backend.data_service.tdx_adapter import fetch_minute_kline_tdx
+import requests
+
+from backend.data_service.tdx_adapter import TDX_DEFAULT_PORT, _to_tdx_code, fetch_minute_kline_tdx
 from backend.db.pg_pool import get_conn
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.trading_core.errors import (
@@ -35,6 +37,7 @@ MINUTE_VOLUME_HAND_SIZE = 100
 PRICE_TICK = Decimal("0.01")
 
 TdxMinuteFetcher = Callable[[str, date], list[dict[str, Any]]]
+RealtimeQuoteFetcher = Callable[[list[str]], dict[str, dict[str, Any]]]
 ConnFactory = Callable[[], Iterator[Any]]
 
 
@@ -127,6 +130,31 @@ class DailySuspendStatus:
 
 
 @dataclass(frozen=True)
+class PreTradeTradabilityStatus:
+    """Daily pre-trade tradability evidence for order-generation gates."""
+
+    symbol: str
+    trade_date: date
+    is_tradable: bool
+    reason_code: str
+    source: str
+    suspend_status: dict[str, Any] | None = None
+    quote_evidence: dict[str, Any] | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "pre_trade_tradability_status_v1",
+            "symbol": self.symbol,
+            "trade_date": self.trade_date.isoformat(),
+            "is_tradable": self.is_tradable,
+            "reason_code": self.reason_code,
+            "source": self.source,
+            "suspend_status": self.suspend_status,
+            "quote_evidence": self.quote_evidence,
+        }
+
+
+@dataclass(frozen=True)
 class PreviousClose:
     """Authoritative previous close resolved from audited daily kline data."""
 
@@ -199,6 +227,253 @@ class DbSuspendStatusProvider:
             suspend_type=str(row[0]) if row[0] is not None else "S",
             suspend_timing=str(row[1]) if row[1] is not None else None,
         )
+
+
+class PreTradeTradabilityProvider:
+    """Combine suspend_d and realtime quote evidence before order creation.
+
+    The provider is intentionally read-only. If a realtime quote fetcher is
+    configured and fails, callers get DataUnavailableError instead of silently
+    falling back to stale close prices.
+    """
+
+    def __init__(
+        self,
+        *,
+        suspend_status_provider: SuspendStatusProvider | None = None,
+        realtime_quote_fetcher: RealtimeQuoteFetcher | None = None,
+        realtime_quote_source: str | None = None,
+        require_realtime_quote: bool = False,
+    ) -> None:
+        self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider()
+        self.realtime_quote_fetcher = realtime_quote_fetcher
+        self.realtime_quote_source = realtime_quote_source or "not_configured"
+        self.require_realtime_quote = bool(require_realtime_quote)
+
+    def get_statuses(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        *,
+        require_realtime_quote: bool | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        normalized_symbols = _normalize_symbol_list(symbols)
+        if not normalized_symbols:
+            return {}
+        require_quote = self.require_realtime_quote if require_realtime_quote is None else bool(require_realtime_quote)
+        quotes: dict[str, dict[str, Any]] = {}
+        if require_quote:
+            if self.realtime_quote_fetcher is None:
+                raise DataUnavailableError(
+                    "pre-trade realtime quote fetcher is required",
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "symbols": normalized_symbols,
+                        "quote_source": self.realtime_quote_source,
+                    },
+                )
+            try:
+                quotes = self.realtime_quote_fetcher(normalized_symbols)
+            except Exception as exc:
+                raise DataUnavailableError(
+                    "pre-trade realtime quote fetch failed",
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "symbols": normalized_symbols,
+                        "quote_source": self.realtime_quote_source,
+                    },
+                ) from exc
+
+        statuses: dict[str, dict[str, Any]] = {}
+        for symbol in normalized_symbols:
+            suspend = self.suspend_status_provider.get_suspend_status(symbol, trade_date)
+            suspend_payload = {
+                "is_suspended": bool(suspend.is_suspended),
+                "suspend_type": suspend.suspend_type,
+                "suspend_timing": suspend.suspend_timing,
+                "source": suspend.source,
+            }
+            if suspend.is_suspended:
+                statuses[symbol] = PreTradeTradabilityStatus(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    is_tradable=False,
+                    reason_code="SUSPENDED_BY_SUSPEND_D",
+                    source="market.suspend_d",
+                    suspend_status=suspend_payload,
+                ).to_payload()
+                continue
+
+            quote_payload = None
+            if require_quote:
+                quote = quotes.get(symbol)
+                if not isinstance(quote, dict):
+                    statuses[symbol] = PreTradeTradabilityStatus(
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        is_tradable=False,
+                        reason_code="REALTIME_QUOTE_MISSING",
+                        source=self.realtime_quote_source,
+                        suspend_status=suspend_payload,
+                        quote_evidence={"quote_source": self.realtime_quote_source, "quote_present": False},
+                    ).to_payload()
+                    continue
+                quote_payload = quote_tradability_evidence(symbol=symbol, quote=quote, source=self.realtime_quote_source)
+                if quote_payload["no_tradable_market"]:
+                    statuses[symbol] = PreTradeTradabilityStatus(
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        is_tradable=False,
+                        reason_code="NO_TRADABLE_REALTIME_QUOTE",
+                        source=self.realtime_quote_source,
+                        suspend_status=suspend_payload,
+                        quote_evidence=quote_payload,
+                    ).to_payload()
+                    continue
+
+            statuses[symbol] = PreTradeTradabilityStatus(
+                symbol=symbol,
+                trade_date=trade_date,
+                is_tradable=True,
+                reason_code="OK",
+                source=self.realtime_quote_source if require_quote else "market.suspend_d",
+                suspend_status=suspend_payload,
+                quote_evidence=quote_payload,
+            ).to_payload()
+        return statuses
+
+
+def fetch_tdx_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """Fetch raw TDX /api/batch-quote rows keyed by AIstock symbol."""
+
+    normalized_symbols = _normalize_symbol_list(symbols)
+    if not normalized_symbols:
+        return {}
+    url = f"http://localhost:{TDX_DEFAULT_PORT}/api/batch-quote"
+    response = requests.post(url, json={"codes": [_to_tdx_code(symbol) for symbol in normalized_symbols]}, timeout=5)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        raise RuntimeError(f"TDX batch-quote returned invalid response: {payload!r}")
+    items = payload.get("data") or []
+    if not isinstance(items, list):
+        raise RuntimeError("TDX batch-quote data payload must be a list")
+    quotes: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        symbol = _symbol_from_tdx_quote(item)
+        if symbol:
+            quotes[symbol] = dict(item)
+    return quotes
+
+
+def quote_tradability_evidence(*, symbol: str, quote: dict[str, Any], source: str) -> dict[str, Any]:
+    kline = quote.get("K") if isinstance(quote.get("K"), dict) else {}
+    bid_price, bid_volume = _best_quote_level(quote, side="bid")
+    ask_price, ask_volume = _best_quote_level(quote, side="ask")
+    open_price = _first_number(kline, ("Open", "open"))
+    high_price = _first_number(kline, ("High", "high"))
+    low_price = _first_number(kline, ("Low", "low"))
+    last_price = _first_number(kline, ("Close", "Last", "close", "last"))
+    if last_price is None:
+        last_price = _first_number(quote, ("lastPrice", "last_price", "price", "close"))
+    total_hand = _first_number(quote, ("TotalHand", "total_hand", "volume", "vol"))
+    amount = _first_number(quote, ("Amount", "amount"))
+    ohl_zero = not any(_is_positive(value) for value in (open_price, high_price, low_price))
+    turnover_zero = not _is_positive(total_hand) and not _is_positive(amount)
+    book_empty = not (_is_positive(bid_price) and _is_positive(bid_volume)) and not (
+        _is_positive(ask_price) and _is_positive(ask_volume)
+    )
+    no_tradable_market = bool(book_empty and (ohl_zero or turnover_zero))
+    return {
+        "schema_version": "pre_trade_quote_tradability_evidence_v1",
+        "symbol": symbol,
+        "quote_source": source,
+        "quote_present": True,
+        "last_price": last_price,
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "total_hand": total_hand,
+        "amount": amount,
+        "bid_price_1": bid_price,
+        "bid_volume_1": bid_volume,
+        "ask_price_1": ask_price,
+        "ask_volume_1": ask_volume,
+        "ohl_zero": ohl_zero,
+        "turnover_zero": turnover_zero,
+        "book_empty": book_empty,
+        "no_tradable_market": no_tradable_market,
+    }
+
+
+def _normalize_symbol_list(symbols: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for symbol in symbols:
+        text = str(symbol or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _symbol_from_tdx_quote(row: dict[str, Any]) -> str | None:
+    code = str(row.get("Code") or row.get("code") or "").strip()
+    if not code:
+        return None
+    exchange_raw = row.get("Exchange", row.get("exchange"))
+    if isinstance(exchange_raw, (int, float)):
+        exchange = {0: "SZ", 1: "SH", 2: "BJ"}.get(int(exchange_raw), "")
+    else:
+        exchange = str(exchange_raw or "").strip().upper()
+    if not exchange and len(code) == 6:
+        if code.startswith(("0", "2", "3")):
+            exchange = "SZ"
+        elif code.startswith(("6", "9")):
+            exchange = "SH"
+        elif code.startswith(("4", "8")):
+            exchange = "BJ"
+    if not exchange:
+        return None
+    return f"{code}.{exchange}"
+
+
+def _best_quote_level(quote: dict[str, Any], *, side: str) -> tuple[float | None, float | None]:
+    if side == "bid":
+        price = _first_number(quote, ("bid_price_1", "bidPrice1", "bid_price", "bidPrice", "bid", "bid1"))
+        volume = _first_number(quote, ("bid_volume_1", "bidVol1", "bid_volume", "bidVol", "bidVolume", "bid_vol"))
+        levels = quote.get("BuyLevel")
+    else:
+        price = _first_number(quote, ("ask_price_1", "askPrice1", "ask_price", "askPrice", "ask", "ask1"))
+        volume = _first_number(quote, ("ask_volume_1", "askVol1", "ask_volume", "askVol", "askVolume", "ask_vol"))
+        levels = quote.get("SellLevel")
+    if (price is None or volume is None) and isinstance(levels, list) and levels:
+        first_level = levels[0]
+        if isinstance(first_level, dict):
+            price = price if price is not None else _first_number(first_level, ("Price", "price"))
+            volume = volume if volume is not None else _first_number(first_level, ("Number", "number", "Volume", "volume"))
+    return price, volume
+
+
+def _first_number(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _is_positive(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 class DbPreviousCloseProvider:

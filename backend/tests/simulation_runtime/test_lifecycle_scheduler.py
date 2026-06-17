@@ -478,6 +478,37 @@ class FakeLocalSimMarketDataProvider:
         )
 
 
+class FakePreTradeTradabilityProvider:
+    def __init__(self, statuses: dict[str, dict[str, Any]] | None = None) -> None:
+        self.statuses = dict(statuses or {})
+        self.calls: list[dict[str, Any]] = []
+
+    def get_statuses(self, symbols: list[str], trade_date: date, *, require_realtime_quote: bool = False):
+        self.calls.append(
+            {
+                "symbols": list(symbols),
+                "trade_date": trade_date,
+                "require_realtime_quote": require_realtime_quote,
+            }
+        )
+        return {
+            symbol: dict(
+                self.statuses.get(
+                    symbol,
+                    {
+                        "schema_version": "pre_trade_tradability_status_v1",
+                        "symbol": symbol,
+                        "trade_date": trade_date.isoformat(),
+                        "is_tradable": True,
+                        "reason_code": "OK",
+                        "source": "unit_test",
+                    },
+                )
+            )
+            for symbol in symbols
+        }
+
+
 def _frozen_manifest(package_id: str = "pkg_scheduler", manifest_sha256: str | None = None) -> StrategyPackageManifest:
     manifest = StrategyPackageManifest(
         manifest_version="alpha_core_v1",
@@ -2713,6 +2744,68 @@ def test_scheduler_no_rebalance_submission_marks_success_without_broker() -> Non
     assert result.results[0].run.run_payload_json["broker_called"] is False
 
 
+def test_scheduler_marks_pre_trade_blocked_holding_without_broker_submit() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    blocked_position = {
+        "688689.SH": PositionLot(
+            portfolio_id="portfolio_blocked",
+            symbol="688689.SH",
+            quantity=878,
+            available_quantity=878,
+            avg_cost=46.82,
+            trade_date=TRADE_DATE - timedelta(days=1),
+        )
+    }
+    context = SimulationRunContext(
+        portfolio_id="portfolio_blocked",
+        current_positions=blocked_position,
+        current_prices={"688689.SH": 46.82},
+        local_broker=FakeLocalSimBroker(),
+        pre_trade_tradability={
+            "688689.SH": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "688689.SH",
+                "trade_date": TRADE_DATE.isoformat(),
+                "is_tradable": False,
+                "reason_code": "NO_TRADABLE_REALTIME_QUOTE",
+                "source": "TDX_REALTIME.batch_quote",
+                "quote_evidence": {
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "total_hand": 0,
+                    "bid_price_1": 0,
+                    "ask_price_1": 0,
+                    "no_tradable_market": True,
+                },
+            }
+        },
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=[], valid_no_candidate=True),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    assert result.results[0].status == "PRE_TRADE_BLOCKED"
+    assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert latest_run.run_payload_json["broker_called"] is False
+    assert latest_run.run_payload_json["no_rebalance_required"] is False
+    assert latest_run.run_payload_json["pre_trade_blocked_order_generation"]["blocked_symbols"] == ["688689.SH"]
+    assert result.results[0].execution_plan.intents == []
+    assert result.results[0].execution_plan.trading_rule_decisions[0].reason_code == "NO_TRADABLE_REALTIME_QUOTE"
+    assert context.local_broker.submitted == []
+
+
 def test_scheduler_marks_existing_zero_intent_plan_success_when_submit_window_reuses_it() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     fake_selection = FakeSelectionService(release, candidates=[], valid_no_candidate=True)
@@ -3143,6 +3236,81 @@ def test_production_context_provider_loads_miniqmt_positions_from_virtual_ledger
     assert getattr(ctx.managed_order_service, "_broker") is qmt_client
 
 
+def test_production_context_provider_applies_miniqmt_pre_trade_tradability_gate_today() -> None:
+    """MiniQMT production context loads suspend/no-quote evidence before plan generation."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_suspended_no_quote",
+            strategy_id="strat1",
+            symbol="688689.SH",
+            open_trade_id="trade_suspended_no_quote",
+            open_date=date.today() - timedelta(days=1),
+            quantity=878,
+            available_quantity=878,
+            remaining_quantity=878,
+            avg_cost=Decimal("46.82"),
+            cost_amount=Decimal("41111.96"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    tradability = FakePreTradeTradabilityProvider(
+        {
+            "688689.SH": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "688689.SH",
+                "trade_date": date.today().isoformat(),
+                "is_tradable": False,
+                "reason_code": "NO_TRADABLE_REALTIME_QUOTE",
+                "source": "TDX_REALTIME.batch_quote",
+                "quote_evidence": {
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "total_hand": 0,
+                    "bid_price_1": 0,
+                    "ask_price_1": 0,
+                    "no_tradable_market": True,
+                },
+            }
+        }
+    )
+    broker = FakeManagedOrderBroker(positions=[{"stock_code": "688689.SH", "quantity": 878, "can_sell": 878}])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 46.82 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        pre_trade_tradability_provider=tradability,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+
+    assert ctx.pre_trade_tradability["688689.SH"]["reason_code"] == "NO_TRADABLE_REALTIME_QUOTE"
+    assert ctx.context_diagnostics["pre_trade_tradability"]["blocked_symbols"] == [
+        {"symbol": "688689.SH", "reason_code": "NO_TRADABLE_REALTIME_QUOTE", "source": "TDX_REALTIME.batch_quote"}
+    ]
+    assert tradability.calls[-1]["require_realtime_quote"] is True
+
+
 def test_production_context_provider_drops_miniqmt_stale_lots_missing_from_broker():
     """MiniQMT current_positions must not emit impossible sells for lots absent from broker can_sell."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
@@ -3533,6 +3701,7 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: paper_repo,
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
@@ -3585,6 +3754,7 @@ def test_production_context_provider_settles_localsim_tplus1_positions_for_trade
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: paper_repo,
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
@@ -3636,6 +3806,7 @@ def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: paper_repo,
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
