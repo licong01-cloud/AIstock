@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from .guards import evaluate_budget, evaluate_stop_conditions
 from .models import (
@@ -17,6 +18,7 @@ from .providers import (
     ClockProvider,
     DirectionDeciderProvider,
     EvaluatorProvider,
+    ExperienceReplayProvider,
     IdFactory,
     LoopConfigGeneratorProvider,
     LoopExecutorProvider,
@@ -48,10 +50,12 @@ class AutonomousEvolutionRuntime:
         self,
         *,
         providers: AutonomousEvolutionProviders,
+        experience_replay_provider: ExperienceReplayProvider | None = None,
         clock: ClockProvider | None = None,
         id_factory: IdFactory | None = None,
     ) -> None:
         self.providers = providers
+        self.experience_replay_provider = experience_replay_provider
         self.clock = clock or default_clock
         self.id_factory = id_factory or default_id_factory
 
@@ -129,6 +133,7 @@ class AutonomousEvolutionRuntime:
     def _build_report(self, state: AutonomousEvolutionState, *, now: datetime) -> AutonomyReport:
         evidence_refs = tuple(sorted(str(ref) for ref in state.evidence_refs if ref))
         artifact_refs = tuple(sorted(str(ref) for ref in state.artifact_refs if ref))
+        curriculum_replay = self._curriculum_replay(state, evidence_refs)
         memory_candidates = ()
         if evidence_refs and state.status not in {"disabled", "running"}:
             memory_candidates = (
@@ -154,7 +159,29 @@ class AutonomousEvolutionRuntime:
             proposals=tuple(proposal.to_dict() for proposal in sorted(state.proposals, key=lambda item: item.sorted_key())),
             submit_decisions=tuple(decision.to_dict() for decision in state.submit_decisions),
             memory_candidates=memory_candidates,
+            curriculum_replay=curriculum_replay,
         )
+
+    def _curriculum_replay(self, state: AutonomousEvolutionState, evidence_refs: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
+        if not self.experience_replay_provider:
+            return ()
+        try:
+            items = self.experience_replay_provider.find_reusable_skills(
+                task_key=state.qe_task_id,
+                evidence_refs=list(evidence_refs),
+                limit=5,
+            )
+        except Exception as exc:  # explicit degradation: replay must not fail the QE autonomy report.
+            return (
+                {
+                    "schema_version": "aistock_research_assistant_skill_replay_v1",
+                    "status": "degraded",
+                    "reason_codes": ["skill_library_curriculum_replay_failed"],
+                    "warnings": [f"skill library replay failed: {type(exc).__name__}: {exc}"],
+                    "source_refs": list(evidence_refs),
+                },
+            )
+        return tuple(dict(item) for item in items)
 
     @staticmethod
     def _validate_low_cost_external_boundary(request: AutonomousEvolutionRequest, proposal: LoopProposal) -> None:

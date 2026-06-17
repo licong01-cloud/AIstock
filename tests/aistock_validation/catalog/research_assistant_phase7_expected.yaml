@@ -96,8 +96,8 @@ dai_classification:
     evidence: [backend/services/research_assistant/reflection_card.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/006_reflection_cards.sql, backend/tests/research_assistant/test_reflection_card_loop.py]
   DAI-LEARN-002:
     status: hard_pass
-    phase: Phase 11 Prompt Lab portion
-    evidence: [backend/services/research_assistant/prompt_lab.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/007_prompt_lab_runs.sql, backend/tests/research_assistant/test_prompt_lab_gepa_offline.py, backend/tests/research_assistant/test_prompt_lab_judge_gated.py]
+    phase: Phase 11 Prompt Lab + Phase 12 Skill Library gates
+    evidence: [backend/services/research_assistant/prompt_lab.py, backend/services/research_assistant/skill_library.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/007_prompt_lab_runs.sql, backend/db/migrations/ra_upgrade/008_skill_library.sql, backend/tests/research_assistant/test_prompt_lab_gepa_offline.py, backend/tests/research_assistant/test_prompt_lab_judge_gated.py, backend/tests/research_assistant/test_skill_library.py]
   DAI-DRIFT-002:
     status: hard_pass
     evidence: [scripts/research_assistant_phase7_crosscheck.py]
@@ -129,5 +129,5 @@ defect_classification:
   DEF-09: {status: hard_pass, evidence: [backend/tests/research_assistant/test_memory_dedup_scope.py]}
   DEF-10: {status: hard_pass, phase: Phase 8, evidence: [backend/services/research_assistant/code_intelligence.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/004_code_intelligence.sql, backend/tests/research_assistant/test_code_intel_context_injection.py, backend/tests/research_assistant/test_code_intel_decomposition.py]}
   DEF-11: {status: hard_pass, phase: Phase 9, evidence: [backend/services/research_assistant/proactive_reports.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/005_proactive_reports.sql, backend/tests/research_assistant/test_proactive_report_generation.py]}
-  DEF-12: {status: hard_pass, phase: Phase 10 Reflection + Phase 11 Prompt Lab portions, evidence: [backend/services/research_assistant/reflection_card.py, backend/services/research_assistant/prompt_lab.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/006_reflection_cards.sql, backend/db/migrations/ra_upgrade/007_prompt_lab_runs.sql, backend/tests/research_assistant/test_reflection_card_loop.py, backend/tests/research_assistant/test_prompt_lab_gepa_offline.py, backend/tests/research_assistant/test_prompt_lab_judge_gated.py]}
+  DEF-12: {status: hard_pass, phase: Phase 10 Reflection + Phase 11 Prompt Lab + Phase 12 Skill Library complete, evidence: [backend/services/research_assistant/reflection_card.py, backend/services/research_assistant/prompt_lab.py, backend/services/research_assistant/skill_library.py, backend/services/research_assistant/service.py, backend/db/migrations/ra_upgrade/006_reflection_cards.sql, backend/db/migrations/ra_upgrade/007_prompt_lab_runs.sql, backend/db/migrations/ra_upgrade/008_skill_library.sql, backend/tests/research_assistant/test_reflection_card_loop.py, backend/tests/research_assistant/test_prompt_lab_gepa_offline.py, backend/tests/research_assistant/test_prompt_lab_judge_gated.py, backend/tests/research_assistant/test_skill_library.py]}
   DEF-13: {status: future_phase_pending, phase: Phase 13-15, evidence: [backend/tests/research_assistant/test_core_no_adapter_import.py]}

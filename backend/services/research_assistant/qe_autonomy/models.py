@@ -297,6 +297,7 @@ class AutonomyReport:
     proposals: tuple[dict[str, Any], ...] = ()
     submit_decisions: tuple[dict[str, Any], ...] = ()
     memory_candidates: tuple[dict[str, Any], ...] = ()
+    curriculum_replay: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -307,6 +308,7 @@ class AutonomyReport:
             "last_verdict_json": _compact(self.last_verdict_json),
             "loops_completed": self.loops_completed,
             "memory_candidates": list(self.memory_candidates),
+            "curriculum_replay": list(self.curriculum_replay),
             "proposals": list(self.proposals),
             "qe_task_id": self.qe_task_id,
             "status": self.status,

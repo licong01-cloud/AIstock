@@ -82,6 +82,15 @@ from .prompt_lab import (
     prompt_lab_plan_digest,
 )
 from .reflection_card import build_reflection_artifacts, reflection_trigger_from_event
+from .skill_library import (
+    SKILL_LIBRARY_APPROVAL_PREFIX,
+    SKILL_LIBRARY_APPROVAL_TYPE,
+    SKILL_LIBRARY_REUSE_CAPABILITY_KEY,
+    RepositorySkillLibraryExperienceReplayProvider,
+    build_successful_workflow_recipe,
+    search_approved_skill_recipes,
+    skill_library_plan_digest,
+)
 from .react_grounding import (
     McpToolCall,
     McpToolResult,
@@ -1218,6 +1227,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 config_generator=adapter,
                 submitter=adapter,
             ),
+            experience_replay_provider=RepositorySkillLibraryExperienceReplayProvider(self.repository),
             id_factory=lambda prefix, stable_key: new_id(f"{prefix}_{stable_key}"),
         )
         return runtime.autonomous_evolve(request)
@@ -6118,6 +6128,168 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "warnings": [
                 "Phase 11 records the human approval gate only; applying a new prompt activation remains a separate reviewed Prompt Pack workflow."
             ],
+        }
+
+    def deposit_successful_workflow_skill(
+        self,
+        *,
+        task_id: str,
+        skill_key: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Deposit a successful workflow as a draft skill; no reuse is enabled here."""
+
+        built = build_successful_workflow_recipe(
+            self.repository,
+            task_id=task_id,
+            skill_key=skill_key,
+            description=description,
+            event_limit=self.configured_limit("task_events_detail"),
+        )
+        if built["status"] == "degraded":
+            return built
+        row = self.repository.create_record(
+            "skill_library",
+            {
+                "skill_id": new_id("sklib"),
+                "skill_key": built["skill_key"],
+                "description": built["description"],
+                "recipe_json": built["recipe_json"],
+                "success_count": 1,
+                "provenance_json": built["provenance_json"],
+                "status": "draft",
+            },
+        )
+        approval = self.create_approval(
+            ApprovalCreate(
+                task_id=task_id,
+                approval_type=SKILL_LIBRARY_APPROVAL_TYPE,
+                risk_level="high",
+                plan_digest=skill_library_plan_digest(
+                    skill_key=str(row["skill_key"]),
+                    recipe_json=dict(row.get("recipe_json") or {}),
+                    provenance_json=dict(row.get("provenance_json") or {}),
+                ),
+                summary=f"Skill Library approval required for {row['skill_key']}",
+                required_confirmation_text=f"{SKILL_LIBRARY_APPROVAL_PREFIX} {row['skill_key']}",
+                created_by="skill_library_deposit",
+            )
+        )
+        recipe_json = dict(row.get("recipe_json") or {})
+        recipe_json["approval_request_id"] = approval["approval_id"]
+        row = self.repository.update_record(
+            "skill_library",
+            str(row["skill_id"]),
+            {
+                "recipe_json": recipe_json,
+                "provenance_json": {
+                    **dict(row.get("provenance_json") or {}),
+                    "approval_request_id": approval["approval_id"],
+                    "approval_required": True,
+                },
+            },
+        )
+        row["approval_request_id"] = approval["approval_id"]
+        return row
+
+    def approve_skill_library_entry(
+        self,
+        skill_id: str,
+        *,
+        approval_id: str | None = None,
+        confirmation_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Promote a draft skill only after consuming assistant_approval_requests."""
+
+        skill = self.repository.get_record("skill_library", skill_id)
+        if not skill:
+            raise KeyError(f"skill library entry not found: {skill_id}")
+        if skill.get("status") != "draft":
+            raise ValueError(f"skill library entry is not draft: {skill.get('status')}")
+        provenance = dict(skill.get("provenance_json") or {})
+        expected_approval = provenance.get("approval_request_id") or (skill.get("recipe_json") or {}).get("approval_request_id")
+        if approval_id != expected_approval:
+            raise ValueError("skill_library approval requires the entry approval_request_id")
+        self._consume_approval_gate(
+            approval_id=approval_id,
+            confirmation_text=confirmation_text,
+            approval_type=SKILL_LIBRARY_APPROVAL_TYPE,
+            required_summary_fragment=str(skill.get("skill_key") or ""),
+        )
+        return self.repository.update_record(
+            "skill_library",
+            skill_id,
+            {
+                "status": "approved",
+                "provenance_json": {
+                    **provenance,
+                    "approved_at": utc_now().isoformat(),
+                    "approved_via": approval_id,
+                },
+            },
+        )
+
+    def search_skill_library_for_curriculum(self, *, query: str, limit: int = 5) -> dict[str, Any]:
+        """Read-only L4 curriculum replay over approved Skill Library recipes."""
+
+        return search_approved_skill_recipes(
+            self.repository,
+            query=query,
+            limit=limit,
+            evidence_refs=[f"skill_library_query:{sha256_json({'query': query})[:12]}"],
+        )
+
+    def propose_skill_reuse(
+        self,
+        *,
+        task_id: str,
+        skill_id: str,
+        input_json: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
+        context_pack_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create an Action Proposal for skill reuse; it never executes directly."""
+
+        skill = self.repository.get_record("skill_library", skill_id)
+        if not skill:
+            raise KeyError(f"skill library entry not found: {skill_id}")
+        if skill.get("status") != "approved":
+            return {
+                "status": "blocked",
+                "action_proposal": None,
+                "reason_codes": ["skill_library_reuse_requires_approved_skill"],
+                "warnings": [f"skill {skill.get('skill_key') or skill_id} is not approved and cannot be reused"],
+            }
+        payload = dict(input_json or {})
+        payload["skill_library_ref"] = {
+            "skill_id": skill["skill_id"],
+            "skill_key": skill["skill_key"],
+            "source_refs": (skill.get("recipe_json") or {}).get("source_refs") or (skill.get("provenance_json") or {}).get("source_refs") or [],
+        }
+        proposal = self.create_action_proposal(
+            ActionProposalCreate(
+                task_id=task_id,
+                conversation_id=conversation_id,
+                capability_key=SKILL_LIBRARY_REUSE_CAPABILITY_KEY,
+                proposal_type="skill",
+                title=f"复用技能：{skill['skill_key']}",
+                summary="Skill Library 复用必须经 Action Proposal 确认、preflight 和 approval；本步骤不直接执行技能。",
+                input_json=payload,
+                expected_result_json={
+                    "skill_library_ref": payload["skill_library_ref"],
+                    "direct_execution_allowed": False,
+                    "risk_gate": "action_proposal_preflight_approval",
+                },
+                context_pack_id=context_pack_id,
+                idempotency_key=sha256_json({"task_id": task_id, "skill_id": skill_id, "input_json": payload}),
+                created_by="skill_library_reuse",
+            )
+        )
+        return {
+            "status": "proposal_created",
+            "action_proposal": proposal,
+            "reason_codes": [],
+            "warnings": [],
         }
 
     def _prompt_text_for_key(self, target_prompt_key: str) -> str:

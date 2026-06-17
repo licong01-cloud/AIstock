@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase11_prompt_lab_v1_20260616"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase12_skill_library_v1_20260616"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -276,6 +276,18 @@ BASE_DDL: list[str] = [
         judge_score_json JSONB NOT NULL,
         status TEXT NOT NULL DEFAULT 'candidate',
         approval_request_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_skill_library (
+        skill_id TEXT PRIMARY KEY,
+        skill_key TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL,
+        recipe_json JSONB NOT NULL,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status TEXT NOT NULL DEFAULT 'draft',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
@@ -982,6 +994,7 @@ TABLE_COMMENTS = {
     "assistant_proactive_reports": "Proactive morning and experiment reports generated from read-only evidence providers.",
     "assistant_reflection_cards": "Reflection Cards generated from task failure, correction, or low-confidence signals; writes personal.episodic memory only.",
     "assistant_prompt_lab_runs": "Prompt Lab offline GEPA/DSPy-style candidate prompt runs with LLM-as-judge scoring and human approval gate.",
+    "assistant_skill_library": "Gated reusable workflow, prompt and tool recipes; draft until human approval and reused only through Action Proposal gates.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
     "research_memory_relations": "Native lightweight knowledge graph relations with evidence references.",
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
@@ -1178,6 +1191,14 @@ COLUMN_COMMENTS = {
     "assistant_prompt_lab_runs.status": "Prompt Lab lifecycle status: candidate, approved, or rejected.",
     "assistant_prompt_lab_runs.approval_request_id": "Pending assistant_approval_requests record required before prompt activation can change.",
     "assistant_prompt_lab_runs.created_at": "Row creation timestamp.",
+    "assistant_skill_library.skill_id": "Stable Skill Library recipe identifier.",
+    "assistant_skill_library.skill_key": "Unique reusable skill key derived from a successful workflow or explicit operator key.",
+    "assistant_skill_library.description": "Human-readable summary of the reusable workflow, prompt, and tool recipe.",
+    "assistant_skill_library.recipe_json": "Reusable workflow, prompt, tool, evidence, and risk-gate recipe; never executable without approval.",
+    "assistant_skill_library.success_count": "Number of successful source workflows supporting this recipe.",
+    "assistant_skill_library.provenance_json": "Source task, evidence refs, approval request, and generated_at metadata for audit replay.",
+    "assistant_skill_library.status": "Skill lifecycle status: draft, approved, or deprecated.",
+    "assistant_skill_library.created_at": "Row creation timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",
