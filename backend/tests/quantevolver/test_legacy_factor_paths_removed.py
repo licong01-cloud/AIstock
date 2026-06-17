@@ -1,10 +1,30 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from backend.services.quantevolver.factor_value_loader import FactorValueLoader
+
+
+class _FactorPipelineConn:
+    def __init__(self, rows):
+        self.cur = MagicMock()
+        self.cur.description = [("factor_name",), ("source",), ("factor_type",)]
+        self.cur.fetchall.return_value = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        cm = MagicMock()
+        cm.__enter__.return_value = self.cur
+        cm.__exit__.return_value = False
+        return cm
 
 
 def test_factor_value_loader_requires_explicit_source() -> None:
@@ -29,6 +49,39 @@ def test_factor_analyst_uses_official_single_loader(monkeypatch) -> None:
     assert isinstance(loader, FakeLoader)
     assert captured["source"] == "single"
     assert captured["pipeline_dir"].replace("\\", "/").endswith("rdagent_assets/factor_values")
+
+
+def test_factor_value_pipeline_computable_factors_use_official_catalog_code(monkeypatch, tmp_path) -> None:
+    from backend.services.quantevolver import factor_value_pipeline as pipeline_mod
+
+    conn = _FactorPipelineConn([("factor_a", "rdagent_task_sync", "alpha")])
+    monkeypatch.setattr(pipeline_mod, "get_conn", lambda: conn)
+
+    result = pipeline_mod.FactorValuePipeline(output_dir=str(tmp_path)).get_computable_factors(
+        limit=10,
+        factor_types=["alpha"],
+    )
+
+    sql, params = conn.cur.execute.call_args.args
+    assert "is_available = true" in sql
+    assert "code_text IS NOT NULL" in sql
+    assert "length(trim(code_text)) > 0" in sql
+    assert "factor_type IN (%s)" in sql
+    assert "transformation_status = 'SUCCESS'" not in sql
+    assert "qe_code_path" not in sql
+    assert "last_transformation_at" not in sql
+    assert "LIMIT 10" in sql
+    assert params == ["alpha"]
+    assert result == [
+        {
+            "factor_name": "factor_a",
+            "source": "rdagent_task_sync",
+            "factor_type": "alpha",
+            "code_source": "code_text",
+            "code_exists": True,
+            "cache_source": "official_offline_backtest_factor_data",
+        }
+    ]
 
 
 def test_factor_analyst_no_legacy_correlation_writer_or_naked_loader() -> None:
@@ -84,3 +137,21 @@ def test_backfill_factor_cache_main_is_retired() -> None:
 
     with pytest.raises(SystemExit, match="official_factor_full_compute"):
         backfill_factor_cache.main()
+
+
+def test_factor_transformation_frontend_does_not_expose_realtime_dto_names() -> None:
+    root = Path("frontend/src/app/quantevolver/factor-transformation")
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in root.rglob("*")
+        if path.suffix in {".ts", ".tsx"}
+    )
+
+    assert "has_realtime_code" not in source
+    assert "realtime_code_text" not in source
+    assert 'tab: "original" | "realtime"' not in source
+    assert '"realtime"' not in source
+    assert "has_non_official_code" in source
+    assert "non_official_code_path" in source
+    assert "transformed_code_text" in source
+

@@ -283,15 +283,15 @@ export function FactorTable({
                     <StatusBadge status={f.transformation_status} />
                   </td>
                   <td className="px-3 py-2.5 text-center whitespace-nowrap">
-                    {f.has_realtime_code ? (
+                    {f.has_non_official_code ? (
                       <span className="text-green-500 text-xs">✓ 有</span>
                     ) : (
                       <span className="text-gray-300 text-xs">✗ 无</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-xs whitespace-nowrap" title={f.qe_code_path || ""}>
-                    {f.qe_code_path ? (
-                      <span className="font-mono text-green-700">{f.qe_code_path}</span>
+                  <td className="px-3 py-2.5 text-xs whitespace-nowrap" title={f.non_official_code_path || ""}>
+                    {f.non_official_code_path ? (
+                      <span className="font-mono text-green-700">{f.non_official_code_path}</span>
                     ) : (
                       <span className="text-gray-300">-</span>
                     )}

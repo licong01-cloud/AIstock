@@ -5308,11 +5308,15 @@ def get_factor_transformation_status(
     try:
         from ..services.quantevolver.factor_transformation_service import FactorTransformationService
         svc = FactorTransformationService()
-        return svc.get_factor_transformation_status(
+        result = svc.get_factor_transformation_status(
             factor_source=factor_source,
             limit=limit,
             offset=offset,
         )
+        for item in result.get("items", []):
+            item["has_non_official_code"] = bool(item.pop("has_realtime_code", False))
+            item["non_official_code_path"] = item.pop("qe_code_path", None)
+        return result
     except Exception as e:
         logger.exception("获取因子改造状态失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -5530,7 +5534,7 @@ def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_s
     获取指定因子的非官方改造代码及原始代码。
     改造后代码优先从文件系统 qe_code_path 读取（权威数据源）；
     原始代码优先从文件系统 asset_path 读取（权威数据源）。
-    数据库中的 realtime_code_text（历史字段名）/ code_text 仅作展示兜底，不作为改造依据。
+    数据库中的历史改造代码字段/code_text 仅作展示兜底，不作为改造依据。
     """
     import os
     try:
@@ -5571,12 +5575,14 @@ def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_s
             except (OSError, UnicodeDecodeError) as e:
                 return None, abs_path, str(e)
 
+        non_official_code_path = result.pop("qe_code_path", None)
         # 从文件系统读取改造后代码（权威数据源）
-        transformed_code, transformed_abs, transformed_err = _read_file_from_path(result.get("qe_code_path"))
+        transformed_code, transformed_abs, transformed_err = _read_file_from_path(non_official_code_path)
         # 从文件系统读取原始代码（权威数据源）
         original_code, original_abs, original_err = _read_file_from_path(result.get("asset_path"))
 
-        result["realtime_code_text"] = transformed_code
+        result["non_official_code_path"] = non_official_code_path
+        result["transformed_code_text"] = transformed_code
         result["code_text"] = original_code
         result["_transformed_code_source"] = "filesystem" if transformed_code else "none"
         result["_original_code_source"] = "filesystem" if original_code else "none"
@@ -5597,7 +5603,7 @@ def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_s
 def reset_factor_transformation(factor_name: str, source: str = "rdagent_sota"):
     """
     重置指定因子的改造状态为 PENDING，允许重新改造。
-    重置时清空 realtime_code_text 和 qe_code_path（改造相关字段）。
+    重置时清空历史改造代码字段和 qe_code_path（改造相关字段）。
     严禁修改 asset_path 和 code_text（原始因子源代码不可修改）。
     """
     try:
@@ -5639,7 +5645,7 @@ def get_transformation_stats():
                         COUNT(CASE WHEN transformation_status = 'PENDING' OR transformation_status IS NULL THEN 1 END) AS pending,
                         COUNT(CASE WHEN transformation_status NOT IN ('SUCCESS', 'FAILED', 'PENDING') AND transformation_status IS NOT NULL THEN 1 END) AS in_progress,
                         COUNT(CASE WHEN asset_path IS NOT NULL AND asset_path != '' THEN 1 END) AS has_original_code,
-                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_realtime_code
+                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_non_official_code
                     FROM aistock_factor_catalog
                 """)
                 row = cur.fetchone()
