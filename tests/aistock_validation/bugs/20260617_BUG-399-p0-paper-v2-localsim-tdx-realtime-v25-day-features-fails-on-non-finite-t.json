@@ -34,8 +34,8 @@
   "expected": "LocalSim same-day TDX_REALTIME simulation should either obtain finite validated V25 day_features from an authoritative realtime-compatible source or fail at readiness with actionable data context before entering repeated scheduler submit failures; unattended simulation must not loop on non-finite turnover_rate_f.",
   "first_seen_at": "2026-06-17T03:25:18.070706Z",
   "fix_branch": "bug/BUG-399-p0-paper-v2-localsim-tdx-realtime-v25-day-featur-20260617",
-  "fix_commit": "ab8aee95d305eb1db68e9ea08491a202c69745a3",
-  "fixed_at": "2026-06-17T04:17:00Z",
+  "fix_commit": "42ad0332eea9ca1acfd7b139c89d37ca78e1e1bb",
+  "fixed_at": "2026-06-17T04:32:53.774099Z",
   "github_issue_number": 1196,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1196",
   "last_seen_at": "2026-06-17T03:25:18.070706Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1199",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,6 +65,13 @@
     "fingerprint": "5a4c6221245589b0204993f2",
     "source_event_id": "FE-20260617-5a4c62212455"
   },
+  "validation_evidence": [
+    "readonly DB diagnosis 2026-06-17: feature_date=2026-06-16, 000029.SZ/000736.SZ daily_basic.turnover_rate_f=NaN while turnover_rate is finite",
+    "readonly DB recheck after code fix: DbV25DayFeatureProvider returns finite vectors for 000029.SZ and 000736.SZ with day_features_audit field_repair entries",
+    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 5 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 8 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 624 passed, 1 skipped, 2 xfailed; paper_v2_data_quality PASS with existing nonblocking legacy ledger WARN; data_quality_deep 10 passed, 21 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -75,12 +83,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "validation_evidence": [
-    "readonly DB diagnosis 2026-06-17: feature_date=2026-06-16, 000029.SZ/000736.SZ daily_basic.turnover_rate_f=NaN while turnover_rate is finite",
-    "readonly DB recheck after code fix: DbV25DayFeatureProvider returns finite vectors for 000029.SZ and 000736.SZ with day_features_audit field_repair entries",
-    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 5 passed",
-    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 8 passed",
-    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 624 passed, 1 skipped, 2 xfailed; paper_v2_data_quality PASS with existing nonblocking legacy ledger WARN; data_quality_deep 10 passed, 21 skipped"
-  ]
+  }
 }
