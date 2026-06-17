@@ -7,6 +7,11 @@ from decimal import Decimal
 import pytest
 
 from backend.services.paper_trading_v2.broker.base import OrderHandle
+from backend.services.paper_trading_v2.market_data import (
+    DailySuspendStatus,
+    PreTradeTradabilityProvider,
+    quote_tradability_evidence,
+)
 from backend.services.qmt_strategy_ledger.models import (
     PositionLotRecord,
     PositionLotStatus,
@@ -17,7 +22,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot
+from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
@@ -36,6 +41,21 @@ from backend.services.simulation_runtime import (
 from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide, PositionLot
+
+
+class MappingSuspendProvider:
+    def __init__(self, suspended_symbols: set[str] | None = None) -> None:
+        self.suspended_symbols = set(suspended_symbols or set())
+
+    def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        suspended = symbol in self.suspended_symbols
+        return DailySuspendStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_suspended=suspended,
+            suspend_type="S" if suspended else None,
+            source="unit_test.suspend",
+        )
 
 
 def _release_and_binding(*, backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM):
@@ -440,6 +460,173 @@ def test_empty_daily_signal_sells_dropped_positions_and_no_trade_is_legal() -> N
     persisted = runtime_repo.save_execution_plan(plan)
     assert persisted.intents == []
     assert persisted.plan_payload_json["intents"] == []
+
+
+def test_rebalance_blocks_suspended_or_no_quote_existing_holding_without_sell_intent() -> None:
+    release, local_binding = _release_and_binding(backend=SimulationBrokerBackend.LOCAL_SIM)
+    _, qmt_binding = _release_and_binding(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    blocked_position = {
+        "688689.SH": PositionLot(
+            portfolio_id="portfolio_shared",
+            symbol="688689.SH",
+            quantity=878,
+            available_quantity=878,
+            avg_cost=46.82,
+            trade_date=date(2026, 5, 20),
+        )
+    }
+    pre_trade = {
+        "688689.SH": {
+            "schema_version": "pre_trade_tradability_status_v1",
+            "symbol": "688689.SH",
+            "trade_date": date(2026, 5, 21).isoformat(),
+            "is_tradable": False,
+            "reason_code": "NO_TRADABLE_REALTIME_QUOTE",
+            "source": "TDX_REALTIME.batch_quote",
+            "quote_evidence": {
+                "open": 0,
+                "high": 0,
+                "low": 0,
+                "total_hand": 0,
+                "bid_price_1": 0,
+                "ask_price_1": 0,
+                "no_tradable_market": True,
+            },
+        }
+    }
+    service = RebalanceIntentService()
+
+    local_result = service.build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=local_binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[],
+        pre_trade_tradability=pre_trade,
+    )
+    qmt_result = service.build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=qmt_binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[],
+        pre_trade_tradability=pre_trade,
+    )
+
+    assert local_result.order_intents == []
+    assert qmt_result.order_intents == []
+    assert [decision.reason_code for decision in local_result.trading_rule_decisions] == ["NO_TRADABLE_REALTIME_QUOTE"]
+    assert local_result.trading_rule_decisions[0].legal_quantity == 0
+    assert local_result.trading_rule_decisions[0].price_limit_rule["pre_trade_tradability"]["quote_evidence"][
+        "no_tradable_market"
+    ] is True
+
+
+def test_pre_trade_tradability_provider_combines_suspend_d_and_realtime_quote() -> None:
+    provider = PreTradeTradabilityProvider(
+        suspend_status_provider=MappingSuspendProvider({"000002.SZ"}),
+        realtime_quote_fetcher=lambda symbols: {
+            "688689.SH": {
+                "K": {"Last": 46820, "Open": 0, "High": 0, "Low": 0},
+                "TotalHand": 0,
+                "BuyLevel": [{"Price": 0, "Number": 0}],
+                "SellLevel": [{"Price": 0, "Number": 0}],
+            },
+            "000001.SZ": {
+                "K": {"Close": 10000, "Open": 9900, "High": 10100, "Low": 9800},
+                "TotalHand": 100,
+                "BuyLevel": [{"Price": 9990, "Number": 1000}],
+                "SellLevel": [{"Price": 10000, "Number": 1000}],
+            },
+        },
+        realtime_quote_source="TDX_REALTIME.batch_quote",
+    )
+
+    statuses = provider.get_statuses(
+        ["688689.SH", "000002.SZ", "000001.SZ"],
+        date(2026, 6, 17),
+        require_realtime_quote=True,
+    )
+
+    assert statuses["688689.SH"]["reason_code"] == "NO_TRADABLE_REALTIME_QUOTE"
+    assert statuses["000002.SZ"]["reason_code"] == "SUSPENDED_BY_SUSPEND_D"
+    assert statuses["000001.SZ"]["reason_code"] == "OK"
+    assert statuses["000001.SZ"]["is_tradable"] is True
+
+
+def test_quote_tradability_evidence_blocks_zero_ohlc_volume_and_empty_book() -> None:
+    evidence = quote_tradability_evidence(
+        symbol="688689.SH",
+        source="TDX_REALTIME.batch_quote",
+        quote={
+            "K": {"Last": 46820, "Open": 0, "High": 0, "Low": 0},
+            "TotalHand": 0,
+            "BuyLevel": [{"Price": 0, "Number": 0}],
+            "SellLevel": [{"Price": 0, "Number": 0}],
+        },
+    )
+
+    assert evidence["no_tradable_market"] is True
+    assert evidence["book_empty"] is True
+    assert evidence["ohl_zero"] is True
+    assert evidence["turnover_zero"] is True
+
+
+def test_rebalance_does_not_count_blocked_sell_proceeds_for_residual_buy() -> None:
+    release, binding = _release_and_binding(backend=SimulationBrokerBackend.LOCAL_SIM)
+    blocked_position = {
+        "688689.SH": PositionLot(
+            portfolio_id="portfolio_shared",
+            symbol="688689.SH",
+            quantity=878,
+            available_quantity=878,
+            avg_cost=46.82,
+            trade_date=date(2026, 5, 20),
+        )
+    }
+    target = TargetPosition(
+        symbol="000001.SZ",
+        target_quantity=1000,
+        target_weight=0.10,
+        reference_price=10.0,
+        score=0.99,
+        rank=1,
+        reason="daily_strategy_buy_or_retain",
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[target],
+        pre_trade_tradability={
+            "688689.SH": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "688689.SH",
+                "trade_date": date(2026, 5, 21).isoformat(),
+                "is_tradable": False,
+                "reason_code": "SUSPENDED_BY_SUSPEND_D",
+                "source": "market.suspend_d",
+            },
+            "000001.SZ": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "000001.SZ",
+                "trade_date": date(2026, 5, 21).isoformat(),
+                "is_tradable": True,
+                "reason_code": "OK",
+                "source": "TDX_REALTIME.batch_quote",
+            },
+        },
+    )
+
+    assert [(intent.symbol, intent.side.value) for intent in rebalance.order_intents] == [("000001.SZ", "BUY")]
+    assert {decision.symbol: decision.reason_code for decision in rebalance.trading_rule_decisions} == {
+        "000001.SZ": "OK",
+        "688689.SH": "SUSPENDED_BY_SUSPEND_D",
+    }
 
 
 class FakeLocalSimBroker:

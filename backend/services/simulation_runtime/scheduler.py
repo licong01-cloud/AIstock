@@ -22,7 +22,11 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import (
+    MinuteDataSource,
+    PreTradeTradabilityProvider,
+    fetch_tdx_realtime_quotes,
+)
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.qmt_strategy_ledger.reconciliation import (
@@ -140,6 +144,7 @@ class SimulationRunContext:
     frozen_cash: float = 0.0
     realized_pnl: float = 0.0
     market_data_source: str | None = None
+    pre_trade_tradability: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -258,6 +263,7 @@ class ProductionSimulationRunContextProvider:
         qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
         qmt_ledger_repository: Any | None = None,
         package_manifest_loader: Callable[[str], StrategyPackageManifest | dict[str, Any] | None] | None = None,
+        pre_trade_tradability_provider: PreTradeTradabilityProvider | Any | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
@@ -273,6 +279,11 @@ class ProductionSimulationRunContextProvider:
         self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
         self._qmt_ledger_repository = qmt_ledger_repository
         self._package_manifest_loader = package_manifest_loader or _default_strategy_package_manifest_loader
+        self._pre_trade_tradability_provider_injected = pre_trade_tradability_provider is not None
+        self._pre_trade_tradability_provider = pre_trade_tradability_provider or PreTradeTradabilityProvider(
+            realtime_quote_fetcher=fetch_tdx_realtime_quotes,
+            realtime_quote_source="TDX_REALTIME.batch_quote",
+        )
         self._enable_localsim_broker = (
             _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
             if enable_localsim_broker is None
@@ -295,6 +306,12 @@ class ProductionSimulationRunContextProvider:
             "localsim_state_source": "paper_v2_portfolio",
             "miniqmt_state_source": "broker_authoritative_positions_with_strategy_slot_projection",
             "market_price_source": "market.kline_daily_raw_latest_close",
+            "pre_trade_tradability_gate": {
+                "source": type(self._pre_trade_tradability_provider).__name__,
+                "localsim_same_day_quote_required": True,
+                "miniqmt_quote_required": True,
+                "historical_quote_required": False,
+            },
             "localsim_market_data_source_policy": {
                 "same_day": MinuteDataSource.TDX_REALTIME.value,
                 "historical": "persisted_portfolio_data_source",
@@ -380,6 +397,15 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
+        market_data_source = self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date)
+        pre_trade_tradability = self._load_pre_trade_tradability(
+            symbols=list(positions),
+            trade_date=trade_date,
+            require_realtime_quote=(
+                market_data_source == MinuteDataSource.TDX_REALTIME
+                and self._position_loader is None
+            ),
+        )
         manifest = getattr(portfolio, "frozen_manifest", None)
         self._validate_manifest_identity(
             manifest=manifest,
@@ -417,12 +443,16 @@ class ProductionSimulationRunContextProvider:
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
-            context_diagnostics={"localsim_tplus1_settlement": settlement_diagnostics},
+            context_diagnostics={
+                "localsim_tplus1_settlement": settlement_diagnostics,
+                "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+            },
             market_data_source=(
                 getattr(local_broker, "data_source").value
                 if local_broker is not None and getattr(local_broker, "data_source", None) is not None
-                else self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date).value
+                else market_data_source.value
             ),
+            pre_trade_tradability=pre_trade_tradability,
         )
 
     @staticmethod
@@ -530,6 +560,11 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
+        pre_trade_tradability = self._load_pre_trade_tradability(
+            symbols=list(positions),
+            trade_date=trade_date,
+            require_realtime_quote=self._position_loader is None and trade_date == date.today(),
+        )
         manifest = self._load_strategy_package_manifest(
             runtime_release=runtime_release,
             binding=binding,
@@ -567,13 +602,84 @@ class ProductionSimulationRunContextProvider:
             qmt_reconciliation_service=qmt_reconciliation_service,
             qmt_ledger_repository=qmt_repository,
             broker_positions=broker_positions,
-            context_diagnostics={"miniqmt_broker_position_reconciliation": reconciliation_diagnostics},
+            context_diagnostics={
+                "miniqmt_broker_position_reconciliation": reconciliation_diagnostics,
+                "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+            },
             cash=float(account.cash),
             frozen_cash=float(account.frozen_cash),
             realized_pnl=float(account.realized_pnl),
             price_by_symbol=prices,
             market_data_source=MinuteDataSource.MINIQMT_REALTIME.value,
+            pre_trade_tradability=pre_trade_tradability,
         )
+
+    def load_pre_trade_tradability(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        binding: SimulationReleaseBinding,
+        market_data_source: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        require_realtime_quote = self._position_loader is None and (
+            (binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and trade_date == date.today())
+            or (
+                binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                and (market_data_source == MinuteDataSource.TDX_REALTIME.value or trade_date == date.today())
+            )
+        )
+        return self._load_pre_trade_tradability(
+            symbols=symbols,
+            trade_date=trade_date,
+            require_realtime_quote=require_realtime_quote,
+        )
+
+    def _load_pre_trade_tradability(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        require_realtime_quote: bool,
+    ) -> dict[str, dict[str, Any]]:
+        if not require_realtime_quote and not self._pre_trade_tradability_provider_injected:
+            return {}
+        if self._position_loader is not None and not self._pre_trade_tradability_provider_injected:
+            return {}
+        loader = getattr(self._pre_trade_tradability_provider, "get_statuses", None)
+        if not callable(loader):
+            raise DataUnavailableError(
+                "pre-trade tradability provider must expose get_statuses",
+                context={"provider": type(self._pre_trade_tradability_provider).__name__},
+            )
+        try:
+            raw = loader(symbols, trade_date, require_realtime_quote=require_realtime_quote)
+        except TypeError:
+            raw = loader(symbols, trade_date)
+        if not isinstance(raw, dict):
+            raise DataUnavailableError(
+                "pre-trade tradability provider returned invalid payload",
+                context={"provider": type(self._pre_trade_tradability_provider).__name__},
+            )
+        return {str(symbol): dict(status) for symbol, status in raw.items() if isinstance(status, dict)}
+
+    @staticmethod
+    def _pre_trade_tradability_diagnostics(statuses: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        blocked = [
+            {
+                "symbol": symbol,
+                "reason_code": status.get("reason_code"),
+                "source": status.get("source"),
+            }
+            for symbol, status in sorted(statuses.items())
+            if isinstance(status, dict) and not bool(status.get("is_tradable", True))
+        ]
+        return {
+            "schema_version": "pre_trade_tradability_diagnostics_v1",
+            "symbol_count": len(statuses),
+            "blocked_symbol_count": len(blocked),
+            "blocked_symbols": blocked,
+        }
 
     def _build_managed_order_service(self, qmt_repository: Any, *, broker: Any | None = None) -> QmtManagedOrderService:
         broker = broker if broker is not None else self._qmt_client_factory()
@@ -2641,6 +2747,27 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
+        if submit and not plan.intents and self._execution_plan_has_pre_trade_blocks(plan):
+            execution = self.orchestrator.submit_persisted_execution_plan(
+                run=run,
+                binding=binding,
+                execution_plan=plan,
+                mode=mode,
+            )
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status=execution.status,
+                run=execution.run,
+                execution_plan=plan,
+                execution_result=execution,
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
             context = self.context_provider.load_context(
                 runtime_release=runtime_release,
@@ -3758,6 +3885,8 @@ class SimulationLifecycleScheduler:
     ) -> bool:
         if not submit or plan.intents or run.run_payload_json.get("broker_called"):
             return False
+        if SimulationLifecycleScheduler._execution_plan_has_pre_trade_blocks(plan):
+            return False
         return run.status in {
             SimulationDailyRunStatus.CREATED,
             SimulationDailyRunStatus.PRECHECKING,
@@ -3767,6 +3896,22 @@ class SimulationLifecycleScheduler:
             SimulationDailyRunStatus.FAILED_RETRYABLE,
             SimulationDailyRunStatus.SUBMITTING,
         }
+
+    @staticmethod
+    def _execution_plan_has_pre_trade_blocks(plan: ExecutionPlan) -> bool:
+        for decision in plan.trading_rule_decisions:
+            if decision.price_limit_rule.get("pre_trade_tradability") and not bool(
+                decision.price_limit_rule["pre_trade_tradability"].get("is_tradable", True)
+            ):
+                return True
+            if str(decision.reason_code).upper() in {
+                "SUSPENDED_BY_SUSPEND_D",
+                "NO_TRADABLE_REALTIME_QUOTE",
+                "REALTIME_QUOTE_MISSING",
+                "SUSPENDED_OR_NO_QUOTE_BLOCKED",
+            }:
+                return True
+        return False
 
     @staticmethod
     def _should_reconcile_existing_miniqmt_run(
@@ -4407,12 +4552,19 @@ class SimulationLifecycleScheduler:
         created_by: str,
     ) -> SimulationPlanBuildResult:
         evidence = selection.evidence_by_package[binding.package_id]
+        candidates = selection.package_results.get(binding.package_id, [])
+        pre_trade_tradability = self._pre_trade_tradability_for_planning(
+            binding=binding,
+            trade_date=trade_date,
+            context=context,
+            candidate_symbols=[candidate.symbol for candidate in candidates],
+        )
         snapshot = SignalSnapshot(
             package_id=binding.package_id,
             manifest_sha256=evidence.manifest_sha256,
             trade_date=trade_date,
             data_source=data_source,
-            candidates=selection.package_results.get(binding.package_id, []),
+            candidates=candidates,
             runtime_config=selection.runtime_config,
             valid_no_candidate=selection.valid_no_candidate,
             no_candidate_reason=selection.no_candidate_reason,
@@ -4424,6 +4576,7 @@ class SimulationLifecycleScheduler:
             signal_snapshot=snapshot,
             current_positions=context.current_positions,
             current_prices=context.current_prices,
+            pre_trade_tradability=pre_trade_tradability,
             manifest=context.manifest,
             portfolio_id=context.portfolio_id or binding.strategy_id,
             top_k=context.top_k,
@@ -4431,6 +4584,29 @@ class SimulationLifecycleScheduler:
             tail_policy_payload=context.tail_policy_payload,
             created_by=created_by,
         )
+
+    def _pre_trade_tradability_for_planning(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        context: SimulationRunContext,
+        candidate_symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        symbols = sorted({*context.current_positions.keys(), *[str(symbol).strip() for symbol in candidate_symbols if str(symbol).strip()]})
+        statuses = {str(symbol): dict(status) for symbol, status in (context.pre_trade_tradability or {}).items()}
+        missing = [symbol for symbol in symbols if symbol not in statuses]
+        loader = getattr(self.context_provider, "load_pre_trade_tradability", None)
+        if missing and callable(loader):
+            statuses.update(
+                loader(
+                    symbols=missing,
+                    trade_date=trade_date,
+                    binding=binding,
+                    market_data_source=context.market_data_source,
+                )
+            )
+        return statuses
 
     def _persist_no_rebalance_evidence(
         self,
