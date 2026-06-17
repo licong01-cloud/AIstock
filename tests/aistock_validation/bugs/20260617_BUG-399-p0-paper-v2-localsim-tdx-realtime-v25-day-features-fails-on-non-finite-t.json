@@ -1,0 +1,86 @@
+{
+  "actual": "simulation_runtime scheduler repeatedly marks LocalSim runs FAILED_RETRYABLE: LocalSim could not load minute market data; context cause=V25 day_features turnover_rate_f is not finite, source=TDX_REALTIME, symbols 000029.SZ/000736.SZ, trade_date=2026-06-17.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_features.py",
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_v25_day_features.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260617_BUG-399-p0-paper-v2-localsim-tdx-realtime-v25-day-features-fails-on-non-finite-t.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-399",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T03:25:18.070706Z",
+  "description": "simulation_runtime scheduler repeatedly marks LocalSim runs FAILED_RETRYABLE: LocalSim could not load minute market data; context cause=V25 day_features turnover_rate_f is not finite, source=TDX_REALTIME, symbols 000029.SZ/000736.SZ, trade_date=2026-06-17.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-5a4c62212455",
+      "timestamp": "2026-06-17T03:25:18.070702Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime API checked 2026-06-17 10:11:18 +08:00; backend/logs/aistock.log repeated warnings 09:52-10:11"
+  ],
+  "expected": "LocalSim same-day TDX_REALTIME simulation should either obtain finite validated V25 day_features from an authoritative realtime-compatible source or fail at readiness with actionable data context before entering repeated scheduler submit failures; unattended simulation must not loop on non-finite turnover_rate_f.",
+  "first_seen_at": "2026-06-17T03:25:18.070706Z",
+  "fix_branch": "bug/BUG-399-p0-paper-v2-localsim-tdx-realtime-v25-day-featur-20260617",
+  "fix_commit": "ab8aee95d305eb1db68e9ea08491a202c69745a3",
+  "fixed_at": "2026-06-17T04:17:00Z",
+  "github_issue_number": 1196,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1196",
+  "last_seen_at": "2026-06-17T03:25:18.070706Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs?trade_date=2026-06-17&limit=100; inspect local_sim errors and backend/logs/aistock.log",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][LocalSim] TDX_REALTIME V25 day_features fails on non-finite turnover_rate_f and blocks unattended simulation",
+  "trigger_condition": {
+    "fingerprint": "5a4c6221245589b0204993f2",
+    "source_event_id": "FE-20260617-5a4c62212455"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "validation_evidence": [
+    "readonly DB diagnosis 2026-06-17: feature_date=2026-06-16, 000029.SZ/000736.SZ daily_basic.turnover_rate_f=NaN while turnover_rate is finite",
+    "readonly DB recheck after code fix: DbV25DayFeatureProvider returns finite vectors for 000029.SZ and 000736.SZ with day_features_audit field_repair entries",
+    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 5 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 8 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 624 passed, 1 skipped, 2 xfailed; paper_v2_data_quality PASS with existing nonblocking legacy ledger WARN; data_quality_deep 10 passed, 21 skipped"
+  ]
+}
