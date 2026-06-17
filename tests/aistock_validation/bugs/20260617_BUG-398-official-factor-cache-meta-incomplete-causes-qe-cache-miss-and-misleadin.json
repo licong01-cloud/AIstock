@@ -1,0 +1,131 @@
+{
+  "actual": "Current runtime shows disk_factor_count=575 but meta_factor_count=89 and orphan_parquet_count=486. /factor-cache/stats reports total_cached=89/no_cache=486. /factor-cache/remote-stats reports synced=89 against local meta only, while the remote may contain a different 575+ parquet mirror. QE prepare_factors requires meta entries and can recompute existing parquet factors when meta/universe metadata is missing or mismatched.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/factor_cache_remote_sync_service.py",
+    "backend/services/quantevolver/factor_value_pipeline.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "tests/aistock_validation/history/qe",
+    "tests/aistock_validation/bugs/20260617_BUG-398-official-factor-cache-meta-incomplete-causes-qe-cache-miss-and-misleadin.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-398",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-16T17:42:37.607699Z",
+  "description": "Current runtime shows disk_factor_count=575 but meta_factor_count=89 and orphan_parquet_count=486. /factor-cache/stats reports total_cached=89/no_cache=486. /factor-cache/remote-stats reports synced=89 against local meta only, while the remote may contain a different 575+ parquet mirror. QE prepare_factors requires meta entries and can recompute existing parquet factors when meta/universe metadata is missing or mismatched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-e27a74763c27",
+      "timestamp": "2026-06-16T17:42:37.607694Z"
+    },
+    {
+      "timestamp": "2026-06-17T10:20:00+08:00",
+      "actor": "codex",
+      "action": "fix_validation_completed",
+      "note": "Implemented disk/meta/orphan cache inventory, missing_meta_reconcile_required contract handling, remote metadata-pending sync stats, and UI visibility; validation evidence recorded in tests/aistock_validation/history/qe/20260617_bug398_official_factor_cache_meta_inventory.md."
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-17 runtime check: cache-status disk=575 meta=89 orphan=486; QE Loop6/Loop7 use FACTOR_CACHE_DIR=/mnt/f/Dev/AIstock/rdagent_assets/factor_values and DATA_MODE=backtest_factor_data_dir",
+    "tests/aistock_validation/history/qe/20260617_bug398_official_factor_cache_meta_inventory.md",
+    "py_compile targeted quantevolver files -> passed",
+    "targeted pytest factor cache/QE cache contract/remote sync policy -> 22 passed",
+    "nox l0 -> passed",
+    "nox validation_module_registry_l0 -> passed",
+    "NO_PROXY + QE_READ_L3_SKIP_UI nox qe_read_l3 -> passed (qe_read_backend 14 passed)",
+    "frontend changed-file eslint and scoped tsc -> passed",
+    "temporary orphan parquet contract check -> missing_meta_reconcile_required passed",
+    "git diff --check -> passed"
+  ],
+  "expected": "official factor cache status uses rdagent_assets/factor_values as the only source; disk parquet count, meta count, orphan parquet count, date window, and source mode are visible. Missing meta can be reconciled from existing parquet without full factor recomputation. QE prepare_factors does not silently recompute just because a parquet exists without meta; it reports a structured missing_meta_reconcile_required/cache contract reason. Remote sync stats compare the full disk parquet set, not only the 89 meta entries. No official path consumes factor_values_realtime.",
+  "first_seen_at": "2026-06-16T17:42:37.607699Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1189,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1189",
+  "last_seen_at": "2026-06-16T17:42:37.607699Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/quantevolver/factor-cache/stats; GET /api/v1/quantevolver/evolution/correlations/cache-status; GET /api/v1/quantevolver/factor-cache/remote-stats; inspect prepare_factors.py cache hit contract for missing_meta",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "official factor cache meta incomplete causes QE cache miss and misleading cache status",
+  "trigger_condition": {
+    "fingerprint": "e27a74763c2731b8ed9656a5",
+    "source_event_id": "FE-20260617-e27a74763c27"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/factor_cache_remote_sync_service.py",
+      "backend/services/quantevolver/factor_value_pipeline.py",
+      "backend/services/quantevolver/factor_value_loader.py",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+      "tests/aistock_validation/history/qe/"
+    ],
+    "ui_issue": true,
+    "ui_route": "/*.parquet",
+    "ui_routes": [
+      "/*.parquet"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": "20260617_bug398_official_factor_cache_meta_inventory",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
