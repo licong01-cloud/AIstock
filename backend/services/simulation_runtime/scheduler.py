@@ -25,7 +25,10 @@ from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
-from backend.services.qmt_strategy_ledger.reconciliation import QmtStrategyLedgerReconciliationService
+from backend.services.qmt_strategy_ledger.reconciliation import (
+    QmtStrategyLedgerReconciliationService,
+    broker_authoritative_strategy_projection,
+)
 from backend.services.qmt_strategy_ledger.order_service import SELL_ORDER_TYPE, OrderPreflightError, QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.models import (
     IntentPreflightStatus,
@@ -290,7 +293,7 @@ class ProductionSimulationRunContextProvider:
             "provider_name": type(self).__name__,
             "ready": True,
             "localsim_state_source": "paper_v2_portfolio",
-            "miniqmt_state_source": "qmt_strategy_virtual_ledger_reconciled_with_broker_positions",
+            "miniqmt_state_source": "broker_authoritative_positions_with_strategy_slot_projection",
             "market_price_source": "market.kline_daily_raw_latest_close",
             "localsim_market_data_source_policy": {
                 "same_day": MinuteDataSource.TDX_REALTIME.value,
@@ -497,12 +500,17 @@ class ProductionSimulationRunContextProvider:
                     repository=qmt_repository,
                     strategy_id=binding.strategy_id,
                 )
+                account_strategy_quantities = self._miniqmt_account_strategy_lot_quantities(
+                    repository=qmt_repository,
+                    account_id=account.account_id,
+                )
                 positions, reconciliation_diagnostics = self._reconcile_miniqmt_positions_with_broker(
                     ledger_positions,
                     broker_positions,
                     strategy_id=binding.strategy_id,
                     binding_id=binding.binding_id,
                     trade_date=trade_date,
+                    account_strategy_quantities=account_strategy_quantities,
                 )
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
@@ -822,6 +830,20 @@ class ProductionSimulationRunContextProvider:
             )
         return positions
 
+    @staticmethod
+    def _miniqmt_account_strategy_lot_quantities(*, repository: Any, account_id: str) -> dict[str, dict[str, int]]:
+        quantities: dict[str, dict[str, int]] = {}
+        for account in repository.list_virtual_accounts(account_id=account_id):
+            by_symbol: dict[str, int] = {}
+            for lot in repository.list_position_lots(account.strategy_id):
+                remaining = int(getattr(lot, "remaining_quantity", getattr(lot, "quantity", 0)) or 0)
+                if remaining <= 0:
+                    continue
+                symbol = str(lot.symbol)
+                by_symbol[symbol] = by_symbol.get(symbol, 0) + remaining
+            quantities[account.strategy_id] = dict(sorted(by_symbol.items()))
+        return quantities
+
     def _load_miniqmt_broker_positions(
         self,
         qmt_client: Any,
@@ -863,8 +885,18 @@ class ProductionSimulationRunContextProvider:
         strategy_id: str,
         binding_id: str,
         trade_date: date,
+        account_strategy_quantities: dict[str, dict[str, int]] | None = None,
     ) -> tuple[dict[str, PositionLot], dict[str, Any]]:
         broker_totals = _broker_position_totals(broker_positions)
+        broker_quantities = {symbol: quantity for symbol, (quantity, _can_sell) in broker_totals.items()}
+        strategy_quantities = account_strategy_quantities or {
+            strategy_id: {symbol: int(position.quantity) for symbol, position in ledger_positions.items()}
+        }
+        projection = broker_authoritative_strategy_projection(
+            strategy_lot_quantities=strategy_quantities,
+            broker_quantities=broker_quantities,
+        )
+        projected_for_strategy = projection.projected_quantities.get(strategy_id, {})
         reconciled: dict[str, PositionLot] = {}
         dropped: list[dict[str, Any]] = []
         capped: list[dict[str, Any]] = []
@@ -872,6 +904,7 @@ class ProductionSimulationRunContextProvider:
             broker_quantity, broker_can_sell = broker_totals.get(symbol, (0, 0))
             ledger_quantity = int(position.quantity)
             ledger_available = int(position.available_quantity)
+            projected_quantity = int(projected_for_strategy.get(symbol, 0) or 0)
             if broker_quantity <= 0:
                 dropped.append(
                     {
@@ -880,11 +913,12 @@ class ProductionSimulationRunContextProvider:
                         "ledger_available_quantity": ledger_available,
                         "broker_quantity": broker_quantity,
                         "broker_can_sell": broker_can_sell,
+                        "projected_quantity": projected_quantity,
                         "reason": "missing_or_zero_broker_position",
                     }
                 )
                 continue
-            capped_quantity = min(ledger_quantity, broker_quantity)
+            capped_quantity = min(projected_quantity, broker_quantity)
             capped_available = min(ledger_available, broker_can_sell, capped_quantity)
             if capped_quantity <= 0:
                 dropped.append(
@@ -894,6 +928,7 @@ class ProductionSimulationRunContextProvider:
                         "ledger_available_quantity": ledger_available,
                         "broker_quantity": broker_quantity,
                         "broker_can_sell": broker_can_sell,
+                        "projected_quantity": projected_quantity,
                         "reason": "broker_quantity_cap_zero",
                     }
                 )
@@ -906,6 +941,7 @@ class ProductionSimulationRunContextProvider:
                         "ledger_available_quantity": ledger_available,
                         "broker_quantity": broker_quantity,
                         "broker_can_sell": broker_can_sell,
+                        "projected_quantity": projected_quantity,
                         "reconciled_quantity": capped_quantity,
                         "reconciled_available_quantity": capped_available,
                     }
@@ -929,6 +965,10 @@ class ProductionSimulationRunContextProvider:
             "capped_position_count": len(capped),
             "dropped_positions": dropped,
             "capped_positions": capped,
+            "position_authority": "broker_positions",
+            "broker_authoritative": True,
+            "account_strategy_count": len(strategy_quantities),
+            "projection_adjustments": list(projection.adjustments),
         }
         return reconciled, diagnostics
 
@@ -4013,6 +4053,7 @@ class SimulationLifecycleScheduler:
             trade_date=run.trade_date,
             broker_positions=broker_positions,
             sync_summary=sync_after_submit[1] if sync_after_submit is not None else None,
+            broker_authoritative=True,
         )
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         strategy_scope = self._miniqmt_reconciliation_strategy_scope(
