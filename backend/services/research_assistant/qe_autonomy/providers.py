@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from .models import (
     AutonomousEvolutionState,
@@ -64,4 +64,9 @@ class AutonomyRunStore(Protocol):
 
 class ApprovalGatewayProvider(Protocol):
     def preflight_confirmation_only(self, proposal: LoopProposal, state: AutonomousEvolutionState) -> SubmitDecision:
+        ...
+
+
+class ExperienceReplayProvider(Protocol):
+    def find_reusable_skills(self, *, task_key: str, evidence_refs: list[str], limit: int) -> list[dict[str, Any]]:
         ...

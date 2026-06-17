@@ -38,7 +38,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase11_prompt_lab_v1_20260616"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase12_skill_library_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -51,6 +51,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_proactive_reports",
         "assistant_reflection_cards",
         "assistant_prompt_lab_runs",
+        "assistant_skill_library",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -100,6 +101,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "COMMENT ON TABLE assistant_proactive_reports" in sql
     assert "COMMENT ON TABLE assistant_reflection_cards" in sql
     assert "COMMENT ON TABLE assistant_prompt_lab_runs" in sql
+    assert "COMMENT ON TABLE assistant_skill_library" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -231,6 +233,33 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
             "lesson_md": "lesson",
             "structured_json": {},
             "memory_ref": "mem_x",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "prompt_lab_runs",
+        {
+            "lab_run_id": "plab_x",
+            "target_prompt_key": "root.assistant",
+            "optimizer": "gepa",
+            "eval_set_ref": "eval_x",
+            "candidate_text": "candidate",
+            "judge_score_json": {},
+            "status": "candidate",
+            "approval_request_id": "appr_x",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "skill_library",
+        {
+            "skill_id": "sklib_x",
+            "skill_key": "qe.task.improvement",
+            "description": "recipe",
+            "recipe_json": {},
+            "success_count": 1,
+            "provenance_json": {},
+            "status": "draft",
         },
     )
     _assert_columns(

@@ -98,6 +98,13 @@ TABLES: dict[str, dict[str, Any]] = {
         "search": {"lab_run_id", "target_prompt_key", "optimizer", "eval_set_ref", "status", "approval_request_id"},
         "no_updated_at": True,
     },
+    "skill_library": {
+        "table": "assistant_skill_library",
+        "id": "skill_id",
+        "json": {"recipe_json", "provenance_json"},
+        "search": {"skill_id", "skill_key", "description", "status"},
+        "no_updated_at": True,
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",

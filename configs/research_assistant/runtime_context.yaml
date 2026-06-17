@@ -861,6 +861,27 @@ planner:
       workflow_pack_ref: rdagent.analysis
       status: approved
       source_ref: "C:/Users/lc999/.codex/skills/rdagent-task-analyzer/SKILL.md"
+    - capability_key: skill_library.reuse
+      capability_type: skill
+      title: "Skill Library gated reuse"
+      natural_language_triggers:
+        - "reuse approved skill"
+        - "skill library replay"
+        - "\u590d\u7528\u5df2\u5ba1\u6279\u6280\u80fd"
+      description_for_llm: "Reuse an approved Skill Library recipe only through Action Proposal, preflight, and approval gates; never execute draft skills directly."
+      risk_level: high
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - CONFIRM_SKILL_REUSE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [skill_library_ref]
+      output_cards: [skill_recipe, approval_gate, replay_evidence]
+      mcp_tool_refs: []
+      skill_refs: []
+      workflow_pack_ref: skill_library.reuse
+      status: approved
+      source_ref: "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md#phase-12-skill-library"
 
 execution:
   default_timeout_seconds: 60
@@ -927,6 +948,7 @@ query_limits:
   api_list_proactive_reports: 50
   api_list_reflection_cards: 50
   api_list_prompt_lab_runs: 50
+  api_list_skill_library: 50
   api_list_entities: 50
   api_list_relations: 50
   api_list_evolution_paths: 50
