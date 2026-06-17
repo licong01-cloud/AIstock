@@ -25,6 +25,7 @@ PHASE8_HARD_PASS_DAI_IDS = {"DAI-CODE-001", "DAI-CODE-002"}
 PHASE9_HARD_PASS_DAI_IDS = {"DAI-REPORT-001"}
 PHASE10_HARD_PASS_DAI_IDS = {"DAI-LEARN-001"}
 PHASE11_HARD_PASS_DAI_IDS = {"DAI-LEARN-002"}
+PHASE12_HARD_PASS_DAI_IDS = {"DAI-LEARN-002"}
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,8 @@ def _assert_dai_classification(rows: list[DaiRow], expected: Mapping[str, Any]) 
             raise AssertionError(f"Phase 10 reflection DAI cannot remain pending: {row.dai_id}")
         if row.dai_id in PHASE11_HARD_PASS_DAI_IDS and status == "future_phase_pending":
             raise AssertionError(f"Phase 11 prompt lab DAI cannot remain pending: {row.dai_id}")
+        if row.dai_id in PHASE12_HARD_PASS_DAI_IDS and status == "future_phase_pending":
+            raise AssertionError(f"Phase 12 skill library DAI cannot remain pending: {row.dai_id}")
 
 
 def assert_phase0_6_anchors(expected: Mapping[str, Any], actual_text: str) -> None:
