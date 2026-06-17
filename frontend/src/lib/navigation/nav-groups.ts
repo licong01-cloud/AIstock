@@ -22,6 +22,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/quantevolver/experiments", label: "\u{1F9EA} \u5B9E\u9A8C\u5386\u53F2" },
       { href: "/quantevolver/templates", label: "\u{1F4CB} QE \u5F85\u6267\u884C\u5B9E\u9A8C" },
       { href: "/qe-archive", label: "\u{1F5C4}\uFE0F QE \u5B9E\u9A8C\u6570\u4ED3" },
+      { href: "/qe-archive/prediction-store", label: "\u{1F4E6} QE Pred Store" },
       { href: "/quantevolver/evolution", label: "\u{1F501} \u81EA\u52A8\u6F14\u8FDB" },
       { href: "/quantevolver/multi-alpha/diagnostics", label: "\u{1F52E} \u591AAlpha \u8BCA\u65AD" },
       { href: "/quantevolver/multi-alpha/evolve-wizard", label: "\u{1F9EC} \u591AAlpha \u6F14\u8FDB" },
