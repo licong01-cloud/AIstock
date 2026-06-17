@@ -545,6 +545,10 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
         def upsert_reproducibility_manifest(self, manifest):  # type: ignore[no-untyped-def]
             self.calls.append(("upsert_reproducibility_manifest", manifest))
 
+        def upsert_artifact_manifest(self, run_id, artifact_manifest, *, replace_existing):  # type: ignore[no-untyped-def]
+            self.calls.append(("upsert_artifact_manifest", (run_id, list(artifact_manifest))))
+            assert replace_existing is True
+
         def upsert_data_context(self, context):  # type: ignore[no-untyped-def]
             self.calls.append(("upsert_data_context", context))
 
@@ -591,11 +595,12 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
     run_call = repository.calls[call_names.index("upsert_run")]
     assert run_call[1].archived_at is not None
     assert run_call[1].archived_at.tzinfo is not None
-    assert call_names[:6] == [
+    assert call_names[:7] == [
         "upsert_run",
         "upsert_run_source",
         "upsert_run_config",
         "upsert_reproducibility_manifest",
+        "upsert_artifact_manifest",
         "upsert_data_context",
         "upsert_account_summary",
     ]
