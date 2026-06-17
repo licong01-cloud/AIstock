@@ -137,10 +137,11 @@ type Factor = {
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
-  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | "missing_meta_reconcile_required" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
   cache_hash_match?: boolean | null;
+  cache_reconcile_required?: boolean | null;
 };
 
 export type MergedFactor = {
@@ -211,10 +212,11 @@ export type MergedFactor = {
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
-  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | "missing_meta_reconcile_required" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
   cache_hash_match?: boolean | null;
+  cache_reconcile_required?: boolean | null;
 };
 
 const GRADE_COLORS: Record<string, string> = {
@@ -425,7 +427,12 @@ export default function FactorList({
     total_size_mb: number; date_range_dominant: string; active_tasks: number;
     last_generation?: string | null;
     hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
-    disabled_total: number; disabled_cached: number;
+    effective_cached?: number; meta_valid_cached?: number; disk_cached_enabled?: number;
+    disk_factor_count?: number; meta_factor_count?: number; orphan_parquet_count?: number; orphan_meta_count?: number;
+    reconcile_required?: number; reconcile_required_sample?: string[];
+    integrity_ok?: boolean; cache_root?: string; single_dir?: string; meta_path?: string;
+    as_of_date?: string | null; data_source_mode?: string | null; window_train_start?: string | null; window_backtest_end?: string | null;
+    disabled_total: number; disabled_cached: number; disabled_disk_cached?: number;
     by_source?: Record<string, number>;
   };
   type CacheTask = {
@@ -471,16 +478,25 @@ export default function FactorList({
     synced?: number;
     missing?: number;
     stale?: number;
+    metadata_pending?: number;
+    local_disk_factor_count?: number;
+    local_meta_factor_count?: number;
+    local_orphan_parquet_count?: number;
+    local_orphan_meta_count?: number;
     error?: string;
   };
   type RemoteFactorStatus = {
-    status: "synced" | "missing" | "stale" | string;
+    status: "synced" | "missing" | "stale" | "metadata_pending" | string;
+    local_meta_status?: string | null;
     local_date_range?: string | null;
     remote_date_range?: string | null;
   };
   type RemoteCacheStats = {
     ok: boolean;
-    local: { cached: number; size_mb: number; cache_root?: string; meta_sha256?: string | null };
+    local: {
+      cached: number; size_mb: number; cache_root?: string; meta_sha256?: string | null;
+      disk_cached?: number; meta_cached?: number; orphan_parquet_count?: number; orphan_meta_count?: number; metadata_pending?: number;
+    };
     selected_node_id?: string | null;
     remote_nodes: RemoteNodeStats[];
     factor_status: Record<string, RemoteFactorStatus>;
@@ -877,6 +893,7 @@ export default function FactorList({
         cache_status: f.cache_status ?? null,
         cache_size_mb: f.cache_size_mb ?? null,
         cache_hash_match: f.cache_hash_match ?? null,
+        cache_reconcile_required: f.cache_reconcile_required ?? false,
       };
     });
 
@@ -884,7 +901,7 @@ export default function FactorList({
 
     // 缓存状态后端已支持全量排序；这里保留当前页内兜底排序。
     if (sortField === "cache_status") {
-      const statusScore: Record<string, number> = { no_cache: 0, error: 0, hash_mismatch: 1, partial: 2, covered: 3, ok: 3 };
+      const statusScore: Record<string, number> = { no_cache: 0, error: 0, missing_meta_reconcile_required: 1, hash_mismatch: 1, partial: 2, covered: 3, ok: 3 };
       const cacheScore = (f: MergedFactor) => {
         if (f.cache_coverage_status) return statusScore[f.cache_coverage_status] ?? 0;
         if (!f.has_cache) return 0;
@@ -905,7 +922,7 @@ export default function FactorList({
     }
 
     return filtered;
-  }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext, cacheStartDate, cacheEndDate]);
+  }, [factors, indSummary, sortField, sortOrder, cacheContext, cacheStartDate, cacheEndDate]);
 
   const loadData = useCallback(async (queryOverride?: string) => {
     const requestId = ++loadDataRequestRef.current;
@@ -1782,10 +1799,11 @@ export default function FactorList({
             {cacheStats ? (
               <>
                 <span style={{ fontSize: 12, color: "#6b7280" }}>
-                  启用 {cacheStats.hash_ok + cacheStats.hash_mismatch + (cacheStats.cache_error || 0)}/{cacheStats.total_code_factors}
+                  启用 {cacheStats.total_cached}/{cacheStats.total_code_factors}
                   {" "}<span style={{ color: "#059669" }}>✓{cacheStats.hash_ok}</span>
                   {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> ✗{cacheStats.cache_error}</span>}
                   {cacheStats.hash_mismatch > 0 && <span style={{ color: "#f59e0b" }}> △{cacheStats.hash_mismatch}</span>}
+                  {(cacheStats.reconcile_required || 0) > 0 && <span style={{ color: "#d97706" }}> 元数据待补{cacheStats.reconcile_required}</span>}
                   {cacheStats.no_cache > 0 && <span style={{ color: "#9ca3af" }}> —{cacheStats.no_cache}</span>}
                   {" "}|{" "}
                   {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
@@ -1794,9 +1812,23 @@ export default function FactorList({
                     <> | 官方缓存{cacheStats.by_source.backtest || 0}</>
                   )}
                 </span>
+                <span
+                  title={`磁盘 parquet=${cacheStats.disk_factor_count ?? "-"}\n_meta.json=${cacheStats.meta_factor_count ?? "-"}\n孤儿 parquet=${cacheStats.orphan_parquet_count ?? 0}\n孤儿 meta=${cacheStats.orphan_meta_count ?? 0}\n${cacheStats.single_dir || ""}`}
+                  style={{
+                    fontSize: 11,
+                    color: (cacheStats.orphan_parquet_count || 0) > 0 ? "#b45309" : "#64748b",
+                    background: (cacheStats.orphan_parquet_count || 0) > 0 ? "#fffbeb" : "#f8fafc",
+                    border: `1px solid ${(cacheStats.orphan_parquet_count || 0) > 0 ? "#fcd34d" : "#e5e7eb"}`,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                  }}
+                >
+                  磁盘 {cacheStats.disk_factor_count ?? 0} / Meta {cacheStats.meta_factor_count ?? 0}
+                  {(cacheStats.orphan_parquet_count || 0) > 0 ? `｜待补元数据 ${cacheStats.orphan_parquet_count}` : ""}
+                </span>
                 {cacheStats.disabled_total > 0 && (
                   <span style={{ fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>
-                    禁用 {cacheStats.disabled_cached}/{cacheStats.disabled_total}
+                    禁用 {cacheStats.disabled_disk_cached ?? cacheStats.disabled_cached}/{cacheStats.disabled_total}
                   </span>
                 )}
                 <span style={{ fontSize: 11, color: "#9ca3af" }}>
@@ -1804,13 +1836,16 @@ export default function FactorList({
                 </span>
                 {remoteStats && (
                   <span style={{ fontSize: 12, color: selectedRemoteNode?.reachable === false ? "#dc2626" : "#64748b", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
-                    WSL缓存 {remoteStats.local.cached}
+                    WSL缓存 {remoteStats.local.disk_cached ?? remoteStats.local.cached}
+                    {remoteStats.local.meta_cached != null && <>｜Meta {remoteStats.local.meta_cached}</>}
+                    {(remoteStats.local.orphan_parquet_count || 0) > 0 && <>｜待补元数据 <span style={{ color: "#d97706" }}>{remoteStats.local.orphan_parquet_count}</span></>}
                     {selectedRemoteNode ? (
                       <>
                         {" "}｜远端 {selectedRemoteNode.display_name || selectedRemoteNode.node_id}: {selectedRemoteNode.remote_cached ?? 0}
                         {" "}｜已同步 <span style={{ color: "#059669" }}>{selectedRemoteNode.synced ?? 0}</span>
                         {(selectedRemoteNode.missing || 0) > 0 && <>｜缺失 <span style={{ color: "#d97706" }}>{selectedRemoteNode.missing}</span></>}
                         {(selectedRemoteNode.stale || 0) > 0 && <>｜过期 <span style={{ color: "#dc2626" }}>{selectedRemoteNode.stale}</span></>}
+                        {(selectedRemoteNode.metadata_pending || 0) > 0 && <>｜元数据待补 <span style={{ color: "#d97706" }}>{selectedRemoteNode.metadata_pending}</span></>}
                       </>
                     ) : "｜无远端节点"}
                   </span>
@@ -1862,6 +1897,7 @@ export default function FactorList({
                 <option value="missing_range">未覆盖该区间</option>
                 <option value="covers_range">已覆盖该区间</option>
                 <option value="has_cache">已有缓存</option>
+                <option value="missing_meta_reconcile_required">待补元数据</option>
                 <option value="no_cache">无缓存</option>
                 <option value="hash_mismatch">源码变更</option>
               </select>
@@ -2565,6 +2601,32 @@ export default function FactorList({
                 const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
                 const cacheCoverageOk = factorCacheCoversRequestedWindow(f, cacheTargetStart, cacheTargetEnd);
                 const remoteSyncStatus = remoteFactorStatusByName[f.factor_name];
+                const remoteNeedsMetaReconcile = Boolean(
+                  remoteSyncStatus?.local_meta_status && remoteSyncStatus.local_meta_status !== "ok"
+                );
+                const remoteSyncLabel = remoteNeedsMetaReconcile
+                  ? "待补元数据"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "已同步"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "远端过期"
+                      : remoteSyncStatus?.status === "metadata_pending"
+                        ? "待补元数据"
+                        : "未同步";
+                const remoteSyncBackground = remoteNeedsMetaReconcile
+                  ? "#fef3c7"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "#d1fae5"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "#fee2e2"
+                      : "#fef3c7";
+                const remoteSyncColor = remoteNeedsMetaReconcile
+                  ? "#d97706"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "#059669"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "#dc2626"
+                      : "#d97706";
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -2708,7 +2770,14 @@ export default function FactorList({
                         {f.ind_calculated_at ? f.ind_calculated_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
-                        {f.has_cache ? (
+                        {f.cache_reconcile_required || f.cache_status === "missing_meta_reconcile_required" ? (
+                          <span
+                            title={`磁盘 parquet 已存在，但 _meta.json 缺少该因子记录；需要先补齐元数据，QE 回测不会静默重算。\n大小: ${f.cache_size_mb ?? "-"} MB${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`}
+                            style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fffbeb", color: "#b45309" }}
+                          >
+                            △ 待补元数据
+                          </span>
+                        ) : f.has_cache ? (
                           f.cache_hash_match === false ? (
                             <span title={`源码已变更，缓存失效\n${f.cache_date_range}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
@@ -2737,17 +2806,17 @@ export default function FactorList({
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
                         {remoteSyncStatus ? (
                           <span
-                            title={`本地: ${remoteSyncStatus.local_date_range || "-"}\n远端: ${remoteSyncStatus.remote_date_range || "-"}\n节点: ${selectedRemoteNode?.display_name || selectedRemoteNode?.node_id || "-"}`}
+                            title={`本地: ${remoteSyncStatus.local_date_range || "-"}\n远端: ${remoteSyncStatus.remote_date_range || "-"}\n元数据状态: ${remoteSyncStatus.local_meta_status || "ok"}\n节点: ${selectedRemoteNode?.display_name || selectedRemoteNode?.node_id || "-"}`}
                             style={{
                               padding: "2px 6px",
                               borderRadius: 4,
                               fontSize: 10,
                               fontWeight: 600,
-                              background: remoteSyncStatus.status === "synced" ? "#d1fae5" : remoteSyncStatus.status === "stale" ? "#fee2e2" : "#fef3c7",
-                              color: remoteSyncStatus.status === "synced" ? "#059669" : remoteSyncStatus.status === "stale" ? "#dc2626" : "#d97706",
+                              background: remoteSyncBackground,
+                              color: remoteSyncColor,
                             }}
                           >
-                            {remoteSyncStatus.status === "synced" ? "已同步" : remoteSyncStatus.status === "stale" ? "远端过期" : "未同步"}
+                            {remoteSyncLabel}
                           </span>
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>

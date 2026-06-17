@@ -530,7 +530,7 @@ def list_factors(
     category: Optional[str] = Query(None, description="过滤类别，__empty__表示未分类"),
     grade: Optional[str] = Query(None, description="过滤评级，__empty__表示未评级"),
     availability: Optional[str] = Query(None, description="过滤可用状态: enabled/disabled/all"),
-    cache_filter: Optional[str] = Query(None, description="因子值缓存过滤: has_cache/no_cache/covers_range/missing_range/hash_mismatch"),
+    cache_filter: Optional[str] = Query(None, description="因子值缓存过滤: has_cache/no_cache/covers_range/missing_range/hash_mismatch/missing_meta_reconcile_required"),
     cache_start_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标开始日期"),
     cache_end_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标结束日期"),
     sort_field: Optional[str] = Query(None, description="排序字段"),
@@ -810,12 +810,13 @@ def list_factors(
                     row["cache_size_mb"] = selected_cache.get("cache_size_mb")
                     row["cache_source"] = selected_cache.get("source_key")
                     row["cache_source_label"] = selected_cache.get("source_label")
+                    row["cache_reconcile_required"] = False
                     row["cache_status"] = "ok"
                     row["_cache_meta_entry"] = entry
                 else:
                     entry = (selected_cache or {}).get("entry") or {}
                     row["has_cache"] = False
-                    row["cache_date_range"] = None
+                    row["cache_date_range"] = (selected_cache or {}).get("cache_date_range")
                     row["cache_start_date"] = None
                     row["cache_end_date"] = None
                     row["cache_computed_at"] = (selected_cache or {}).get("cache_computed_at") or entry.get("computed_at")
@@ -823,11 +824,15 @@ def list_factors(
                     row["cache_window_train_start"] = (selected_cache or {}).get("cache_window_train_start") or entry.get("window_train_start")
                     row["cache_window_backtest_end"] = (selected_cache or {}).get("cache_window_backtest_end") or entry.get("window_backtest_end")
                     row["cache_data_source_mode"] = (selected_cache or {}).get("cache_data_source_mode") or entry.get("data_source_mode")
-                    row["cache_size_mb"] = None
+                    row["cache_size_mb"] = (selected_cache or {}).get("cache_size_mb")
                     row["cache_hash_match"] = None
                     row["cache_source"] = (selected_cache or {}).get("source_key")
                     row["cache_source_label"] = (selected_cache or {}).get("source_label")
+                    row["cache_reconcile_required"] = bool((selected_cache or {}).get("reconcile_required"))
                     row["cache_status"] = (selected_cache or {}).get("cache_status") or ("error" if entry.get("status") == "error" else "no_cache")
+                    if row["cache_status"] == "missing_meta_reconcile_required":
+                        row["cache_start_date"] = (selected_cache or {}).get("cache_start_date")
+                        row["cache_end_date"] = (selected_cache or {}).get("cache_end_date")
 
             # hash 校验（优先 DB code_text 与缓存写入一致；失败不影响 has_cache）
             try:
@@ -861,16 +866,21 @@ def list_factors(
             if cache_filter_norm == "has_cache":
                 rows = [r for r in rows if r.get("has_cache")]
             elif cache_filter_norm == "no_cache":
-                rows = [r for r in rows if not r.get("has_cache")]
+                rows = [
+                    r for r in rows
+                    if not r.get("has_cache") and r.get("cache_status") != "missing_meta_reconcile_required"
+                ]
             elif cache_filter_norm == "covers_range":
                 rows = [r for r in rows if r.get("cache_coverage_status") == "covered"]
             elif cache_filter_norm == "missing_range":
                 rows = [r for r in rows if r.get("cache_coverage_status") != "covered"]
             elif cache_filter_norm == "hash_mismatch":
                 rows = [r for r in rows if r.get("cache_hash_match") is False]
+            elif cache_filter_norm == "missing_meta_reconcile_required":
+                rows = [r for r in rows if r.get("cache_status") == "missing_meta_reconcile_required"]
 
             if sort_field in cache_sort_fields:
-                status_score = {"no_cache": 0, "error": 0, "hash_mismatch": 1, "partial": 2, "covered": 3, "ok": 3}
+                status_score = {"no_cache": 0, "error": 0, "missing_meta_reconcile_required": 1, "hash_mismatch": 1, "partial": 2, "covered": 3, "ok": 3}
 
                 def _cache_sort_value(row: Dict[str, Any]) -> Any:
                     if sort_field == "cache_status":
@@ -3384,6 +3394,51 @@ def _is_official_factor_cache_path_shape(path_value: Any) -> bool:
     return bool(parts) and parts[-1] == "factor_values"
 
 
+_cache_parquet_window_ttl: Dict[str, Dict[str, Any]] = {}
+_PARQUET_WINDOW_TTL_SEC = 300
+
+
+def _infer_factor_cache_window_from_parquet(parquet_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    try:
+        stat = parquet_path.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cache_key = str(parquet_path.resolve())
+        cached = _cache_parquet_window_ttl.get(cache_key)
+        if (
+            cached
+            and cached.get("signature") == signature
+            and time.time() - float(cached.get("loaded_at", 0)) < _PARQUET_WINDOW_TTL_SEC
+        ):
+            window = cached.get("window") or (None, None, None)
+            return window[0], window[1], window[2]
+
+        import pandas as pd
+
+        frame = pd.read_parquet(parquet_path, columns=[])
+        index = frame.index
+        if hasattr(index, "names") and len(getattr(index, "names", []) or []) > 1:
+            date_level = 0
+            if "datetime" in index.names:
+                date_level = index.names.index("datetime")
+            dates = pd.DatetimeIndex(index.get_level_values(date_level))
+        else:
+            dates = pd.DatetimeIndex(index)
+        if dates.empty:
+            return None, None, None
+        start = dates.min().strftime("%Y-%m-%d")
+        end = dates.max().strftime("%Y-%m-%d")
+        window = (start, end, f"{start}~{end}")
+        _cache_parquet_window_ttl[cache_key] = {
+            "loaded_at": time.time(),
+            "signature": signature,
+            "window": window,
+        }
+        return window
+    except Exception as exc:
+        logger.warning("[factor-cache] infer parquet date range failed for %s: %s", parquet_path, exc)
+        return None, None, None
+
+
 def _get_all_factors_with_code_text() -> list:
     """从因子库查询所有有 code_text 的因子。
 
@@ -3443,6 +3498,7 @@ def _invalidate_cache_meta(meta_path: Optional[Path] = None):
     """使 meta 内存缓存失效。"""
     if meta_path is None:
         _cache_meta_ttl.clear()
+        _cache_parquet_window_ttl.clear()
     else:
         _cache_meta_ttl.pop(str(Path(meta_path).resolve()), None)
 
@@ -3510,6 +3566,16 @@ def _collect_factor_cache_candidates(
         status = str(entry.get("status") or ("ok" if has_file else "no_cache")).lower()
         cache_start, cache_end = _split_factor_cache_range(entry.get("date_range"))
         valid_cache = has_entry and has_file and status != "error"
+        reconcile_required = has_file and not has_entry
+        inferred_range = None
+        if reconcile_required:
+            cache_start, cache_end, inferred_range = _infer_factor_cache_window_from_parquet(parquet_path)
+        if reconcile_required:
+            cache_status = "missing_meta_reconcile_required"
+        elif valid_cache:
+            cache_status = "ok"
+        else:
+            cache_status = "error" if status == "error" else "no_cache"
         size_mb = round(parquet_path.stat().st_size / 1024 / 1024, 1) if has_file else None
         candidates.append(
             {
@@ -3521,8 +3587,9 @@ def _collect_factor_cache_candidates(
                 "has_entry": has_entry,
                 "has_file": has_file,
                 "valid_cache": valid_cache,
-                "cache_status": "ok" if valid_cache else ("error" if status == "error" else "no_cache"),
-                "cache_date_range": entry.get("date_range"),
+                "reconcile_required": reconcile_required,
+                "cache_status": cache_status,
+                "cache_date_range": entry.get("date_range") or inferred_range,
                 "cache_start_date": cache_start,
                 "cache_end_date": cache_end,
                 "cache_computed_at": entry.get("computed_at"),
@@ -3573,6 +3640,55 @@ def _choose_best_factor_cache_candidate(
         return (is_error, str(candidate.get("cache_computed_at") or ""))
 
     return max(candidates, key=_non_valid_key)
+
+
+def _factor_cache_inventory() -> Dict[str, Any]:
+    """Return read-only disk/meta inventory for the official shared cache."""
+    try:
+        from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
+
+        pipeline = FactorValuePipeline(output_dir=str(FACTOR_CACHE_ROOT))
+        inventory = pipeline.get_cache_inventory()
+        integrity = pipeline.validate_meta_integrity()
+    except Exception as exc:
+        logger.warning("[factor-cache] inventory scan failed: %s", exc)
+        disk_names = {
+            path.stem
+            for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")
+            if not path.name.startswith("_")
+        } if FACTOR_CACHE_SINGLE_DIR.exists() else set()
+        meta = _load_cache_meta()
+        factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        meta_names = set(factors)
+        total_size_mb = round(
+            sum(path.stat().st_size for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")) / 1024 / 1024,
+            1,
+        ) if FACTOR_CACHE_SINGLE_DIR.exists() else 0
+        inventory = {
+            "cache_root": str(FACTOR_CACHE_ROOT),
+            "single_dir": str(FACTOR_CACHE_SINGLE_DIR),
+            "meta_path": str(FACTOR_CACHE_META_PATH),
+            "disk_factor_count": len(disk_names),
+            "meta_factor_count": len(meta_names),
+            "orphan_parquet_count": len(disk_names - meta_names),
+            "orphan_meta_count": len(meta_names - disk_names),
+            "orphan_parquets": sorted(disk_names - meta_names),
+            "orphan_meta_entries": sorted(meta_names - disk_names),
+            "total_size_mb": total_size_mb,
+            "as_of_date": meta.get("as_of_date"),
+            "generated_at": meta.get("generated_at"),
+        }
+        integrity = {
+            "ok": False,
+            "error": str(exc),
+            "disk_factor_count": inventory["disk_factor_count"],
+            "meta_factor_count": inventory["meta_factor_count"],
+            "orphan_parquet_count": inventory["orphan_parquet_count"],
+            "orphan_meta_count": inventory["orphan_meta_count"],
+        }
+    inventory["integrity_ok"] = bool(integrity.get("ok"))
+    inventory["integrity"] = integrity
+    return inventory
 
 
 def _read_file_from_path(path_str: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -3639,12 +3755,12 @@ def _load_failed_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
 def factor_cache_stats():
     """返回缓存总览：总缓存数、占用空间、覆盖率、日期范围分布。"""
     try:
-        cached_files: List[Path] = []
-        for spec in FACTOR_CACHE_SOURCE_SPECS:
-            single_dir = Path(spec["single_dir"])
-            if single_dir.exists():
-                cached_files.extend(single_dir.glob("*.parquet"))
-        total_size = sum(f.stat().st_size for f in cached_files)
+        inventory = _factor_cache_inventory()
+        total_size = float(inventory.get("total_size_mb") or 0) * 1024 * 1024
+        disk_factor_count = int(inventory.get("disk_factor_count") or 0)
+        meta_factor_count = int(inventory.get("meta_factor_count") or 0)
+        orphan_parquet_count = int(inventory.get("orphan_parquet_count") or 0)
+        orphan_meta_count = int(inventory.get("orphan_meta_count") or 0)
 
         # 代码因子总数 + 可用/禁用因子名集合（从因子库 code_text 查询）
         db_available_names: set = set()
@@ -3681,7 +3797,10 @@ def factor_cache_stats():
         cache_ok = 0
         cache_error = 0
         hash_mismatch = 0
+        reconcile_required = 0
+        disk_cached_enabled = 0
         disabled_cached = 0
+        disabled_disk_cached = 0
 
         for fn in db_available_names:
             selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
@@ -3690,6 +3809,7 @@ def factor_cache_stats():
             current_hash = db_code_hashes.get(fn)
 
             if selected_cache and selected_cache.get("valid_cache"):
+                disk_cached_enabled += 1
                 if current_hash and cached_hash and cached_hash != current_hash:
                     hash_mismatch += 1
                 else:
@@ -3701,6 +3821,13 @@ def factor_cache_stats():
             elif selected_cache and selected_cache.get("cache_status") == "error":
                 # _meta.json 明确记录了失败
                 cache_error += 1
+            elif selected_cache and selected_cache.get("cache_status") == "missing_meta_reconcile_required":
+                disk_cached_enabled += 1
+                reconcile_required += 1
+                dr = selected_cache.get("cache_date_range") or "metadata_pending"
+                range_dist[dr] = range_dist.get(dr, 0) + 1
+                source_key = str(selected_cache.get("source_key") or "unknown")
+                by_source[source_key] = by_source.get(source_key, 0) + 1
             # else: no_cache, 不计入
 
         # 禁用因子缓存统计
@@ -3708,27 +3835,51 @@ def factor_cache_stats():
             selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
             if selected_cache and selected_cache.get("valid_cache"):
                 disabled_cached += 1
+                disabled_disk_cached += 1
                 dr = selected_cache.get("cache_date_range") or "unknown"
                 range_dist[dr] = range_dist.get(dr, 0) + 1
+            elif selected_cache and selected_cache.get("cache_status") == "missing_meta_reconcile_required":
+                disabled_disk_cached += 1
 
         dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else "unknown"
+        effective_cached = cache_ok + hash_mismatch + reconcile_required
 
         return {
             "ok": True,
-            "total_cached": cache_ok + hash_mismatch,
+            "total_cached": effective_cached,
+            "effective_cached": effective_cached,
+            "meta_valid_cached": cache_ok + hash_mismatch,
+            "disk_cached_enabled": disk_cached_enabled,
+            "disk_factor_count": disk_factor_count,
+            "meta_factor_count": meta_factor_count,
+            "orphan_parquet_count": orphan_parquet_count,
+            "orphan_meta_count": orphan_meta_count,
+            "integrity_ok": bool(inventory.get("integrity_ok")),
+            "integrity": inventory.get("integrity"),
+            "reconcile_required": reconcile_required,
+            "reconcile_required_sample": list((inventory.get("orphan_parquets") or [])[:20]),
             "total_code_factors": total_code_factors,
-            "coverage_pct": round((cache_ok + hash_mismatch) / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
+            "coverage_pct": round(effective_cached / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
             "total_size_mb": round(total_size / 1024 / 1024, 1),
             "date_range_dominant": dominant_range,
             "date_range_distribution": dict(sorted(range_dist.items(), key=lambda x: -x[1])[:10]),
             "hash_ok": cache_ok,
             "hash_mismatch": hash_mismatch,
             "cache_error": cache_error,
-            "no_cache": total_code_factors - cache_ok - hash_mismatch - cache_error,
+            "no_cache": max(total_code_factors - effective_cached - cache_error, 0),
             "disabled_total": total_disabled_factors,
             "disabled_cached": disabled_cached,
+            "disabled_disk_cached": disabled_disk_cached,
             "by_source": by_source,
-            "last_generation": _load_cache_meta().get("generated_at"),
+            "cache_root": str(FACTOR_CACHE_ROOT),
+            "single_dir": str(FACTOR_CACHE_SINGLE_DIR),
+            "meta_path": str(FACTOR_CACHE_META_PATH),
+            "last_generation": inventory.get("generated_at") or _load_cache_meta().get("generated_at"),
+            "as_of_date": inventory.get("as_of_date"),
+            "data_source_mode": inventory.get("data_source_mode"),
+            "data_freshness_profile": inventory.get("data_freshness_profile"),
+            "window_train_start": inventory.get("window_train_start"),
+            "window_backtest_end": inventory.get("window_backtest_end"),
             "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
         }
     except Exception as e:
