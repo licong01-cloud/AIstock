@@ -86,7 +86,6 @@ from .skill_library import (
     SKILL_LIBRARY_APPROVAL_PREFIX,
     SKILL_LIBRARY_APPROVAL_TYPE,
     SKILL_LIBRARY_REUSE_CAPABILITY_KEY,
-    SKILL_LIBRARY_REUSE_CONFIRMATION,
     RepositorySkillLibraryExperienceReplayProvider,
     build_successful_workflow_recipe,
     search_approved_skill_recipes,
