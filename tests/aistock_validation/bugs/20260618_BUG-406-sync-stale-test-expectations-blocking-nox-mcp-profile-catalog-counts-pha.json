@@ -2,7 +2,11 @@
   "actual": "Pre-existing upstream drift on main (HEAD 7c09d7c9) causes 7 nox failures unrelated to feature code; product is correct, test expectations/anchors are stale. Confirmed failing on clean main with no BUG-403 changes. FAILURES: (1) backend/tests/research_assistant/test_phase0_blueprint_baseline.py::test_blueprint_baseline_defects_match_current_head_lines - blueprint line-number anchors stale after doc edits; refresh anchors to current HEAD lines. (2) backend/tests/mcp/test_profiles_registry_gateway.py: test_research_profile_is_only_current_module, test_unified_profiles_are_available[research_full-expected17], [full-expected18], test_gateway_loads_research_assistant_tools, test_gateway_loads_research_full_profile - expected module/tool sets not synced after A3 (#1188) added stock_analysis + external_research to research/assistant/full profiles. (3) backend/tests/research_assistant/test_mcp_catalog_sync.py::test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers - assert len(qe_tools)==70 but actual 74 after model_registry tools added to aistock-qe; update expected count and any related profile expectations. SCOPE: update test expectations + phase0 anchors only to match current correct manifest/profiles/blueprint; NO product/behavior change. This unblocks nox for BUG-403 and other PRs. CONSTRAINTS: fix in worktree not root; no service start; verify by running the listed tests + nox l0/module_registry green.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260618_BUG-406-sync-stale-test-expectations-blocking-nox-mcp-profile-catalog-counts-pha.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "docs/process/research_assistant_baseline_verification_20260531.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-406",
@@ -43,7 +47,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -69,5 +74,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }

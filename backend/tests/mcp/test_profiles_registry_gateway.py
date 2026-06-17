@@ -68,7 +68,7 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
 
 def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
-    assert resolve_modules(profile="research_assistant") == ["catalog", "research_assistant"]
+    assert resolve_modules(profile="research_assistant") == ["catalog", "research_assistant", "stock_analysis", "external_research"]
     assert resolve_modules(profile="research_with_assistant") == ["catalog", "research", "research_assistant"]
 
 
@@ -92,8 +92,8 @@ def test_research_profile_is_only_current_module() -> None:
         ("selection_advisory", ["selection_center", "advisory"]),
         ("paper_v2_stable", ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]),
         ("paper_v2_ops", ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]),
-        ("research_full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research"]),
-        ("full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research", "validation", "qe_experiment", "qe_archive"]),
+        ("research_full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research", "stock_analysis"]),
+        ("full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring", "external_research", "stock_analysis", "validation", "qe_experiment", "qe_archive"]),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -210,6 +210,7 @@ def test_gateway_loads_phase2_research_tools() -> None:
 
 def test_gateway_loads_research_assistant_tools() -> None:
     from backend.mcp import gateway
+    from backend.mcp.modules import external_research, stock_analysis
     from backend.mcp.modules.research_assistant import TOOL_COUNT as RESEARCH_ASSISTANT_TOOL_COUNT
 
     _mcp, registry = gateway.create_gateway(
@@ -220,7 +221,9 @@ def test_gateway_loads_research_assistant_tools() -> None:
 
     assert registry.tool_count("catalog") == 6
     assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
-    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT + 6
+    assert registry.tool_count("stock_analysis") == stock_analysis.TOOL_COUNT
+    assert registry.tool_count("external_research") == external_research.TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT + stock_analysis.TOOL_COUNT + external_research.TOOL_COUNT + 6
 
 
 
@@ -325,4 +328,5 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("paper_v2_monitoring") == 32
     assert registry.tool_count("qmt_broker_monitoring") == 10
     assert registry.tool_count("external_research") == 4
-    assert registry.total_tool_count() == 279
+    assert registry.tool_count("stock_analysis") == 7
+    assert registry.total_tool_count() == 286
