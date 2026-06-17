@@ -264,7 +264,7 @@ export default function FactorTransformationPage() {
         { label: "进行中",       value: stats.in_progress,       color: "#0891b2" },
         { label: "改造成功",     value: stats.success,           color: "#16a34a" },
         { label: "改造失败",     value: stats.failed,            color: "#dc2626" },
-        { label: "已有实时代码", value: stats.has_realtime_code, color: "#059669" },
+        { label: "非官方改造代码", value: stats.has_realtime_code, color: "#059669" },
       ]
     : [];
 
@@ -316,7 +316,7 @@ export default function FactorTransformationPage() {
           <div>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>因子代码改造</h1>
             <p style={{ marginTop: 8, opacity: 0.9, fontSize: 14, margin: "8px 0 0" }}>
-              将 RDAgent 生成的因子代码转换为可直接从数据库读取实时数据的版本
+              将 RDAgent 生成的因子代码转换为仅供模拟盘/选股/荐股使用的非官方 live 版本；不参与官方因子缓存、相关性或 QE 回测
             </p>
           </div>
           <button

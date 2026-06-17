@@ -10,7 +10,11 @@
     "backend/tests",
     "tests",
     "tests/aistock_validation/bugs/20260617_BUG-401-issue.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/correlation_llm_agent.py",
+    "backend/services/quantevolver/correlation_compute_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-401",
@@ -28,6 +32,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260617-55982231256d",
       "timestamp": "2026-06-17T05:47:17.931228Z"
+    },
+    {
+      "timestamp": "2026-06-17T06:20:00Z",
+      "actor": "codex",
+      "action": "expand_scope_for_router_auto_loader",
+      "note": "Added quantevolver_evolution router to remove _get_loader source=auto residual path."
+    },
+    {
+      "timestamp": "2026-06-17T08:35:00Z",
+      "actor": "codex",
+      "action": "expand_scope_for_remaining_non_official_source_cleanup",
+      "note": "Added quantevolver router display endpoint and correlation LLM agent to prevent official correlation detail/analysis from reading non-official transformed code paths."
+    },
+    {
+      "timestamp": "2026-06-17T08:50:00Z",
+      "actor": "codex",
+      "action": "expand_scope_for_correlation_service_message_cleanup",
+      "note": "Added correlation_compute_service to remove misleading realtime-transformed wording from official correlation persistence errors."
     }
   ],
   "evidence_uris": [],
@@ -49,7 +71,8 @@
   "reproduce_command": "rg -n FactorValueLoader\\(\\)|factor_values_realtime|DataSnapshotManager|/factor-values|RealtimeFactorDataLoader|backfill_factor_cache backend frontend/src scripts tests",
   "required_verification": [
     "l0",
-    "qe_read_l3"
+    "qe_read_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

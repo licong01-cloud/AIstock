@@ -5525,12 +5525,12 @@ def get_transformation_job_progress(job_id: str):
 
 
 @router.get("/factor-transformation/factor/{factor_name}/code")
-def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"):
+def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_sync"):
     """
-    获取指定因子的改造后实时代码及原始代码。
+    获取指定因子的非官方改造代码及原始代码。
     改造后代码优先从文件系统 qe_code_path 读取（权威数据源）；
     原始代码优先从文件系统 asset_path 读取（权威数据源）。
-    数据库中的 realtime_code_text / code_text 仅作展示兜底，不作为改造依据。
+    数据库中的 realtime_code_text（历史字段名）/ code_text 仅作展示兜底，不作为改造依据。
     """
     import os
     try:
@@ -5589,7 +5589,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("获取因子实时代码失败")
+        logger.exception("获取因子非官方改造代码失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 

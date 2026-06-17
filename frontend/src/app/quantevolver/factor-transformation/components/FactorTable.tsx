@@ -212,7 +212,7 @@ export function FactorTable({
                   改造状态
                   <SortArrow active={sortKey === "transformation_status"} dir={sortDir} />
                 </th>
-                <th className="px-3 py-3 text-center whitespace-nowrap" style={{ minWidth: 72 }}>实时代码</th>
+                <th className="px-3 py-3 text-center whitespace-nowrap" style={{ minWidth: 72 }}>非官方代码</th>
                 <th className="px-3 py-3 text-left whitespace-nowrap">QE文件路径</th>
                 <th
                   className="px-3 py-3 text-left whitespace-nowrap cursor-pointer select-none hover:text-gray-700"
