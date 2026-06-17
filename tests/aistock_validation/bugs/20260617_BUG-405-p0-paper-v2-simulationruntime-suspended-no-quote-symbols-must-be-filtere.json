@@ -31,8 +31,8 @@
   "expected": "Before daily simulation order generation for both LocalSim and MiniQMT, AIstock checks suspend_d and/or authoritative realtime quote tradability. Suspended/no-quote symbols must not produce executable BUY/SELL orders. Existing holdings that are suspended/no-quote are carried with explicit SUSPENDED_OR_NO_QUOTE_BLOCKED evidence; their sell proceeds must not be counted for residual buys. Runs must not remain open indefinitely because a suspended/no-quote sell order was submitted. MiniQMT broker status=50 open orders for untradable symbols must be reconciled as explicit blocked/carry evidence and handled by controlled cancel/terminalization policy, not fake success.",
   "first_seen_at": "2026-06-17T10:57:33.325210Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b9b21f87141f2ffe19fbfd90b6701d1ff4c1659",
+  "fixed_at": "2026-06-17T12:54:59.572586Z",
   "github_issue_number": 1210,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1210",
   "last_seen_at": "2026-06-17T10:57:33.325210Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1212",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,14 @@
     "fingerprint": "f84cbfbea2ca013616712240",
     "source_event_id": "FE-20260617-f84cbfbea2ca"
   },
+  "validation_evidence": [
+    "python -m py_compile backend/services/paper_trading_v2/market_data.py backend/services/simulation_runtime/decision.py backend/services/simulation_runtime/lifecycle.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 73 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-405 --module paper_v2 ... -> PASS workflow_gate=ready",
+    "python -m nox -s validation_module_registry_l0 -> success, 8 passed",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s paper_v2_l3 -> success: 6 sessions; paper_v2_backend 624 passed, 1 skipped, 2 xfailed; data_quality_deep 10 passed, 21 skipped; paper_v2_ui 26 passed, 1 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
