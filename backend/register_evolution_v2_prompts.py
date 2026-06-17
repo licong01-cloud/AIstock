@@ -22,8 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-import psycopg2
-from backend.db.pg_pool import _db_cfg
+# Delayed until after sys.path and .env setup so the script works when run directly.
+import psycopg2  # noqa: E402
+from backend.db.pg_pool import _db_cfg  # noqa: E402
 
 conn = psycopg2.connect(**_db_cfg())
 cur = conn.cursor()

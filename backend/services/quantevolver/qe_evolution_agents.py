@@ -863,7 +863,7 @@ class EvolutionFactorAgent:
                 target_cats = uncovered
                 logger.info(f"factor_expand: 优先搜索未覆盖类别 {uncovered}（已覆盖: {covered_cats}）")
             else:
-                logger.info(f"factor_expand: 所有类别已覆盖，全库搜索")
+                logger.info("factor_expand: 所有类别已覆盖，全库搜索")
                 target_cats = []
 
         if not target_cats:
@@ -928,7 +928,6 @@ class EvolutionFactorAgent:
         # 加权抽样偏向高评级（类别过滤后再加权）
         # 未评级/D级因子权重=0.5（取整为1），允许进入候选池但优先级低
         import random
-        import math
         grade_weights = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 1}
         weighted = []
         for c in candidates:
@@ -1298,12 +1297,6 @@ class EvolutionModelAgent:
                     "sharpe": loop.get("metrics", {}).get("sharpe"),
                 })
 
-        step1 = {
-            "current_model_id": current_model_id,
-            "training_diagnostics": training_diag,
-            "tried_models": list(tried_models),
-            "model_history": model_history,
-        }
         logger.info(f"EvolutionModelAgent Step 1: current_model={current_model_id}, tried={len(tried_models)}")
 
         # ── Step 2: decide_model_direction [LLM#1] ──
