@@ -57,7 +57,7 @@
   "first_seen_at": "2026-06-17T05:47:17.931232Z",
   "fix_branch": null,
   "fix_commit": "b142e0118817f289099a3642c8b8c89bf3c67ae6",
-  "fixed_at": "2026-06-17T10:56:04.653748Z",
+  "fixed_at": "2026-06-17T10:57:21.413710Z",
   "github_issue_number": 1203,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1203",
   "last_seen_at": "2026-06-17T05:47:17.931232Z",
@@ -123,7 +123,8 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "PR #1207 GitHub checks all green: gh pr checks 1207 -> 17 passed, 0 failed",
+    "PR #1207 GitHub checks all green before merge: gh pr checks 1207 -> 17 passed, 0 failed",
+    "PR #1207 merged at 2026-06-17T10:55:36Z, merge commit b142e0118817f289099a3642c8b8c89bf3c67ae6",
     "python -m py_compile changed Python files -> passed",
     "ruff check changed Python files -> passed",
     "targeted pytest -> 55 passed, 1 warning",
