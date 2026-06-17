@@ -1,0 +1,114 @@
+{
+  "actual": "静态核查显示 factor_values_realtime/DataSnapshotManager/旧 /factor-values API 在业务源码中为 0 命中，但 FactorValueLoader 默认 source=auto 且 FactorAnalyst 存在 3 处 FactorValueLoader() 裸调用，backfill_factor_cache.py 仍可作为 legacy 手工入口存在，factor_code_transformer/factor_transformation_service 仍保留 RealtimeFactorDataLoader 注入/转换逻辑。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/factor_value_loader.py",
+    "backend/services/quantevolver/factor_analyst.py",
+    "backend/services/quantevolver/factor_code_transformer.py",
+    "backend/services/quantevolver/factor_transformation_service.py",
+    "scripts/backfill_factor_cache.py",
+    "frontend/src/app/quantevolver/factor-transformation",
+    "backend/tests",
+    "tests",
+    "tests/aistock_validation/bugs/20260617_BUG-401-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-401",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T05:47:17.931232Z",
+  "description": "静态核查显示 factor_values_realtime/DataSnapshotManager/旧 /factor-values API 在业务源码中为 0 命中，但 FactorValueLoader 默认 source=auto 且 FactorAnalyst 存在 3 处 FactorValueLoader() 裸调用，backfill_factor_cache.py 仍可作为 legacy 手工入口存在，factor_code_transformer/factor_transformation_service 仍保留 RealtimeFactorDataLoader 注入/转换逻辑。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-55982231256d",
+      "timestamp": "2026-06-17T05:47:17.931228Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "FactorValueLoader 必须显式声明 source，官方读取必须使用 source=single 且绑定 rdagent_assets/factor_values；FactorAnalyst 不再通过默认 auto loader 或旧方法写相关性 DB；legacy backfill 入口必须被删除或 fail-fast 隔离；RealtimeFactorDataLoader 只允许作为非官方 live/模拟盘/选股旁路且不得被官方独立指标、相关性、QE 回测引用；回归测试证明业务源码不再存在裸 FactorValueLoader()、factor_values_realtime、DataSnapshotManager、旧 /factor-values API。",
+  "first_seen_at": "2026-06-17T05:47:17.931232Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1203,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1203",
+  "last_seen_at": "2026-06-17T05:47:17.931232Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n FactorValueLoader\\(\\)|factor_values_realtime|DataSnapshotManager|/factor-values|RealtimeFactorDataLoader|backfill_factor_cache backend frontend/src scripts tests",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "清理官方因子缓存旧链路隐式数据源",
+  "trigger_condition": {
+    "fingerprint": "55982231256d05be9f1437e8",
+    "source_event_id": "FE-20260617-55982231256d"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/quantevolver/factor_value_loader.py",
+      "backend/services/quantevolver/factor_analyst.py",
+      "backend/services/quantevolver/factor_code_transformer.py",
+      "backend/services/quantevolver/factor_transformation_service.py",
+      "scripts/backfill_factor_cache.py",
+      "backend/tests",
+      "tests",
+      "frontend/src/app/quantevolver/factor-transformation"
+    ],
+    "ui_issue": true,
+    "ui_route": "/factor_values",
+    "ui_routes": [
+      "/factor_values"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
