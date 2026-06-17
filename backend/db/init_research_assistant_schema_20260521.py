@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase10_reflection_cards_v1_20260616"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase11_prompt_lab_v1_20260616"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -263,6 +263,19 @@ BASE_DDL: list[str] = [
         lesson_md TEXT NOT NULL,
         structured_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         memory_ref TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_prompt_lab_runs (
+        lab_run_id TEXT PRIMARY KEY,
+        target_prompt_key TEXT NOT NULL,
+        optimizer TEXT NOT NULL,
+        eval_set_ref TEXT NOT NULL,
+        candidate_text TEXT NOT NULL,
+        judge_score_json JSONB NOT NULL,
+        status TEXT NOT NULL DEFAULT 'candidate',
+        approval_request_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
@@ -968,6 +981,7 @@ TABLE_COMMENTS = {
     "assistant_code_context_refs": "Code-intelligence context references injected into Research Assistant Context Packs; AST deterministic, no embedding.",
     "assistant_proactive_reports": "Proactive morning and experiment reports generated from read-only evidence providers.",
     "assistant_reflection_cards": "Reflection Cards generated from task failure, correction, or low-confidence signals; writes personal.episodic memory only.",
+    "assistant_prompt_lab_runs": "Prompt Lab offline GEPA/DSPy-style candidate prompt runs with LLM-as-judge scoring and human approval gate.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
     "research_memory_relations": "Native lightweight knowledge graph relations with evidence references.",
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
@@ -1155,6 +1169,15 @@ COLUMN_COMMENTS = {
     "assistant_reflection_cards.structured_json": "Structured cause, lesson, next strategy, source_refs, reason_codes, warnings, and safety flags.",
     "assistant_reflection_cards.memory_ref": "personal.episodic.* memory_id written for L1 recall.",
     "assistant_reflection_cards.created_at": "Row creation timestamp.",
+    "assistant_prompt_lab_runs.lab_run_id": "Stable Prompt Lab run identifier.",
+    "assistant_prompt_lab_runs.target_prompt_key": "Prompt node key targeted by the offline optimization candidate.",
+    "assistant_prompt_lab_runs.optimizer": "Offline optimizer family such as gepa, dspy_mipro, or manual.",
+    "assistant_prompt_lab_runs.eval_set_ref": "Historical trace evaluation-set reference used for the candidate.",
+    "assistant_prompt_lab_runs.candidate_text": "Candidate prompt text generated offline; not active until approved.",
+    "assistant_prompt_lab_runs.judge_score_json": "Offline LLM-as-judge or deterministic judge score, dimensions, reason_codes, warnings, and source_refs.",
+    "assistant_prompt_lab_runs.status": "Prompt Lab lifecycle status: candidate, approved, or rejected.",
+    "assistant_prompt_lab_runs.approval_request_id": "Pending assistant_approval_requests record required before prompt activation can change.",
+    "assistant_prompt_lab_runs.created_at": "Row creation timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",

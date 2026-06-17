@@ -74,6 +74,13 @@ from .proactive_reports import (
     build_default_proactive_report_registry,
     generate_proactive_report,
 )
+from .prompt_lab import (
+    OfflinePromptJudge,
+    build_prompt_lab_candidate,
+    collect_prompt_lab_eval_set,
+    judge_prompt_lab_candidate,
+    prompt_lab_plan_digest,
+)
 from .reflection_card import build_reflection_artifacts, reflection_trigger_from_event
 from .react_grounding import (
     McpToolCall,
@@ -6014,6 +6021,113 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "status": report["status"],
             },
         )
+
+    def run_prompt_lab_offline(
+        self,
+        *,
+        target_prompt_key: str,
+        optimizer: str = "gepa",
+        eval_limit: int = 20,
+        offline_judge: OfflinePromptJudge | None = None,
+    ) -> dict[str, Any]:
+        """Create a gated Prompt Lab candidate without changing prompt activation."""
+
+        baseline = self._prompt_text_for_key(target_prompt_key)
+        eval_set = collect_prompt_lab_eval_set(
+            self.repository,
+            target_prompt_key=target_prompt_key,
+            limit=eval_limit,
+        )
+        candidate = build_prompt_lab_candidate(
+            target_prompt_key=target_prompt_key,
+            baseline_text=baseline,
+            optimizer=optimizer,
+            eval_set=eval_set,
+        )
+        source_refs = list(candidate.get("source_refs") or [])
+        score = judge_prompt_lab_candidate(
+            judge=offline_judge,
+            target_prompt_key=target_prompt_key,
+            baseline_text=baseline,
+            candidate_text=str(candidate["candidate_text"]),
+            eval_items=list(eval_set.get("items") or []),
+            source_refs=source_refs,
+        )
+        merged_score = {
+            **score,
+            "candidate_reason_codes": list(candidate.get("reason_codes") or []),
+            "candidate_warnings": list(candidate.get("warnings") or []),
+            "activation_changed": False,
+            "offline_only": True,
+        }
+        approval = self.create_approval(
+            ApprovalCreate(
+                approval_type="prompt_lab.activate",
+                risk_level="high",
+                plan_digest=prompt_lab_plan_digest(
+                    target_prompt_key=target_prompt_key,
+                    candidate_text=str(candidate["candidate_text"]),
+                    eval_set_ref=str(candidate["eval_set_ref"]),
+                ),
+                summary=f"Prompt Lab candidate for {target_prompt_key}; human approval required before prompt activation",
+                required_confirmation_text=f"APPROVE PROMPT LAB {target_prompt_key}",
+                created_by="prompt_lab_offline",
+            )
+        )
+        return self.repository.create_record(
+            "prompt_lab_runs",
+            {
+                "lab_run_id": new_id("plab"),
+                "target_prompt_key": target_prompt_key,
+                "optimizer": optimizer,
+                "eval_set_ref": candidate["eval_set_ref"],
+                "candidate_text": candidate["candidate_text"],
+                "judge_score_json": merged_score,
+                "status": "candidate",
+                "approval_request_id": approval["approval_id"],
+            },
+        )
+
+    def activate_prompt_lab_candidate(
+        self,
+        lab_run_id: str,
+        *,
+        approval_id: str | None = None,
+        confirmation_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Gate prompt activation changes; Phase 11 never activates candidates silently."""
+
+        run = self.repository.get_record("prompt_lab_runs", lab_run_id)
+        if not run:
+            raise KeyError(f"prompt lab run not found: {lab_run_id}")
+        if run.get("status") != "candidate":
+            raise ValueError(f"prompt lab run is not candidate: {run.get('status')}")
+        if approval_id != run.get("approval_request_id"):
+            raise ValueError("prompt_lab activation requires the run approval_request_id")
+        self._consume_approval_gate(
+            approval_id=approval_id,
+            confirmation_text=confirmation_text,
+            approval_type="prompt_lab.activate",
+            required_summary_fragment=str(run.get("target_prompt_key") or ""),
+        )
+        return {
+            "status": "approval_recorded",
+            "lab_run_id": lab_run_id,
+            "activation_changed": False,
+            "reason_codes": ["prompt_lab_activation_not_implemented_in_phase11"],
+            "warnings": [
+                "Phase 11 records the human approval gate only; applying a new prompt activation remains a separate reviewed Prompt Pack workflow."
+            ],
+        }
+
+    def _prompt_text_for_key(self, target_prompt_key: str) -> str:
+        node = self.repository.find_one("prompt_node_versions", {"prompt_key": target_prompt_key, "status": "approved"})
+        if node and str(node.get("prompt_text") or "").strip():
+            return str(node["prompt_text"])
+        legacy = self.repository.find_one("prompt_nodes", {"prompt_key": target_prompt_key, "status": "enabled"})
+        if legacy and str(legacy.get("prompt_text") or "").strip():
+            return str(legacy["prompt_text"])
+        raise KeyError(f"prompt text not found for target_prompt_key={target_prompt_key}; seed prompt pack first")
 
     def _ensure_default_reports_and_notifications(self, seeded: dict[str, int]) -> None:
         if not self.repository.list_records("reports", limit=1)["items"]:

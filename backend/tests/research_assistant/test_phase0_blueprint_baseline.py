@@ -156,7 +156,8 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
         assert '"graph_relation_refs": []' in service_text
     assert not re.search(r"arxiv|scholar|tavily|web_search|paper_search", service_text, re.I)
     assert "generate_reflection_card" in service_text
-    assert not re.search(r"prompt_lab|research_curriculum", service_text, re.I)
+    assert "run_prompt_lab_offline" in service_text
+    assert not re.search(r"research_curriculum", service_text, re.I)
 
 
 def test_phase0_module_registry_registers_all_blueprint_modules_with_owner() -> None:
