@@ -1,0 +1,100 @@
+{
+  "actual": "GOAL: assistant should understand natural language, call tools by semantics, then have the LLM synthesize tool results into a human-friendly answer that actually addresses the question. ZERO hardcoded answer templates (otherwise every question type needs its own template). Jarvis-style. PROBLEM: the result->reply layer is ~800 lines of hardcoded per-domain Python renderers in backend/services/research_assistant/service.py:4263-5060. _compose_assistant_reply (4263) is an if/elif cascade that, when a business response_mode fires, returns a template and DISCARDS the LLM's own text (the 'if text: return text' branch at 4308 is only reached for non-business turns). Renderers (each ignores user_message): _render_mcp_execution_reply(4325), _render_semantic_clarification_reply(4337), _render_generic_business_item(4390), _render_stock_analysis_evidence_card_reply(4469), _render_generic_mcp_business_reply(4559), _render_local_data_daily_status_reply(4585), _render_qe_run_leaderboard_reply(4670), _render_qe_experiment_status_reply(4719), _render_compact_business_item(4779), _render_qe_warehouse_business_reply(4818), _render_mcp_safe_preflight_reply(4910), _render_qe_draft_safe_reply(4939), _render_react_execution_fallback_reply(4965), _render_mcp_route_reply(4995), _render_mcp_tool_catalog_reply(5015); plus intent-level fallback_reply (runtime_config.py:127) and frontend ui-copy.ts welcome strings. CONCRETE FAILURE: user asked 'which QE experiments are still running'; _render_qe_experiment_status_reply(execution, summary) has NO user_message param, so it dumped status_counts (completed=18, created=2) + all rows instead of answering 'none are running'. CONTRIBUTING: semantic_tool_planner tool catalog (_compact_tool_catalog) lacks tool parameter schemas so the planner cannot build filter args; planner prompt tool_args hint omits status/state; underlying qe_experiment_list MCP tool has no status filter param, so filtering MUST happen at result-synthesis time. evidence guard (react_grounding.py:295) checks source/as_of presence, not whether the answer is on-topic. DIRECTION (analysis only, design in worktree): introduce an LLM answer-synthesis stage that takes (user_message + tool_results + evidence_refs) and produces the human answer; must preserve evidence contract (inline source/as_of, no XX/X% placeholders, honest empty/none answers, status-semantics like created vs running), keep approval/risk gates and clarification path, and progressively retire the per-domain templates. SCOPE: G1 synthesis layer (replace renderers), G2 pass tool param schemas + status filter to planner, G3 result-side filtering/negative answers. CONSTRAINTS: keep anti-hallucination, keep write/approval gating, no service start, fix in worktree, not root.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-403",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T09:02:01.650047Z",
+  "description": "GOAL: assistant should understand natural language, call tools by semantics, then have the LLM synthesize tool results into a human-friendly answer that actually addresses the question. ZERO hardcoded answer templates (otherwise every question type needs its own template). Jarvis-style. PROBLEM: the result->reply layer is ~800 lines of hardcoded per-domain Python renderers in backend/services/research_assistant/service.py:4263-5060. _compose_assistant_reply (4263) is an if/elif cascade that, when a business response_mode fires, returns a template and DISCARDS the LLM's own text (the 'if text: return text' branch at 4308 is only reached for non-business turns). Renderers (each ignores user_message): _render_mcp_execution_reply(4325), _render_semantic_clarification_reply(4337), _render_generic_business_item(4390), _render_stock_analysis_evidence_card_reply(4469), _render_generic_mcp_business_reply(4559), _render_local_data_daily_status_reply(4585), _render_qe_run_leaderboard_reply(4670), _render_qe_experiment_status_reply(4719), _render_compact_business_item(4779), _render_qe_warehouse_business_reply(4818), _render_mcp_safe_preflight_reply(4910), _render_qe_draft_safe_reply(4939), _render_react_execution_fallback_reply(4965), _render_mcp_route_reply(4995), _render_mcp_tool_catalog_reply(5015); plus intent-level fallback_reply (runtime_config.py:127) and frontend ui-copy.ts welcome strings. CONCRETE FAILURE: user asked 'which QE experiments are still running'; _render_qe_experiment_status_reply(execution, summary) has NO user_message param, so it dumped status_counts (completed=18, created=2) + all rows instead of answering 'none are running'. CONTRIBUTING: semantic_tool_planner tool catalog (_compact_tool_catalog) lacks tool parameter schemas so the planner cannot build filter args; planner prompt tool_args hint omits status/state; underlying qe_experiment_list MCP tool has no status filter param, so filtering MUST happen at result-synthesis time. evidence guard (react_grounding.py:295) checks source/as_of presence, not whether the answer is on-topic. DIRECTION (analysis only, design in worktree): introduce an LLM answer-synthesis stage that takes (user_message + tool_results + evidence_refs) and produces the human answer; must preserve evidence contract (inline source/as_of, no XX/X% placeholders, honest empty/none answers, status-semantics like created vs running), keep approval/risk gates and clarification path, and progressively retire the per-domain templates. SCOPE: G1 synthesis layer (replace renderers), G2 pass tool param schemas + status filter to planner, G3 result-side filtering/negative answers. CONSTRAINTS: keep anti-hallucination, keep write/approval gating, no service start, fix in worktree, not root.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-cea416df2715",
+      "timestamp": "2026-06-17T09:02:01.650043Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-17T09:02:01.650047Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1208,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1208",
+  "last_seen_at": "2026-06-17T09:02:01.650047Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA reply synthesis: replace all hardcoded per-domain answer templates with LLM semantic synthesis (Jarvis-style)",
+  "trigger_condition": {
+    "fingerprint": "cea416df27158c6a00c3ee0b",
+    "source_event_id": "FE-20260617-cea416df2715"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/services/research_assistant/service.py:4263-5060",
+    "ui_routes": [
+      "/services/research_assistant/service.py:4263-5060"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
