@@ -2594,7 +2594,11 @@ def test_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
     assert submitted.results[0].status == "RECONCILIATION_WARNING"
     assert submitted.results[0].run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert submitted.results[0].run.run_payload_json["last_stage"] == "FAILED_RETRYABLE"
-    assert submitted.results[0].run.run_payload_json["reconcile_after_submit"]["issues"][0]["issue_type"] == "POSITION_MISMATCH"
+    reconciliation = submitted.results[0].run.run_payload_json["reconcile_after_submit"]
+    assert reconciliation["position_authority"] == "broker_positions"
+    assert reconciliation["issues"][0]["issue_type"] == "UNBACKED_STRATEGY_POSITION"
+    assert reconciliation["strategy_lot_quantities"]["SchedulerQMT"]["000003.SZ"] == 1
+    assert reconciliation["raw_strategy_lot_quantities"]["SchedulerQMT"]["000003.SZ"] == 77
 
 
 def test_scheduler_broker_backend_filter_limits_tick_scope() -> None:
@@ -3253,6 +3257,68 @@ def test_production_context_provider_caps_miniqmt_lots_to_broker_quantity_and_ca
     assert diagnostics["capped_position_count"] == 1
     assert diagnostics["capped_positions"][0]["reconciled_quantity"] == 500
     assert diagnostics["capped_positions"][0]["reconciled_available_quantity"] == 300
+
+
+def test_production_context_provider_projects_miniqmt_strategy_slot_from_account_broker_authority():
+    """One slot's local lots cannot consume another slot's broker-backed attribution."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    for strategy_id, strategy_name, quantity in (
+        ("strat1", "StrategyA", 7600),
+        ("strat_b", "StrategyB", 6600),
+    ):
+        qmt_repo.create_virtual_account(
+            VirtualAccount(
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                display_name=strategy_name,
+                account_id="QMT_SIM_ACCOUNT",
+                mode="SIM",
+                initial_cash=Decimal("1000000"),
+                cash=Decimal("900000"),
+                status=VirtualAccountStatus.ENABLED,
+            )
+        )
+        qmt_repo.create_position_lot(
+            PositionLotRecord(
+                lot_id=f"lot_{strategy_id}",
+                strategy_id=strategy_id,
+                symbol="001358.SZ",
+                open_trade_id=f"trade_{strategy_id}",
+                open_date=date(2026, 5, 20),
+                quantity=quantity,
+                available_quantity=quantity,
+                remaining_quantity=quantity,
+                avg_cost=Decimal("29.88"),
+                cost_amount=Decimal(quantity) * Decimal("29.88"),
+                account_id="QMT_SIM_ACCOUNT",
+            )
+        )
+    broker = FakeManagedOrderBroker(positions=[{"stock_code": "001358.SZ", "quantity": 13200, "can_sell": 13200}])
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 30.0 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+
+    assert ctx.current_positions["001358.SZ"].quantity == 7100
+    diagnostics = ctx.context_diagnostics["miniqmt_broker_position_reconciliation"]
+    assert diagnostics["position_authority"] == "broker_positions"
+    assert diagnostics["account_strategy_count"] == 2
+    assert diagnostics["capped_position_count"] == 1
+    assert diagnostics["projection_adjustments"][0]["issue_type"] == "UNBACKED_STRATEGY_POSITION"
+    assert diagnostics["projection_adjustments"][0]["projected_strategy_quantities"] == {
+        "strat1": 7100,
+        "strat_b": 6100,
+    }
 
 
 def test_production_context_provider_miniqmt_preview_checks_broker_can_sell_without_submit():

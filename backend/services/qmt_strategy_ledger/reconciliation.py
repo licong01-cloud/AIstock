@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
@@ -20,6 +21,9 @@ class ReconciliationReport:
     unattributed_orders: int
     unattributed_trades: int
     overlap_symbols: tuple[str, ...] = field(default_factory=tuple)
+    position_authority: str = "strategy_lot_quantities"
+    raw_strategy_lot_quantities: dict[str, dict[str, int]] = field(default_factory=dict)
+    position_authority_adjustments: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +53,9 @@ class ReconciliationReport:
             "unattributed_orders": self.unattributed_orders,
             "unattributed_trades": self.unattributed_trades,
             "overlap_symbols": list(self.overlap_symbols),
+            "position_authority": self.position_authority,
+            "raw_strategy_lot_quantities": self.raw_strategy_lot_quantities,
+            "position_authority_adjustments": list(self.position_authority_adjustments),
         }
 
     def strategy_scope(self, strategy_id: str | None = None, strategy_name: str | None = None) -> dict[str, Any]:
@@ -100,6 +107,21 @@ class ReconciliationReport:
             "position_count": len(scoped_quantities),
             "symbols": sorted(scoped_quantities),
             "strategy_lot_quantities": scoped_quantities,
+            "position_authority": self.position_authority,
+            "raw_strategy_lot_quantities": dict(
+                self.raw_strategy_lot_quantities.get(scoped_strategy_name, {})
+            )
+            if scoped_strategy_name
+            else {},
+            "position_authority_adjustments": [
+                adjustment
+                for adjustment in self.position_authority_adjustments
+                if _authority_adjustment_belongs_to_strategy(
+                    adjustment,
+                    scoped_strategy_name=scoped_strategy_name,
+                    scoped_strategy_id=scoped_strategy_id,
+                )
+            ],
         }
 
 
@@ -114,6 +136,7 @@ class QmtStrategyLedgerReconciliationService:
         trade_date: date,
         broker_positions: list[dict[str, Any]] | tuple[dict[str, Any], ...],
         sync_summary: SyncSummary | None = None,
+        broker_authoritative: bool = False,
     ) -> ReconciliationReport:
         run = ReconciliationRunRecord(
             run_id=new_id("qmtrec"),
@@ -139,6 +162,17 @@ class QmtStrategyLedgerReconciliationService:
             strategy_lot_quantities[account.strategy_name] = dict(sorted(by_symbol.items()))
 
         broker_quantities = _broker_quantities(broker_positions)
+        raw_strategy_lot_quantities = {
+            strategy_name: dict(quantities) for strategy_name, quantities in strategy_lot_quantities.items()
+        }
+        position_authority_adjustments: tuple[dict[str, Any], ...] = ()
+        if broker_authoritative:
+            projection = broker_authoritative_strategy_projection(
+                strategy_lot_quantities=strategy_lot_quantities,
+                broker_quantities=broker_quantities,
+            )
+            strategy_lot_quantities = projection.projected_quantities
+            position_authority_adjustments = projection.adjustments
         strategy_totals = _strategy_totals(strategy_lot_quantities)
         overlap_symbols = tuple(
             sorted(
@@ -149,20 +183,39 @@ class QmtStrategyLedgerReconciliationService:
         )
 
         issues: list[ReconciliationIssueRecord] = []
-        for symbol in sorted(set(strategy_totals) | set(broker_quantities)):
-            strategy_qty = strategy_totals.get(symbol, 0)
-            broker_qty = broker_quantities.get(symbol, 0)
-            if strategy_qty != broker_qty:
+        if broker_authoritative:
+            for adjustment in position_authority_adjustments:
+                issue_type = str(adjustment.get("issue_type") or "")
+                if issue_type not in {"UNBACKED_STRATEGY_POSITION", "UNATTRIBUTED_BROKER_POSITION"}:
+                    continue
                 issues.append(
                     self._append_issue(
                         run_id=run.run_id,
-                        issue_type="POSITION_MISMATCH",
-                        severity="ERROR",
-                        message="strategy lot quantity does not match MiniQMT merged position quantity",
-                        symbol=symbol,
-                        context={"strategy_quantity": strategy_qty, "broker_quantity": broker_qty},
+                        issue_type=issue_type,
+                        severity="WARNING",
+                        message=str(
+                            adjustment.get("message")
+                            or "MiniQMT broker-authoritative position projection adjusted local strategy lots"
+                        ),
+                        symbol=str(adjustment.get("symbol") or "") or None,
+                        context=dict(adjustment),
                     )
                 )
+        else:
+            for symbol in sorted(set(strategy_totals) | set(broker_quantities)):
+                strategy_qty = strategy_totals.get(symbol, 0)
+                broker_qty = broker_quantities.get(symbol, 0)
+                if strategy_qty != broker_qty:
+                    issues.append(
+                        self._append_issue(
+                            run_id=run.run_id,
+                            issue_type="POSITION_MISMATCH",
+                            severity="ERROR",
+                            message="strategy lot quantity does not match MiniQMT merged position quantity",
+                            symbol=symbol,
+                            context={"strategy_quantity": strategy_qty, "broker_quantity": broker_qty},
+                        )
+                    )
 
         unattributed_orders = self._repository.list_unattributed_orders(account_id=account_id, trade_date=trade_date)
         unattributed_trades = self._repository.list_unattributed_trades(account_id=account_id, trade_date=trade_date)
@@ -200,6 +253,8 @@ class QmtStrategyLedgerReconciliationService:
             "overlap_symbols": list(overlap_symbols),
             "strategy_ids_by_name": strategy_ids_by_name,
             "strategy_remark_prefixes_by_name": strategy_remark_prefixes_by_name,
+            "position_authority": "broker_positions" if broker_authoritative else "strategy_lot_quantities",
+            "broker_authoritative": broker_authoritative,
         }
         if sync_summary is not None:
             summary_json["sync_summary"] = sync_summary.to_dict()
@@ -220,6 +275,9 @@ class QmtStrategyLedgerReconciliationService:
             unattributed_orders=len(unattributed_orders),
             unattributed_trades=len(unattributed_trades),
             overlap_symbols=overlap_symbols,
+            position_authority="broker_positions" if broker_authoritative else "strategy_lot_quantities",
+            raw_strategy_lot_quantities=raw_strategy_lot_quantities,
+            position_authority_adjustments=position_authority_adjustments,
         )
 
     def _append_issue(
@@ -270,6 +328,166 @@ def _strategy_totals(strategy_lot_quantities: dict[str, dict[str, int]]) -> dict
     return dict(sorted(totals.items()))
 
 
+@dataclass(frozen=True)
+class BrokerAuthoritativeStrategyProjection:
+    projected_quantities: dict[str, dict[str, int]]
+    raw_quantities: dict[str, dict[str, int]]
+    broker_quantities: dict[str, int]
+    adjustments: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+
+
+def broker_authoritative_strategy_projection(
+    *,
+    strategy_lot_quantities: Mapping[str, Mapping[str, int]],
+    broker_quantities: Mapping[str, int],
+) -> BrokerAuthoritativeStrategyProjection:
+    """Project strategy-slot quantities from MiniQMT broker totals.
+
+    Local strategy lots are attribution evidence only. They cannot create
+    strategy-owned holdings beyond the broker account position.
+    """
+
+    strategy_names = [str(name) for name in strategy_lot_quantities]
+    raw: dict[str, dict[str, int]] = {
+        name: {
+            str(symbol): max(int(quantity or 0), 0)
+            for symbol, quantity in dict(strategy_lot_quantities.get(name, {})).items()
+            if max(int(quantity or 0), 0) > 0
+        }
+        for name in strategy_names
+    }
+    broker = {
+        str(symbol): max(int(quantity or 0), 0)
+        for symbol, quantity in dict(broker_quantities).items()
+        if max(int(quantity or 0), 0) > 0
+    }
+    projected: dict[str, dict[str, int]] = {name: {} for name in strategy_names}
+    adjustments: list[dict[str, Any]] = []
+    symbols = sorted(set(broker) | {symbol for quantities in raw.values() for symbol in quantities})
+    for symbol in symbols:
+        raw_by_strategy = {name: int(quantities.get(symbol, 0) or 0) for name, quantities in raw.items()}
+        raw_by_strategy = {name: quantity for name, quantity in raw_by_strategy.items() if quantity > 0}
+        strategy_total = sum(raw_by_strategy.values())
+        broker_qty = int(broker.get(symbol, 0) or 0)
+        if strategy_total <= broker_qty:
+            for name, quantity in raw_by_strategy.items():
+                projected[name][symbol] = quantity
+            if broker_qty > strategy_total:
+                adjustments.append(
+                    {
+                        "issue_type": "UNATTRIBUTED_BROKER_POSITION",
+                        "symbol": symbol,
+                        "message": "MiniQMT broker position quantity has no complete strategy-slot attribution",
+                        "strategy_quantity": strategy_total,
+                        "broker_quantity": broker_qty,
+                        "unattributed_quantity": broker_qty - strategy_total,
+                        "raw_strategy_quantities": dict(sorted(raw_by_strategy.items())),
+                        "projected_strategy_quantities": dict(sorted(raw_by_strategy.items())),
+                        "position_authority": "broker_positions",
+                    }
+                )
+            continue
+
+        allocations = _allocate_broker_quantity(raw_by_strategy, broker_qty)
+        for name, quantity in allocations.items():
+            if quantity > 0:
+                projected[name][symbol] = quantity
+        adjustments.append(
+            {
+                "issue_type": "UNBACKED_STRATEGY_POSITION",
+                "symbol": symbol,
+                "message": "local strategy lots exceed MiniQMT broker position and were capped by broker authority",
+                "strategy_quantity": strategy_total,
+                "broker_quantity": broker_qty,
+                "unbacked_quantity": strategy_total - broker_qty,
+                "raw_strategy_quantities": dict(sorted(raw_by_strategy.items())),
+                "projected_strategy_quantities": dict(sorted(allocations.items())),
+                "affected_strategies": {
+                    name: {
+                        "raw_quantity": quantity,
+                        "projected_quantity": int(allocations.get(name, 0) or 0),
+                        "unbacked_quantity": quantity - int(allocations.get(name, 0) or 0),
+                    }
+                    for name, quantity in sorted(raw_by_strategy.items())
+                    if quantity != int(allocations.get(name, 0) or 0)
+                },
+                "position_authority": "broker_positions",
+            }
+        )
+    return BrokerAuthoritativeStrategyProjection(
+        projected_quantities={name: dict(sorted(quantities.items())) for name, quantities in projected.items()},
+        raw_quantities={name: dict(sorted(quantities.items())) for name, quantities in raw.items()},
+        broker_quantities=dict(sorted(broker.items())),
+        adjustments=tuple(adjustments),
+    )
+
+
+def _allocate_broker_quantity(raw_by_strategy: Mapping[str, int], broker_quantity: int) -> dict[str, int]:
+    if broker_quantity <= 0:
+        return {str(name): 0 for name in raw_by_strategy}
+    total = sum(max(int(quantity or 0), 0) for quantity in raw_by_strategy.values())
+    if total <= 0:
+        return {str(name): 0 for name in raw_by_strategy}
+    if broker_quantity >= total:
+        return {str(name): max(int(quantity or 0), 0) for name, quantity in raw_by_strategy.items()}
+    allocations: dict[str, int] = {}
+    lot_size = 100 if all(max(int(quantity or 0), 0) % 100 == 0 for quantity in raw_by_strategy.values()) else 1
+    if lot_size > 1 and broker_quantity >= lot_size:
+        lot_budget = broker_quantity // lot_size
+        lot_quantities = {str(name): max(int(quantity or 0), 0) // lot_size for name, quantity in raw_by_strategy.items()}
+        lot_allocations = _allocate_broker_lots(lot_quantities, lot_budget)
+        allocations = {name: quantity * lot_size for name, quantity in lot_allocations.items()}
+        remainder = broker_quantity - sum(allocations.values())
+        if remainder <= 0:
+            return allocations
+        for name in sorted(allocations):
+            raw_quantity = max(int(raw_by_strategy.get(name, 0) or 0), 0)
+            if allocations[name] >= raw_quantity:
+                continue
+            add = min(remainder, raw_quantity - allocations[name])
+            allocations[name] += add
+            remainder -= add
+            if remainder <= 0:
+                break
+        return allocations
+    remainders: list[tuple[int, str]] = []
+    allocated = 0
+    for name, quantity in raw_by_strategy.items():
+        numerator = max(int(quantity or 0), 0) * broker_quantity
+        base = numerator // total
+        allocations[str(name)] = base
+        allocated += base
+        remainders.append((numerator % total, str(name)))
+    remaining = broker_quantity - allocated
+    for _, name in sorted(remainders, key=lambda item: (-item[0], item[1]))[:remaining]:
+        allocations[name] = allocations.get(name, 0) + 1
+    return allocations
+
+
+def _allocate_broker_lots(raw_lots_by_strategy: Mapping[str, int], broker_lots: int) -> dict[str, int]:
+    total_lots = sum(max(int(quantity or 0), 0) for quantity in raw_lots_by_strategy.values())
+    if broker_lots <= 0 or total_lots <= 0:
+        return {str(name): 0 for name in raw_lots_by_strategy}
+    allocations: dict[str, int] = {}
+    remainders: list[tuple[int, str]] = []
+    allocated = 0
+    for name, quantity in raw_lots_by_strategy.items():
+        numerator = max(int(quantity or 0), 0) * broker_lots
+        base = min(max(int(quantity or 0), 0), numerator // total_lots)
+        allocations[str(name)] = base
+        allocated += base
+        remainders.append((numerator % total_lots, str(name)))
+    remaining = broker_lots - allocated
+    for _, name in sorted(remainders, key=lambda item: (-item[0], item[1])):
+        if remaining <= 0:
+            break
+        if allocations.get(name, 0) >= max(int(raw_lots_by_strategy.get(name, 0) or 0), 0):
+            continue
+        allocations[name] = allocations.get(name, 0) + 1
+        remaining -= 1
+    return allocations
+
+
 def _resolve_strategy_scope(
     *,
     strategy_lot_quantities: dict[str, dict[str, int]],
@@ -318,7 +536,40 @@ def _issue_belongs_to_strategy_scope(
         if order_remark.startswith(f"{scoped_remark_prefix}-"):
             return True
     if issue.issue_type != "POSITION_MISMATCH" or not issue.symbol:
-        return False
+        return _authority_adjustment_belongs_to_strategy(
+            context,
+            scoped_strategy_name=scoped_strategy_name,
+            scoped_strategy_id=scoped_strategy_id,
+        )
     scoped_quantity = int(scoped_quantities.get(issue.symbol, 0) or 0)
     broker_quantity = int(broker_quantities.get(issue.symbol, 0) or 0)
     return scoped_quantity > broker_quantity
+
+
+def _authority_adjustment_belongs_to_strategy(
+    adjustment: Mapping[str, Any],
+    *,
+    scoped_strategy_name: str | None,
+    scoped_strategy_id: str | None,
+) -> bool:
+    issue_type = str(adjustment.get("issue_type") or "").strip()
+    if issue_type == "UNATTRIBUTED_BROKER_POSITION":
+        return False
+    if issue_type != "UNBACKED_STRATEGY_POSITION":
+        return False
+    affected = adjustment.get("affected_strategies")
+    if isinstance(affected, Mapping):
+        if scoped_strategy_name and scoped_strategy_name in affected:
+            return True
+        if scoped_strategy_id and scoped_strategy_id in affected:
+            return True
+    raw = adjustment.get("raw_strategy_quantities")
+    projected = adjustment.get("projected_strategy_quantities")
+    for values in (raw, projected):
+        if not isinstance(values, Mapping):
+            continue
+        if scoped_strategy_name and scoped_strategy_name in values:
+            return True
+        if scoped_strategy_id and scoped_strategy_id in values:
+            return True
+    return False
