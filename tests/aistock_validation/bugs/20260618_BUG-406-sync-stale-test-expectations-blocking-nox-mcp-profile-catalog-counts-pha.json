@@ -1,0 +1,73 @@
+{
+  "actual": "Pre-existing upstream drift on main (HEAD 7c09d7c9) causes 7 nox failures unrelated to feature code; product is correct, test expectations/anchors are stale. Confirmed failing on clean main with no BUG-403 changes. FAILURES: (1) backend/tests/research_assistant/test_phase0_blueprint_baseline.py::test_blueprint_baseline_defects_match_current_head_lines - blueprint line-number anchors stale after doc edits; refresh anchors to current HEAD lines. (2) backend/tests/mcp/test_profiles_registry_gateway.py: test_research_profile_is_only_current_module, test_unified_profiles_are_available[research_full-expected17], [full-expected18], test_gateway_loads_research_assistant_tools, test_gateway_loads_research_full_profile - expected module/tool sets not synced after A3 (#1188) added stock_analysis + external_research to research/assistant/full profiles. (3) backend/tests/research_assistant/test_mcp_catalog_sync.py::test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers - assert len(qe_tools)==70 but actual 74 after model_registry tools added to aistock-qe; update expected count and any related profile expectations. SCOPE: update test expectations + phase0 anchors only to match current correct manifest/profiles/blueprint; NO product/behavior change. This unblocks nox for BUG-403 and other PRs. CONSTRAINTS: fix in worktree not root; no service start; verify by running the listed tests + nox l0/module_registry green.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260618_BUG-406-sync-stale-test-expectations-blocking-nox-mcp-profile-catalog-counts-pha.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-406",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T17:53:17.553658Z",
+  "description": "Pre-existing upstream drift on main (HEAD 7c09d7c9) causes 7 nox failures unrelated to feature code; product is correct, test expectations/anchors are stale. Confirmed failing on clean main with no BUG-403 changes. FAILURES: (1) backend/tests/research_assistant/test_phase0_blueprint_baseline.py::test_blueprint_baseline_defects_match_current_head_lines - blueprint line-number anchors stale after doc edits; refresh anchors to current HEAD lines. (2) backend/tests/mcp/test_profiles_registry_gateway.py: test_research_profile_is_only_current_module, test_unified_profiles_are_available[research_full-expected17], [full-expected18], test_gateway_loads_research_assistant_tools, test_gateway_loads_research_full_profile - expected module/tool sets not synced after A3 (#1188) added stock_analysis + external_research to research/assistant/full profiles. (3) backend/tests/research_assistant/test_mcp_catalog_sync.py::test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers - assert len(qe_tools)==70 but actual 74 after model_registry tools added to aistock-qe; update expected count and any related profile expectations. SCOPE: update test expectations + phase0 anchors only to match current correct manifest/profiles/blueprint; NO product/behavior change. This unblocks nox for BUG-403 and other PRs. CONSTRAINTS: fix in worktree not root; no service start; verify by running the listed tests + nox l0/module_registry green.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-9eb38c97769e",
+      "timestamp": "2026-06-17T17:53:17.553655Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-17T17:53:17.553658Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1214,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1214",
+  "last_seen_at": "2026-06-17T17:53:17.553658Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Sync stale test expectations blocking nox: MCP profile/catalog counts + phase0 blueprint anchors",
+  "trigger_condition": {
+    "fingerprint": "9eb38c97769ed8c7dccae869",
+    "source_event_id": "FE-20260618-9eb38c97769e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
