@@ -1,14 +1,14 @@
-import pickle
 import os
 import json
+import math as _math
+import re as _re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as _np
 import pandas as pd
 import qlib
 import yaml
-from mlflow.entities import ViewType
-from mlflow.tracking import MlflowClient
 
 _conf_path = Path(__file__).resolve().parent / "conf_baseline.yaml"
 if not _conf_path.exists():
@@ -37,7 +37,8 @@ if _provider_uri and _region:
 else:
     qlib.init()
 
-from qlib.workflow import R
+# qlib.workflow.R must be imported after qlib.init binds the provider.
+from qlib.workflow import R  # noqa: E402
 
 # here is the documents of the https://qlib.readthedocs.io/en/latest/component/recorder.html
 
@@ -384,12 +385,6 @@ else:
 # ============================================================
 # Phase 3: Enhanced Diagnostics Output
 # ============================================================
-import json as _json
-import re as _re
-import math as _math
-
-import numpy as _np
-
 
 def _json_safe(obj):
     """Convert numpy/pandas types to JSON-serializable Python types."""
@@ -1396,7 +1391,6 @@ def _resolve_feature_names(n_features: int) -> list:
 
         dh = (_conf or {}).get("data_handler_config", {})
         dl_cfg = dh.get("data_loader", {})
-        dl_cls = dl_cfg.get("class", "")
         dl_kw = dl_cfg.get("kwargs", {})
 
         real_names = []
@@ -1953,7 +1947,7 @@ if latest_recorder is not None:
         # Write full enhanced file (with time series, for dashboard charts)
         _enhanced_path = Path.cwd() / "qlib_results_enhanced.json"
         _enhanced_path.write_text(
-            _json.dumps(_json_safe(_enhanced), ensure_ascii=False, indent=2),
+            json.dumps(_json_safe(_enhanced), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         print(f"Enhanced results saved to {_enhanced_path}")
@@ -1962,7 +1956,7 @@ if latest_recorder is not None:
         _llm_summary = _generate_llm_summary(_enhanced)
         _llm_path = Path.cwd() / "qlib_results_llm.json"
         _llm_path.write_text(
-            _json.dumps(_json_safe(_llm_summary), ensure_ascii=False, indent=2),
+            json.dumps(_json_safe(_llm_summary), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         print(f"LLM summary saved to {_llm_path}")
