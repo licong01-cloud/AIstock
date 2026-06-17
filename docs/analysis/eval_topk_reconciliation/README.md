@@ -30,7 +30,7 @@ python topk_reconcile.py --pred <pred.pkl> --label <label.pkl> --k 20 50 \
 - 含 null 的项人工判断（数据不足时两边都应 null，不应一边 0 一边 null）。
 
 ## ⚠️ 注意
-1. **within_portfolio_rankic 符号**：后端用 `corr(rank, label)`、rank=1 最优 → **好模型为负**（脚本里 `within_portfolio_rankic_backend_sign` 对齐后端；`within_portfolio_rankic_conventional` 取负、正=好供直觉）。验收时按后端反号口径比对；建议后端后续取负或文档注明（非阻塞 nit，已在评审反馈）。
+1. **within_portfolio_rankic 符号**：PR #1184 后端**已采纳 positive=good**（`read_exp_res.py:1246-1250` 取 `-Spearman(rank,label)`，rank=1 最优）。脚本 `within_portfolio_rankic_conventional` 与后端同号，`--backend-json` 直接 diff（|delta|<1e-4 视为一致）。旧的 `within_portfolio_rankic_backend_sign`（未取负）仅供历史 run 比对。T6 评审 nit 已闭环。
 2. **label 列名**：qlib label.pkl 常为 `LABEL0`，脚本自动识别（label/LABEL0/首列）。
 3. **日对齐**：脚本按 `trade_date`(normalize 到日)合并;若后端用不同 horizon 对齐的 label,需确认 label.pkl 是同一份(read_exp_res 用的就是 recorder 存的 label.pkl,一致)。
 4. **topk_return 定义**：逐日 mean(rank≤k 的 label) → 跨日平均(非池化)；脚本与后端均如此。

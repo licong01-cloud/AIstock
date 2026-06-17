@@ -93,10 +93,11 @@ def reconcile(pred_path: str, label_path: str, ks=(20, 50)) -> dict:
         res[f"topk_dispersion_{k}"] = avg(per_day[k]["disp"])
     if res.get("topk_return_20") is not None and res.get("topk_return_50") is not None:
         res["topk_decay"] = round(res["topk_return_20"] - res["topk_return_50"], 6)
-    # 后端口径: corr(rank, label), rank=1最优 → 好模型为负
-    res["within_portfolio_rankic_backend_sign"] = avg(rankics)
-    # 惯例口径(正=好): 取负, 便于直觉解读 + 与 rank_ic 同号比对
+    # 后端口径(read_exp_res.py:1246-1250, PR #1184): 已取负 -Spearman(rank,label),
+    # rank=1最优 → positive=good。下面 conventional 与后端同号,用于直接 diff。
     res["within_portfolio_rankic_conventional"] = round(-avg(rankics), 6) if rankics else None
+    # 旧的未取负口径(corr(rank,label), 好模型为负), 仅保留供历史 run 比对。
+    res["within_portfolio_rankic_backend_sign"] = avg(rankics)
     return res
 
 
@@ -122,10 +123,14 @@ def main():
             else:
                 d = abs(a - b)
                 print(f"  {key}: indep={a} backend={b} delta={d:.2e} {'⚠️' if d > 1e-4 else 'OK'}")
-        # within_portfolio_rankic: 后端用 corr(rank,label) 反号
-        a = res.get("within_portfolio_rankic_backend_sign")
+        # within_portfolio_rankic: 后端 PR #1184 已 positive=good(-Spearman), 与 conventional 同号 → 直接 diff
+        a = res.get("within_portfolio_rankic_conventional")
         b = be.get("within_portfolio_rankic")
-        print(f"  within_portfolio_rankic(后端反号口径): indep={a} backend={b}")
+        if a is None or b is None:
+            print(f"  within_portfolio_rankic: indep={a} backend={b} (含 null, 人工判断)")
+        else:
+            d = abs(a - b)
+            print(f"  within_portfolio_rankic: indep={a} backend={b} delta={d:.2e} {'⚠️' if d > 1e-4 else 'OK'}")
     return 0
 
 
