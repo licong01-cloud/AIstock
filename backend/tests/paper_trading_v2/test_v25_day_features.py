@@ -151,7 +151,30 @@ def test_db_v25_day_feature_provider_substitutes_nan_like_free_turnover_with_aud
     ]
 
 
-@pytest.mark.parametrize("turnover_rate_f", ["bad", None, ""])
+def test_db_v25_day_feature_provider_substitutes_missing_free_turnover_with_audit() -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=None)
+
+    features = provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+    assert all(math.isfinite(value) for value in features.values)
+    assert features.values[4] == pytest.approx(0.05)
+    assert features.values[5] == pytest.approx(0.05)
+    repairs = [row for row in features.audit or [] if row.get("role") == "field_repair"]
+    assert repairs == [
+        {
+            "role": "field_repair",
+            "dataset": "daily_basic",
+            "trade_date": "2024-01-02",
+            "field": "turnover_rate_f",
+            "source_field": "turnover_rate",
+            "status": "substituted",
+            "reason": "missing_source_value",
+            "source_value": "None",
+        }
+    ]
+
+
+@pytest.mark.parametrize("turnover_rate_f", ["bad", ""])
 def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover(turnover_rate_f: Any) -> None:
     provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=turnover_rate_f)
 

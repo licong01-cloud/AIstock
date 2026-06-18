@@ -1,0 +1,74 @@
+{
+  "actual": "GET /api/v1/simulation-runtime/runs/simrun_02793cc251b81093 after backend restart returns status=FAILED_RETRYABLE, submit_failure.stage=LOCAL_SIM_SUBMIT_FAILED, cause='V25 day_features turnover_rate_f is invalid', symbol=000736.SZ. Direct read-only provider check with .env shows feature_date=2026-06-17, turnover_rate=4.0369, turnover_rate_f=None.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_features.py",
+    "backend/tests/paper_trading_v2/test_v25_day_features.py",
+    "tests/aistock_validation/bugs/20260618_BUG-409-p0-paper-v2-localsim-turnover-rate-f-null-still-blocks-unattended-simula.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-409",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T05:24:59.259545Z",
+  "description": "GET /api/v1/simulation-runtime/runs/simrun_02793cc251b81093 after backend restart returns status=FAILED_RETRYABLE, submit_failure.stage=LOCAL_SIM_SUBMIT_FAILED, cause='V25 day_features turnover_rate_f is invalid', symbol=000736.SZ. Direct read-only provider check with .env shows feature_date=2026-06-17, turnover_rate=4.0369, turnover_rate_f=None.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-6db24e45e560",
+      "timestamp": "2026-06-18T05:24:59.259541Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-18 13:13-13:36 +08 post-restart validation: backend health ok, QMT connected, LocalSim simrun_02793cc251b81093 remains FAILED_RETRYABLE with LOCAL_SIM_SUBMIT_FAILED; DB row market.daily_basic 000736.SZ 2026-06-17 has turnover_rate_f=None and turnover_rate=4.0369."
+  ],
+  "expected": "LocalSim V25 day_features should handle authoritative missing free-float turnover values consistently when same-row turnover_rate is finite and auditable, without zero/default fallback; malformed non-numeric values must still fail fast. The scheduler should be able to recover/retry the current-day LocalSim run after the fix.",
+  "first_seen_at": "2026-06-18T05:24:59.259545Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1228,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1228",
+  "last_seen_at": "2026-06-18T05:24:59.259545Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_02793cc251b81093; read-only DbV25DayFeatureProvider.load_day_features(symbol='000736.SZ', trade_date=date(2026,6,18)) with .env DB config",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][LocalSim] turnover_rate_f NULL still blocks unattended simulation after BUG-408",
+  "trigger_condition": {
+    "fingerprint": "6db24e45e56002fa6e724162",
+    "source_event_id": "FE-20260618-6db24e45e560"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

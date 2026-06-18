@@ -338,12 +338,21 @@ class DbV25DayFeatureProvider:
         try:
             parsed = float(value)
         except (TypeError, ValueError) as exc:
+            if value is None:
+                return cls._substitute_free_float_turnover_rate(
+                    value,
+                    turnover_rate_raw=turnover_rate_raw,
+                    trade_date=trade_date,
+                    audit=audit,
+                    reason="missing_source_value",
+                )
             if cls._is_nan_like_value(value):
                 return cls._substitute_free_float_turnover_rate(
                     value,
                     turnover_rate_raw=turnover_rate_raw,
                     trade_date=trade_date,
                     audit=audit,
+                    reason="non_finite_source_value",
                 )
             raise DataUnavailableError(
                 "V25 day_features turnover_rate_f is invalid",
@@ -357,6 +366,7 @@ class DbV25DayFeatureProvider:
             turnover_rate_raw=turnover_rate_raw,
             trade_date=trade_date,
             audit=audit,
+            reason="non_finite_source_value",
         )
 
     @staticmethod
@@ -374,10 +384,11 @@ class DbV25DayFeatureProvider:
         turnover_rate_raw: float,
         trade_date: date,
         audit: list[dict[str, Any]],
+        reason: str,
     ) -> float:
-        # Some daily_basic rows contain PostgreSQL numeric NaN for turnover_rate_f
-        # while same-row turnover_rate is valid. Keep the vector finite and audited
-        # without introducing neutral/zero defaults or reading future intraday data.
+        # Some daily_basic rows contain missing/non-finite turnover_rate_f while
+        # same-row turnover_rate is valid. Keep the vector finite and audited
+        # without introducing neutral/zero defaults or future intraday data.
         audit.append(
             {
                 "role": "field_repair",
@@ -386,7 +397,7 @@ class DbV25DayFeatureProvider:
                 "field": "turnover_rate_f",
                 "source_field": "turnover_rate",
                 "status": "substituted",
-                "reason": "non_finite_source_value",
+                "reason": reason,
                 "source_value": str(value),
             }
         )
