@@ -142,6 +142,43 @@ const selectStyle: React.CSSProperties = {
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const BASE = `${API}/quantevolver/evolution`;
+const OFFICIAL_CACHE_DEFAULT_START = "2018-08-01";
+const OFFICIAL_CACHE_DEFAULT_END = "2026-04-30";
+
+function isIsoDate(value?: string | null): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function splitDateRangeEnd(value?: string | null): string | null {
+  if (!value) return null;
+  const end = value.split("~").pop()?.trim();
+  return isIsoDate(end) ? end : null;
+}
+
+function resolveOfficialDisplayWindow(
+  officialCacheWindow: OfficialCacheWindow | null,
+  singleCache: OfficialCacheStatus | null,
+): { start: string; end: string } {
+  const startCandidates = [
+    OFFICIAL_CACHE_DEFAULT_START,
+    officialCacheWindow?.start,
+    singleCache?.window_train_start,
+  ].filter(isIsoDate);
+  const endCandidates = [
+    OFFICIAL_CACHE_DEFAULT_END,
+    officialCacheWindow?.end,
+    singleCache?.window_backtest_end,
+    singleCache?.as_of_date,
+    splitDateRangeEnd(singleCache?.date_range),
+  ].filter(isIsoDate);
+
+  const sortedEndCandidates = endCandidates.sort();
+
+  return {
+    start: startCandidates.sort()[0] || OFFICIAL_CACHE_DEFAULT_START,
+    end: sortedEndCandidates[sortedEndCandidates.length - 1] || OFFICIAL_CACHE_DEFAULT_END,
+  };
+}
 
 function formatElapsed(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}s`;
@@ -274,6 +311,7 @@ export default function ComputePanel({
   };
 
   const isComputing = computing || progress?.status === "computing";
+  const officialDisplayWindow = resolveOfficialDisplayWindow(officialCacheWindow, singleCache);
 
 
   return (
@@ -319,7 +357,7 @@ export default function ComputePanel({
               whiteSpace: "nowrap",
             }}
           >
-            官方窗口 {officialCacheWindow?.start || singleCache?.window_train_start || "2018-08-01"} ~ {officialCacheWindow?.end || singleCache?.window_backtest_end || singleCache?.as_of_date || "2026-04-30"}
+            官方窗口 {officialDisplayWindow.start} ~ {officialDisplayWindow.end}
           </div>
           <select
             value={scope}
@@ -482,7 +520,7 @@ export default function ComputePanel({
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
             因子统计（官方离线缓存口径）
             <span style={{ marginLeft: 8, opacity: 0.7 }}>
-              独立指标 / 相关性 / QE 回测共用 {officialCacheWindow?.start || singleCache?.window_train_start || "2018-08-01"} ~ {officialCacheWindow?.end || singleCache?.window_backtest_end || singleCache?.as_of_date || "2026-04-30"}
+              独立指标 / 相关性 / QE 回测共用 {officialDisplayWindow.start} ~ {officialDisplayWindow.end}
             </span>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -531,7 +569,7 @@ export default function ComputePanel({
         {singleCache && (
           <>
             <StatItem label="缓存来源" value="官方离线缓存" />
-            <StatItem label="共用时间段" value={`${officialCacheWindow?.start || singleCache.window_train_start || "2018-08-01"} ~ ${officialCacheWindow?.end || singleCache.window_backtest_end || singleCache.as_of_date || "2026-04-30"}`} />
+            <StatItem label="共用时间段" value={`${officialDisplayWindow.start} ~ ${officialDisplayWindow.end}`} />
             <StatItem label="因子缓存文件" value={`${singleCache.cached_count} 个`} />
             {singleCache.disk_factor_count != null && (
               <StatItem label="磁盘/Meta" value={`${singleCache.disk_factor_count} / ${singleCache.meta_factor_count ?? "-"}`} />
