@@ -11,6 +11,7 @@ from backend.routers import analysis as analysis_router
 from backend.services.research_assistant.external_research import ExtractedEvidence, ExternalEvidenceItem
 from backend.services.research_assistant.mcp_catalog_sync import default_mcp_tools, gateway_catalog, workflow_capabilities
 from backend.services.research_assistant.models import ChatTurnRequest
+from backend.services.research_assistant.react_grounding import McpToolCall
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService
 
@@ -112,6 +113,34 @@ class _StockEvidenceCardLlm:
 
     def complete(self, **kwargs: Any) -> LlmCallResult:
         self.complete_calls.append(kwargs)
+        messages = kwargs.get("messages") if isinstance(kwargs.get("messages"), list) else []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            try:
+                payload = json.loads(str(message.get("content") or ""))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or payload.get("type") != "TOOL_RESULT":
+                continue
+            tool_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+            if tool_payload.get("response_mode") == "stock_analysis_evidence_card":
+                symbol = str(tool_payload.get("symbol") or "600584")
+                source = str(tool_payload.get("source") or "stock_analysis_read_adapter")
+                as_of = str(tool_payload.get("as_of") or "2026-06-16")
+                sections = tool_payload.get("sections") if isinstance(tool_payload.get("sections"), list) else []
+                datasets = ", ".join(str(section.get("dataset")) for section in sections if isinstance(section, dict))
+                return LlmCallResult(
+                    content=(
+                        f"{symbol} 全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
+                        f"未来趋势只能基于已返回证据谨慎判断；已覆盖 {datasets}。"
+                        f"来源 {source}，截至 {as_of}。"
+                    ),
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
         return LlmCallResult(
             content="Understood as an individual-stock evidence-card request.",
             provider="fake",
@@ -119,6 +148,41 @@ class _StockEvidenceCardLlm:
             duration_ms=1,
             usage={},
         )
+
+
+class _NativeStockEvidenceCardLlm(_StockEvidenceCardLlm):
+    def complete(self, **kwargs: Any) -> LlmCallResult:
+        messages = kwargs.get("messages") if isinstance(kwargs.get("messages"), list) else []
+        has_tool_result = any("TOOL_RESULT" in str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        if not has_tool_result:
+            self.complete_calls.append(kwargs)
+            return LlmCallResult(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-stock-analysis",
+                        tool_name="stock_analysis_get_quote",
+                        payload_json={"symbol": "000688", "period": "1y", "limit": 8},
+                        stable_call_id="native_stock_000688",
+                        reason="native_function_call:stock_analysis_get_quote",
+                    )
+                ],
+            )
+        result = super().complete(**kwargs)
+        if "全方位分析" in result.content:
+            return LlmCallResult(
+                content=result.content.replace("600584 全方位分析", "国城矿业（000688）全方位分析", 1).replace("000688 全方位分析", "国城矿业（000688）全方位分析", 1),
+                provider=result.provider,
+                model=result.model,
+                duration_ms=result.duration_ms,
+                usage=result.usage,
+                tool_calls=result.tool_calls,
+            )
+        return result
 
 
 def test_stock_analysis_tools_are_read_only_and_assistant_direct() -> None:
@@ -186,12 +250,14 @@ def test_600584_react_smoke_returns_evidence_card_not_blocker() -> None:
     text = result["assistant_message"]["content_text"]
 
     assert "600584" in text
-    assert "个股证据卡" in text
+    assert "基本情况" in text
+    assert "近期走势" in text
+    assert "未来趋势" in text
     assert "行情" in text
-    assert "财务摘要" in text
-    assert "资金流向" in text
+    assert "财务" in text
+    assert "资金流" in text
     assert "联网基本面" in text
-    assert "external-ref:600584" in text
+    assert "来源 stock_analysis_read_adapter" in text
     assert "阻断卡" not in text
     assert "XX" not in text
     assert "X%" not in text
@@ -204,3 +270,34 @@ def test_600584_react_smoke_returns_evidence_card_not_blocker() -> None:
     assert cards["mcp_summary_result"]["source_refs"]
     assert cards["mcp_summary_result"]["sections"]
     assert fake_llm.plan_calls
+
+
+def test_bug_403_guocheng_mining_agentic_stock_analysis_uses_native_tool_call() -> None:
+    fake_llm = _NativeStockEvidenceCardLlm()
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake_llm)
+    svc.seed_catalogs()
+    svc.stock_analysis_facade_factory = _FakeStockEvidenceService
+    svc.external_research_provider_factory = _FakeExternalResearchProvider
+
+    result = svc.chat_turn(ChatTurnRequest(message="国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
+    text = result["assistant_message"]["content_text"]
+
+    assert "国城矿业" in text
+    assert "000688" in text
+    assert "基本情况" in text
+    assert "近期走势" in text
+    assert "未来趋势" in text
+    assert "行情" in text
+    assert "财务" in text
+    assert "资金流" in text
+    assert "技术" in text
+    assert "联网基本面" in text
+    assert "来源 stock_analysis_read_adapter" in text
+    assert "澄清" not in text
+    assert "个股证据卡" not in text
+    assert "source=" not in text
+    assert "as_of=" not in text
+    assert result["cards"]["mcp_summary_result"]["symbol"] == "000688"
+    datasets = {section["dataset"] for section in result["cards"]["mcp_summary_result"]["sections"]}
+    assert {"quote", "financials", "fund_flow", "technicals", "fundamentals"} <= datasets
+    assert result["cards"]["react_grounding"]["tool_call_count"] >= 1

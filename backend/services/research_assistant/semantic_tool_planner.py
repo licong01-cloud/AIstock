@@ -133,6 +133,7 @@ def _compact_tool_catalog(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for tool in tools:
         if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
             continue
+        input_schema = tool.get("input_schema_json") if isinstance(tool.get("input_schema_json"), dict) else {"type": "object"}
         compact.append(
             {
                 "server_key": str(tool.get("server_key") or ""),
@@ -143,6 +144,7 @@ def _compact_tool_catalog(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "risk_level": str(tool.get("risk_level") or ""),
                 "side_effect_level": str(tool.get("side_effect_level") or ""),
                 "requires_approval": bool(tool.get("requires_approval")),
+                "input_schema": input_schema,
             }
         )
     return [item for item in compact if item["server_key"] and item["tool_name"]]
@@ -211,7 +213,7 @@ class SemanticToolPlanner:
                 "domain": "domain string such as qe_warehouse or local_data",
                 "server_key": "audited MCP server key when status is tool_plan",
                 "tool_name": "audited MCP tool name when status is tool_plan",
-                "tool_args": "object with safe read-only filters such as symbol, analysis_date, period, limit, or order_by",
+                "tool_args": "object with safe read-only filters from input_schema, such as status, state, symbol, ts_code, analysis_date, trade_date, period, limit, offset, or order_by",
                 "confidence": "0.0-1.0",
                 "reason": "short business reason",
                 "clarification_questions": "array of concise questions when status is clarification",
@@ -221,6 +223,7 @@ class SemanticToolPlanner:
                 "Never choose confirmed/write tools for an unclear or read-only question.",
                 "When the user asks for a comparison but the metric is not explicit enough to select a tool argument safely, return clarification.",
                 "Prefer a read-only summary or analytics tool for factual questions that can be answered from existing warehouse/catalog data.",
+                "When the user asks for running/completed/created/failed records, include status/state filters only when the selected tool schema supports them; otherwise rely on final synthesis to filter the returned evidence.",
                 "For individual-stock evidence-card requests, include the stock code or symbol in tool_args.symbol and prefer a read-only stock_analysis tool.",
                 "Keep the final response as a single JSON object and no prose.",
             ],

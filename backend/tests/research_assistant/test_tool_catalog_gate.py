@@ -13,7 +13,7 @@ from backend.services.research_assistant.react_grounding import (
     run_react_grounding_loop,
 )
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService
+from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService, _extract_litellm_tool_calls
 
 
 class RecordingProvider:
@@ -66,6 +66,30 @@ def test_catalog_outside_tool_is_rejected_and_not_executed() -> None:
     assert result.tool_results[0].executed is False
 
 
+def test_native_function_tool_calls_are_parsed_into_mcp_calls() -> None:
+    class NativeMessage:
+        tool_calls = [
+            {
+                "id": "native-call-1",
+                "function": {
+                    "name": "stock_analysis_get_quote",
+                    "arguments": "{\"symbol\":\"600584\",\"analysis_date\":\"2026-06-16\"}",
+                },
+            }
+        ]
+
+    calls = _extract_litellm_tool_calls(
+        NativeMessage(),
+        {"stock_analysis_get_quote": {"server_key": "aistock-stock-analysis", "tool_name": "stock_analysis_get_quote"}},
+    )
+
+    assert len(calls) == 1
+    assert calls[0].server_key == "aistock-stock-analysis"
+    assert calls[0].tool_name == "stock_analysis_get_quote"
+    assert calls[0].payload_json == {"symbol": "600584", "analysis_date": "2026-06-16"}
+    assert calls[0].reason == "native_function_call:stock_analysis_get_quote"
+
+
 class HighRiskToolLlm:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -100,21 +124,24 @@ class HighRiskToolLlm:
         )
 
 
-def test_high_risk_tool_creates_preflight_card_without_execute(monkeypatch: Any) -> None:
-    fake = HighRiskToolLlm()
-    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
-    svc.seed_catalogs()
-    execute_calls: list[tuple[Any, Any]] = []
+class GuardedResearchAssistantService(ResearchAssistantService):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.execute_calls: list[tuple[Any, Any]] = []
 
-    def forbidden_execute(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        execute_calls.append((args, kwargs))
+    def execute_action_proposal(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self.execute_calls.append((args, kwargs))
         raise AssertionError("execute_action_proposal must not run inside ReAct for high-risk tools")
 
-    monkeypatch.setattr(svc, "execute_action_proposal", forbidden_execute)
+
+def test_high_risk_tool_creates_preflight_card_without_execute() -> None:
+    fake = HighRiskToolLlm()
+    svc = GuardedResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
+    svc.seed_catalogs()
 
     result = svc.chat_turn(ChatTurnRequest(message="Sync BUG-120 GitHub issue status"))
 
-    assert execute_calls == []
+    assert svc.execute_calls == []
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is False
     assert execution["status"] in {"approval_required", "preflight_required"}

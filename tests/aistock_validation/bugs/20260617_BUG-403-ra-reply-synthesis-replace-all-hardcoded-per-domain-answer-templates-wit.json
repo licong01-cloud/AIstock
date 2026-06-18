@@ -2,7 +2,21 @@
   "actual": "GOAL: assistant should understand natural language, call tools by semantics, then have the LLM synthesize tool results into a human-friendly answer that actually addresses the question. ZERO hardcoded answer templates (otherwise every question type needs its own template). Jarvis-style. PROBLEM: the result->reply layer is ~800 lines of hardcoded per-domain Python renderers in backend/services/research_assistant/service.py:4263-5060. _compose_assistant_reply (4263) is an if/elif cascade that, when a business response_mode fires, returns a template and DISCARDS the LLM's own text (the 'if text: return text' branch at 4308 is only reached for non-business turns). Renderers (each ignores user_message): _render_mcp_execution_reply(4325), _render_semantic_clarification_reply(4337), _render_generic_business_item(4390), _render_stock_analysis_evidence_card_reply(4469), _render_generic_mcp_business_reply(4559), _render_local_data_daily_status_reply(4585), _render_qe_run_leaderboard_reply(4670), _render_qe_experiment_status_reply(4719), _render_compact_business_item(4779), _render_qe_warehouse_business_reply(4818), _render_mcp_safe_preflight_reply(4910), _render_qe_draft_safe_reply(4939), _render_react_execution_fallback_reply(4965), _render_mcp_route_reply(4995), _render_mcp_tool_catalog_reply(5015); plus intent-level fallback_reply (runtime_config.py:127) and frontend ui-copy.ts welcome strings. CONCRETE FAILURE: user asked 'which QE experiments are still running'; _render_qe_experiment_status_reply(execution, summary) has NO user_message param, so it dumped status_counts (completed=18, created=2) + all rows instead of answering 'none are running'. CONTRIBUTING: semantic_tool_planner tool catalog (_compact_tool_catalog) lacks tool parameter schemas so the planner cannot build filter args; planner prompt tool_args hint omits status/state; underlying qe_experiment_list MCP tool has no status filter param, so filtering MUST happen at result-synthesis time. evidence guard (react_grounding.py:295) checks source/as_of presence, not whether the answer is on-topic. DIRECTION (analysis only, design in worktree): introduce an LLM answer-synthesis stage that takes (user_message + tool_results + evidence_refs) and produces the human answer; must preserve evidence contract (inline source/as_of, no XX/X% placeholders, honest empty/none answers, status-semantics like created vs running), keep approval/risk gates and clarification path, and progressively retire the per-domain templates. SCOPE: G1 synthesis layer (replace renderers), G2 pass tool param schemas + status filter to planner, G3 result-side filtering/negative answers. CONSTRAINTS: keep anti-hallucination, keep write/approval gating, no service start, fix in worktree, not root.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/ra_agentic_reply_architecture_design_20260617.md",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/semantic_tool_planner.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "backend/tests/research_assistant/test_evidence_guard.py",
+    "backend/tests/research_assistant/test_tool_catalog_gate.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+    "backend/tests/research_assistant/test_phase0_blueprint_baseline.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-403",
@@ -20,6 +34,74 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260617-cea416df2715",
       "timestamp": "2026-06-17T09:02:01.650043Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "docs/analysis/ra_agentic_reply_architecture_design_20260617.md",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/semantic_tool_planner.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py"
+      ],
+      "note": "BUG-403 P1 implements the approved RA agentic reply architecture: LLM function-calling/tool schema registry, bounded agent loop, grounding guard, and replacement of QE/local_data/stock business answer templates with model synthesis. Scope is limited to Research Assistant backend service/orchestrator/catalog helpers, targeted tests, and the design artifact already present in the task worktree.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-17T09:45:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "docs/analysis/ra_agentic_reply_architecture_design_20260617.md",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/semantic_tool_planner.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py"
+      ],
+      "note": "BUG-403 follow-up for design section 7.7: expand scope to update the Research Assistant phase0 baseline anchors from removed legacy auto-execute needles to the new agent-loop functions.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "docs/analysis/ra_agentic_reply_architecture_design_20260617.md",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/semantic_tool_planner.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py"
+      ],
+      "timestamp": "2026-06-18T03:21:01Z"
     }
   ],
   "evidence_uris": [],
@@ -43,11 +125,12 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P2",
+  "severity": "P1",
   "status": "open",
   "suspected_modules": [
     "research_assistant"
@@ -96,5 +179,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }
