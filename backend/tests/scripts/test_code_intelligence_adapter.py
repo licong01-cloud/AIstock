@@ -279,6 +279,48 @@ def test_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch,
     assert "selected_nodes" not in stdout
 
 
+def test_summary_command_sanitizes_changed_files_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text(
+        "\ufeffChanges:\n"
+        "+++ b/scripts/code_intelligence_adapter.py\n"
+        "scripts/code_intelligence_adapter.py\n"
+        "F:/Dev/AIstock/scripts/nightly_adaptive_scheduler.py\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_build_summary(**kwargs):
+        observed.update(kwargs)
+        return {
+            "status": "ok",
+            "latest_freshness": "fresh",
+            "affected_tests_count": 0,
+            "fallback_used": False,
+            "stale_metadata_warning": False,
+        }
+
+    monkeypatch.setattr(adapter, "build_summary", fake_build_summary)
+
+    result = adapter.main(
+        [
+            "summary",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--changed-files-file",
+            str(changed_file),
+            "--root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out.startswith("PASS code-intelligence-summary ")
+    assert observed["changed_files"] == ["scripts/code_intelligence_adapter.py"]
+
+
 def test_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         adapter,

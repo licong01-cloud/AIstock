@@ -352,22 +352,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
-          $changedFiles = @()
-          try {
-            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $changedFiles = @()
-              $global:LASTEXITCODE = 0
-            }
-          } catch {
-            $changedFiles = @()
-          }
-          New-Item -ItemType File -Force -Path $changedFile | Out-Null
-          if (@($changedFiles).Count -gt 0) {
-            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
-          } else {
-            Clear-Content -Path $changedFile
-          }
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
             --language zh `
             --output "$outDir/ua-configure.stdout.json"
@@ -450,22 +439,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
-          $changedFiles = @()
-          try {
-            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $changedFiles = @()
-              $global:LASTEXITCODE = 0
-            }
-          } catch {
-            $changedFiles = @()
-          }
-          New-Item -ItemType File -Force -Path $changedFile | Out-Null
-          if (@($changedFiles).Count -gt 0) {
-            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
-          } else {
-            Clear-Content -Path $changedFile
-          }
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
             --provider deepseek_api `
             --require-api-key
@@ -773,5 +751,3 @@ jobs:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
-
-
