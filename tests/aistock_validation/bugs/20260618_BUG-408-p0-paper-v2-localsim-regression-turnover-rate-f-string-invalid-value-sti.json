@@ -31,8 +31,8 @@
   "expected": "LocalSim V25 day_features must consistently repair non-finite or DB string NaN turnover_rate_f using finite turnover_rate when authoritative and finite, with audited field_repair evidence and no silent zero/default fallback; malformed non-numeric values must still fail fast with actionable context. BUG-399 regression coverage must include string/Decimal NaN forms observed from DB/psycopg runtime.",
   "first_seen_at": "2026-06-18T03:19:50.964198Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dd786bfc70366fde7ee0afe248e0e4c000ea57d6",
+  "fixed_at": "2026-06-18T05:00:45.247421Z",
   "github_issue_number": 1223,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1223",
   "last_seen_at": "2026-06-18T03:19:50.964198Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1224",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -61,6 +62,11 @@
     "fingerprint": "bdcf28e4047c1f0d2ce27cb3",
     "source_event_id": "FE-20260618-bdcf28e4047c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 11 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 8 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 630 passed, 1 skipped, 2 xfailed; paper_v2_data_quality PASS with existing nonblocking legacy ledger WARN; data_quality_deep 10 passed, 21 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
