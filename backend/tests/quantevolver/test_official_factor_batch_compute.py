@@ -7,6 +7,7 @@ import time
 import pandas as pd
 
 from backend.services.quantevolver.backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
+from backend.services.quantevolver import offline_code_text_factor_executor as executor_mod
 from backend.services.quantevolver.offline_code_text_factor_executor import FactorExecutionResult
 from backend.services.quantevolver.offline_code_text_factor_executor import OfflineCodeTextFactorExecutor
 from backend.services.quantevolver.official_factor_batch_compute_service import OfficialFactorBatchComputeService
@@ -60,6 +61,78 @@ result = base[['close']].rename(columns={'close': 'value'})
     assert result.success is True
     assert list(result.dataframe.columns) == ["value"]
     assert result.dataframe.index.names[:2] == ["datetime", "instrument"]
+
+
+def test_offline_code_text_executor_captures_result_h5_without_pytables(monkeypatch, tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    df = _base_df()
+    df.to_hdf(data_dir / "daily_pv.h5", key="data")
+    cache = BacktestBaseDataMemoryCache.load_once(data_dir, "2018-08-01", "2018-08-02")
+
+    def _fail_to_hdf(*args, **kwargs):
+        raise AssertionError("result.h5 writes must be captured in memory")
+
+    def _fail_read_hdf(*args, **kwargs):
+        raise AssertionError("captured result.h5 reads must not call PyTables")
+
+    monkeypatch.setattr(executor_mod, "_ORIGINAL_DF_TO_HDF", _fail_to_hdf)
+    monkeypatch.setattr(pd, "read_hdf", _fail_read_hdf)
+    code_text = """
+import pandas as pd
+base = pd.read_hdf('daily_pv.h5')
+out = base[['close']].rename(columns={'close': 'value'})
+out.to_hdf('result.h5', key='data', mode='w')
+result = pd.read_hdf('result.h5')
+"""
+
+    result = OfflineCodeTextFactorExecutor(cache).compute_factor("factor_a", code_text)
+
+    assert result.success is True
+    assert list(result.dataframe.columns) == ["value"]
+    assert result.dataframe["value"].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_offline_code_text_executor_thread_local_result_h5_capture(monkeypatch, tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    df = _base_df()
+    df.to_hdf(data_dir / "daily_pv.h5", key="data")
+    cache = BacktestBaseDataMemoryCache.load_once(data_dir, "2018-08-01", "2018-08-02")
+
+    def _fail_to_hdf(*args, **kwargs):
+        raise AssertionError("threaded result.h5 writes must be captured in memory")
+
+    monkeypatch.setattr(executor_mod, "_ORIGINAL_DF_TO_HDF", _fail_to_hdf)
+    executor = OfflineCodeTextFactorExecutor(cache)
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    batch = [
+        {
+            "factor_name": "factor_a",
+            "code_text": """
+import pandas as pd
+base = pd.read_hdf('daily_pv.h5')
+out = base[['close']].rename(columns={'close': 'value'}) * 10
+out.to_hdf('result.h5', key='data', mode='w')
+""",
+        },
+        {
+            "factor_name": "factor_b",
+            "code_text": """
+import pandas as pd
+base = pd.read_hdf('daily_pv.h5')
+out = base[['close']].rename(columns={'close': 'value'}) * 100
+out.to_hdf('result.h5', key='data', mode='w')
+""",
+        },
+    ]
+
+    result = service._compute_batch_frames(executor, batch, workers=2)
+
+    assert result["factor_a"].success is True
+    assert result["factor_b"].success is True
+    assert result["factor_a"].dataframe["value"].tolist() == [10.0, 20.0, 30.0, 40.0]
+    assert result["factor_b"].dataframe["value"].tolist() == [100.0, 200.0, 300.0, 400.0]
 
 
 def test_batch_compute_uses_worker_threads_for_factor_values(tmp_path):

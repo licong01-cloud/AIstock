@@ -1,0 +1,74 @@
+{
+  "actual": "Threaded OfflineCodeTextFactorExecutor can still invoke pandas/PyTables result.h5 write/read inside worker threads; full compute crashed with Segmentation fault before Python exception handling.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/offline_code_text_factor_executor.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "tests/aistock_validation/bugs/20260619_BUG-421-official-factor-full-compute-segfaults-on-threaded-result-h5-capture.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-421",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T20:19:48.707189Z",
+  "description": "Threaded OfflineCodeTextFactorExecutor can still invoke pandas/PyTables result.h5 write/read inside worker threads; full compute crashed with Segmentation fault before Python exception handling.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-f5ec77215672",
+      "timestamp": "2026-06-18T20:19:48.707185Z"
+    }
+  ],
+  "evidence_uris": [
+    "debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug420.log"
+  ],
+  "expected": "Official full factor compute must complete all enabled factors in WSL without process-level HDF5/PyTables segfaults; factor result output should be captured safely while preserving original factor code semantics.",
+  "first_seen_at": "2026-06-18T20:19:48.707189Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1280,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1280",
+  "last_seen_at": "2026-06-18T20:19:48.707189Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "wsl ./debug_tools/qe/20260619_factor_cache_full_chain_validation/run_official_full_compute.sh with workers=4; see official_full_compute_after_bug420.log",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "Official factor full compute segfaults on threaded result.h5 capture",
+  "trigger_condition": {
+    "fingerprint": "f5ec77215672527061612004",
+    "source_event_id": "FE-20260619-f5ec77215672"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

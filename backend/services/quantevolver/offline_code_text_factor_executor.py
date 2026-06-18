@@ -19,9 +19,11 @@ from .backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 
 _THREAD_LOCAL = threading.local()
 _HDF_PATCH_LOCK = threading.Lock()
+_HDF_IO_LOCK = threading.Lock()
 _HDF_PATCHED = False
 _ORIGINAL_DF_TO_HDF = pd.DataFrame.to_hdf
 _ORIGINAL_SERIES_TO_HDF = pd.Series.to_hdf
+_MISSING = object()
 
 
 @dataclass
@@ -111,7 +113,11 @@ class OfflineCodeTextFactorExecutor:
         def read_hdf(path_or_buf, *args, **kwargs):
             path_s = str(path_or_buf)
             if Path(path_s).name == "result.h5":
-                return original_read_hdf(path_or_buf, *args, **kwargs)
+                captured = _get_captured_result_h5(path_or_buf)
+                if captured is not None:
+                    return captured
+                with _HDF_IO_LOCK:
+                    return original_read_hdf(path_or_buf, *args, **kwargs)
             return self.base_cache.get(path_s)
 
         def read_parquet(path, *args, **kwargs):
@@ -126,9 +132,13 @@ class OfflineCodeTextFactorExecutor:
         return proxy
 
     def _collect_result(self, factor_name: str, ns: dict[str, Any], work_dir: Path) -> pd.DataFrame:
+        captured = _get_captured_result_h5("result.h5")
+        if captured is not None:
+            return captured
         result_h5 = work_dir / "result.h5"
         if result_h5.exists():
-            return pd.read_hdf(result_h5)
+            with _HDF_IO_LOCK:
+                return pd.read_hdf(result_h5)
         for key in ("result", "df", "factor", factor_name):
             value = ns.get(key)
             if isinstance(value, (pd.DataFrame, pd.Series)):
@@ -197,7 +207,9 @@ class OfflineCodeTextFactorExecutor:
 @contextlib.contextmanager
 def _factor_output_dir(path: str | os.PathLike[str]):
     old = getattr(_THREAD_LOCAL, "factor_output_dir", None)
+    old_result = getattr(_THREAD_LOCAL, "factor_result_h5", _MISSING)
     _THREAD_LOCAL.factor_output_dir = Path(path)
+    _THREAD_LOCAL.factor_result_h5 = None
     try:
         yield
     finally:
@@ -208,6 +220,13 @@ def _factor_output_dir(path: str | os.PathLike[str]):
                 pass
         else:
             _THREAD_LOCAL.factor_output_dir = old
+        if old_result is _MISSING:
+            try:
+                delattr(_THREAD_LOCAL, "factor_result_h5")
+            except AttributeError:
+                pass
+        else:
+            _THREAD_LOCAL.factor_result_h5 = old_result
 
 
 def _redirect_hdf_path(path_or_buf):
@@ -220,6 +239,39 @@ def _redirect_hdf_path(path_or_buf):
     return Path(output_dir) / path
 
 
+def _capture_result_h5(path_or_buf, value: pd.DataFrame | pd.Series) -> bool:
+    """Capture legacy result.h5 writes in thread-local memory.
+
+    Official full-compute runs factor code concurrently. PyTables/HDF5 is not
+    safe for these per-factor result files in worker threads, so only
+    result.h5 output is intercepted; base-data reads are already served by the
+    memory cache.
+    """
+    if getattr(_THREAD_LOCAL, "factor_output_dir", None) is None:
+        return False
+    if not isinstance(path_or_buf, (str, os.PathLike)):
+        return False
+    if Path(path_or_buf).name != "result.h5":
+        return False
+    if isinstance(value, pd.Series):
+        captured = value.to_frame(name=value.name or "value")
+    else:
+        captured = value
+    _THREAD_LOCAL.factor_result_h5 = captured.copy(deep=False)
+    return True
+
+
+def _get_captured_result_h5(path_or_buf) -> pd.DataFrame | pd.Series | None:
+    if not isinstance(path_or_buf, (str, os.PathLike)):
+        return None
+    if Path(path_or_buf).name != "result.h5":
+        return None
+    captured = getattr(_THREAD_LOCAL, "factor_result_h5", None)
+    if isinstance(captured, (pd.DataFrame, pd.Series)):
+        return captured.copy(deep=False)
+    return None
+
+
 def _ensure_hdf_redirect_patch() -> None:
     global _HDF_PATCHED
     if _HDF_PATCHED:
@@ -229,10 +281,16 @@ def _ensure_hdf_redirect_patch() -> None:
             return
 
         def dataframe_to_hdf(self, path_or_buf, *args, **kwargs):
-            return _ORIGINAL_DF_TO_HDF(self, _redirect_hdf_path(path_or_buf), *args, **kwargs)
+            if _capture_result_h5(path_or_buf, self):
+                return None
+            with _HDF_IO_LOCK:
+                return _ORIGINAL_DF_TO_HDF(self, _redirect_hdf_path(path_or_buf), *args, **kwargs)
 
         def series_to_hdf(self, path_or_buf, *args, **kwargs):
-            return _ORIGINAL_SERIES_TO_HDF(self, _redirect_hdf_path(path_or_buf), *args, **kwargs)
+            if _capture_result_h5(path_or_buf, self):
+                return None
+            with _HDF_IO_LOCK:
+                return _ORIGINAL_SERIES_TO_HDF(self, _redirect_hdf_path(path_or_buf), *args, **kwargs)
 
         pd.DataFrame.to_hdf = dataframe_to_hdf
         pd.Series.to_hdf = series_to_hdf
