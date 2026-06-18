@@ -46,6 +46,39 @@ def _section_only_stock_result() -> McpToolResult:
     )
 
 
+def _recoverable_catalog_rejection() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-local-data",
+        tool_name="local_data_get_unack_alert_count",
+        status="rejected",
+        summary="approved capability not found for tool",
+        error_json={
+            "reason_code": "capability_not_found",
+            "catalog_reason": "tool_not_in_audited_catalog",
+            "server_key": "aistock-local-data",
+            "tool_name": "local_data_get_unack_alert_count",
+            "exception_type": "KeyError",
+            "message": "approved capability not found for tool: aistock-local-data/local_data_get_unack_alert_count",
+            "recoverable_catalog_rejection": True,
+        },
+        executed=False,
+        blocked_reason="capability_not_found",
+    )
+
+
+def _local_data_success_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-local-data",
+        tool_name="local_data_get_preset_daily_status",
+        status="succeeded",
+        summary="success=1 failed=0",
+        source_refs=["local_data_facade_read_adapter"],
+        as_of="2026-06-17",
+        payload_json={"source": "local_data_facade_read_adapter", "as_of": "2026-06-17"},
+        executed=True,
+    )
+
+
 def test_evidence_guard_allows_sourced_numeric_answer() -> None:
     decision = compose_with_evidence_guard(
         "Metric is 12%; source=test://source as_of=2026-06-01.",
@@ -118,3 +151,29 @@ def test_evidence_guard_accepts_section_level_source_and_as_of_citations() -> No
 
     assert decision.allowed is True
     assert decision.reason == "ok"
+
+
+def test_bug_404_413_grounded_answer_takes_precedence_over_recovered_catalog_error() -> None:
+    decision = compose_with_evidence_guard(
+        "Local data sync succeeded: success=1 failed=0; source=local_data_facade_read_adapter as_of=2026-06-17.",
+        [_recoverable_catalog_rejection(), _local_data_success_result()],
+        ReactGroundingConfig(max_tool_iterations=3),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+    assert "capability_not_found" not in decision.text
+
+
+def test_bug_404_413_unrecovered_catalog_error_replaces_insufficient() -> None:
+    decision = compose_with_evidence_guard(
+        "Insufficient evidence: no covered local-data result.",
+        [_recoverable_catalog_rejection()],
+        ReactGroundingConfig(max_tool_iterations=3),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "explicit_tool_error"
+    assert "reason_code=capability_not_found" in decision.text
+    assert "tool_not_in_audited_catalog" in decision.text
+    assert "Insufficient evidence" not in decision.text

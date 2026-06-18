@@ -246,3 +246,162 @@ def test_bug_413_guard_violation_regenerates_with_exact_citation_options() -> No
     assert "stock-ref:quote:000688" in result.final_text
     assert any(step.get("evidence_guard_reason") == "missing_inline_tool_evidence" for step in result.trace_steps)
     assert any(step.get("repair") == "regenerate_with_evidence_citation_options" for step in result.trace_steps)
+
+
+class _LocalDataSyncProvider:
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        assert call.tool_name == "local_data_get_preset_daily_status"
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="succeeded",
+            payload_json={
+                "response_mode": "local_data_daily_sync_status",
+                "source": "local_data_facade_read_adapter",
+                "as_of": "2026-06-17",
+                "group_counts": {"success": 1, "failed": 0},
+            },
+            source_refs=["local_data_facade_read_adapter"],
+            as_of="2026-06-17",
+            summary="success=1 failed=0",
+            executed=True,
+        )
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("local-data read-only recovery must not require preflight")
+
+
+class _RecoveringCatalogRejectionLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_unack_alert_count",
+                        stable_call_id="uncovered_alert_count",
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_preset_daily_status",
+                        stable_call_id="covered_daily_status",
+                    )
+                ],
+            )
+        return ModelTurn(
+            content="Local data sync succeeded: success=1 failed=0; source=local_data_facade_read_adapter as_of=2026-06-17.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+class _UnrecoveredCatalogRejectionLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_unack_alert_count",
+                        stable_call_id="uncovered_alert_count",
+                    )
+                ],
+            )
+        return ModelTurn(
+            content="Insufficient evidence: no covered local-data result.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_bug_404_412_recovered_catalog_rejection_does_not_override_grounded_answer() -> None:
+    fake = _RecoveringCatalogRejectionLlm()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "Was yesterday's local data sync OK?"}],
+        model_complete=fake.complete,
+        mcp_provider=_LocalDataSyncProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_get_preset_daily_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message="Was yesterday's local data sync OK?"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "ok"
+    assert "success=1" in result.final_text
+    assert "reason_code=capability_not_found" not in result.final_text
+    assert "Insufficient evidence" not in result.final_text
+    rejected = result.tool_results[0]
+    assert rejected.status == "rejected"
+    assert rejected.error_json["reason_code"] == "capability_not_found"
+    assert rejected.error_json["catalog_reason"] == "tool_not_in_audited_catalog"
+    assert rejected.error_json["recoverable_catalog_rejection"] is True
+
+
+def test_bug_404_412_unrecovered_catalog_rejection_reports_loud_capability_error() -> None:
+    fake = _UnrecoveredCatalogRejectionLlm()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "Was yesterday's local data sync OK?"}],
+        model_complete=fake.complete,
+        mcp_provider=_LocalDataSyncProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_get_preset_daily_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=3, user_message="Was yesterday's local data sync OK?"),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "explicit_tool_error"
+    assert "reason_code=capability_not_found" in result.final_text
+    assert "tool_not_in_audited_catalog" in result.final_text
+    assert "Insufficient evidence" not in result.final_text

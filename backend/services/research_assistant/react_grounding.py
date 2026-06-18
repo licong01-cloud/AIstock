@@ -330,9 +330,15 @@ def exception_result(call: McpToolCall, exc: BaseException, *, stage: str) -> Mc
 
 def _program_error_results(results: list[McpToolResult]) -> list[McpToolResult]:
     program_errors: list[McpToolResult] = []
-    for result in results:
+    for index, result in enumerate(results):
         error = result.error_json if isinstance(result.error_json, dict) else {}
         reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
+        later_success = any(
+            item.executed and item.status in {"succeeded", "success", "ok"}
+            for item in results[index + 1 :]
+        )
+        if later_success and error.get("recoverable_catalog_rejection"):
+            continue
         if result.status in {"failed", "rejected"} and reason_code in PROGRAM_ERROR_REASON_CODES:
             program_errors.append(result)
     return program_errors
@@ -343,9 +349,11 @@ def _render_program_error_summary(error: dict[str, Any]) -> str:
     route = f"{error.get('server_key')}/{error.get('tool_name')}"
     exc_type = str(error.get("exception_type") or error.get("error_type") or "Error")
     message = str(error.get("message") or error.get("human_reason") or error.get("error_summary") or "")
+    catalog_reason = str(error.get("catalog_reason") or "")
+    catalog_fragment = f"catalog_reason={catalog_reason}; " if catalog_reason else ""
     return (
         "工具调用失败："
-        f"reason_code={reason_code}; tool={route}; exception_type={exc_type}; "
+        f"reason_code={reason_code}; {catalog_fragment}tool={route}; exception_type={exc_type}; "
         f"error_summary={message}"
     ).strip()
 
@@ -603,29 +611,54 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
     source_count = len(known_sources)
     as_of_count = len(known_as_of)
     program_errors = _program_error_results(collected_results)
-    if program_errors and _text_reports_program_error(text, program_errors):
-        return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
-    if program_errors:
-        return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
     placeholder = _contains_placeholder(text, config.placeholder_patterns)
     if placeholder:
-        return EvidenceGuardDecision(False, "Insufficient evidence: placeholder tokens are not allowed in factual answers.", f"placeholder_blocked:{placeholder}", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: placeholder tokens are not allowed in factual answers.", f"placeholder_blocked:{placeholder}", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     forbidden_marker = _contains_forbidden_marker(text, config.forbidden_answer_markers)
     if forbidden_marker:
-        return EvidenceGuardDecision(False, "Insufficient evidence: final answer matched a retired business template marker.", f"forbidden_answer_marker:{forbidden_marker}", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: final answer matched a retired business template marker.", f"forbidden_answer_marker:{forbidden_marker}", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     has_numbers = _has_numeric_fact(text)
     inline_source = _has_inline_source(text, known_sources)
     inline_as_of = _has_inline_as_of(text, known_as_of)
     if config.evidence_required and collected_results and not (inline_source and inline_as_of):
-        return EvidenceGuardDecision(False, "Insufficient evidence: tool-grounded answers require inline source/as_of.", "missing_inline_tool_evidence", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: tool-grounded answers require inline source/as_of.", "missing_inline_tool_evidence", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and has_numbers and not (inline_source and inline_as_of):
-        return EvidenceGuardDecision(False, "Insufficient evidence: numeric facts require inline source/as_of.", "unsourced_numeric_fact", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: numeric facts require inline source/as_of.", "unsourced_numeric_fact", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and collected_results and not _matches_running_focus(text, config, collected_results):
-        return EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested running-status focus.", "question_focus_mismatch", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested running-status focus.", "question_focus_mismatch", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and collected_results and not _matches_completed_focus(text, config, collected_results):
-        return EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested completed-status focus.", "question_focus_mismatch", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested completed-status focus.", "question_focus_mismatch", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and collected_results and _contains_forbidden_marker(text, config.forbidden_answer_markers):
-        return EvidenceGuardDecision(False, "Insufficient evidence: regenerated answer still matched a retired business template marker.", "post_guard_forbidden_answer_marker", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: regenerated answer still matched a retired business template marker.", "post_guard_forbidden_answer_marker", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     return EvidenceGuardDecision(True, text, "ok", source_count, as_of_count)
 
 
@@ -645,6 +678,28 @@ def strip_internal_chain(text: str) -> str:
 
 
 def rejection_result(call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+    if decision.reason == "tool_not_in_audited_catalog":
+        error = {
+            "reason_code": "capability_not_found",
+            "code": "capability_not_found",
+            "catalog_reason": "tool_not_in_audited_catalog",
+            "stage": "catalog_gate",
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "exception_type": "KeyError",
+            "message": f"approved capability not found for tool: {call.server_key}/{call.tool_name}; catalog_reason=tool_not_in_audited_catalog",
+            "recoverable_catalog_rejection": True,
+        }
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="rejected",
+            summary=_render_program_error_summary(error),
+            error_json=error,
+            executed=False,
+            blocked_reason="capability_not_found",
+            stable_call_id=call.stable_call_id,
+        )
     return McpToolResult(
         server_key=call.server_key,
         tool_name=call.tool_name,
