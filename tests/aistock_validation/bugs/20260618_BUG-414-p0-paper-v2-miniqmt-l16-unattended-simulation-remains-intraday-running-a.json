@@ -1,0 +1,80 @@
+{
+  "actual": "Observed MiniQMT L16 run simrun_6809d03f7a3ffca5 stayed INTRADAY_RUNNING with QMT batch PARTIAL, target_count=58, intent_count=46, submitted=24, failed=22, all SKIPPED_INSUFFICIENT_CAPITAL, plus reconciliation warnings.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/services/qmt_strategy_ledger",
+    "backend/tests/simulation_runtime",
+    "backend/tests/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260618_BUG-414-p0-paper-v2-miniqmt-l16-unattended-simulation-remains-intraday-running-a.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-414",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T09:21:30.155630Z",
+  "description": "Observed MiniQMT L16 run simrun_6809d03f7a3ffca5 stayed INTRADAY_RUNNING with QMT batch PARTIAL, target_count=58, intent_count=46, submitted=24, failed=22, all SKIPPED_INSUFFICIENT_CAPITAL, plus reconciliation warnings.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-58ec4c44c2be",
+      "timestamp": "2026-06-18T09:21:30.155625Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime observation 2026-06-18: MiniQMT L16 simrun_6809d03f7a3ffca5 INTRADAY_RUNNING/PARTIAL with 22 SKIPPED_INSUFFICIENT_CAPITAL residual BUYs"
+  ],
+  "expected": "After close, MiniQMT L16 runs with PARTIAL broker results and capital residuals transition to a clear auditable terminal state; no fake success, no indefinite INTRADAY_RUNNING; regression tests cover capacity residual terminalization, retryability, and signal/execution isolation guards.",
+  "first_seen_at": "2026-06-18T09:21:30.155630Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1245,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1245",
+  "last_seen_at": "2026-06-18T09:21:30.155630Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect simulation-runtime daily runs for MiniQMT L16 after close; verify simrun_6809d03f7a3ffca5 status/payload and QMT batch PARTIAL residual BUY diagnostics.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][MiniQMT] L16 unattended simulation remains INTRADAY_RUNNING after close with PARTIAL cash residuals",
+  "trigger_condition": {
+    "fingerprint": "58ec4c44c2be71c9fee978b9",
+    "source_event_id": "FE-20260618-58ec4c44c2be"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
