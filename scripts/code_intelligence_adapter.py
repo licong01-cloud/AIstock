@@ -1252,6 +1252,7 @@ def build_llm_value_summary(
     prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
     rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
     ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
+    discovery_manifest = _read_json_object(artifact_dir / "discovery-plans" / "manifest.json")
     adaptive_evidence = (
         adaptive.get("llm_invocation_evidence") if isinstance(adaptive.get("llm_invocation_evidence"), dict) else {}
     )
@@ -1315,6 +1316,7 @@ def build_llm_value_summary(
         "scheduler_advice_json": _artifact_ref(artifact_dir / "llm-nightly-scheduler-advice.json", root),
         "discovery_hypotheses_json": _artifact_ref(artifact_dir / "llm-hypotheses.json", root),
         "selected_plans_json": _artifact_ref(artifact_dir / "selected-plans.json", root),
+        "discovery_plans_manifest_json": _artifact_ref(artifact_dir / "discovery-plans" / "manifest.json", root),
         "test_plan_advice_json": _artifact_ref(artifact_dir / "llm-test-plan-advice.json", root),
         "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
         "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
@@ -1376,6 +1378,8 @@ def build_llm_value_summary(
             "discovery_hypotheses": _artifact_summary(hypotheses),
             "discovery_hypothesis_count": len(hypotheses.get("hypotheses") or []) if isinstance(hypotheses.get("hypotheses"), list) else 0,
             "selected_plan_count": len(hypotheses.get("selected_plan_keys") or []) if isinstance(hypotheses.get("selected_plan_keys"), list) else 0,
+            "discovery_executed_plan_count": (discovery_manifest.get("summary") or {}).get("executed_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
+            "discovery_anomaly_count": (discovery_manifest.get("summary") or {}).get("anomaly_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
         },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
@@ -1411,6 +1415,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
     code_summary_ref = refs.get("code_intelligence_summary_md") or refs.get("code_intelligence_summary_json") or "missing"
     adaptive_ref = refs.get("adaptive_scheduler_md") or refs.get("adaptive_scheduler_json") or "missing"
     hypotheses_ref = refs.get("discovery_hypotheses_json") or "missing"
+    discovery_manifest_ref = refs.get("discovery_plans_manifest_json") or "missing"
     lines = [
         "## LLM + Code Intelligence Value",
         "",
@@ -1423,6 +1428,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
         f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
         f"- discovery_hypotheses: `hypotheses={llm.get('discovery_hypothesis_count') or 0}, selected_plans={llm.get('selected_plan_count') or 0}`",
+        f"- discovery_plans: `executed={llm.get('discovery_executed_plan_count') or 0}, anomalies={llm.get('discovery_anomaly_count') or 0}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
@@ -1435,6 +1441,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- adaptive_scheduler: `{adaptive_ref}`",
         f"- discovery_hypotheses: `{hypotheses_ref}`",
         f"- selected_plans: `{refs.get('selected_plans_json') or 'missing'}`",
+        f"- discovery_plans: `{discovery_manifest_ref}`",
         f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
         f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
         "",

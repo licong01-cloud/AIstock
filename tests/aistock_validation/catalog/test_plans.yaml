@@ -105,6 +105,74 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, smoke_json, llm_advice]
+  - plan_key: validation_discovery_issue_intake_readonly
+    title: Nightly discovery readonly issue intake quality
+    module: validation.runner
+    level: L1
+    command_key: nox_validation_discovery_issue_intake_readonly
+    nox_session: validation_discovery_issue_intake_readonly
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 180
+    evidence_kinds: [nightly_discovery, issue_intake]
+  - plan_key: workflow_discovery_root_clean_guard
+    title: Nightly discovery readonly root clean guard
+    module: validation.runner
+    level: L1
+    command_key: nox_workflow_discovery_root_clean_guard
+    nox_session: workflow_discovery_root_clean_guard
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 120
+    evidence_kinds: [nightly_discovery, guardrail]
+  - plan_key: code_intelligence_discovery_affected_tests_quality
+    title: Nightly discovery readonly CodeGraph affected-test quality
+    module: validation.runner
+    level: L1
+    command_key: nox_code_intelligence_discovery_affected_tests_quality
+    nox_session: code_intelligence_discovery_affected_tests_quality
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 180
+    evidence_kinds: [nightly_discovery, code_intelligence]
+  - plan_key: validation_center_discovery_run_record_integrity
+    title: Nightly discovery readonly Validation Center run-record integrity
+    module: validation.runner
+    level: L1
+    command_key: nox_validation_center_discovery_run_record_integrity
+    nox_session: validation_center_discovery_run_record_integrity
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 180
+    evidence_kinds: [nightly_discovery, validation_history]
   - plan_key: validation_catalog_integrity
     title: Validation catalog integrity guard
     module: validation.runner
