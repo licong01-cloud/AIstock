@@ -100,6 +100,60 @@ def test_rotation_explains_no_allowlisted_discovery_plan(tmp_path: Path) -> None
     assert payload["rotation"]["no_candidate_reason"] == "no_allowlisted_readonly_discovery_plan_selected"
 
 
+def test_previous_candidate_manifest_biases_next_rotation(tmp_path: Path) -> None:
+    manifest = tmp_path / "previous" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_bug_candidate_queue_v1",
+                "rotation": {
+                    "focus_modules": ["validation_center"],
+                    "selected_plan_keys": [
+                        "validation_center_discovery_run_record_integrity",
+                        "workflow_discovery_root_clean_guard",
+                    ],
+                },
+                "summary": {
+                    "candidate_count": 2,
+                    "issue_payload_ready_count": 0,
+                    "deduped_count": 1,
+                },
+                "discovery_effectiveness": {
+                    "candidate_count": 2,
+                    "issue_payload_ready_count": 0,
+                    "deduped_count": 1,
+                    "no_candidate_reason": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = pack.build_discovery_input_pack(
+        run_id="feedback-test",
+        run_date="2026-06-19",
+        allowed_plan_keys=[
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+        ],
+        previous_candidate_manifest=manifest,
+        budget_plan_limit=3,
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    rotation = payload["rotation"]
+    assert rotation["selection_reasons"][0]["reason"] == "previous_discovery_feedback"
+    assert rotation["selected_plan_keys"][0] == "validation_center_discovery_run_record_integrity"
+    assert "validation_discovery_issue_intake_readonly" in rotation["selected_plan_keys"]
+    assert rotation["feedback"]["signals"] == ["candidate_without_issue_payload", "deduped_candidates"]
+    assert rotation["feedback_focus_modules"] == ["validation_center"]
+
+
 def test_cli_writes_input_pack_and_changed_files(tmp_path: Path, capsys) -> None:
     source = tmp_path / "raw.txt"
     output = tmp_path / "pack.json"
