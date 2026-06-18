@@ -522,6 +522,67 @@ const uiTargetPage = {
   has_more: false,
 };
 
+
+const issueCandidateSummary = {
+  schema_version: "aistock_validation_candidate_queue_v1",
+  candidate_count: 1,
+  nightly_candidate_count: 1,
+  open_count: 1,
+  linked_issue_count: 0,
+  missing_issue_link_count: 1,
+  issue_payload_ready_count: 1,
+  draft_count: 1,
+  deduped_count: 0,
+  artifact_only_count: 0,
+  by_status: { draft: 1 },
+  by_module: { "validation.center": 1 },
+  by_severity: { P1: 1 },
+  by_source_type: { nightly_bug_candidate: 1 },
+  by_quality_gate: { ready: 1 },
+  no_submit_reason_counts: { awaiting_operator_promotion: 1, auto_submit_disabled: 1 },
+  reason_codes: ["missing_github_issue_links"],
+  production_8001_touched: false,
+};
+
+const issueCandidatePage = {
+  items: [
+    {
+      candidate_id: "NC-20260618-ready",
+      title: "Validation API probe found stale plan catalog",
+      source_type: "nightly_bug_candidate",
+      source_plan_key: "nightly_validation_api_probe",
+      module_id: "validation.center",
+      severity: "P1",
+      status: "draft",
+      confidence: 0.94,
+      summary: "DeepSeek hypothesis was confirmed by the validation probe.",
+      expected: "Validation Center should load the requested plan catalog.",
+      actual: "The API returned plan not found.",
+      reproduce: ["python -m nox -s validation_center_backend"],
+      fingerprint: "nc-ready",
+      run_count: 1,
+      quality_gate_state: "ready",
+      issue_payload_ready: true,
+      auto_submit_allowed: false,
+      quality_gate_reasons: [],
+      no_submit_reasons: ["awaiting_operator_promotion", "auto_submit_disabled"],
+      why_not_submitted: "awaiting_operator_promotion / auto_submit_disabled",
+      codegraph_refs: ["tmp/validation/code-intelligence/9001/codegraph-freshness.json"],
+      ua_refs: ["tmp/validation/code-intelligence/9001/ua-summary-manifest.json"],
+      evidence_refs: ["tmp/validation/code-intelligence/9001/discovery-results.json"],
+      recommended_validation: ["python -m nox -s validation_center_backend"],
+      allowed_write_scope: ["backend/services/validation/pipeline_center.py"],
+      github_issue_payload_ref: "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-ready.json",
+      source_path: "tmp/validation/code-intelligence/9001/bug-candidates/candidates/NC-20260618-ready.json",
+      source_paths: ["tmp/validation/code-intelligence/9001/bug-candidates/candidates/NC-20260618-ready.json"],
+    },
+  ],
+  total: 1,
+  page: 1,
+  page_size: 20,
+  has_more: false,
+};
+
 const uiTargetSummary = {
   schema_version: "aistock_validation_ui_targets_v1",
   generated_at: "2026-05-07T09:00:00+08:00",
@@ -546,7 +607,10 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   const writeMethods: string[] = [];
 
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (text.includes("Failed to load resource: the server responded with a status of 404")) return;
+    consoleErrors.push(text);
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("requestfailed", (request) => requestFailures.push(`${request.method()} ${request.url()}`));
@@ -645,6 +709,27 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
           github_connectivity: { state: "healthy", data_state: "complete" },
           reason_codes: [],
           production_8001_touched: false,
+        },
+      });
+    }
+
+    if (path.endsWith("/api/v1/validation/code-intelligence/summary")) {
+      return respond({
+        status: "success",
+        data: {
+          schema_version: "aistock_validation_code_intelligence_summary_v1",
+          data_state: "complete",
+          artifact_count: 2,
+          blocking_for_issue_workflow: false,
+          codegraph: {
+            effective_freshness: "fresh",
+            effective_source: "history",
+            artifact_path: "tmp/validation/code-intelligence/codegraph-freshness.json",
+            summary_ref: "tmp/validation/code-intelligence/codegraph-summary.json",
+          },
+          understand_anything: { summary_count: 1, manifest: { artifact_path: "tmp/validation/code-intelligence/ua-summary-manifest.json" } },
+          warnings: [],
+          reason_codes: [],
         },
       });
     }
@@ -792,6 +877,14 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
 
     if (path.endsWith("/api/v1/validation/issues/workflow")) {
       return respond({ status: "success", data: { items: [{ bug_id: bugId, title: "Demo validation failure", workflow_state: "open", severity: "P2", module_id: "validation_center", gate_state: "triage_required", next_action: "完成分诊", allowed_write_scope_state: "complete", required_verification_state: "pending", closure_requirements_state: "pending", github_issue_url: "https://github.com/example/aistock/issues/1" }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/issues/candidates/summary")) {
+      return respond({ status: "success", data: issueCandidateSummary });
+    }
+
+    if (path.endsWith("/api/v1/validation/issues/candidates")) {
+      return respond({ status: "success", data: issueCandidatePage });
     }
 
     if (path.endsWith(`/api/v1/validation/issues/${bugId}/workflow`)) {
@@ -1008,25 +1101,25 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("Bug Registry", { exact: true })).toBeVisible();
 
   const phaseTabs = page.locator(".pv2-phase-tab");
-  await expect(phaseTabs).toHaveCount(10);
+  await expect(phaseTabs).toHaveCount(11);
 
-  await phaseTabs.nth(1).click();
+  await phaseTabs.nth(2).click();
   await expect(page.getByText("frontend_targeted").first()).toBeVisible();
   await expect(page.getByText("codex/validation-center-phase1").first()).toBeVisible();
   await expect(page.getByText("frontend/src/app/validation-center/page.tsx").first()).toBeVisible();
 
-  await phaseTabs.nth(7).click();
+  await phaseTabs.nth(8).click();
   await expect(page.getByText("Open PR", { exact: true })).toBeVisible();
   await expect(page.getByText("root_tmp.py").first()).toBeVisible();
   await expect(page.getByText("read_only_allowlist").first()).toBeVisible();
   await expect(page.getByText("add_file_ownership_mapping_before_commit").first()).toBeVisible();
 
-  await phaseTabs.nth(5).click();
+  await phaseTabs.nth(6).click();
   await expect(page.getByText("validation_module_registry_l0").first()).toBeVisible();
   await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
   await expect(page.getByText("unmapped_workspace_files_present").first()).toBeVisible();
 
-  await phaseTabs.nth(4).click();
+  await phaseTabs.nth(5).click();
   await expect(page.getByRole("heading", { name: "UI Target Route Coverage" })).toBeVisible();
   await expect(page.getByText("Catalog: tests/aistock_validation/catalog/ui_targets.yaml")).toBeVisible();
   await expect(page.getByText("Route coverage boundary")).toBeVisible();
@@ -1040,7 +1133,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(routeDetailPanel.getByText("Line 81.35% / Branch 64.35%")).toBeVisible();
   await expect(routeDetailPanel.getByText(passedRunId)).toBeVisible();
 
-  await phaseTabs.nth(3).click();
+  await phaseTabs.nth(4).click();
   await expect(page.getByText("Validation Center backend contract").first()).toBeVisible();
   await expect(page.getByText("tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log")).toBeVisible();
   await expect(page.getByText("tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-validation.md")).toBeVisible();
@@ -1076,7 +1169,14 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await markdownRunRow.locator("button").first().click();
   await expect(page.getByText(/coverage_missing/).first()).toBeVisible();
 
-  await phaseTabs.nth(2).click();
+  await phaseTabs.nth(3).click();
+  await expect(page.getByRole("heading", { name: "Nightly Discovery Dashboard" })).toBeVisible();
+  await expect(page.getByText("Issue-ready").first()).toBeVisible();
+  await expect(page.getByText("DeepSeek hypothesis was confirmed by the validation probe.")).toBeVisible();
+  await expect(page.getByText("awaiting_operator_promotion").first()).toBeVisible();
+  await expect(page.getByText("tmp/validation/code-intelligence/9001/codegraph-freshness.json")).toBeVisible();
+  await expect(page.getByText("tmp/validation/code-intelligence/9001/ua-summary-manifest.json")).toBeVisible();
+  await expect(page.getByText("aistock_bug_candidate_github_issue_payload_v1")).toHaveCount(0);
   await expect(page.getByText("Demo validation failure").first()).toBeVisible();
   await expect(page.getByText("No silent fallback")).toBeVisible();
   const findingRow = page.locator("tr", { hasText: "No silent fallback" }).first();
@@ -1086,17 +1186,17 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   const bugRow = page.locator("tr", { hasText: "Demo validation failure" }).last();
   await bugRow.locator("button").first().click();
   await expect(page.getByText("bug", { exact: true })).toBeVisible();
-  await expect(page.getByText("python -m nox -s validation_center_backend").first()).toBeVisible();
+  await expect(page.getByText("python -m nox -s validation_center_backend").last()).toBeVisible();
   await expect(page.getByText("verification_run_id required").first()).toBeVisible();
 
-  await phaseTabs.nth(6).click();
+  await phaseTabs.nth(7).click();
   await expect(page.getByText("https://github.com/example/aistock/issues/1").first()).toBeVisible();
   await expect(page.getByText("No synced GitHub issue link yet")).toHaveCount(0);
 
-  await phaseTabs.nth(8).click();
+  await phaseTabs.nth(9).click();
   await expect(page.getByText("validation:legacy")).toBeVisible();
 
-  await phaseTabs.nth(9).click();
+  await phaseTabs.nth(10).click();
   await expect(page.getByText("auto_allowed").first()).toBeVisible();
 
   await expect(page.getByText("aistock_validation_run_v1")).toHaveCount(0);

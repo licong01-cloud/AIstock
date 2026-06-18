@@ -9,6 +9,7 @@ import {
   type ValidationExecutionJob,
   type ValidationGithubPrSummary,
   type ValidationHealth,
+  type ValidationIssueCandidateSummary,
   type ValidationIssueWorkflowSummary,
   type ValidationLegacyDebtSummary,
   type ValidationMergeGate,
@@ -65,6 +66,7 @@ export type PipelineOverviewCardsProps = {
   plans?: ValidationPlan[];
   executions?: ValidationPage<ValidationExecutionJob> | null;
   mergeGate?: ValidationMergeGate | null;
+  issueCandidateSummary?: ValidationIssueCandidateSummary | null;
   issueWorkflowSummary?: ValidationIssueWorkflowSummary | null;
   moduleQuality?: ValidationModuleQualitySummary | null;
   moduleDetailSummary?: ValidationModuleQualitySummary | null;
@@ -277,14 +279,16 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
 
   if (section.id === "issue_workflow") {
     const missing = numberValue(props.issueWorkflowSummary?.missing_scope_count) + numberValue(props.issueWorkflowSummary?.missing_required_verification_count);
+    const readyDrafts = numberValue(props.issueCandidateSummary?.issue_payload_ready_count);
+    const candidateWarnings = numberValue(props.issueCandidateSummary?.missing_issue_link_count);
     return {
       id: section.id,
       label: section.label,
       hint: section.hint,
-      tone: missing ? "yellow" : normalizeTone(backendCard?.health_tone || "green"),
-      state: missing ? "需补齐" : "可跟踪",
-      meta: `open ${display(props.issueWorkflowSummary?.open_count ?? objectField(backendCard?.summary, "open_count") ?? 0)}`,
-      risk: backendCard?.risk_score ?? missing * 12,
+      tone: missing || candidateWarnings ? "yellow" : normalizeTone(backendCard?.health_tone || "green"),
+      state: missing ? "needs-scope" : readyDrafts ? "issue-ready" : "ready",
+      meta: `open ${display(props.issueWorkflowSummary?.open_count ?? objectField(backendCard?.summary, "open_count") ?? 0)} / nightly ${display(props.issueCandidateSummary?.nightly_candidate_count ?? props.issueCandidateSummary?.candidate_count ?? 0)}`,
+      risk: backendCard?.risk_score ?? (missing + candidateWarnings) * 12,
       rows: [
         ...baseRows,
         ["open_count", props.issueWorkflowSummary?.open_count],
@@ -292,9 +296,13 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ["review_ready_count", props.issueWorkflowSummary?.review_ready_count],
         ["missing_scope_count", props.issueWorkflowSummary?.missing_scope_count],
         ["missing_required_verification_count", props.issueWorkflowSummary?.missing_required_verification_count],
+        ["nightly_candidate_count", props.issueCandidateSummary?.nightly_candidate_count],
+        ["issue_payload_ready_count", props.issueCandidateSummary?.issue_payload_ready_count],
+        ["candidate_status", props.issueCandidateSummary?.by_status],
+        ["candidate_no_submit_reasons", props.issueCandidateSummary?.no_submit_reason_counts],
         ["by_workflow_state", props.issueWorkflowSummary?.by_workflow_state],
       ],
-      reasonCodes: stringList(props.issueWorkflowSummary?.reason_codes),
+      reasonCodes: [...stringList(props.issueWorkflowSummary?.reason_codes), ...stringList(props.issueCandidateSummary?.reason_codes)],
     };
   }
 
