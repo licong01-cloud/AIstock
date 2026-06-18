@@ -577,6 +577,7 @@ AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
     "For business evidence answers, do not use fixed status-summary templates, do not dump raw JSON, "
     "and do not mention internal route names, server_key, tool_name, summary_first, or mcp_execution_result. "
     "Every factual or numeric claim must cite an actual tool source value and actual as_of/trade_date/report_period value returned by tools. "
+    "When a tool observation includes citation_options, cite those exact source/as_of strings instead of paraphrasing the source. "
     "If the evidence says zero/none, state that honestly and briefly instead of listing all rows. "
     "Write the final answer in the user's language. For write or confirmation requests, only describe the approval/preflight boundary. "
     "Do not invent facts, placeholders, source values, dates, or actions."
@@ -4346,6 +4347,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "After tool results are present, write the final answer yourself and address the exact user question.",
                 "Do not return a Python-rendered template or copy a raw tool payload.",
                 "Cite actual source and as_of/trade_date/report_period values found in tool results.",
+                "If citation_options are present, cite their exact source/as_of strings for the relevant facts.",
             ],
         }
         react_messages.append({"role": "system", "content": json.dumps(directive, ensure_ascii=False, sort_keys=True)})

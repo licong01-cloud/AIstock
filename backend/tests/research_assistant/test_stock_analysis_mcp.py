@@ -185,6 +185,49 @@ class _NativeStockEvidenceCardLlm(_StockEvidenceCardLlm):
         return result
 
 
+class _Bug413RealStyleStockEvidenceCardLlm(_NativeStockEvidenceCardLlm):
+    def __init__(self) -> None:
+        super().__init__()
+        self.saw_repair_directive = False
+
+    def complete(self, **kwargs: Any) -> LlmCallResult:
+        messages = kwargs.get("messages") if isinstance(kwargs.get("messages"), list) else []
+        joined = "\n".join(str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        has_tool_result = any("TOOL_RESULT" in str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        if "REACT_EVIDENCE_GUARD_REPAIR_DIRECTIVE" in joined:
+            self.saw_repair_directive = True
+            assert "missing_inline_tool_evidence" in joined
+            assert "stock-ref:quote:000688" in joined
+            assert "2026-06-16" in joined
+            return LlmCallResult(
+                content=(
+                    "国城矿业（000688）全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
+                    "未来趋势只能基于已返回证据谨慎判断。"
+                    "来源 stock-ref:quote:000688，截至 2026-06-16；"
+                    "来源 stock-ref:financials:000688，截至 2026-06-16；"
+                    "来源 stock-ref:fund_flow:000688，截至 2026-06-16；"
+                    "来源 stock-ref:technicals:000688，截至 2026-06-16。"
+                ),
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        if has_tool_result:
+            self.complete_calls.append(kwargs)
+            return LlmCallResult(
+                content=(
+                    "国城矿业（000688）全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
+                    "未来趋势只能基于已返回证据谨慎判断。"
+                ),
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        return super().complete(**kwargs)
+
+
 def test_stock_analysis_tools_are_read_only_and_assistant_direct() -> None:
     manifest_tools = {name: TOOL_MANIFEST_BY_NAME[name] for name in STOCK_TOOL_NAMES}
     assert all(entry.risk_level == "read_only" for entry in manifest_tools.values())
@@ -301,3 +344,28 @@ def test_bug_403_guocheng_mining_agentic_stock_analysis_uses_native_tool_call() 
     datasets = {section["dataset"] for section in result["cards"]["mcp_summary_result"]["sections"]}
     assert {"quote", "financials", "fund_flow", "technicals", "fundamentals"} <= datasets
     assert result["cards"]["react_grounding"]["tool_call_count"] >= 1
+
+
+def test_bug_413_guocheng_real_style_multisource_answer_regenerates_instead_of_fail_closed() -> None:
+    fake_llm = _Bug413RealStyleStockEvidenceCardLlm()
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake_llm)
+    svc.seed_catalogs()
+    svc.stock_analysis_facade_factory = _FakeStockEvidenceService
+    svc.external_research_provider_factory = _FakeExternalResearchProvider
+
+    result = svc.chat_turn(ChatTurnRequest(message="给我国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
+    text = result["assistant_message"]["content_text"]
+    guard = result["cards"]["react_grounding"]["evidence_guard"]
+
+    assert fake_llm.saw_repair_directive is True
+    assert guard["allowed"] is True
+    assert guard["reason"] == "ok"
+    assert "Insufficient evidence: business reply synthesis did not pass grounding guard" not in text
+    assert "国城矿业" in text
+    assert "000688" in text
+    assert "基本情况" in text
+    assert "近期走势" in text
+    assert "未来趋势" in text
+    assert "stock-ref:quote:000688" in text
+    assert "2026-06-16" in text
+    assert "个股证据卡" not in text
