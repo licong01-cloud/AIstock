@@ -1,7 +1,8 @@
 # 统一存储 + 信号层 + 策略包统一模型 架构蓝图(独立框架)
 
 > 文档类型:设计蓝图。日期 2026-06-18。作者:strategy session。
-> **Rev 2(2026-06-19):统一为单一一级概念「策略包」(`alpha_mode` 区分 单/组合);取消独立的"腿/Alpha 组件库"实体。**
+> **Rev 3(2026-06-19):新增 §5.8 命名规范 + §5.9 组合模型与数据库设计(实体表+关系表,消除自引用嵌套隐患)。**
+> Rev 2(2026-06-19):统一为单一一级概念「策略包」(`alpha_mode` 区分 单/组合);取消独立的"腿/Alpha 组件库"实体。
 > Rev 1(2026-06-18):§11 六项决策确认。
 > 状态:**独立蓝图,框架与决策已确认**;待与既有方案(P1-P6 / P2 / P3 / eval)整合为分期实施步骤(§10「待整合」,本文不做整合、不含代码改动)。
 > 范围:QE 实验数据统一存储、可删除 workspace、策略包统一模型(每包独立指标)、信号层解耦、两类"补到最新"流水线。
@@ -95,6 +96,7 @@
 | d | `data_vintage`/`train_cutoff` | 包 + model_asset | 两类补最新 + 版本化 |
 | e | champion/challenger 指针 | model_asset | 场景 B 热切换/回滚 |
 | f | `alpha_components[].ref_package_id` | 组合包 | 组合按引用拼装 + 血缘 |
+| g | `display_name` / `legacy_name` | 单&组合 | 人类可读名(§5.8)+ 兼容旧名 alias |
 
 ### 5.4 **每个策略包独立指标(必须记录 —— 组合与选择依据)**
 每包、每 data_vintage、**多 seed 聚合(均值+CV+min/max)**(组合包记组合后指标):
@@ -120,6 +122,33 @@
 - **组合创建**:选若干**单 Alpha 策略包** + 权重方案 → 生成**多 Alpha 候选策略包** → `--pred-backtest` 组合回测 → 晋升。
 - **UI**:统一"策略包库"页(alpha_mode/status/signal_domain/指标 过滤、看正交矩阵、多选基础包组合、下钻源 run、从 QE 一键登记)。
 - **MCP**:只读查询策略包库 + 登记/组合(写走确认门)。
+
+### 5.8 命名规范(`package_id` 机器键不变;`package_name` 人类可读)
+- **`package_id`**:沿用 `pkg_<hex>` 作唯一标识(机器用,不面向人)。
+- **`package_name`**:**禁止裸 ID/hash/run_id/无意义串**;结构化、可读、可机读(`split('·')` 得字段)。
+- **模板**:`[模式] · [信号域/主题] · [自定义名] · [日期] · [版本(可选)]`
+  | 字段 | 取值 | 来源 |
+  |---|---|---|
+  | 模式 | `单A` / `组合×N`(N=alpha 数) | alpha_mode + component 数 |
+  | 信号域/主题 | 单:6 域之一;组合:自定义主题 | `signal_domain` |
+  | 自定义名 | 人给;缺省=`因子集×模型`简写 | 用户可只覆盖此段 |
+  | 日期 | `YYYYMMDD`(data_vintage/created_at) | |
+  | 版本 | 同名冲突 `v2/v3`,首版省 | |
+- **示例**:`单A·基本面动量·FM12×TCN·20260617` / `单A·融资情绪·MARG10×LGBM·20260617` / `组合×6·核心多Alpha·20260619` / `组合×3·防御低回撤·20260620·v2`。
+- **约束**:字段内禁 `·`;name ≤64 字,自定义名 ≤16 字;唯一性由 package_id 保证,name 不必全局唯一。
+- **自动生成 + 覆盖**:从 QE 添加/组合创建时按模板自动产名;用户可覆盖"自定义名"段。
+- **兼容现有(5 个 legacy)**:原名("qe_… 策略回测N")存为 `legacy_name`/alias,不强改;可选按元数据 backfill `display_name`(原名留 alias);新规范**只对新建包强制**,UI 同时显示 legacy。新增字段 `display_name`、`legacy_name`(见 §5.3)。
+
+### 5.9 组合模型与数据库设计(实体表 + 关系表,消除自引用嵌套隐患)
+**问题**:若仅靠 manifest JSON 在同一张表里埋"组合→子包"自引用,有隐患:① 悬挂引用(子包删/退役→引用断,无 FK);② 递归/成环(组合套组合→任意深度/环);③ 版本漂移(子包重训/换 champion→组合被静默改变);④ 单/组合不变量混杂;⑤ JSON 埋引用无法 FK 校验、反查贵。
+
+**解法(既保"一个概念"又消隐患)= 一张实体表 + 一张组合关系表**:
+- **`strategy_packages`(实体表,唯一概念)**:单/组合共用,`alpha_mode` 区分。
+- **`strategy_package_components`(组合边表,新增)**:`parent_package_id`(FK→组合)、`child_package_id`(FK→单包)、**钉死的 `child_manifest_sha256`**、`component_weight`、`score_normalization`、`position`;唯一约束 `(parent_package_id, position)`。
+- **硬约束**:① 子包必须 `alpha_mode=single`(CHECK/触发器)→ **禁止组合套组合,深度=1、天然无环**;② FK 完整性;③ **退役守卫**(单包被未退役组合引用时禁止/告警退役)。
+- **冻结(固化)**:多 Alpha 包创建即冻结——pin 每子包 `(package_id+manifest_sha256+权重+归一)` + `alpha_combination_policy` + 组合回测证据 → 算父 `manifest_sha256` → frozen 状态;**子包后续变化不影响已冻结组合**(钉 sha);采用新版本=新建组合版本。
+- **真相源分工**:manifest JSON 存**冻结快照**(内容);**关系表是关系索引/完整性层**,与 manifest 同步,支持"谁引用了此单包"反查与退役守卫。
+- **区分**:单包 = 实体表中无组合边的行;组合 = 实体表一行 + 关系表 N 条边(+ `alpha_mode`/命名/asset_checks 分支)。
 
 ---
 
@@ -189,3 +218,5 @@
 4. 场景 B 滚动训练:**本期纳入**。✅
 5. **X(M.2 SSD)= 热层**(MLflow/store/registry/共享 label;规划 WSL 文件挂载);冷归档用 E: 机械盘。✅
 6. registry 模型 artifact:**只对 candidate 及以上策略包**,非全量。✅
+7. **命名规范**:`package_id` 沿用 `pkg_<hex>`(机器键);`package_name` 必须人类可读结构化 `[模式]·[信号域/主题]·[自定义名]·[日期]·[版本]`,禁裸 ID;legacy 名保留 alias,新规范仅对新建包强制(§5.8)。✅
+8. **组合数据库设计**:一张实体表 `strategy_packages` + 一张组合边表 `strategy_package_components`(pin child_manifest_sha256 + 权重 + position);子包限 single(深度=1 无环)+ FK + 退役守卫;消除自引用嵌套隐患(§5.9)。✅
