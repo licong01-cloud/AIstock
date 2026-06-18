@@ -582,6 +582,201 @@ def test_test_plan_advice_includes_compact_code_intelligence_refs(tmp_path):
     assert payload["llm_invocation_evidence"]["input_policy"] == "plan_key_intent_catalog_plus_code_intelligence_refs_only"
 
 
+
+
+def _discovery_pack(**overrides):
+    payload = {
+        "schema_version": "aistock_discovery_input_pack_v1",
+        "run_id": "local-test",
+        "commit": "abc123",
+        "branch": "feature/test",
+        "module": "validation",
+        "changed_files": ["scripts/llm_provider_adapter.py"],
+        "changed_files_count": 1,
+        "input_quality": {"changed_files_status": "ok", "noise_filtered": True},
+        "recent_failures": [],
+        "recent_bug_clusters": [],
+        "allowed_plan_keys": ["l0", "validation_catalog_integrity", "validation_center_backend"],
+        "stop_conditions": ["no_production_db_write", "allowlisted_plans_only"],
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_nightly_discovery_hypothesis_deterministic_fallback_selects_allowlisted_plan():
+    payload = adapter.build_nightly_discovery_hypotheses(
+        "deterministic",
+        adapter.load_config(),
+        discovery_input_pack=_discovery_pack(),
+        codegraph_freshness="fresh",
+    )
+
+    assert payload["schema_version"] == adapter.DISCOVERY_HYPOTHESIS_SCHEMA_VERSION
+    assert payload["warning_only"] is True
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert payload["hypotheses"]
+    assert payload["selected_plan_keys"] == ["validation_catalog_integrity"]
+    assert payload["deterministic_gate"]["shell_commands_allowed"] is False
+    assert payload["deterministic_gate"]["production_actions_allowed"] is False
+
+
+def test_nightly_discovery_hypothesis_invokes_deepseek_and_preserves_hypotheses(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "id": "deepseek-hypothesis",
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "validation workflow changed",
+                                    "rationale": "run backend catalog checks",
+                                    "hypotheses": [
+                                        {
+                                            "id": "H-LLM-1",
+                                            "module": "validation.runner",
+                                            "risk": "P1",
+                                            "why_now": "workflow script changed",
+                                            "expected_failure_modes": ["catalog drift"],
+                                            "recommended_plan_keys": [
+                                                "validation_catalog_integrity",
+                                                "not_a_plan",
+                                            ],
+                                            "evidence_to_collect": ["catalog summary"],
+                                            "stop_conditions": ["allowlisted_plans_only"],
+                                        }
+                                    ],
+                                    "confidence": "0.74",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_discovery_hypotheses(
+        "deepseek_api",
+        adapter.load_config(),
+        discovery_input_pack=_discovery_pack(),
+        codegraph_freshness="fresh",
+        invoke_llm=True,
+    )
+
+    assert payload["effective_provider"] == "deepseek_api"
+    assert payload["llm_gate"] == "ready"
+    assert payload["llm_invocation_evidence"]["invoked"] is True
+    assert payload["hypotheses"][0]["id"] == "H-LLM-1"
+    assert payload["selected_plan_keys"] == ["validation_catalog_integrity"]
+    assert {item["plan_key"] for item in payload["rejected_plan_keys"]} == {"not_a_plan"}
+    assert payload["token_budget_used"] == 20
+
+
+def test_nightly_discovery_hypothesis_rejects_non_allowlist_plan():
+    payload = adapter.build_nightly_discovery_hypotheses(
+        "deterministic",
+        adapter.load_config(),
+        discovery_input_pack=_discovery_pack(allowed_plan_keys=["l0"]),
+        allowed_plan_keys=["l0"],
+        codegraph_freshness="fresh",
+    )
+
+    assert payload["selected_plan_keys"] == ["l0"]
+    assert all(plan_key in {"l0"} for plan_key in payload["selected_plan_keys"])
+    assert payload["deterministic_gate"]["allowlist_enforced"] is True
+
+
+def test_nightly_discovery_hypothesis_rejects_shell_command_fields(monkeypatch):
+    def fake_raw_chat(*args, **kwargs):
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "hypotheses": [
+                                        {
+                                            "id": "H-unsafe",
+                                            "recommended_plan_keys": ["l0"],
+                                            "command": "python -m nox -s l0",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+            "deepseek-v4-pro",
+            "env:DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(adapter, "_invoke_provider_raw_chat", fake_raw_chat)
+
+    payload = adapter.build_nightly_discovery_hypotheses(
+        "deepseek_api",
+        adapter.load_config(),
+        discovery_input_pack=_discovery_pack(allowed_plan_keys=["l0"]),
+        codegraph_freshness="fresh",
+        invoke_llm=True,
+    )
+
+    assert payload["llm_gate"] == "degraded"
+    assert payload["llm_invocation_evidence"]["invoked"] is False
+    assert "provider advice must not contain shell command fields" in payload["llm_invocation_evidence"]["error"]
+    assert payload["selected_plan_keys"] == ["l0"]
+
+
+def test_nightly_discovery_hypothesis_cli_uses_compact_success_output(capsys, tmp_path):
+    input_pack = tmp_path / "discovery-input-pack.json"
+    output = tmp_path / "llm-hypotheses.json"
+    selected = tmp_path / "selected-plans.json"
+    input_pack.write_text(json.dumps(_discovery_pack()), encoding="utf-8")
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-discovery-hypothesis",
+            "--provider",
+            "deterministic",
+            "--input-pack",
+            str(input_pack),
+            "--codegraph-freshness",
+            "fresh",
+            "--allowed-plan-key",
+            "l0,validation_catalog_integrity",
+            "--output",
+            str(output),
+            "--selected-plans-output",
+            str(selected),
+        ]
+    )
+    captured = capsys.readouterr()
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+    selected_payload = json.loads(selected.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert '"check": "nightly-discovery-hypothesis"' in captured.out
+    assert '"hypothesis_count":' in captured.out
+    assert '"llm_invoked": false' in captured.out
+    assert artifact["schema_version"] == adapter.DISCOVERY_HYPOTHESIS_SCHEMA_VERSION
+    assert artifact["public_artifact"] is True
+    assert selected_payload["selected_plan_keys"] == ["validation_catalog_integrity"]
+
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
 

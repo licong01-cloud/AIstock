@@ -1055,6 +1055,9 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "llm-test-plan-advice.json" in code_steps
     assert "nightly-scheduler-advice" in code_steps
     assert "llm-nightly-scheduler-advice.json" in code_steps
+    assert "nightly-discovery-hypothesis" in code_steps
+    assert "llm-hypotheses.json" in code_steps
+    assert "selected-plans.json" in code_steps
     assert "prompt-evaluation" in code_steps
     assert "llm-prompt-evaluation.json" in code_steps
     assert "guarded-rollout-gate" in code_steps

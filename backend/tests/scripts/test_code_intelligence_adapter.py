@@ -1306,6 +1306,24 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         ),
         encoding="utf-8",
     )
+    (artifact_dir / "llm-hypotheses.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_discovery_hypothesis_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "hypotheses": [{"id": "H-001", "recommended_plan_keys": ["validation_catalog_integrity"]}],
+                "selected_plan_keys": ["validation_catalog_integrity"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "selected-plans.json").write_text(
+        json.dumps({"selected_plan_keys": ["validation_catalog_integrity"]}),
+        encoding="utf-8",
+    )
     (artifact_dir / "llm-prompt-evaluation.json").write_text(
         json.dumps(
             {
@@ -1337,10 +1355,14 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["workflow_gate"] == "ready"
     assert payload["llm"]["llm_invoked"] is True
     assert payload["llm"]["allowed_plan_keys"] == ["l0", "validation_module_registry_l0"]
+    assert payload["llm"]["discovery_hypothesis_count"] == 1
+    assert payload["llm"]["selected_plan_count"] == 1
     assert payload["understand_anything"]["summary_count"] == 2
     assert "LLM + Code Intelligence Value" in markdown
     assert "llm_provider: `deepseek_api`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
+    assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
+    assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 
 
