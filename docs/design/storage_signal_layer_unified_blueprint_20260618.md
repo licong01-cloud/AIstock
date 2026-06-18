@@ -242,3 +242,21 @@
 6. registry 模型 artifact:**只对 candidate 及以上策略包**,非全量。✅
 7. **命名规范**:`package_id` 沿用 `pkg_<hex>`(机器键);`package_name` 必须人类可读结构化 `[模式]·[信号域/主题]·[自定义名]·[日期]·[版本]`,禁裸 ID;legacy 名保留 alias,新规范仅对新建包强制(§5.8)。✅
 8. **组合数据库设计**:一张实体表 `strategy_packages` + 一张组合边表 `strategy_package_components`(pin child_manifest_sha256 + 权重 + position);子包限 single(深度=1 无环)+ FK + 退役守卫;消除自引用嵌套隐患(§5.9)。✅
+
+---
+
+## 12. UI 设计(现阶段暂缓;先功能后换肤)
+
+> **现阶段决策(2026-06-19):暂不做前端模板/换肤;优先功能开发与设计。** 本节为未来项备忘。
+
+### 12.1 现阶段对 Codex 的硬要求(立即生效)
+- **今后所有新 UI 必须沿用现有界面风格**——以 **因子库(factor library)、QE 自动演进(quantevolver/evolution)** 页面为风格基线(布局/配色/组件/表格图表约定/三态),保持站内一致。
+- 新页(多 Alpha 正交、策略包库、compose 组合页等)**照此基线开发**,不引入异构风格。
+
+### 12.2 未来项(暂缓,后续再评估整体换肤/模板)
+待功能稳定后再考虑是否切换到统一开源模板/设计系统;候选(MIT/Apache、Next.js 友好、数据看板适配),供未来对照:
+- 看板/图表:**Tremor**(tremor.so)、**shadcn/ui**(ui.shadcn.com)、**Apache ECharts**(echarts.apache.org)。
+- 综合后台:**Tabler**(tabler.io)、**Ant Design Pro**(pro.ant.design)、**Horizon UI**(horizon-ui.com)。
+- 组件库:**Mantine**(mantine.dev)、**Ant Design**(ant.design)、**Refine**(refine.dev)。
+- 重表格:**AG Grid 社区版**(ag-grid.com)。
+- 迁移原则(未来):strangler 增量换皮、共享组件库、路由/数据契约不变(后端零影响)。
