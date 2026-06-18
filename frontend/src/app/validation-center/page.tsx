@@ -199,36 +199,65 @@ function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: Validatio
 
 function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssueCandidateSummary | null; items?: ValidationPage<ValidationIssueCandidateItem> | null }) {
   const candidates = items?.items || [];
+  const readyCount = summary?.issue_payload_ready_count ?? candidates.filter((item) => item.issue_payload_ready === true).length;
+  const noSubmitCount = Math.max(0, (summary?.candidate_count ?? candidates.length) - (summary?.linked_issue_count ?? 0));
   return (
-    <SectionCard title="Issue Candidate Queue" eyebrow="CI / Nightly / FailureEvent / agent handoff">
-      <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="Candidates" value={summary?.candidate_count ?? candidates.length} hint="read-only queue" tone="info" />
-        <MetricCard label="Open" value={summary?.open_count ?? 0} hint="not promoted or ignored" tone={(summary?.open_count || 0) ? "warning" : "success"} />
-        <MetricCard label="Linked Issues" value={summary?.linked_issue_count ?? 0} hint="GitHub issue link" tone="success" />
-        <MetricCard label="Missing Links" value={summary?.missing_issue_link_count ?? 0} hint="triage before repair" tone={(summary?.missing_issue_link_count || 0) ? "warning" : "success"} />
+    <SectionCard title="Nightly Discovery Dashboard" eyebrow="Issue Candidate Queue / LLM hypothesis / quality gate">
+      <div className="pv2-notice pv2-notice-info">
+        <div className="pv2-notice-title">Daily discovery, not raw JSON by default</div>
+        <div className="pv2-notice-body">This panel shows what Nightly found, whether a high-quality issue draft is ready, and why a candidate was not submitted. Raw artifact paths stay in advanced audit details.</div>
       </div>
-      <div style={{ marginBottom: 12 }}>
-        <CountChips counts={summary?.by_status} />
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Nightly Candidates" value={summary?.nightly_candidate_count ?? summary?.candidate_count ?? candidates.length} hint="code intelligence scan" tone="info" />
+        <MetricCard label="Issue-ready" value={readyCount} hint="quality gate passed" tone={readyCount ? "success" : "warning"} />
+        <MetricCard label="Draft / Deduped" value={`${summary?.draft_count ?? 0} / ${summary?.deduped_count ?? 0}`} hint={`artifact-only ${display(summary?.artifact_only_count ?? 0)}`} tone="info" />
+        <MetricCard label="Not Submitted" value={noSubmitCount} hint="see reason chips" tone={noSubmitCount ? "warning" : "success"} />
+      </div>
+      <div className="pv2-grid pv2-grid-2" style={{ marginBottom: 12 }}>
+        <div><h3 className="pv2-subtitle">Candidate Status</h3><CountChips counts={summary?.by_status} /></div>
+        <div><h3 className="pv2-subtitle">No-submit Reasons</h3><CountChips counts={summary?.no_submit_reason_counts} /></div>
       </div>
       <div className="pv2-table-wrap">
         <table className="pv2-table">
-          <thead><tr><th>Candidate</th><th>Status</th><th>Module / Severity</th><th>Links</th><th>Evidence</th><th>Suggested Validation</th></tr></thead>
+          <thead><tr><th>Candidate</th><th>Gate</th><th>Hypothesis vs Verification</th><th>Why no issue</th><th>CodeGraph / UA</th><th>Suggested Validation</th></tr></thead>
           <tbody>
             {candidates.length ? candidates.map((item) => (
               <tr key={item.candidate_id}>
                 <td>
                   <strong>{display(item.title || item.candidate_id)}</strong><br />
                   <span className="pv2-muted pv2-mono">{compactId(item.candidate_id)}</span><br />
-                  <span className="pv2-muted pv2-mono">fp {compactId(item.fingerprint)}</span>
+                  <span className="pv2-muted pv2-mono">fp {compactId(item.fingerprint)}</span><br />
+                  <span className="pv2-muted">plan {display(item.source_plan_key)}</span>
                 </td>
-                <td><StatusBadge status={item.status || "new"} /><br /><span className="pv2-muted">{display(item.source_type)}</span><br />runs {display(item.run_count ?? 1)}</td>
-                <td>{display(item.module_id)}<br /><StatusBadge status={item.severity || "P1"} /></td>
                 <td>
-                  {item.github_issue_url ? <a href={item.github_issue_url}>{display(item.github_issue_number || item.github_issue_url)}</a> : <span className="pv2-muted">No GitHub issue link</span>}<br />
-                  {item.linked_pr_url ? <a href={item.linked_pr_url}>PR</a> : <span className="pv2-muted">No PR link</span>}
+                  <StatusBadge status={item.quality_gate_state || item.status || "new"} /><br />
+                  <span className="pv2-muted">ready {display(item.issue_payload_ready)}</span><br />
+                  <span className="pv2-muted">confidence {display(item.confidence)}</span><br />
+                  <span className="pv2-muted">runs {display(item.run_count ?? 1)}</span>
                 </td>
-                <td><BadgeList items={(item.evidence_refs || []).slice(0, 3)} empty="No compact evidence refs" /><span className="pv2-muted">{display(item.source_path)}</span></td>
-                <td><BadgeList items={(item.recommended_validation || []).slice(0, 3)} empty="Run triage before selecting validation" /></td>
+                <td>
+                  <strong>{display(item.summary || item.source_type)}</strong><br />
+                  <span className="pv2-muted">Expected: {display(item.expected)}</span><br />
+                  <span className="pv2-muted">Actual: {display(item.actual)}</span><br />
+                  <details className="pv2-readable-item"><summary>Reproduce / evidence</summary><BadgeList items={item.reproduce} empty="No reproduce command" /><BadgeList items={(item.evidence_refs || []).slice(0, 4)} empty="No compact evidence refs" /></details>
+                </td>
+                <td>
+                  {item.github_issue_url ? <a href={item.github_issue_url}>{display(item.github_issue_number || item.github_issue_url)}</a> : <span className="pv2-muted">{display(item.why_not_submitted || "not promoted yet")}</span>}<br />
+                  <BadgeList items={item.no_submit_reasons} empty="No blocking reason" />
+                </td>
+                <td>
+                  <BadgeList items={[...(item.codegraph_refs || []), ...(item.ua_refs || [])].slice(0, 4)} empty="No graph refs" />
+                </td>
+                <td>
+                  <BadgeList items={(item.recommended_validation || []).slice(0, 3)} empty="Run triage before selecting validation" />
+                  <details className="pv2-readable-item"><summary>Advanced audit</summary><KeyValuePanel rows={[
+                    ["source_path", item.source_path],
+                    ["source_paths", item.source_paths],
+                    ["github_issue_payload_ref", item.github_issue_payload_ref],
+                    ["quality_gate_reasons", item.quality_gate_reasons],
+                    ["allowed_write_scope", item.allowed_write_scope],
+                  ]} /></details>
+                </td>
               </tr>
             )) : <tr><td className="pv2-empty-cell" colSpan={6}>No issue candidates yet. CI/Nightly candidate artifacts can appear here without raw JSON dumps.</td></tr>}
           </tbody>
@@ -1200,6 +1229,7 @@ export default function ValidationCenterPage() {
         githubIssueSummary={githubIssueSummary}
         githubPrSummary={githubPrSummary}
         health={platformHealth || health}
+        issueCandidateSummary={issueCandidateSummary}
         issueWorkflowSummary={issueWorkflowSummary}
         legacyDebtSummary={legacyDebtSummary}
         mergeGate={mergeGate}
