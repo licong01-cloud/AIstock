@@ -401,6 +401,48 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
 
 
+def test_codeql_uses_registry_sync_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    fast_lane = jobs["docs-lite"]
+    analyze_steps = jobs["analyze"]["steps"]
+
+    assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
+    detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
+    assert "scripts/ci_change_classifier.py" in detect_step["run"]
+    assert "close_sync_metadata_only" in detect_step["run"]
+
+    no_op = next(step for step in analyze_steps if step.get("name") == "Fast-lane CodeQL no-op")
+    assert "registry_sync == '1'" in str(no_op["if"])
+    gated_steps = [step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}]
+    assert gated_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in gated_steps)
+
+
+def test_semgrep_uses_registry_sync_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["semgrep"]["steps"]
+
+    detect_step = next(step for step in steps if step.get("name") == "Detect Semgrep fast lane")
+    assert detect_step["id"] == "fast_lane"
+    assert "scripts/ci_change_classifier.py" in detect_step["run"]
+    assert "close_sync_metadata_only" in detect_step["run"]
+
+    semgrep_steps = [
+        step
+        for step in steps
+        if step.get("name") in {"Set up Python 3.12", "Install Semgrep", "Run Semgrep"}
+    ]
+    assert semgrep_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in semgrep_steps)
+    no_op = next(step for step in steps if step.get("name") == "Emit fast-lane semgrep no-op record")
+    assert "registry_sync == '1'" in str(no_op["if"])
+
+
 def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
     allocator.parent.mkdir(parents=True, exist_ok=True)
