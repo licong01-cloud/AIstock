@@ -260,3 +260,33 @@
 - 组件库:**Mantine**(mantine.dev)、**Ant Design**(ant.design)、**Refine**(refine.dev)。
 - 重表格:**AG Grid 社区版**(ag-grid.com)。
 - 迁移原则(未来):strangler 增量换皮、共享组件库、路由/数据契约不变(后端零影响)。
+
+---
+
+## 13. 闭环审计 + MVP 路径 + 基线核验状态(防空中楼阁)
+
+### 13.1 闭环现状
+- **单 Alpha 闭环:✅ 今天已通**(QE→晋升单包→paper/选股/荐股;`pkg_a2f5…` 已 150 paper 组合为证)。
+- **多 Alpha 闭环:未闭合**,缺中段:`预测入库 → 包↔pred 链接 → P3-A 正交 → P3-B 组合引擎 → 多包表示 → 多包晋级门`,跑通后自动接现有 paper/选股/荐股。
+
+### 13.2 多 Alpha MVP 最小闭环(有序)
+1) **预测入库**(合 #1237 + 重启 + 回填 R24)→ 2) **单包补 `prediction_ref`**(包↔pred 绑定,**易漏的隐藏环**)→ 3) **P3-A 正交实测**(#1227)→ 4) **P3-B 组合引擎 + 多包表示**(唯一新表 `strategy_package_components`)→ 5) **多包晋级门**(组合回测证据 + 组件完整性)→ 6) 接现有 paper/选股/荐股(零改)。地基(GC/label去重/registry门控/整合/滚动训练 B/荐股优化)MVP 闭环后并行补。
+
+### 13.3 基线核验状态(已扫码 ✅ / 待扫 ⬜)
+**已扫码确认(本轮已读源码,非推断)**:
+- 上传机制 `qe_prediction_store_client.py`、callback base `callback_urls.py`、远端 **SSH 执行** `node_execution/config_composer`;
+- eval Top-K 计算 `read_exp_res.py`、P3-A `orthogonality.py`、荐股定价 `price_guidance.py`(固定规则非预测);
+- `MultiAlphaEngine`(reuse_prediction + `--pred-backtest` 已有件;reuse_model **未实现**);
+- **策略包真实 schema = PG JSONB**:`strategy_pkg.strategy_package` + `candidate_strategy_package`(`manifest_json`/`factor/model/strategy_manifest_json`;source_type∈{qe_experiment, qe_evolution_loop, candidate_strategy_package});**组合现埋在 manifest_json JSONB**;
+- 包多 Alpha 骨架(`alpha_mode`/`alpha_components`/`alpha_combination_policy`,现 5 包全 single)。
+> **修正**:manifest 是 **DB 内 JSONB**,不是文件;§5.9/§5.10 的"DB 权威"=JSONB+结构化列权威,需 sha 校验的是被引用的 **model/pred 文件 artifact**。组合边表是把 JSONB 里的引用**外提为带 FK 的关系行**。
+
+**待扫(实施前必做的基线门;不扫不开工,防空中楼阁)**:
+- ⬜ `params.pkl` 是否=可加载完整模型(决定"免重训扩展"成立性 / registry 化内容);
+- ⬜ `selection_center`/`paper_v2` 读包的**确切路径**(读 `manifest_json` 还是结构化列)→ 验证"下游零改";
+- ⬜ `candidate→package` 晋升实现内部(`create_candidate_from_qe_loop`);
+- ⬜ `MultiAlphaEngine --pred-backtest` 端到端**是否真跑通**(记忆:"回测未执行");
+- ⬜ qe_archive 列是否足以支撑"删 workspace 后全量分析"(+ `data_snapshot_hash` 现状);
+- ⬜ 是否已有 `prediction_ref`/包↔pred 链接的某种形态。
+
+→ **整合实施计划的第 0 步 = 完成上面这张待扫清单的基线扫描**(读源码 + 跑一次 `--pred-backtest` 冒烟),扫完才进 P2.5/P3.5 开发,确保不是空中楼阁。
