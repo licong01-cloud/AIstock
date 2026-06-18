@@ -322,12 +322,16 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
 
 
-def test_nightly_workflow_always_materializes_changed_files_handoff() -> None:
+def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> None:
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     blocks = [block for block in workflow.split("      - name: ") if "nightly-changed-files.txt" in block]
 
     assert len(blocks) == 2
+    assert workflow.count("scripts/nightly_discovery_input_pack.py") == 2
+    assert "git diff --name-only HEAD~1 HEAD" not in workflow
     for block in blocks:
-        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" in block
-        assert "if (@($changedFiles).Count -gt 0)" in block
-        assert "Clear-Content -Path $changedFile" in block
+        assert "--base-ref HEAD~1" in block
+        assert '--output "$outDir/discovery-input-pack.json"' in block
+        assert "--changed-files-output $changedFile" in block
+        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" not in block
+        assert "Clear-Content -Path $changedFile" not in block

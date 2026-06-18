@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import fnmatch
@@ -14,6 +14,11 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts import nightly_discovery_input_pack  # noqa: E402
+
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.6"
@@ -1919,7 +1924,7 @@ def build_context_artifacts(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     context_path = output_dir / "codegraph-context.md"
     manifest_path = output_dir / "code-intelligence.json"
@@ -1975,7 +1980,7 @@ def build_context_artifacts(
     context_text = _prepend_context_guidance(
         context_text=context_text,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         status=status,
         quality=quality,
     )
@@ -2114,7 +2119,7 @@ def build_affected_tests_artifact(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     out_path = output_dir / "affected-tests.json"
     status = codegraph_status(root, skip_external=skip_external)
@@ -2140,7 +2145,7 @@ def build_affected_tests_artifact(
     codegraph_suggested = list(suggested)
     test_fallback_suggested, test_discovery = _discover_repo_test_fallbacks(
         root=root,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         filter_glob=filter_glob,
     )
     supplement = [path for path in test_fallback_suggested if path not in suggested]
@@ -2189,16 +2194,17 @@ def build_summary(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
@@ -2233,7 +2239,7 @@ def build_summary(
     ]
     if module:
         verify_parts.append(f"--module {module}")
-    verify_parts.extend(f"--changed-file {path}" for path in (changed_files or [])[:12])
+    verify_parts.extend(f"--changed-file {path}" for path in changed[:12])
     freshness_effective = freshness.get("effective") if isinstance(freshness, dict) else {}
     return {
         "schema_version": "aistock_code_intelligence_summary_v1",
@@ -2290,7 +2296,7 @@ def build_client_verification(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / item_id
     output_dir.mkdir(parents=True, exist_ok=True)
     status = codegraph_status(root, skip_external=skip_external)
@@ -2303,14 +2309,14 @@ def build_client_verification(
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         max_symbols=8,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         skip_external=skip_external,
     )
@@ -2719,10 +2725,10 @@ def cmd_context(args: argparse.Namespace) -> int:
 def cmd_affected_tests(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_affected_tests_artifact(
         item_id=args.item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=Path(args.root) if args.root else REPO_ROOT,
         filter_glob=args.filter,
         skip_external=args.skip_external,
@@ -2809,11 +2815,11 @@ def cmd_ua_configure(args: argparse.Namespace) -> int:
 def cmd_summary(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_summary(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         skip_external=args.skip_external,
@@ -2842,11 +2848,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
 def cmd_verify_clients(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_client_verification(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         output_dir=Path(args.output_dir) if args.output_dir else None,
