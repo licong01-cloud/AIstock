@@ -95,9 +95,7 @@ from .react_grounding import (
     McpToolCall,
     McpToolResult,
     ModelTurn,
-    EvidenceGuardDecision,
     ReactGroundingConfig,
-    ReactGroundingResult,
     ToolCatalogEntry,
     ToolGateDecision,
     run_react_grounding_loop,
@@ -109,12 +107,13 @@ from .prompt_pack import (
 )
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
-from .domain_ontology import domain_prompt_key
+from .domain_ontology import DOMAIN_SPECS, domain_prompt_key
 from .mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
     default_mcp_tools,
     enrich_mcp_server_record,
+    function_calling_tools_for_mcp,
     gateway_catalog,
     manifest_entry_to_mcp_tool,
     server_key_for_module,
@@ -306,6 +305,19 @@ class _ServiceReactMcpProvider:
         self.cards = cards
         self.user_message = user_message
 
+    @staticmethod
+    def _merge_route_defaults(payload: dict[str, Any], route_args: dict[str, Any]) -> None:
+        for key, value in route_args.items():
+            if key == "tool_args" and isinstance(value, dict):
+                existing = payload.get("tool_args") if isinstance(payload.get("tool_args"), dict) else {}
+                for arg_key in ("symbol", "ts_code", "stock_code", "analysis_date", "period", "status", "order_by", "limit"):
+                    if payload.get(arg_key) not in (None, "", [], {}):
+                        existing[arg_key] = payload[arg_key]
+                payload["tool_args"] = {**value, **existing}
+                continue
+            if key not in payload or payload.get(key) in (None, "", [], {}):
+                payload[key] = value
+
     def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
         payload = dict(call.payload_json)
@@ -314,12 +326,13 @@ class _ServiceReactMcpProvider:
         payload.setdefault("mcp_route_decision", route)
         payload["server_key"] = call.server_key
         payload["tool_name"] = call.tool_name
+        call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
         payload["selected_tool"] = {
             "server_key": call.server_key,
             "tool_name": call.tool_name,
-            "domain": route.get("domain") or "",
+            "domain": route.get("domain") or call_domain,
         }
-        payload.update(self.service._mcp_route_tool_args(route))
+        self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
         payload.setdefault("limit", self.service._mcp_route_limit(route))
         capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
@@ -397,12 +410,13 @@ class _ServiceReactMcpProvider:
         payload.setdefault("mcp_route_decision", route)
         payload["server_key"] = call.server_key
         payload["tool_name"] = call.tool_name
+        call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
         payload["selected_tool"] = {
             "server_key": call.server_key,
             "tool_name": call.tool_name,
-            "domain": route.get("domain") or "",
+            "domain": route.get("domain") or call_domain,
         }
-        payload.update(self.service._mcp_route_tool_args(route))
+        self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
         capability_key = self.service._capability_key_for_tool(call, route)
         proposal = self.service.create_action_proposal(
             ActionProposalCreate(
@@ -509,6 +523,33 @@ MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS = (
     "research_assistant_catalog_summary_adapter",
     "summary_adapter",
     "\u6211\u53ea\u5c55\u793a\u6982\u8981",
+)
+
+BUSINESS_SYNTHESIS_RESPONSE_MODES = {
+    "local_data_daily_sync_status",
+    "qe_experiment_status_summary",
+    "qe_warehouse_business_summary",
+    "stock_analysis_evidence_card",
+}
+AGENTIC_SYNTHESIS_FORBIDDEN_MARKERS = (
+    "\u5df2\u6c47\u603b",
+    "\u72b6\u6001\u6c47\u603b\uff1a",
+    "\u72b6\u6001\u6c47\u603b:",
+    "\u5df2\u6c47\u603b QE",
+    "\u5df2\u6c47\u603b\u672c\u5730\u6570\u636e",
+    "QE \u6570\u4ed3\u5065\u5eb7\u6c47\u603b\u5982\u4e0b",
+    "\u672c\u8f6e\u672a\u542f\u52a8\u3001\u6267\u884c\u3001\u7269\u5316\u6216\u4fee\u6539\u4efb\u4f55 QE \u5b9e\u9a8c",
+    "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65",
+    "\u672c\u8f6e\u672a\u6267\u884c backfill",
+)
+AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
+    "You are AIstock Research Assistant. Use the audited tool results to answer the user's exact question. "
+    "For business evidence answers, do not use fixed status-summary templates, do not dump raw JSON, "
+    "and do not mention internal route names, server_key, tool_name, summary_first, or mcp_execution_result. "
+    "Every factual or numeric claim must cite an actual tool source value and actual as_of/trade_date/report_period value returned by tools. "
+    "If the evidence says zero/none, state that honestly and briefly instead of listing all rows. "
+    "Write the final answer in the user's language. For write or confirmation requests, only describe the approval/preflight boundary. "
+    "Do not invent facts, placeholders, source values, dates, or actions."
 )
 
 
@@ -994,6 +1035,7 @@ class LlmCallResult:
     model: str
     duration_ms: int
     usage: dict[str, Any]
+    tool_calls: list[McpToolCall] | None = None
 
 
 def _litellm_message_content(value: Any) -> str:
@@ -1043,6 +1085,49 @@ def _litellm_compatible_messages(messages: list[dict[str, Any]]) -> list[dict[st
     return normalized
 
 
+def _attr_or_key(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    if arguments in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(arguments))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"value": arguments}
+    return dict(parsed) if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, str]] | None) -> list[McpToolCall]:
+    raw_calls = _attr_or_key(message, "tool_calls", []) or []
+    if not isinstance(raw_calls, list):
+        return []
+    calls: list[McpToolCall] = []
+    for index, raw in enumerate(raw_calls):
+        function = _attr_or_key(raw, "function", {}) or {}
+        function_name = str(_attr_or_key(function, "name", "") or "").strip()
+        mapping = (registry or {}).get(function_name)
+        if not mapping:
+            continue
+        arguments = _parse_tool_arguments(_attr_or_key(function, "arguments", {}) or {})
+        call_id = str(_attr_or_key(raw, "id", "") or f"tool_call_{index:03d}")
+        calls.append(
+            McpToolCall(
+                server_key=mapping["server_key"],
+                tool_name=mapping["tool_name"],
+                payload_json=arguments,
+                stable_call_id=call_id,
+                reason=f"native_function_call:{function_name}",
+            )
+        )
+    return sorted(calls, key=lambda call: call.sorted_key())
+
+
 
 
 def _default_workflow_capabilities() -> list[dict[str, Any]]:
@@ -1080,7 +1165,17 @@ class ResearchAssistantLlmClient:
     credentials are missing; there is no canned success fallback.
     """
 
-    def complete(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
+    def complete(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model_profile: dict[str, Any],
+        temperature: float,
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        tool_registry: dict[str, dict[str, str]] | None = None,
+    ) -> LlmCallResult:
         provider = str(model_profile.get("provider") or "").strip()
         model_name = str(model_profile.get("model_name") or "").strip()
         if not provider or not model_name:
@@ -1102,20 +1197,19 @@ class ResearchAssistantLlmClient:
             raise RuntimeError("litellm is not installed; Research Assistant cannot call LLM") from exc
         start = perf_counter()
         provider_messages = _litellm_compatible_messages(messages)
-        response = litellm.completion(
-            model=model_id,
-            messages=provider_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **completion_kwargs,
-        )
+        if tools:
+            completion_kwargs["tools"] = tools
+            completion_kwargs["tool_choice"] = tool_choice or "auto"
+        response = litellm.completion(model=model_id, messages=provider_messages, temperature=temperature, max_tokens=max_tokens, **completion_kwargs)
         duration_ms = int((perf_counter() - start) * 1000)
-        content = str(response.choices[0].message.content or "").strip()
+        message = response.choices[0].message
+        content = str(message.content or "").strip()
+        tool_calls = _extract_litellm_tool_calls(message, tool_registry)
         usage_raw = getattr(response, "usage", None)
         usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
-        if not content:
+        if not content and not tool_calls:
             raise RuntimeError("assistant LLM returned empty content")
-        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
+        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, tool_calls=tool_calls)
 
     def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
         return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
@@ -2398,6 +2492,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             context_pack=context_pack,
         )
         messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages, mode_decision=mode_decision_json, runtime_config=runtime_config)
+        function_tools, function_tool_registry = self._agentic_function_tools(mode_decision)
         self.add_task_event(
             task["task_id"],
             TaskEventCreate(
@@ -2420,6 +2515,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             model_profile=model_profile,
             runtime_activation=runtime_activation,
             assembly_trace=assembly_trace,
+            function_tools=function_tools,
+            function_tool_registry=function_tool_registry,
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision, route_decision=route_decision)
@@ -2458,6 +2555,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             budget_plan=budget_plan,
             runtime_config=runtime_config,
             mode_decision=mode_decision,
+            function_tools=function_tools,
+            function_tool_registry=function_tool_registry,
         )
         trace = self.create_trace_event(
             TraceEventCreate(
@@ -2745,6 +2844,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
         if prior_messages:
             messages.extend(prior_messages)
+        messages.append({"role": "system", "content": AGENTIC_SYNTHESIS_SYSTEM_PROMPT})
         mcp_catalog_context = self._mcp_tool_catalog_context_for_llm(user_message)
         if mcp_catalog_context:
             messages.append({"role": "system", "content": mcp_catalog_context})
@@ -2992,10 +3092,76 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if route.get("requires_clarification"):
                 return route
             if route.get("semantic_status") == "no_tool":
-                return route
+                return self._agentic_read_route_override(user_message, route)
             if route.get("server_key") and route.get("tool_name"):
-                return self._canonicalize_mcp_route(route)
-        return self._canonicalize_mcp_route(dict(route_request(user_message)))
+                return self._agentic_read_route_override(user_message, self._canonicalize_mcp_route(route))
+        legacy_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
+        return self._agentic_read_route_override(user_message, legacy_route)
+
+    @staticmethod
+    def _is_qe_experiment_status_read_request(user_message: str) -> bool:
+        lower = user_message.lower()
+        has_qe_scope = "qe" in lower or "quantevolver" in lower or "custom_evo" in lower or "实验" in lower
+        status_terms = (
+            "哪些",
+            "有哪",
+            "列表",
+            "状态",
+            "进度",
+            "正在运行",
+            "还在运行",
+            "运行中",
+            "还在跑",
+            "completed",
+            "running",
+            "created",
+            "failed",
+            "完成",
+            "失败",
+            "已完成",
+        )
+        strong_write_terms = (
+            "创建",
+            "生成",
+            "草案",
+            "模板",
+            "物化",
+            "启动",
+            "执行实验",
+            "运行一个",
+            "跑一个",
+            "create",
+            "generate",
+            "materialize",
+            "start experiment",
+            "run experiment",
+        )
+        return has_qe_scope and any(term in lower for term in status_terms) and not any(term in lower for term in strong_write_terms)
+
+    def _agentic_read_route_override(self, user_message: str, route: dict[str, Any]) -> dict[str, Any]:
+        if (
+            str(route.get("domain") or "") in {"qe_experiment", "general"}
+            and (not route.get("tool_name") or str(route.get("tool_name") or "") in {"qe_template_create", "qe_template_validate", "qe_template_materialize_confirmed", "qe_template_run_confirmed", "qe_template_create_and_run_confirmed"})
+            and self._is_qe_experiment_status_read_request(user_message)
+        ):
+            spec = next(item for item in DOMAIN_SPECS.values() if item.domain.value == "qe_experiment")
+            read_route = dict(route)
+            read_route.update(
+                {
+                    "domain": spec.domain.value,
+                    "intent_value": spec.intent_value,
+                    "server_key": spec.server_key,
+                    "tool_name": "qe_experiment_list",
+                    "side_effect": "read_only",
+                    "reason": "User asked for QE experiment status/read-only evidence; route to qe_experiment_list before agentic synthesis.",
+                    "policy": spec.risk_policy,
+                    "read_tools": list(spec.read_tools),
+                    "plan_tools": list(spec.plan_tools),
+                    "confirmed_tools": list(spec.confirmed_tools),
+                }
+            )
+            return self._canonicalize_mcp_route(read_route)
+        return route
 
     def _semantic_tool_plan(self, user_message: str, *, model_profile: dict[str, Any]) -> SemanticToolPlan | None:
         if not model_profile or not self.semantic_tool_planner.available():
@@ -3016,7 +3182,35 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         normalized = {str(key): value for key, value in args.items() if value not in (None, "", [], {})}
         if route.get("limit") not in (None, "", [], {}) and "limit" not in normalized:
             normalized["limit"] = route["limit"]
-        for key in ("symbol", "ts_code", "analysis_date", "period"):
+        for key in (
+            "symbol",
+            "ts_code",
+            "stock_code",
+            "analysis_date",
+            "trade_date",
+            "report_period",
+            "period",
+            "status",
+            "state",
+            "order_by",
+            "offset",
+            "active_only",
+            "model_type",
+            "experiment_id",
+            "task_id",
+            "qe_task_id",
+            "qe_loop_id",
+            "loop_id",
+            "loop_index",
+            "run_id",
+            "query",
+            "q",
+            "search",
+            "locale",
+            "provider",
+            "url",
+            "max_chars",
+        ):
             if route.get(key) not in (None, "", [], {}) and key not in normalized:
                 normalized[key] = route[key]
         return {"tool_args": normalized, **normalized} if normalized else {}
@@ -3076,6 +3270,69 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             lines.append(f"- {display_name} ({server_key}{alias_text}): {tool_names}")
         return "\n".join(lines)
 
+
+    def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+        if mode_decision.mode not in {DialogueMode.PLANNING, DialogueMode.ANALYSIS, DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}:
+            return [], {}
+        if mode_decision.allowed_tool_side_effect == "none":
+            return [], {}
+        tools = self._manifest_mcp_catalog_records()
+        allowed: list[dict[str, Any]] = []
+        for tool in tools:
+            side_effect = str(tool.get("side_effect_level") or "read_only")
+            if mode_decision.allowed_tool_side_effect == "read_only" and side_effect != "read_only":
+                continue
+            allowed.append(tool)
+        return function_calling_tools_for_mcp(allowed)
+
+    @staticmethod
+    def _looks_like_large_tool_payload(payload: dict[str, Any]) -> bool:
+        rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+        return len(rendered) > 9000 or len(items) > 12 or len(sections) > 8
+
+    def _cheap_worker_model_profile(self) -> dict[str, Any] | None:
+        route = self.route_model(ModelRouteRequest(role="cheap_worker", risk_level="low", token_estimate=2000))
+        profile = route.get("model_profile")
+        return profile if isinstance(profile, dict) and profile.get("status") == "enabled" and profile.get("role") == "cheap_worker" else None
+
+    def _compact_tool_result_with_auxiliary_model(self, result: McpToolResult) -> McpToolResult:
+        if not isinstance(result.payload_json, dict) or not self._looks_like_large_tool_payload(result.payload_json):
+            return result
+        profile = self._cheap_worker_model_profile()
+        if not profile or not callable(getattr(self.llm_client, "complete", None)):
+            return result
+        prompt = {
+            "instruction": "Summarize this tool result for the primary agent. Preserve exact source_refs, as_of, status_counts/group_counts, IDs, metrics, and negative/empty facts. Do not invent.",
+            "tool_result": {
+                "server_key": result.server_key,
+                "tool_name": result.tool_name,
+                "payload": result.payload_json,
+                "source_refs": result.source_refs,
+                "as_of": result.as_of,
+            },
+        }
+        try:
+            compacted = self.llm_client.complete(
+                messages=[{"role": "system", "content": "You are a cheap_worker compression helper; output compact JSON only."}, {"role": "user", "content": json.dumps(prompt, ensure_ascii=False, sort_keys=True)}],
+                model_profile=profile,
+                temperature=0.0,
+                max_tokens=700,
+            )
+        except Exception:  # noqa: BLE001 - auxiliary compression must not block primary synthesis.
+            logger.exception("cheap_worker tool-result compaction failed; using original result")
+            return result
+        compact_payload = dict(result.payload_json)
+        compact_payload["auxiliary_summary"] = compacted.content[:2400]
+        if isinstance(compact_payload.get("items"), list):
+            compact_payload["items"] = compact_payload["items"][:5]
+        if isinstance(compact_payload.get("sections"), list):
+            compact_payload["sections"] = compact_payload["sections"][:8]
+        result.payload_json = compact_payload
+        result.summary = compacted.content[:1200]
+        return result
+
     def _complete_chat_with_reactive_recovery(
         self,
         *,
@@ -3092,6 +3349,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         model_profile: dict[str, Any],
         runtime_activation: dict[str, Any],
         assembly_trace: dict[str, Any],
+        function_tools: list[dict[str, Any]] | None = None,
+        function_tool_registry: dict[str, dict[str, str]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], ContextBudgetPlan, list[dict[str, str]], dict[str, Any]]:
         try:
             result = self.llm_client.complete(
@@ -3099,6 +3358,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 model_profile=model_profile,
                 temperature=budget_plan.llm_temperature,
                 max_tokens=budget_plan.llm_max_tokens,
+                tools=function_tools,
+                tool_choice="auto" if function_tools else None,
+                tool_registry=function_tool_registry,
             )
             return result, messages, budget_plan, prior_messages, assembly_trace
         except Exception as exc:
@@ -3187,6 +3449,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     model_profile=model_profile,
                     temperature=retry_budget.llm_temperature,
                     max_tokens=retry_budget.llm_max_tokens,
+                    tools=function_tools,
+                    tool_choice="auto" if function_tools else None,
+                    tool_registry=function_tool_registry,
                 )
                 return result, retry_messages, retry_budget, retry_prior_messages, retry_trace
             except Exception as retry_exc:
@@ -3664,121 +3929,29 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             }
         return cards
 
-    def _maybe_auto_execute_read_only_mcp_route(
-        self,
-        *,
-        user_message: str,
-        conversation_id: str,
-        task: dict[str, Any],
-        context_pack: dict[str, Any],
-        cards: dict[str, Any],
-        mode_decision: ModeDecision,
-    ) -> None:
-        route = cards.get("mcp_route_decision")
-        if not isinstance(route, dict):
-            return
-        eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
-        route["auto_execute"] = eligibility
-        if not eligibility["eligible"]:
-            return
-        server_key = str(route["server_key"])
-        tool_name = str(route["tool_name"])
-        capability_key = f"{route['domain']}.mcp_orchestration"
-        payload = {
-            "request": user_message,
-            "route": route,
-            "mcp_route_decision": route,
-            **self._mcp_route_tool_args(route),
-            "limit": self._mcp_route_limit(route),
-        }
-        try:
-            proposal = self.create_action_proposal(
-                ActionProposalCreate(
-                    task_id=task["task_id"],
-                    conversation_id=conversation_id,
-                    capability_key=capability_key,
-                    proposal_type="mcp_tool",
-                    title=f"Summary-first MCP read: {server_key}/{tool_name}",
-                    summary=f"Auto-execute low-risk read-only MCP summary for route {server_key}/{tool_name}.",
-                    input_json=payload,
-                    expected_result_json={"summary_first": True, "server_key": server_key, "tool_name": tool_name},
-                    context_pack_id=context_pack.get("context_pack_id"),
-                    idempotency_key=sha256_json({"task_id": task["task_id"], "auto_mcp_read": server_key, "tool_name": tool_name, "payload": payload}),
-                    created_by="research_assistant_auto_read_only_route",
-                )
-            )
-            preflight = self.preflight_action_proposal(
-                proposal["action_proposal_id"],
-                ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
-            )
-            if preflight["proposal"]["status"] != "preflight_passed":
-                cards["mcp_execution_result"] = {
-                    "auto_executed": False,
-                    "status": "preflight_blocked",
-                    "route": f"{server_key}/{tool_name}",
-                    "server_key": server_key,
-                    "tool_name": tool_name,
-                    "action_proposal_id": proposal["action_proposal_id"],
-                    "preflight": preflight["preflight"],
-                    "summary_first": True,
-                }
-                return
-            executed = self.execute_action_proposal(
-                proposal["action_proposal_id"],
-                ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
-            )
-        except Exception as exc:  # pragma: no cover - defensive path keeps chat usable when catalog drifts.
-            logger.exception("read-only MCP auto execution failed for %s/%s", server_key, tool_name)
-            cards["mcp_execution_result"] = {
-                "auto_executed": False,
-                "status": "failed",
-                "route": f"{server_key}/{tool_name}",
-                "server_key": server_key,
-                "tool_name": tool_name,
-                "summary_first": True,
-                "error": {"code": "auto_mcp_execution_failed", "message": str(exc)},
+    @staticmethod
+    def _react_messages_for_agentic_synthesis(messages: list[dict[str, Any]], *, user_message: str, route_seed: McpToolCall | None) -> list[dict[str, Any]]:
+        react_messages = [dict(item) for item in messages]
+        directive = {
+            "type": "AGENTIC_REPLY_SYNTHESIS_DIRECTIVE",
+            "instruction": AGENTIC_SYNTHESIS_SYSTEM_PROMPT,
+            "user_message": user_message,
+            "seeded_tool_call": {
+                "server_key": route_seed.server_key,
+                "tool_name": route_seed.tool_name,
+                "payload_json": route_seed.payload_json,
             }
-            self.add_task_event(
-                task["task_id"],
-                TaskEventCreate(
-                    event_type="mcp_auto_execute_failed",
-                    severity="warning",
-                    message=f"Read-only MCP auto execution failed: {server_key}/{tool_name}",
-                    payload_json={"server_key": server_key, "tool_name": tool_name, "error": str(exc)},
-                ),
-            )
-            return
-
-        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
-        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
-        cards["mcp_summary_result"] = summary_result
-        cards["mcp_result_cards"] = list(executed.get("human_cards") or [])
-        cards["mcp_tool_event"] = {
-            "tool_event_id": tool_event.get("tool_event_id"),
-            "server_key": tool_event.get("server_key"),
-            "tool_name": tool_event.get("tool_name"),
-            "status": tool_event.get("status"),
-            "transport": tool_event.get("transport"),
-            "duration_ms": tool_event.get("duration_ms"),
-            "artifact_refs": tool_event.get("artifact_refs") or [],
+            if route_seed
+            else None,
+            "output_rules": [
+                "If tool_calls are needed, emit native function calls or the structured JSON fallback only.",
+                "After tool results are present, write the final answer yourself and address the exact user question.",
+                "Do not return a Python-rendered template or copy a raw tool payload.",
+                "Cite actual source and as_of/trade_date/report_period values found in tool results.",
+            ],
         }
-        cards["mcp_execution_result"] = {
-            "auto_executed": bool(executed.get("executed")),
-            "status": executed.get("status"),
-            "executed": bool(executed.get("executed")),
-            "route": f"{server_key}/{tool_name}",
-            "server_key": server_key,
-            "tool_name": tool_name,
-            "action_proposal_id": proposal["action_proposal_id"],
-            "proposal_status": (executed.get("proposal") or {}).get("status") if isinstance(executed.get("proposal"), dict) else None,
-            "tool_event_id": tool_event.get("tool_event_id"),
-            "trace_id": executed.get("trace_id"),
-            "summary_first": bool(summary_result.get("summary_first", True)),
-            "response_summary": self._compact_mcp_summary_for_cards(summary_result),
-            "human_cards": list(executed.get("human_cards") or []),
-        }
-        cards["status_rail"] = self._mcp_executed_status_rail()
-
+        react_messages.append({"role": "system", "content": json.dumps(directive, ensure_ascii=False, sort_keys=True)})
+        return react_messages
 
     def _complete_chat_with_react_grounding(
         self,
@@ -3794,8 +3967,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         budget_plan: ContextBudgetPlan,
         runtime_config: dict[str, Any],
         mode_decision: ModeDecision,
+        function_tools: list[dict[str, Any]] | None = None,
+        function_tool_registry: dict[str, dict[str, str]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
         route_seed = self._seeded_react_tool_call(cards, mode_decision)
+        if route_seed and first_llm_result.tool_calls:
+            # Native function calls take precedence over legacy route seeding.
+            route_seed = None
+        react_messages = self._react_messages_for_agentic_synthesis(messages, user_message=user_message, route_seed=route_seed)
         first_turn_consumed = False
 
         def model_complete(next_messages: list[dict[str, Any]]) -> ModelTurn:
@@ -3808,6 +3987,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     model=first_llm_result.model,
                     duration_ms=first_llm_result.duration_ms,
                     usage=first_llm_result.usage,
+                    tool_calls=list(first_llm_result.tool_calls or []),
                 )
             first_turn_consumed = True
             result = self.llm_client.complete(
@@ -3815,6 +3995,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 model_profile=model_profile,
                 temperature=budget_plan.llm_temperature,
                 max_tokens=budget_plan.llm_max_tokens,
+                tools=function_tools,
+                tool_choice="auto" if function_tools else None,
+                tool_registry=function_tool_registry,
             )
             return ModelTurn(
                 content=result.content,
@@ -3822,6 +4005,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                tool_calls=list(result.tool_calls or []),
             )
 
         provider = _ServiceReactMcpProvider(
@@ -3832,69 +4016,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             cards=cards,
             user_message=user_message,
         )
-        if (
-            route_seed
-            and mode_decision.mode != DialogueMode.ANALYSIS
-            and self._should_finish_with_business_summary_tool(route_seed, cards)
-        ):
-            entry = next(
-                (
-                    item
-                    for item in self._react_tool_catalog_entries()
-                    if item.server_key == route_seed.server_key and item.tool_name == route_seed.tool_name
-                ),
-                None,
-            )
-            if entry is not None:
-                decision = ToolGateDecision(
-                    allowed=True,
-                    action="execute_read_only",
-                    reason="business_summary_terminal",
-                    catalog_entry=entry,
-                    requires_approval=False,
-                    risk_level=entry.risk_level,
-                    side_effect_level=entry.side_effect_level,
-                )
-                result = provider.execute_read_only(route_seed, decision)
-                guard = EvidenceGuardDecision(
-                    allowed=True,
-                    text=first_llm_result.content,
-                    reason="ok",
-                    source_count=1 if result.source_refs else 0,
-                    as_of_count=1 if result.as_of else 0,
-                )
-                react_result = ReactGroundingResult(
-                    final_text=first_llm_result.content,
-                    messages=[dict(item) for item in messages],
-                    tool_calls=[route_seed],
-                    tool_results=[result],
-                    trace_steps=[
-                        {
-                            "iteration": 1,
-                            "model": "business_summary_terminal",
-                            "tool_call_count": 1,
-                            "provider": "route_seed",
-                        }
-                    ],
-                    evidence_guard=guard,
-                    iterations=1,
-                    stopped_reason="business_summary_terminal",
-                    model_turns=[],
-                )
-                return first_llm_result, [dict(item) for item in messages], react_result
-
         def fallback_tool_calls() -> list[McpToolCall]:
             fallback = self._grounded_route_fallback_tool_call(cards, mode_decision)
             return [fallback] if fallback else []
 
         react_result = run_react_grounding_loop(
-            messages=messages,
+            messages=react_messages,
             model_complete=model_complete,
             mcp_provider=provider,
             catalog_entries=self._react_tool_catalog_entries(),
-            config=self._react_grounding_config(runtime_config),
+            config=self._react_grounding_config(runtime_config, user_message=user_message, token_budget=budget_plan.effective_window_tokens),
             seeded_tool_calls=[route_seed] if route_seed else None,
             fallback_tool_calls=fallback_tool_calls,
+            tool_result_compactor=self._compact_tool_result_with_auxiliary_model,
         )
         final_turn = react_result.model_turns[-1] if react_result.model_turns else ModelTurn(
             content=react_result.final_text,
@@ -3909,28 +4043,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             model=final_turn.model,
             duration_ms=sum(turn.duration_ms for turn in react_result.model_turns) or first_llm_result.duration_ms,
             usage=self._merge_llm_usage([turn.usage for turn in react_result.model_turns]),
+            tool_calls=list(final_turn.tool_calls or []),
         )
         return grounded_llm_result, [dict(item) for item in react_result.messages], react_result
 
     def _should_finish_with_business_summary_tool(self, call: McpToolCall, cards: dict[str, Any]) -> bool:
-        route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
-        domain = str(route.get("domain") or "")
-        if domain == "stock_analysis":
-            return call.server_key == "aistock-stock-analysis" and str(route.get("side_effect") or "read_only") == "read_only"
-        if domain not in {"qe_experiment", "qe_warehouse"}:
-            return False
-        if domain == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
-            return False
-        return call.server_key == "aistock-qe" and str(route.get("side_effect") or "read_only") == "read_only"
+        return False
 
-    def _react_grounding_config(self, runtime_config: dict[str, Any]) -> ReactGroundingConfig:
+    def _react_grounding_config(self, runtime_config: dict[str, Any], *, user_message: str = "", token_budget: int | None = None) -> ReactGroundingConfig:
         cfg = runtime_config.get("react_grounding") if isinstance(runtime_config.get("react_grounding"), dict) else {}
         if "max_tool_iterations" not in cfg:
             raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
         return ReactGroundingConfig(
             max_tool_iterations=int(cfg["max_tool_iterations"]),
             evidence_required=bool(cfg.get("evidence_required", True)),
+            user_message=user_message,
+            token_budget=int(cfg.get("token_budget") or token_budget) if (cfg.get("token_budget") or token_budget) else None,
             placeholder_patterns=tuple(str(item) for item in cfg.get("placeholder_patterns", [r"\bXX\b", r"\bX%\b", "approxX", "about X"])),
+            forbidden_answer_markers=AGENTIC_SYNTHESIS_FORBIDDEN_MARKERS,
         )
 
     @staticmethod
@@ -3964,6 +4094,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
             return None
+        if self._stock_analysis_route_needs_model_symbol(route):
+            return None
         eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
         route["auto_execute"] = eligibility
         if eligibility.get("eligible"):
@@ -3986,6 +4118,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
             return None
+        if self._stock_analysis_route_needs_model_symbol(route):
+            return None
         if str(route.get("side_effect") or "read_only") != "read_only":
             return None
         eligibility = route.get("auto_execute") if isinstance(route.get("auto_execute"), dict) else self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
@@ -4007,6 +4141,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
 
     @staticmethod
+    def _stock_analysis_route_needs_model_symbol(route: dict[str, Any]) -> bool:
+        if str(route.get("domain") or "") != "stock_analysis":
+            return False
+        tool_name = str(route.get("tool_name") or "")
+        if not tool_name.startswith("stock_analysis_"):
+            return False
+        args = route.get("tool_args") if isinstance(route.get("tool_args"), dict) else {}
+        return not any(route.get(key) or args.get(key) for key in ("symbol", "ts_code", "stock_code"))
+
+    @staticmethod
     def _react_grounding_card(react_result: Any) -> dict[str, Any]:
         return {
             "schema_version": "research_assistant_react_grounding_v1",
@@ -4021,6 +4165,26 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "as_of_count": react_result.evidence_guard.as_of_count,
             },
         }
+
+
+    @staticmethod
+    def _is_business_synthesis_summary(summary: dict[str, Any]) -> bool:
+        if not isinstance(summary, dict):
+            return False
+        if str(summary.get("response_mode") or "") in BUSINESS_SYNTHESIS_RESPONSE_MODES:
+            return True
+        return bool(summary.get("local_data_daily_status"))
+
+    @staticmethod
+    def _contains_agentic_template_marker(text: str) -> bool:
+        lowered = text.lower()
+        return any(marker and marker.lower() in lowered for marker in AGENTIC_SYNTHESIS_FORBIDDEN_MARKERS)
+
+    @staticmethod
+    def _business_synthesis_failure_text(text: str) -> str:
+        if ResearchAssistantService._is_insufficient_evidence_text(text):
+            return text
+        return "Insufficient evidence: business reply synthesis did not pass grounding guard."
 
     @staticmethod
     def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
@@ -4101,6 +4265,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             if capability and self._capability_allows_tool(capability, call):
                 return candidate
+        inferred_domain = self._domain_for_mcp_tool(call.tool_name)
+        if inferred_domain:
+            candidate = f"{inferred_domain}.mcp_orchestration"
+            capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
+            if capability and self._capability_allows_tool(capability, call):
+                return candidate
+            capability = self._refresh_capability_cache_for_tool(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                capability_key=candidate,
+            )
+            if capability and self._capability_allows_tool(capability, call):
+                return candidate
         capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
         for capability in capabilities:
             if self._capability_allows_tool(capability, call):
@@ -4109,6 +4286,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if capability:
             return str(capability["capability_key"])
         raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
+
+    @staticmethod
+    def _domain_for_mcp_tool(tool_name: str) -> str | None:
+        for spec in DOMAIN_SPECS.values():
+            if tool_name in {*spec.read_tools, *spec.plan_tools, *spec.confirmed_tools}:
+                return spec.domain.value
+        return None
 
     @staticmethod
     def _capability_allows_tool(capability: dict[str, Any], call: McpToolCall) -> bool:
@@ -4267,6 +4451,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
         if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            if self._is_business_synthesis_summary(summary):
+                if text and not self._is_insufficient_evidence_text(text) and not self._contains_agentic_template_marker(text) and not self._contains_mcp_business_forbidden_marker(text):
+                    return self._apply_main_reply_policy(text, mode_decision)
+                return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             if self._should_render_auto_mcp_execution_reply(execution, summary, react_active=react_active):
                 return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
@@ -4277,6 +4465,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             and react_card.get("stopped_reason") == "evidence_summary_fallback"
         ):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            if self._is_business_synthesis_summary(summary):
+                return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if isinstance(route, dict) and route.get("requires_clarification"):
@@ -4288,6 +4478,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             and self._contains_mcp_business_forbidden_marker(text)
         ):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            if self._is_business_synthesis_summary(summary):
+                return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
             return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
@@ -4311,6 +4503,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _should_render_auto_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any], *, react_active: bool) -> bool:
         del execution
+        if ResearchAssistantService._is_business_synthesis_summary(summary):
+            return False
         if summary.get("local_data_daily_status") or summary.get("response_mode") == "local_data_daily_sync_status":
             return True
         if summary.get("response_mode") in QE_BUSINESS_RESPONSE_MODES:

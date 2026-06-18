@@ -274,6 +274,11 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
             "行业地位",
             "竞争格局",
             "发展趋势",
+            "基本情况",
+            "近期走势",
+            "走势",
+            "未来趋势",
+            "全方位分析",
         ),
         read_tools=(
             "stock_analysis_get_quote",

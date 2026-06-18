@@ -8,6 +8,8 @@ schema details, but tool identity and risk metadata come from TOOL_MANIFEST.
 from __future__ import annotations
 
 import json
+import re
+from hashlib import sha1
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -378,10 +380,117 @@ def _required_confirmations_for(entry: ToolManifestEntry) -> list[str]:
 
 def _input_schema_for(tool_name: str) -> dict[str, Any]:
     required_inputs = list(REQUIRED_INPUTS_BY_TOOL.get(tool_name, []))
-    schema: dict[str, Any] = {"type": "object"}
+    properties: dict[str, Any] = {
+        "request": {"type": "string", "description": "Original user request for audit context."},
+        "query": {"type": "string", "description": "Search or natural-language query."},
+        "q": {"type": "string", "description": "Short search query alias."},
+        "search": {"type": "string", "description": "Catalog or text search filter."},
+        "locale": {"type": "string", "description": "Locale such as zh-CN or en-US."},
+        "provider": {"type": "string", "description": "Optional provider selector."},
+        "url": {"type": "string", "description": "URL for fetch/extract tools."},
+        "max_chars": {"type": "integer", "minimum": 1, "maximum": 12000},
+        "status": {"type": "string", "description": "Business status filter, for example running/completed/created/failed."},
+        "state": {"type": "string", "description": "State filter alias when a tool uses state instead of status."},
+        "symbol": {"type": "string", "description": "Stock symbol or ts_code, for example 000688.SZ."},
+        "ts_code": {"type": "string", "description": "Tushare stock code."},
+        "stock_code": {"type": "string", "description": "Stock code alias."},
+        "dataset": {"type": "string", "description": "Local-data dataset key."},
+        "analysis_date": {"type": "string", "description": "Analysis date in YYYY-MM-DD format."},
+        "trade_date": {"type": "string", "description": "Trading date in YYYY-MM-DD or YYYYMMDD format."},
+        "report_period": {"type": "string", "description": "Financial report period."},
+        "period": {"type": "string", "description": "Lookback period such as 1m, 3m, 1y."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "order_by": {"type": "string", "description": "Sort metric such as cagr, calmar, updated_at, created_at."},
+        "active_only": {"type": "boolean", "description": "Return only active/running records when supported."},
+        "model_type": {"type": "string"},
+        "experiment_id": {"type": "string"},
+        "task_id": {"type": "string"},
+        "qe_task_id": {"type": "string"},
+        "qe_loop_id": {"type": "string"},
+        "loop_id": {"type": "string"},
+        "loop_index": {"type": "integer"},
+        "run_id": {"type": "string"},
+        "factor_name": {"type": "string"},
+        "model_id": {"type": "string"},
+        "package_id": {"type": "string"},
+        "algo_code": {"type": "string"},
+        "method": {"type": "string"},
+        "min_abs_corr": {"type": "number"},
+        "min_icir": {"type": "number"},
+        "min_ir": {"type": "number"},
+        "min_runs": {"type": "integer", "minimum": 1},
+        "qe_selectable": {"type": "boolean"},
+        "plan_id": {"type": "string"},
+        "confirmation_text": {"type": "string"},
+        "title": {"type": "string"},
+        "template_kind": {"type": "string"},
+        "config_json": {"type": "object"},
+        "template_id": {"type": "string"},
+        "confirm_template": {"type": "string"},
+        "confirm_run": {"type": "string"},
+        "confirm_direct_run": {"type": "string"},
+        "memory_type": {"type": "string"},
+        "subject_key": {"type": "string"},
+        "problem_statement": {"type": "string"},
+        "bug_id": {"type": "string"},
+        "issue_number": {"type": "integer"},
+        "candidate_id": {"type": "string"},
+        "mode": {"type": "string"},
+    }
+    for required in required_inputs:
+        properties.setdefault(str(required), {"type": "string"})
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required_inputs:
         schema["required"] = required_inputs
     return schema
+
+
+def mcp_tool_function_name(tool_name: str) -> str:
+    """Return a provider-safe function name for a manifest MCP tool."""
+
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", str(tool_name or "")).strip("_") or "mcp_tool"
+    if not re.match(r"^[A-Za-z_]", safe):
+        safe = f"tool_{safe}"
+    if len(safe) <= 64:
+        return safe
+    digest = sha1(safe.encode("utf-8")).hexdigest()[:8]
+    return f"{safe[:55]}_{digest}"
+
+
+def function_calling_tools_for_mcp(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """Build LiteLLM/OpenAI function specs plus a local name-to-MCP registry."""
+
+    specs: list[dict[str, Any]] = []
+    registry: dict[str, dict[str, str]] = {}
+    for tool in tools:
+        if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
+            continue
+        server_key = str(tool.get("server_key") or "").strip()
+        tool_name = str(tool.get("tool_name") or "").strip()
+        if not server_key or not tool_name:
+            continue
+        function_name = mcp_tool_function_name(tool_name)
+        schema = tool.get("input_schema_json") if isinstance(tool.get("input_schema_json"), dict) else {"type": "object"}
+        description = str(tool.get("description") or tool.get("title") or tool_name).strip()
+        risk = str(tool.get("risk_level") or "medium")
+        side_effect = str(tool.get("side_effect_level") or "read_only")
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "description": (
+                        f"{description} MCP route={server_key}/{tool_name}; "
+                        f"risk={risk}; side_effect={side_effect}. "
+                        "Use only parameters declared in the JSON schema."
+                    )[:1024],
+                    "parameters": schema,
+                },
+            }
+        )
+        registry[function_name] = {"server_key": server_key, "tool_name": tool_name}
+    return specs, registry
 
 
 def manifest_entry_to_mcp_tool(entry: ToolManifestEntry, overlay: Mapping[str, Any] | None = None, catalog: GatewayServerCatalog | None = None) -> dict[str, Any]:

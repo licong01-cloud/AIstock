@@ -7,7 +7,9 @@ from backend.services.research_assistant.mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
     default_mcp_tools,
+    function_calling_tools_for_mcp,
     load_catalog,
+    mcp_tool_function_name,
 )
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import ResearchAssistantService
@@ -105,7 +107,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert len(qlib_tools) == len(MODULE_TOOL_NAMES["qlib_export"])
     assert any(tool["tool_name"] == "qlib_export_list_snapshots" for tool in qlib_tools)
     qe_tools = [tool for tool in tools if tool["server_key"] == "aistock-qe"]
-    assert len(qe_tools) == 74
+    assert len(qe_tools) == len(MODULE_TOOL_NAMES["model_registry"]) + len(MODULE_TOOL_NAMES["qe_archive"]) + len(MODULE_TOOL_NAMES["qe_experiment"])
     assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_tools)
     assert any(tool["tool_name"] == "model_registry_list" for tool in qe_tools)
     factor_tools = [tool for tool in tools if tool["server_key"] == "aistock-factor"]
@@ -142,6 +144,27 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert all(tool["side_effect_level"] == "read_only" for tool in stock_analysis_tools)
     assert all("gateway_manifest" in tool["preflight_schema_json"] for tool in tools)
     assert next(tool for tool in catalog_tools if tool["tool_name"] == "mcp_gateway_health")["preflight_schema_json"]["gateway_manifest"]["risk_level"] == "catalog"
+
+    schema_by_tool = {tool["tool_name"]: tool["input_schema_json"] for tool in tools}
+    assert "symbol" in schema_by_tool["stock_analysis_get_quote"]["required"]
+    assert "status" in schema_by_tool["qe_experiment_list"]["properties"]
+    assert "order_by" in schema_by_tool["qe_archive_query_run_leaderboard"]["properties"]
+    assert "analysis_date" in schema_by_tool["local_data_get_preset_daily_status"]["properties"]
+    assert "limit" in schema_by_tool["local_data_get_preset_daily_status"]["properties"]
+
+    specs, registry = function_calling_tools_for_mcp(
+        [
+            next(tool for tool in tools if tool["tool_name"] == "stock_analysis_get_quote"),
+            next(tool for tool in tools if tool["tool_name"] == "qe_archive_query_run_leaderboard"),
+        ]
+    )
+    stock_function_name = mcp_tool_function_name("stock_analysis_get_quote")
+    assert any(spec["function"]["name"] == stock_function_name for spec in specs)
+    assert registry[stock_function_name] == {
+        "server_key": "aistock-stock-analysis",
+        "tool_name": "stock_analysis_get_quote",
+    }
+    assert "symbol" in next(spec for spec in specs if spec["function"]["name"] == stock_function_name)["function"]["parameters"]["required"]
 
 
 def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanized() -> None:

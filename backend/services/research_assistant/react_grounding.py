@@ -17,7 +17,10 @@ from typing import Any, Callable, Protocol
 class ReactGroundingConfig:
     max_tool_iterations: int
     evidence_required: bool = True
+    user_message: str = ""
+    token_budget: int | None = None
     placeholder_patterns: tuple[str, ...] = (r"\bXX\b", r"\bX%\b", r"approxX", r"about X")
+    forbidden_answer_markers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.max_tool_iterations <= 0:
@@ -90,6 +93,7 @@ class ModelTurn:
     model: str
     duration_ms: int
     usage: dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[McpToolCall] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,7 @@ class McpProvider(Protocol):
 
 
 ModelComplete = Callable[[list[dict[str, Any]]], ModelTurn]
+ToolResultCompactor = Callable[[McpToolResult], McpToolResult]
 
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
@@ -225,6 +230,11 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
         "reason_codes",
         "warnings",
         "status",
+        "status_counts",
+        "group_counts",
+        "status_groups",
+        "health_summary",
+        "trade_date",
         "evidence_card",
         "sections",
         "fundamentals",
@@ -241,6 +251,13 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
             "summary_first": payload.get("summary_first", True),
             "source": payload.get("source"),
             "total": payload.get("total"),
+            "response_mode": payload.get("response_mode"),
+            "as_of": payload.get("as_of"),
+            "trade_date": payload.get("trade_date"),
+            "status_counts": payload.get("status_counts"),
+            "group_counts": payload.get("group_counts"),
+            "health_summary": payload.get("health_summary"),
+            "sections": (payload.get("sections") or [])[:8] if isinstance(payload.get("sections"), list) else payload.get("sections"),
             "artifact_refs": (payload.get("artifact_refs") or [])[:3] if isinstance(payload.get("artifact_refs"), list) else [],
             "omitted_sections": payload.get("omitted_sections") or [],
         }
@@ -248,7 +265,12 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
             if key in payload:
                 compact[key] = payload.get(key)
         if isinstance(payload.get("items"), list):
-            compact["items"] = payload["items"][:1]
+            compact["items"] = payload["items"][:3]
+        if isinstance(payload.get("status_groups"), dict):
+            compact["status_groups"] = {
+                str(key): value[:5] if isinstance(value, list) else value
+                for key, value in payload["status_groups"].items()
+            }
     return compact
 
 
@@ -288,8 +310,114 @@ def _contains_placeholder(text: str, patterns: tuple[str, ...]) -> str | None:
     return None
 
 
+def _contains_forbidden_marker(text: str, markers: tuple[str, ...]) -> str | None:
+    lowered = text.lower()
+    for marker in markers:
+        marker_text = str(marker or "").strip()
+        if marker_text and marker_text.lower() in lowered:
+            return marker_text
+    return None
+
+
 def _has_numeric_fact(text: str) -> bool:
     return _NUMBER_RE.search(text) is not None
+
+
+def _known_source_values(collected_results: list[McpToolResult]) -> set[str]:
+    values: set[str] = set()
+    for item in collected_results:
+        for source in item.source_refs:
+            text = str(source).strip()
+            if text:
+                values.add(text)
+        payload = item.payload_json if isinstance(item.payload_json, dict) else {}
+        source = payload.get("source")
+        if source:
+            values.add(str(source).strip())
+    return {item for item in values if item}
+
+
+def _known_as_of_values(collected_results: list[McpToolResult]) -> set[str]:
+    values: set[str] = set()
+    for item in collected_results:
+        if item.as_of:
+            values.add(str(item.as_of).strip())
+        payload = item.payload_json if isinstance(item.payload_json, dict) else {}
+        for key in ("as_of", "trade_date", "analysis_date", "report_period"):
+            if payload.get(key):
+                values.add(str(payload[key]).strip())
+    return {item for item in values if item}
+
+
+def _has_inline_source(text: str, known_sources: set[str]) -> bool:
+    lower = text.lower()
+    return any(source and source.lower() in lower for source in known_sources)
+
+
+def _has_inline_as_of(text: str, known_as_of: set[str]) -> bool:
+    lower = text.lower()
+    return any(value and value.lower() in lower for value in known_as_of)
+
+
+def _evidence_citation_suffix(collected_results: list[McpToolResult]) -> str | None:
+    for result in collected_results:
+        source = next((str(item).strip() for item in result.source_refs if str(item).strip()), "")
+        as_of = str(result.as_of or "").strip()
+        if source and as_of:
+            return f"来源 {source}，截至 {as_of}。"
+    return None
+
+
+def _append_missing_evidence_citation(text: str, collected_results: list[McpToolResult]) -> str | None:
+    suffix = _evidence_citation_suffix(collected_results)
+    if not suffix:
+        return None
+    stripped = text.rstrip()
+    if suffix in stripped:
+        return stripped
+    separator = "" if stripped.endswith(("。", ".", "！", "!", "？", "?")) else "。"
+    return f"{stripped}{separator}{suffix}"
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(term.lower() in lowered for term in terms)
+
+
+def _status_counts_from_results(collected_results: list[McpToolResult]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for result in collected_results:
+        payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+        counts = payload.get("status_counts") if isinstance(payload.get("status_counts"), dict) else {}
+        for key, value in counts.items():
+            try:
+                totals[str(key).lower()] = totals.get(str(key).lower(), 0) + int(value or 0)
+            except (TypeError, ValueError):
+                continue
+    return totals
+
+
+def _matches_running_focus(text: str, config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    question = config.user_message
+    if not _contains_any(question, ("running", "正在运行", "还在运行", "在运行", "运行中", "还在跑")):
+        return True
+    counts = _status_counts_from_results(collected_results)
+    if not counts:
+        return True
+    running_count = counts.get("running", 0)
+    if running_count == 0:
+        return _contains_any(text, ("无正在运行", "没有正在运行", "暂无正在运行", "无运行中", "no running", "none are running", "0 running"))
+    return _contains_any(text, ("running", "正在运行", "运行中"))
+
+
+def _matches_completed_focus(text: str, config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    question = config.user_message
+    if not _contains_any(question, ("completed", "已完成", "完成几个", "完成了几个", "完成数量", "多少完成")):
+        return True
+    counts = _status_counts_from_results(collected_results)
+    if not counts or "completed" not in counts:
+        return True
+    return str(counts["completed"]) in text and _contains_any(text, ("completed", "已完成", "完成"))
 
 
 def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToolResult], config: ReactGroundingConfig) -> EvidenceGuardDecision:
@@ -299,13 +427,24 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
     placeholder = _contains_placeholder(text, config.placeholder_patterns)
     if placeholder:
         return EvidenceGuardDecision(False, "Insufficient evidence: placeholder tokens are not allowed in factual answers.", f"placeholder_blocked:{placeholder}", source_count, as_of_count)
+    forbidden_marker = _contains_forbidden_marker(text, config.forbidden_answer_markers)
+    if forbidden_marker:
+        return EvidenceGuardDecision(False, "Insufficient evidence: final answer matched a retired business template marker.", f"forbidden_answer_marker:{forbidden_marker}", source_count, as_of_count)
     has_numbers = _has_numeric_fact(text)
-    inline_source = bool(re.search(r"source\s*=|source_refs?", text, flags=re.IGNORECASE))
-    inline_as_of = bool(re.search(r"as_of\s*=|trade_date\s*=|report_period\s*=", text, flags=re.IGNORECASE))
+    known_sources = _known_source_values(collected_results)
+    known_as_of = _known_as_of_values(collected_results)
+    inline_source = _has_inline_source(text, known_sources)
+    inline_as_of = _has_inline_as_of(text, known_as_of)
     if config.evidence_required and collected_results and not (inline_source and inline_as_of):
         return EvidenceGuardDecision(False, "Insufficient evidence: tool-grounded answers require inline source/as_of.", "missing_inline_tool_evidence", source_count, as_of_count)
     if config.evidence_required and has_numbers and not (inline_source and inline_as_of):
         return EvidenceGuardDecision(False, "Insufficient evidence: numeric facts require inline source/as_of.", "unsourced_numeric_fact", source_count, as_of_count)
+    if config.evidence_required and collected_results and not _matches_running_focus(text, config, collected_results):
+        return EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested running-status focus.", "question_focus_mismatch", source_count, as_of_count)
+    if config.evidence_required and collected_results and not _matches_completed_focus(text, config, collected_results):
+        return EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested completed-status focus.", "question_focus_mismatch", source_count, as_of_count)
+    if config.evidence_required and collected_results and _contains_forbidden_marker(text, config.forbidden_answer_markers):
+        return EvidenceGuardDecision(False, "Insufficient evidence: regenerated answer still matched a retired business template marker.", "post_guard_forbidden_answer_marker", source_count, as_of_count)
     return EvidenceGuardDecision(True, text, "ok", source_count, as_of_count)
 
 
@@ -389,6 +528,7 @@ def run_react_grounding_loop(
     config: ReactGroundingConfig,
     seeded_tool_calls: list[McpToolCall] | None = None,
     fallback_tool_calls: Callable[[], list[McpToolCall]] | None = None,
+    tool_result_compactor: ToolResultCompactor | None = None,
 ) -> ReactGroundingResult:
     working_messages = [dict(item) for item in messages]
     trace_steps: list[dict[str, Any]] = []
@@ -400,17 +540,31 @@ def run_react_grounding_loop(
     stopped_reason = "max_iterations_exhausted"
 
     for iteration in range(1, config.max_tool_iterations + 1):
+        if config.token_budget is not None:
+            rendered_messages = json.dumps(working_messages, ensure_ascii=False, sort_keys=True)
+            if len(rendered_messages) // 4 > config.token_budget:
+                stopped_reason = "token_budget_exhausted"
+                break
         if pending_seeded:
             calls = pending_seeded
             pending_seeded = []
             turn = ModelTurn(content=json.dumps({"tool_calls": [call.__dict__ for call in calls]}, ensure_ascii=False), provider="route_seed", model="route_seed", duration_ms=0, usage={})
         else:
             turn = model_complete(working_messages)
-            calls = extract_structured_tool_calls(turn.content)
+            calls = sorted((turn.tool_calls or extract_structured_tool_calls(turn.content)), key=lambda call: call.sorted_key())
         model_turns.append(turn)
         trace_steps.append({"iteration": iteration, "model": turn.model, "tool_call_count": len(calls), "provider": turn.provider})
         if not calls:
             guard = compose_with_evidence_guard(turn.content, collected_results, config)
+            if not guard.allowed and guard.reason in {"missing_inline_tool_evidence", "unsourced_numeric_fact"}:
+                cited_text = _append_missing_evidence_citation(strip_internal_chain(turn.content), collected_results)
+                if cited_text:
+                    repaired_guard = compose_with_evidence_guard(cited_text, collected_results, config)
+                    if repaired_guard.allowed:
+                        final_text = repaired_guard.text
+                        stopped_reason = "final_answer"
+                        trace_steps.append({"iteration": iteration, "repair": "append_tool_evidence_citation"})
+                        return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, repaired_guard, iteration, stopped_reason, model_turns)
             if guard.allowed:
                 final_text = guard.text
                 stopped_reason = "final_answer"
@@ -448,27 +602,19 @@ def run_react_grounding_loop(
                 result = mcp_provider.preflight_confirmation_only(call, decision)
             else:
                 result = rejection_result(call, decision)
+            if tool_result_compactor is not None:
+                result = tool_result_compactor(result)
             result.stable_call_id = call.stable_call_id
             iteration_results.append(result)
         iteration_results.sort(key=lambda item: item.sorted_key())
         for result in iteration_results:
             collected_results.append(result)
             working_messages.append(tool_result_message(result))
-        terminal_summary = next((item for item in iteration_results if _is_terminal_summary_result(item)), None)
-        if terminal_summary is not None:
-            guard = compose_with_evidence_guard(_evidence_summary_fallback_text(terminal_summary), collected_results, config)
-            stopped_reason = "evidence_summary_fallback"
-            return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
         if any(item.status in {"failed", "rejected"} for item in iteration_results):
             working_messages.append(_retry_directive(iteration_results))
 
     if final_text:
         guard = compose_with_evidence_guard(final_text, collected_results, config)
     else:
-        sourced = next((item for item in collected_results if item.source_refs and item.as_of), None)
-        if sourced is not None:
-            guard = compose_with_evidence_guard(_evidence_summary_fallback_text(sourced), collected_results, config)
-            stopped_reason = "evidence_summary_fallback"
-        else:
-            guard = EvidenceGuardDecision(False, "Insufficient evidence: max tool iterations reached without reliable evidence.", "max_tool_iterations_exhausted", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+        guard = EvidenceGuardDecision(False, "Insufficient evidence: max tool iterations reached without reliable evidence.", "max_tool_iterations_exhausted", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
     return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, config.max_tool_iterations, stopped_reason, model_turns)
