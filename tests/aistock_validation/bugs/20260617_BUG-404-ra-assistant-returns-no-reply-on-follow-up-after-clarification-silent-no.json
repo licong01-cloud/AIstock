@@ -32,16 +32,16 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "timestamp": "2026-06-18T12:27:07Z",
-      "note": "Revised BUG-404 scope per user: no silent/no crash for clarification follow-up plus explicit concrete reporting for tool/capability/data-source failures; scope expanded to RA service/react loop/execution references and related tests; production gates remain noop."
+      "note": "Revised BUG-404 scope per user: no silent/no crash for clarification follow-up plus explicit concrete reporting for tool/capability/data-source failures; scope expanded to RA service/react loop/execution references and related tests; production gates remain noop.",
+      "timestamp": "2026-06-18T12:27:07Z"
     }
   ],
   "evidence_uris": [],
   "expected": "任意 chat/turn 都返回非空助手消息；单个工具/能力/数据源失败不炸整轮，而是在回复和卡片中明确包含 reason_code、工具标识、异常类型与原始错误摘要，并记录日志/事件。真实错误不得呈现为 insufficient evidence；只有证据确实不足时才使用 insufficient。",
   "first_seen_at": "2026-06-17T10:46:15.763036Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8ba960b78be05df712fe6c3487e6b4b1f746105",
+  "fixed_at": "2026-06-18T18:06:23.084149Z",
   "github_issue_number": 1209,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1209",
   "last_seen_at": "2026-06-17T10:46:15.763036Z",
@@ -52,6 +52,7 @@
     "Do not touch production DB or apply DDL.",
     "Do not soften real tool/program errors into insufficient evidence."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1262",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -75,6 +76,9 @@
     "fingerprint": "60967062e92bdd8f8ec837fa",
     "source_event_id": "FE-20260617-60967062e92b"
   },
+  "validation_evidence": [
+    "Tier2 approved; GitHub PR #1262 statusCheckRollup all green before merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
