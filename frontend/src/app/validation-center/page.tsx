@@ -199,6 +199,7 @@ function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: Validatio
 
 function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssueCandidateSummary | null; items?: ValidationPage<ValidationIssueCandidateItem> | null }) {
   const candidates = items?.items || [];
+  const outcome = isObject(summary?.outcome_metrics) ? summary?.outcome_metrics : {};
   const readyCount = summary?.issue_payload_ready_count ?? candidates.filter((item) => item.issue_payload_ready === true).length;
   const noSubmitCount = Math.max(0, (summary?.candidate_count ?? candidates.length) - (summary?.linked_issue_count ?? 0));
   return (
@@ -212,6 +213,12 @@ function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssu
         <MetricCard label="Issue-ready" value={readyCount} hint="quality gate passed" tone={readyCount ? "success" : "warning"} />
         <MetricCard label="Draft / Deduped" value={`${summary?.draft_count ?? 0} / ${summary?.deduped_count ?? 0}`} hint={`artifact-only ${display(summary?.artifact_only_count ?? 0)}`} tone="info" />
         <MetricCard label="Not Submitted" value={noSubmitCount} hint="see reason chips" tone={noSubmitCount ? "warning" : "success"} />
+      </div>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Promoted Issues" value={display(outcome.promoted_issue_count)} hint={`rate ${display(outcome.promotion_rate)}`} tone={Number(outcome.promoted_issue_count || 0) ? "success" : "warning"} />
+        <MetricCard label="Confirmed Bugs" value={display(outcome.confirmed_issue_count)} hint={`confirm ${display(outcome.confirmation_rate)}`} tone={Number(outcome.confirmed_issue_count || 0) ? "success" : "info"} />
+        <MetricCard label="False Positive" value={display(outcome.false_positive_count)} hint={`rate ${display(outcome.false_positive_rate)}`} tone={Number(outcome.false_positive_count || 0) ? "warning" : "success"} />
+        <MetricCard label="Open Unlinked" value={display(outcome.open_unlinked_count)} hint="needs promotion or reason" tone={Number(outcome.open_unlinked_count || 0) ? "warning" : "success"} />
       </div>
       <div className="pv2-grid pv2-grid-2" style={{ marginBottom: 12 }}>
         <div><h3 className="pv2-subtitle">Candidate Status</h3><CountChips counts={summary?.by_status} /></div>

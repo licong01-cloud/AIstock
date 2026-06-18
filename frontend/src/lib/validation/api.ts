@@ -816,6 +816,7 @@ export type ValidationIssueCandidateSummary = JsonObject & {
   by_source_type?: Record<string, number>;
   by_quality_gate?: Record<string, number>;
   no_submit_reason_counts?: Record<string, number>;
+  outcome_metrics?: JsonObject;
   reason_codes?: string[];
 };
 
