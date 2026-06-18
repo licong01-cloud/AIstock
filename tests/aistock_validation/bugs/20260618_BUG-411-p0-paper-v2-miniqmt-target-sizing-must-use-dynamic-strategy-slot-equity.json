@@ -1,0 +1,116 @@
+{
+  "actual": "MiniQMT 分仓应作为 AIstock 侧独立账户运行，目标仓位必须基于当前分仓 cash + frozen_cash + broker-authoritative market_value/total_equity 动态计算。当前 simulation_runtime 在目标生成时传入 binding.capital_allocation，导致分仓运行后即使权益从 1000 万变为 1100 万，后续买入仓位仍按固定初始额度计算，违背独立账户复利/回撤动态调整要求。修复要求：MiniQMT 分仓目标生成使用当前策略槽动态 total_equity；保持执行层严格按分仓现金/持仓风控，禁止跨分仓使用 QMT 总账户资金；补充回归测试证明动态权益参与 target sizing。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260618_BUG-411-p0-paper-v2-miniqmt-target-sizing-must-use-dynamic-strategy-slot-equity.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-411",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T07:23:36.371148Z",
+  "description": "MiniQMT 分仓应作为 AIstock 侧独立账户运行，目标仓位必须基于当前分仓 cash + frozen_cash + broker-authoritative market_value/total_equity 动态计算。当前 simulation_runtime 在目标生成时传入 binding.capital_allocation，导致分仓运行后即使权益从 1000 万变为 1100 万，后续买入仓位仍按固定初始额度计算，违背独立账户复利/回撤动态调整要求。修复要求：MiniQMT 分仓目标生成使用当前策略槽动态 total_equity；保持执行层严格按分仓现金/持仓风控，禁止跨分仓使用 QMT 总账户资金；补充回归测试证明动态权益参与 target sizing。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-8d77ddfdfd16",
+      "timestamp": "2026-06-18T07:23:36.371145Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-18T07:23:36.371148Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1238,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1238",
+  "last_seen_at": "2026-06-18T07:23:36.371148Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][MiniQMT] target sizing must use dynamic strategy-slot equity instead of fixed capital allocation",
+  "trigger_condition": {
+    "fingerprint": "8d77ddfdfd165b1521607fdb",
+    "source_event_id": "FE-20260618-8d77ddfdfd16"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2"
+    ],
+    "ui_issue": true,
+    "ui_route": "/total_equity",
+    "ui_routes": [
+      "/total_equity",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
