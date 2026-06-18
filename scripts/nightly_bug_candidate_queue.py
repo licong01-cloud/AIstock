@@ -346,7 +346,12 @@ def render_issue_body(candidate: dict[str, Any]) -> str:
         "",
         "## Next Step",
         "",
-        "Review this draft, then register the BUG through `scripts/aistock_issue_workflow.py submit-bug` before any fix work.",
+        (
+            "Review this draft, then promote it with "
+            "`python scripts/aistock_issue_workflow.py promote-nightly-candidate "
+            "--issue-payload <this-payload-json> --opt-in-auto-file --create-registry-worktree --apply` "
+            "before any fix work."
+        ),
     ]
     return "\n".join(lines).rstrip() + "\n"
 
