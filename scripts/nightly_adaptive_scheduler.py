@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts import llm_provider_adapter  # noqa: E402
+from scripts import nightly_discovery_input_pack  # noqa: E402
 
 REPORT_SCHEMA_VERSION = "aistock_nightly_adaptive_scheduler_report_v1"
 FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
@@ -31,49 +31,6 @@ STATUS_FAILURE_MODULES = {
     "paper_v2_live": ["paper_v2_live"],
     "code_intelligence": ["validation.runner"],
 }
-DIFF_HEADER_PREFIXES = ("--- ", "+++ ", "@@")
-
-
-def _split_csv(values: list[str] | None) -> list[str]:
-    result: list[str] = []
-    for value in values or []:
-        result.extend(item.strip() for item in str(value).split(",") if item.strip())
-    return result
-
-
-def _normalize_path(value: str) -> str:
-    text = str(value or "").strip().lstrip("\ufeff").replace("\\", "/")
-    while text.startswith("./"):
-        text = text[2:]
-    return text
-
-
-def _unique(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        item = str(value or "").strip()
-        if item and item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
-
-
-def _is_probable_repo_path(value: str) -> bool:
-    if not value or "\x00" in value:
-        return False
-    lowered = value.lower()
-    if lowered.startswith(("http://", "https://")):
-        return False
-    if any(value.startswith(prefix) for prefix in DIFF_HEADER_PREFIXES):
-        return False
-    if value in {"--- Changes ---", "Changes", "Files"}:
-        return False
-    if ":" in value.split("/", 1)[0]:
-        return False
-    if value.startswith(("/", "\\")):
-        return False
-    return bool(Path(value).suffix or "/" in value)
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -86,21 +43,15 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _git_changed_files(base_ref: str | None, *, root: Path) -> list[str]:
-    if not base_ref:
-        return []
-    proc = subprocess.run(
-        ["git", "diff", "--name-only", str(base_ref), "HEAD"],
-        cwd=str(root),
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-    return [_normalize_path(line) for line in proc.stdout.splitlines() if _normalize_path(line)]
+def unique_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        item = str(value or "").strip()
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def collect_changed_files(
@@ -110,11 +61,12 @@ def collect_changed_files(
     base_ref: str | None,
     root: Path,
 ) -> list[str]:
-    collected = [_normalize_path(item) for item in _split_csv(changed_files)]
-    if changed_files_file and changed_files_file.exists():
-        collected.extend(_normalize_path(line) for line in changed_files_file.read_text(encoding="utf-8-sig").splitlines())
-    collected.extend(_git_changed_files(base_ref, root=root))
-    return _unique([item for item in collected if _is_probable_repo_path(item)])
+    return nightly_discovery_input_pack.collect_changed_files(
+        changed_files=changed_files,
+        changed_files_file=changed_files_file,
+        base_ref=base_ref,
+        root=root,
+    )
 
 
 def _canonical_status_key(raw_key: str) -> str | None:
@@ -148,7 +100,7 @@ def recent_failure_modules_from_statuses(statuses: dict[str, str]) -> list[str]:
     for key, value in statuses.items():
         if value.strip().lower() in FAILURE_STATUSES:
             modules.extend(STATUS_FAILURE_MODULES.get(key, []))
-    return _unique(modules)
+    return unique_values(modules)
 
 
 def normalize_codegraph_freshness(value: str | None) -> str:

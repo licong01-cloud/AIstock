@@ -107,6 +107,20 @@ class ModelStoreService:
             "pointer": pointer,
         }
 
+    def pull_label(self, *, run_id: str) -> dict[str, Any]:
+        pointer = self.get_pointer(run_id=run_id)
+        store_uri = pointer.get("mlflow_artifact_uri")
+        if not store_uri:
+            raise PredictionStoreNotFound(f"run_id={run_id} has no prediction-store pointer")
+        path = self.artifact_store.resolve_artifact_path(str(store_uri), artifact_type="label", artifact_name="label.pkl")
+        return {
+            "run_id": run_id,
+            "artifact_type": "label",
+            "artifact_path": str(path),
+            "size_bytes": path.stat().st_size,
+            "pointer": pointer,
+        }
+
     def prediction_path(self, *, run_id: str) -> Path:
         pointer = self.get_pointer(run_id=run_id)
         store_uri = pointer.get("mlflow_artifact_uri")
@@ -120,6 +134,13 @@ class ModelStoreService:
         if not store_uri:
             raise PredictionStoreNotFound(f"run_id={run_id} has no prediction-store pointer")
         return self.artifact_store.resolve_artifact_path(str(store_uri), artifact_type="model_params", artifact_name="params.pkl")
+
+    def label_path(self, *, run_id: str) -> Path:
+        pointer = self.get_pointer(run_id=run_id)
+        store_uri = pointer.get("mlflow_artifact_uri")
+        if not store_uri:
+            raise PredictionStoreNotFound(f"run_id={run_id} has no prediction-store pointer")
+        return self.artifact_store.resolve_artifact_path(str(store_uri), artifact_type="label", artifact_name="label.pkl")
 
     def _find_run(self, *, run_id: str | None, experiment_id: str | None) -> dict[str, Any] | None:
         where = "r.run_id = %s" if run_id else "r.experiment_id = %s"

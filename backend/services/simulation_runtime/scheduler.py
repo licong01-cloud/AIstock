@@ -9,6 +9,7 @@ that a backend tick cannot duplicate orders.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 from collections.abc import Callable
@@ -22,7 +23,11 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import (
+    MinuteDataSource,
+    PreTradeTradabilityProvider,
+    fetch_tdx_realtime_quotes,
+)
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.qmt_strategy_ledger.reconciliation import (
@@ -76,9 +81,79 @@ DEFAULT_SCHEDULER_WINDOWS = (
     {"window_id": "selection", "label": "选股", "start": "09:10", "end": "09:20", "action": "selection_evidence"},
     {"window_id": "planning", "label": "调仓", "start": "09:20", "end": "09:25", "action": "execution_plan"},
     {"window_id": "execution", "label": "盘中/尾盘", "start": "09:25", "end": "15:00", "action": "submit"},
+    {
+        "window_id": "post_close_reconcile",
+        "label": "Post-close reconcile",
+        "start": "15:00",
+        "end": "15:30",
+        "action": "eod_reconcile",
+    },
 )
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
+
+
+def _build_dynamic_target_equity_basis(
+    *,
+    binding: SimulationReleaseBinding,
+    cash: float,
+    frozen_cash: float,
+    positions: dict[str, PositionLot],
+    prices: dict[str, float],
+    source: str,
+) -> tuple[float, dict[str, Any]]:
+    invalid_marks: list[dict[str, Any]] = []
+    market_value = 0.0
+    for symbol, position in positions.items():
+        quantity = int(position.quantity)
+        if quantity <= 0:
+            continue
+        raw_price = prices.get(symbol)
+        try:
+            price = float(raw_price) if raw_price is not None else float("nan")
+        except (TypeError, ValueError):
+            price = float("nan")
+        if not math.isfinite(price) or price <= 0:
+            invalid_marks.append({"symbol": symbol, "price": raw_price})
+            continue
+        market_value += quantity * price
+    if invalid_marks:
+        raise DataUnavailableError(
+            "dynamic target sizing requires positive finite marks for all held positions",
+            context={
+                "strategy_id": binding.strategy_id,
+                "binding_id": binding.binding_id,
+                "broker_backend": binding.broker_backend.value,
+                "invalid_marks": invalid_marks,
+            },
+        )
+    total_equity = float(cash) + float(frozen_cash) + market_value
+    if total_equity <= 0:
+        raise RuntimeConfigInvalidError(
+            "dynamic target sizing requires positive strategy-slot total_equity",
+            context={
+                "strategy_id": binding.strategy_id,
+                "binding_id": binding.binding_id,
+                "broker_backend": binding.broker_backend.value,
+                "cash": float(cash),
+                "frozen_cash": float(frozen_cash),
+                "market_value": market_value,
+            },
+        )
+    return total_equity, {
+        "schema_version": "simulation_target_equity_basis_v1",
+        "source": source,
+        "strategy_id": binding.strategy_id,
+        "binding_id": binding.binding_id,
+        "broker_backend": binding.broker_backend.value,
+        "cash": float(cash),
+        "frozen_cash": float(frozen_cash),
+        "market_value": market_value,
+        "total_equity": total_equity,
+        "capital_allocation": float(binding.capital_allocation),
+        "position_count": sum(1 for position in positions.values() if int(position.quantity) > 0),
+    }
+
 
 _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES = frozenset(
     {
@@ -140,6 +215,9 @@ class SimulationRunContext:
     frozen_cash: float = 0.0
     realized_pnl: float = 0.0
     market_data_source: str | None = None
+    pre_trade_tradability: dict[str, dict[str, Any]] = field(default_factory=dict)
+    target_total_equity: float | None = None
+    target_equity_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -258,6 +336,7 @@ class ProductionSimulationRunContextProvider:
         qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
         qmt_ledger_repository: Any | None = None,
         package_manifest_loader: Callable[[str], StrategyPackageManifest | dict[str, Any] | None] | None = None,
+        pre_trade_tradability_provider: PreTradeTradabilityProvider | Any | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
@@ -273,6 +352,11 @@ class ProductionSimulationRunContextProvider:
         self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
         self._qmt_ledger_repository = qmt_ledger_repository
         self._package_manifest_loader = package_manifest_loader or _default_strategy_package_manifest_loader
+        self._pre_trade_tradability_provider_injected = pre_trade_tradability_provider is not None
+        self._pre_trade_tradability_provider = pre_trade_tradability_provider or PreTradeTradabilityProvider(
+            realtime_quote_fetcher=fetch_tdx_realtime_quotes,
+            realtime_quote_source="TDX_REALTIME.batch_quote",
+        )
         self._enable_localsim_broker = (
             _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
             if enable_localsim_broker is None
@@ -295,6 +379,12 @@ class ProductionSimulationRunContextProvider:
             "localsim_state_source": "paper_v2_portfolio",
             "miniqmt_state_source": "broker_authoritative_positions_with_strategy_slot_projection",
             "market_price_source": "market.kline_daily_raw_latest_close",
+            "pre_trade_tradability_gate": {
+                "source": type(self._pre_trade_tradability_provider).__name__,
+                "localsim_same_day_quote_required": True,
+                "miniqmt_quote_required": True,
+                "historical_quote_required": False,
+            },
             "localsim_market_data_source_policy": {
                 "same_day": MinuteDataSource.TDX_REALTIME.value,
                 "historical": "persisted_portfolio_data_source",
@@ -380,6 +470,15 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
+        market_data_source = self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date)
+        pre_trade_tradability = self._load_pre_trade_tradability(
+            symbols=list(positions),
+            trade_date=trade_date,
+            require_realtime_quote=(
+                market_data_source == MinuteDataSource.TDX_REALTIME
+                and self._position_loader is None
+            ),
+        )
         manifest = getattr(portfolio, "frozen_manifest", None)
         self._validate_manifest_identity(
             manifest=manifest,
@@ -408,6 +507,14 @@ class ProductionSimulationRunContextProvider:
             positions=positions,
             trade_date=trade_date,
         )
+        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=cash,
+            frozen_cash=0.0,
+            positions=positions,
+            prices=prices,
+            source="paper_v2_portfolio_dynamic_equity",
+        )
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -417,12 +524,19 @@ class ProductionSimulationRunContextProvider:
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
-            context_diagnostics={"localsim_tplus1_settlement": settlement_diagnostics},
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
+            context_diagnostics={
+                "localsim_tplus1_settlement": settlement_diagnostics,
+                "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+                "target_equity_basis": target_equity_context,
+            },
             market_data_source=(
                 getattr(local_broker, "data_source").value
                 if local_broker is not None and getattr(local_broker, "data_source", None) is not None
-                else self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date).value
+                else market_data_source.value
             ),
+            pre_trade_tradability=pre_trade_tradability,
         )
 
     @staticmethod
@@ -530,6 +644,11 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
+        pre_trade_tradability = self._load_pre_trade_tradability(
+            symbols=list(positions),
+            trade_date=trade_date,
+            require_realtime_quote=self._position_loader is None and trade_date == date.today(),
+        )
         manifest = self._load_strategy_package_manifest(
             runtime_release=runtime_release,
             binding=binding,
@@ -557,6 +676,16 @@ class ProductionSimulationRunContextProvider:
             if self._qmt_reconciliation_service_factory is not None
             else QmtStrategyLedgerReconciliationService(repository=qmt_repository)
         )
+        cash = float(account.cash)
+        frozen_cash = float(account.frozen_cash)
+        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=cash,
+            frozen_cash=frozen_cash,
+            positions=positions,
+            prices=prices,
+            source="miniqmt_strategy_slot_dynamic_equity",
+        )
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -567,13 +696,87 @@ class ProductionSimulationRunContextProvider:
             qmt_reconciliation_service=qmt_reconciliation_service,
             qmt_ledger_repository=qmt_repository,
             broker_positions=broker_positions,
-            context_diagnostics={"miniqmt_broker_position_reconciliation": reconciliation_diagnostics},
-            cash=float(account.cash),
-            frozen_cash=float(account.frozen_cash),
+            context_diagnostics={
+                "miniqmt_broker_position_reconciliation": reconciliation_diagnostics,
+                "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+                "target_equity_basis": target_equity_context,
+            },
+            cash=cash,
+            frozen_cash=frozen_cash,
             realized_pnl=float(account.realized_pnl),
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
             price_by_symbol=prices,
             market_data_source=MinuteDataSource.MINIQMT_REALTIME.value,
+            pre_trade_tradability=pre_trade_tradability,
         )
+
+    def load_pre_trade_tradability(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        binding: SimulationReleaseBinding,
+        market_data_source: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        require_realtime_quote = self._position_loader is None and (
+            (binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and trade_date == date.today())
+            or (
+                binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                and (market_data_source == MinuteDataSource.TDX_REALTIME.value or trade_date == date.today())
+            )
+        )
+        return self._load_pre_trade_tradability(
+            symbols=symbols,
+            trade_date=trade_date,
+            require_realtime_quote=require_realtime_quote,
+        )
+
+    def _load_pre_trade_tradability(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        require_realtime_quote: bool,
+    ) -> dict[str, dict[str, Any]]:
+        if not require_realtime_quote and not self._pre_trade_tradability_provider_injected:
+            return {}
+        if self._position_loader is not None and not self._pre_trade_tradability_provider_injected:
+            return {}
+        loader = getattr(self._pre_trade_tradability_provider, "get_statuses", None)
+        if not callable(loader):
+            raise DataUnavailableError(
+                "pre-trade tradability provider must expose get_statuses",
+                context={"provider": type(self._pre_trade_tradability_provider).__name__},
+            )
+        try:
+            raw = loader(symbols, trade_date, require_realtime_quote=require_realtime_quote)
+        except TypeError:
+            raw = loader(symbols, trade_date)
+        if not isinstance(raw, dict):
+            raise DataUnavailableError(
+                "pre-trade tradability provider returned invalid payload",
+                context={"provider": type(self._pre_trade_tradability_provider).__name__},
+            )
+        return {str(symbol): dict(status) for symbol, status in raw.items() if isinstance(status, dict)}
+
+    @staticmethod
+    def _pre_trade_tradability_diagnostics(statuses: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        blocked = [
+            {
+                "symbol": symbol,
+                "reason_code": status.get("reason_code"),
+                "source": status.get("source"),
+            }
+            for symbol, status in sorted(statuses.items())
+            if isinstance(status, dict) and not bool(status.get("is_tradable", True))
+        ]
+        return {
+            "schema_version": "pre_trade_tradability_diagnostics_v1",
+            "symbol_count": len(statuses),
+            "blocked_symbol_count": len(blocked),
+            "blocked_symbols": blocked,
+        }
 
     def _build_managed_order_service(self, qmt_repository: Any, *, broker: Any | None = None) -> QmtManagedOrderService:
         broker = broker if broker is not None else self._qmt_client_factory()
@@ -1682,6 +1885,7 @@ class SimulationLifecycleScheduler:
                 "selection": "daily_selection_evidence",
                 "planning": "execution_plan",
                 "execution": "submit_and_reconcile",
+                "post_close_reconcile": "post_close_terminalization",
             },
         }
 
@@ -1709,6 +1913,13 @@ class SimulationLifecycleScheduler:
             strategy_id=strategy_id,
             limit=limit,
         )
+        eod_terminalized_results = self._terminalize_post_close_miniqmt_runs(
+            trade_date=trade_date,
+            broker_backend=broker_backend,
+            strategy_id=strategy_id,
+            limit=limit,
+            as_of_time=as_of_time,
+        )
         bindings = self.repository.list_simulation_release_bindings(
             strategy_id=strategy_id,
             release_id=release_id,
@@ -1727,6 +1938,7 @@ class SimulationLifecycleScheduler:
             approval_states=approval_states,
         )
         results: list[SimulationSchedulerBindingResult] = []
+        eod_terminalized_run_ids = {str(item.get("run_id")) for item in eod_terminalized_results if item.get("run_id")}
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] = {}
         shared_selection_keys = self._shared_selection_cache_keys(
             bindings=bindings,
@@ -1734,6 +1946,15 @@ class SimulationLifecycleScheduler:
             data_source=data_source,
         )
         for binding in bindings:
+            eod_result = self._post_close_terminalized_binding_result(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+                run_ids=eod_terminalized_run_ids,
+            )
+            if eod_result is not None:
+                results.append(eod_result)
+                continue
             try:
                 results.append(
                     self._run_binding(
@@ -1774,9 +1995,70 @@ class SimulationLifecycleScheduler:
             submit=submit,
             total_bindings=len(bindings),
             results=tuple(results),
-            stale_run_results=tuple(stale_run_results),
+            stale_run_results=tuple([*stale_run_results, *eod_terminalized_results]),
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
+        )
+
+    def post_close_reconcile_once(
+        self,
+        *,
+        trade_date: date,
+        data_source: str,
+        limit: int = 100,
+        strategy_id: str | None = None,
+        as_of_time: datetime | None = None,
+    ) -> SimulationSchedulerRunOnceResult:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        terminalized = self._terminalize_post_close_miniqmt_runs(
+            trade_date=trade_date,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            strategy_id=strategy_id,
+            limit=limit,
+            as_of_time=as_of_time,
+        )
+        return SimulationSchedulerRunOnceResult(
+            trade_date=trade_date,
+            data_source=data_source,
+            submit=False,
+            total_bindings=0,
+            results=(),
+            stale_run_results=tuple(terminalized),
+            as_of_time=as_of_time,
+            schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
+        )
+
+    def _post_close_terminalized_binding_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        run_ids: set[str],
+    ) -> SimulationSchedulerBindingResult | None:
+        if not run_ids:
+            return None
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+            trade_date=trade_date,
+        )
+        if existing is None or existing.run_id not in run_ids:
+            return None
+        plan = self.repository.get_execution_plan(existing.execution_plan_id or "") if existing.execution_plan_id else None
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status="POST_CLOSE_TERMINALIZED",
+            run=existing,
+            execution_plan=plan,
+            data_source=self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=trade_date,
+                default_data_source=data_source,
+            ),
         )
 
     def _terminalize_stale_miniqmt_active_runs(
@@ -1840,6 +2122,131 @@ class SimulationLifecycleScheduler:
                     }
                 )
         return terminalized[:limit]
+
+    def _terminalize_post_close_miniqmt_runs(
+        self,
+        *,
+        trade_date: date,
+        broker_backend: SimulationBrokerBackend | str | None,
+        strategy_id: str | None,
+        limit: int,
+        as_of_time: datetime | None,
+    ) -> list[dict[str, Any]]:
+        if not self._is_post_close_reconcile_time(as_of_time=as_of_time):
+            return []
+        if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.MINIQMT_SIM:
+            return []
+        terminalized: list[dict[str, Any]] = []
+        seen_run_ids: set[str] = set()
+        for status in _MINIQMT_STALE_ACTIVE_STATUSES:
+            for run in self.repository.list_simulation_daily_runs(
+                broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+                strategy_id=strategy_id,
+                status=status,
+                limit=limit,
+            ):
+                if run.run_id in seen_run_ids or run.trade_date != trade_date:
+                    continue
+                seen_run_ids.add(run.run_id)
+                terminalized_run = self._post_close_terminalize_miniqmt_run(run=run, as_of_time=as_of_time)
+                if terminalized_run is None:
+                    continue
+                terminalized.append(terminalized_run)
+                if len(terminalized) >= limit:
+                    return terminalized
+        return terminalized
+
+    def _post_close_terminalize_miniqmt_run(
+        self,
+        *,
+        run: SimulationDailyRun,
+        as_of_time: datetime | None,
+    ) -> dict[str, Any] | None:
+        payload = run.run_payload_json
+        if not self._mini_qmt_batch_has_broker_side_effect_evidence(payload):
+            return None
+        terminal_status, reason = self._miniqmt_post_close_terminal_status(payload)
+        if terminal_status is None:
+            return None
+        summary = self._mini_qmt_batch_residual_summary(payload)
+        evidence = {
+            "schema_version": "miniqmt_post_close_terminalization_v1",
+            "reason": reason,
+            "previous_status": run.status.value,
+            "terminal_status": terminal_status.value,
+            "trade_date": run.trade_date.isoformat(),
+            "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
+            "qmt_batch_status": payload.get("qmt_batch_status"),
+            "qmt_batch_id": payload.get("qmt_batch_id"),
+            "residual_summary": summary,
+            "open_order_evidence": self._latest_miniqmt_payload_evidence(payload, "open_order_evidence"),
+            "submit_result_gate": self._latest_miniqmt_payload_evidence(payload, "submit_result_gate"),
+            "audit_state": self._miniqmt_post_close_audit_state(terminal_status, reason),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=terminal_status,
+            payload_patch={
+                "last_stage": terminal_status.value,
+                "miniqmt_post_close_terminalization": evidence,
+            },
+            payload_unset=("submit_failure",) if terminal_status == SimulationDailyRunStatus.SUCCEEDED else None,
+        )
+        return {
+            "run_id": updated.run_id,
+            "trade_date": updated.trade_date.isoformat(),
+            "strategy_id": updated.strategy_id,
+            "previous_status": run.status.value,
+            "status": updated.status.value,
+            "reason": reason,
+            "post_close_terminalization": True,
+        }
+
+    @staticmethod
+    def _is_post_close_reconcile_time(*, as_of_time: datetime | None) -> bool:
+        if as_of_time is None:
+            return False
+        return as_of_time.time().replace(second=0, microsecond=0) >= time(15, 0)
+
+    @staticmethod
+    def _miniqmt_post_close_terminal_status(
+        payload: dict[str, Any],
+    ) -> tuple[SimulationDailyRunStatus | None, str | None]:
+        open_order_evidence = SimulationLifecycleScheduler._latest_miniqmt_payload_evidence(
+            payload,
+            "open_order_evidence",
+        )
+        open_order_count = int(open_order_evidence.get("open_order_count") or 0) if open_order_evidence else 0
+        if open_order_count > 0:
+            return SimulationDailyRunStatus.FAILED_TERMINAL, "miniqmt_post_close_open_orders_terminal_failed"
+        if SimulationLifecycleScheduler._mini_qmt_batch_succeeded(payload):
+            return SimulationDailyRunStatus.SUCCEEDED, "miniqmt_post_close_batch_succeeded"
+        if SimulationLifecycleScheduler._mini_qmt_batch_has_terminal_capacity_residual(payload):
+            return SimulationDailyRunStatus.SUCCEEDED, "miniqmt_post_close_capacity_residual_skipped"
+        if SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(payload):
+            return SimulationDailyRunStatus.FAILED_RETRYABLE, "miniqmt_post_close_buy_residual_unresolved"
+        return None, None
+
+    @staticmethod
+    def _miniqmt_post_close_audit_state(status: SimulationDailyRunStatus, reason: str | None) -> str:
+        if status == SimulationDailyRunStatus.SUCCEEDED:
+            if reason == "miniqmt_post_close_capacity_residual_skipped":
+                return "succeeded_with_capacity_residual"
+            return "succeeded_after_close"
+        if status == SimulationDailyRunStatus.FAILED_RETRYABLE:
+            return "failed_retryable_after_close"
+        return "failed_terminal_after_close"
+
+    @staticmethod
+    def _latest_miniqmt_payload_evidence(payload: dict[str, Any], key: str) -> dict[str, Any]:
+        for container_key in ("reconcile_after_submit", "sync_after_submit", "sync_before_submit"):
+            container = payload.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            evidence = container.get(key)
+            if isinstance(evidence, dict):
+                return evidence
+        return {}
 
     def _with_unattended_roll_forward_bindings(
         self,
@@ -2635,6 +3042,27 @@ class SimulationLifecycleScheduler:
                 status="NO_REBALANCE",
                 run=updated,
                 execution_plan=plan,
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
+        if submit and not plan.intents and self._execution_plan_has_pre_trade_blocks(plan):
+            execution = self.orchestrator.submit_persisted_execution_plan(
+                run=run,
+                binding=binding,
+                execution_plan=plan,
+                mode=mode,
+            )
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status=execution.status,
+                run=execution.run,
+                execution_plan=plan,
+                execution_result=execution,
                 data_source=self._effective_market_data_source_for_binding(
                     binding=binding,
                     trade_date=trade_date,
@@ -3758,6 +4186,8 @@ class SimulationLifecycleScheduler:
     ) -> bool:
         if not submit or plan.intents or run.run_payload_json.get("broker_called"):
             return False
+        if SimulationLifecycleScheduler._execution_plan_has_pre_trade_blocks(plan):
+            return False
         return run.status in {
             SimulationDailyRunStatus.CREATED,
             SimulationDailyRunStatus.PRECHECKING,
@@ -3767,6 +4197,22 @@ class SimulationLifecycleScheduler:
             SimulationDailyRunStatus.FAILED_RETRYABLE,
             SimulationDailyRunStatus.SUBMITTING,
         }
+
+    @staticmethod
+    def _execution_plan_has_pre_trade_blocks(plan: ExecutionPlan) -> bool:
+        for decision in plan.trading_rule_decisions:
+            if decision.price_limit_rule.get("pre_trade_tradability") and not bool(
+                decision.price_limit_rule["pre_trade_tradability"].get("is_tradable", True)
+            ):
+                return True
+            if str(decision.reason_code).upper() in {
+                "SUSPENDED_BY_SUSPEND_D",
+                "NO_TRADABLE_REALTIME_QUOTE",
+                "REALTIME_QUOTE_MISSING",
+                "SUSPENDED_OR_NO_QUOTE_BLOCKED",
+            }:
+                return True
+        return False
 
     @staticmethod
     def _should_reconcile_existing_miniqmt_run(
@@ -4127,12 +4573,12 @@ class SimulationLifecycleScheduler:
         )
         open_order_count = int(open_order_evidence.get("open_order_count") or 0)
         broker_side_effect_count = int(side_effect_evidence.get("broker_side_effect_count") or 0)
-        if run_status_gate.get("status") != "SUCCEEDED":
-            status = "blocked"
-            reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
-        elif open_order_count > 0:
+        if open_order_count > 0:
             status = "PENDING"
             reason = "miniqmt_open_orders_pending_after_reconciliation"
+        elif run_status_gate.get("status") != "SUCCEEDED":
+            status = "blocked"
+            reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
         elif batch_succeeded:
             status = "SUCCEEDED"
             reason = "miniqmt_batch_succeeded_and_reconciled"
@@ -4407,15 +4853,26 @@ class SimulationLifecycleScheduler:
         created_by: str,
     ) -> SimulationPlanBuildResult:
         evidence = selection.evidence_by_package[binding.package_id]
+        candidates = selection.package_results.get(binding.package_id, [])
+        pre_trade_tradability = self._pre_trade_tradability_for_planning(
+            binding=binding,
+            trade_date=trade_date,
+            context=context,
+            candidate_symbols=[candidate.symbol for candidate in candidates],
+        )
         snapshot = SignalSnapshot(
             package_id=binding.package_id,
             manifest_sha256=evidence.manifest_sha256,
             trade_date=trade_date,
             data_source=data_source,
-            candidates=selection.package_results.get(binding.package_id, []),
+            candidates=candidates,
             runtime_config=selection.runtime_config,
             valid_no_candidate=selection.valid_no_candidate,
             no_candidate_reason=selection.no_candidate_reason,
+        )
+        target_total_equity, target_equity_context = self._target_equity_basis_for_context(
+            binding=binding,
+            context=context,
         )
         return self.orchestrator.build_execution_plan(
             runtime_release=runtime_release,
@@ -4424,13 +4881,78 @@ class SimulationLifecycleScheduler:
             signal_snapshot=snapshot,
             current_positions=context.current_positions,
             current_prices=context.current_prices,
+            pre_trade_tradability=pre_trade_tradability,
             manifest=context.manifest,
             portfolio_id=context.portfolio_id or binding.strategy_id,
             top_k=context.top_k,
             execution_policy_payload=context.execution_policy_payload,
             tail_policy_payload=context.tail_policy_payload,
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
             created_by=created_by,
         )
+
+    @staticmethod
+    def _target_equity_basis_for_context(
+        *,
+        binding: SimulationReleaseBinding,
+        context: SimulationRunContext,
+    ) -> tuple[float | None, dict[str, Any] | None]:
+        if context.target_total_equity is not None:
+            return float(context.target_total_equity), dict(context.target_equity_context or {})
+        cash = context.cash
+        frozen_cash = context.frozen_cash
+        if cash is None:
+            if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and context.qmt_ledger_repository is not None:
+                account = context.qmt_ledger_repository.get_virtual_account(binding.strategy_id)
+                cash = float(account.cash)
+                frozen_cash = float(account.frozen_cash)
+            elif binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and (
+                context.qmt_sync_service is not None
+                or context.qmt_reconciliation_service is not None
+                or bool(context.broker_positions)
+            ):
+                raise DataUnavailableError(
+                    "MiniQMT target sizing requires strategy-slot dynamic cash/equity context",
+                    context={"strategy_id": binding.strategy_id, "binding_id": binding.binding_id},
+                )
+            else:
+                return None, None
+        return _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=float(cash),
+            frozen_cash=float(frozen_cash),
+            positions=context.current_positions,
+            prices=SimulationLifecycleScheduler._performance_marks(context),
+            source=(
+                "miniqmt_strategy_slot_dynamic_equity"
+                if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                else "paper_v2_portfolio_dynamic_equity"
+            ),
+        )
+
+    def _pre_trade_tradability_for_planning(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        context: SimulationRunContext,
+        candidate_symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        symbols = sorted({*context.current_positions.keys(), *[str(symbol).strip() for symbol in candidate_symbols if str(symbol).strip()]})
+        statuses = {str(symbol): dict(status) for symbol, status in (context.pre_trade_tradability or {}).items()}
+        missing = [symbol for symbol in symbols if symbol not in statuses]
+        loader = getattr(self.context_provider, "load_pre_trade_tradability", None)
+        if missing and callable(loader):
+            statuses.update(
+                loader(
+                    symbols=missing,
+                    trade_date=trade_date,
+                    binding=binding,
+                    market_data_source=context.market_data_source,
+                )
+            )
+        return statuses
 
     def _persist_no_rebalance_evidence(
         self,
@@ -4712,13 +5234,21 @@ class SimulationLifecycleBackgroundScheduler:
         }
         if decision["should_run"]:
             try:
-                tick = self.lifecycle_scheduler.run_once(
-                    trade_date=trade_date,
-                    data_source=self._data_source,
-                    limit=self._limit,
-                    submit=bool(decision["submit"]),
-                    as_of_time=now,
-                )
+                if decision["reason"] == "eod_reconcile":
+                    tick = self.lifecycle_scheduler.post_close_reconcile_once(
+                        trade_date=trade_date,
+                        data_source=self._data_source,
+                        limit=self._limit,
+                        as_of_time=now,
+                    )
+                else:
+                    tick = self.lifecycle_scheduler.run_once(
+                        trade_date=trade_date,
+                        data_source=self._data_source,
+                        limit=self._limit,
+                        submit=bool(decision["submit"]),
+                        as_of_time=now,
+                    )
                 result["processed"] = [
                     {
                         "binding_id": item.binding_id,
@@ -4732,12 +5262,14 @@ class SimulationLifecycleBackgroundScheduler:
                     }
                     for item in tick.results
                 ]
+                result["terminalized_runs"] = list(tick.stale_run_results)
                 result["summary"] = {
                     "total_bindings": tick.total_bindings,
                     "planned_count": tick.planned_count,
                     "reused_count": tick.reused_count,
                     "submitted_count": tick.submitted_count,
                     "failed_count": tick.failed_count,
+                    "stale_terminalized_count": tick.stale_terminalized_count,
                 }
             except Exception as exc:  # scheduler must expose failure, not crash silently
                 payload = {
@@ -4767,7 +5299,7 @@ class SimulationLifecycleBackgroundScheduler:
         if active is None:
             return {"window": None, "should_run": False, "submit": False, "reason": "outside_configured_windows"}
         action = str(active.get("action") or "")
-        should_run = action in {"selection_evidence", "execution_plan", "submit"}
+        should_run = action in {"selection_evidence", "execution_plan", "submit", "eod_reconcile"}
         submit = bool(self._default_submit and action == "submit")
         return {"window": active, "should_run": should_run, "submit": submit, "reason": action}
 

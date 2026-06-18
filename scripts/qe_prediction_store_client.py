@@ -78,7 +78,7 @@ def maybe_upload_prediction_artifacts(
             "mlflow_artifact_uri": manifest.get("mlflow_artifact_uri") or manifest.get("uri"),
             "prediction_store_manifest": manifest,
             "uploaded_artifacts": sorted(artifacts),
-            "missing_artifacts": [name for name in ("prediction", "model_params") if name not in artifacts],
+            "missing_artifacts": [name for name in ("prediction", "model_params", "label") if name not in artifacts],
             "written_at": _utc_now(),
         }
         _write_marker(marker)
@@ -165,6 +165,9 @@ def _find_artifact_paths(*, recorder: Any, recorder_ref: dict[str, Any], recorde
             params = directory / params_name
             if params.exists() and "model_params" not in result:
                 result["model_params"] = params
+        label = directory / "label.pkl"
+        if label.exists() and "label" not in result:
+            result["label"] = label
     return result
 
 
@@ -197,6 +200,7 @@ def _candidate_artifact_dirs(*, recorder: Any, recorder_ref: dict[str, Any], rec
             candidates.extend(root.glob(f"**/{recorder_id[:8]}*/artifacts"))
         candidates.extend(path.parent for path in root.glob("**/artifacts/pred.pkl"))
         candidates.extend(path.parent for path in root.glob("**/artifacts/params.pkl"))
+        candidates.extend(path.parent for path in root.glob("**/artifacts/label.pkl"))
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -244,6 +248,9 @@ def _post_artifacts(*, run_key: str, artifacts: dict[str, Path], metadata: dict[
         if "model_params" in artifacts:
             f = stack.enter_context(artifacts["model_params"].open("rb"))
             files["params"] = ("params.pkl", f, "application/octet-stream")
+        if "label" in artifacts:
+            f = stack.enter_context(artifacts["label"].open("rb"))
+            files["label"] = ("label.pkl", f, "application/octet-stream")
         response = requests.post(url, data={k: v for k, v in data.items() if v not in (None, "")}, files=files, timeout=_timeout())
     if response.status_code >= 400:
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")

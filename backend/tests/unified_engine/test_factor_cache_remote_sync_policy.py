@@ -239,3 +239,31 @@ def test_factor_cache_node_api_client_streams_raw_put_and_posts_meta(tmp_path, m
     assert result["upload_workers"] == 1
     assert len(calls["put"]) == 1
     assert len(calls["post"]) == 1
+
+
+
+def test_factor_cache_remote_stats_counts_disk_parquet_even_without_meta(tmp_path, monkeypatch) -> None:
+    fake_api = _FakeNodeApi(remote_meta={"factors": {}})
+    service, root, _node = _make_service(tmp_path, monkeypatch, fake_api)
+    (root / "single").mkdir(parents=True)
+    (root / "single" / "AlphaA.parquet").write_bytes(b"PAR1")
+    (root / "single" / "AlphaB.parquet").write_bytes(b"PAR1")
+    (root / "single" / "_merged_panel.parquet").write_bytes(b"PAR1")
+    (root / "_meta.json").write_text(
+        json.dumps({"factors": {"AlphaA": {"status": "ok", "date_range": "2020-01-01~2026-05-02"}}}),
+        encoding="utf-8",
+    )
+    service.list_remote_nodes = lambda: [
+        RemoteCacheNode("node-api", "Node API", "http://127.0.0.1:9000", None, "online")
+    ]
+
+    stats = service.get_stats(include_factor_status=True)
+
+    assert stats["local"]["disk_cached"] == 2
+    assert stats["local"]["effective_cached"] == 2
+    assert stats["local"]["meta_cached"] == 1
+    assert stats["local"]["orphan_parquet_count"] == 1
+    assert stats["local"]["metadata_pending"] == 1
+    assert stats["remote_nodes"][0]["local_disk_factor_count"] == 2
+    assert stats["remote_nodes"][0]["local_effective_factor_count"] == 2
+    assert stats["factor_status"]["AlphaB"]["local_meta_status"] == "missing_meta_reconcile_required"

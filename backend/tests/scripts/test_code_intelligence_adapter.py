@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -277,6 +277,48 @@ def test_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch,
     assert stdout.startswith("PASS code-intelligence-summary ")
     assert "affected_tests=1" in stdout
     assert "selected_nodes" not in stdout
+
+
+def test_summary_command_sanitizes_changed_files_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text(
+        "\ufeffChanges:\n"
+        "+++ b/scripts/code_intelligence_adapter.py\n"
+        "scripts/code_intelligence_adapter.py\n"
+        "F:/Dev/AIstock/scripts/nightly_adaptive_scheduler.py\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_build_summary(**kwargs):
+        observed.update(kwargs)
+        return {
+            "status": "ok",
+            "latest_freshness": "fresh",
+            "affected_tests_count": 0,
+            "fallback_used": False,
+            "stale_metadata_warning": False,
+        }
+
+    monkeypatch.setattr(adapter, "build_summary", fake_build_summary)
+
+    result = adapter.main(
+        [
+            "summary",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--changed-files-file",
+            str(changed_file),
+            "--root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out.startswith("PASS code-intelligence-summary ")
+    assert observed["changed_files"] == ["scripts/code_intelligence_adapter.py"]
 
 
 def test_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1264,6 +1306,37 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         ),
         encoding="utf-8",
     )
+    (artifact_dir / "llm-hypotheses.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_discovery_hypothesis_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "hypotheses": [{"id": "H-001", "recommended_plan_keys": ["validation_catalog_integrity"]}],
+                "selected_plan_keys": ["validation_catalog_integrity"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "selected-plans.json").write_text(
+        json.dumps({"selected_plan_keys": ["validation_catalog_integrity"]}),
+        encoding="utf-8",
+    )
+    discovery_dir = artifact_dir / "discovery-plans"
+    discovery_dir.mkdir()
+    (discovery_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"executed_count": 1, "anomaly_count": 0}}),
+        encoding="utf-8",
+    )
+    bug_candidate_dir = artifact_dir / "bug-candidates"
+    bug_candidate_dir.mkdir()
+    (bug_candidate_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"candidate_count": 2, "issue_payload_ready_count": 1}}),
+        encoding="utf-8",
+    )
+    (bug_candidate_dir / "candidate-summary.md").write_text("## Nightly BugCandidate Queue\n", encoding="utf-8")
     (artifact_dir / "llm-prompt-evaluation.json").write_text(
         json.dumps(
             {
@@ -1295,10 +1368,19 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["workflow_gate"] == "ready"
     assert payload["llm"]["llm_invoked"] is True
     assert payload["llm"]["allowed_plan_keys"] == ["l0", "validation_module_registry_l0"]
+    assert payload["llm"]["discovery_hypothesis_count"] == 1
+    assert payload["llm"]["selected_plan_count"] == 1
+    assert payload["llm"]["bug_candidate_count"] == 2
+    assert payload["llm"]["bug_candidate_issue_payload_count"] == 1
     assert payload["understand_anything"]["summary_count"] == 2
     assert "LLM + Code Intelligence Value" in markdown
     assert "llm_provider: `deepseek_api`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
+    assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
+    assert "discovery_plans: `executed=1, anomalies=0`" in markdown
+    assert "bug_candidates: `candidates=2, issue_payload_drafts=1`" in markdown
+    assert "bug-candidates/manifest.json" in markdown
+    assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 
 
@@ -1913,4 +1995,3 @@ def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, m
     assert payload["fresh_summary_count"] == 1
     assert payload["base_current_summary_count"] == 1
     assert payload["stale_summary_count"] == 0
-

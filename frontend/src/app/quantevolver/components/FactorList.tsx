@@ -429,7 +429,10 @@ export default function FactorList({
     hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
     effective_cached?: number; meta_valid_cached?: number; disk_cached_enabled?: number;
     disk_factor_count?: number; meta_factor_count?: number; orphan_parquet_count?: number; orphan_meta_count?: number;
+    factor_parquet_count?: number; all_parquet_count?: number; all_size_mb?: number;
+    merged_panel_present?: boolean; merged_panel_size_mb?: number;
     reconcile_required?: number; reconcile_required_sample?: string[];
+    stats_mode?: string; hash_check_enabled?: boolean; db_hash_check_skipped?: boolean; stats_cache_hit?: boolean;
     integrity_ok?: boolean; cache_root?: string; single_dir?: string; meta_path?: string;
     as_of_date?: string | null; data_source_mode?: string | null; window_train_start?: string | null; window_backtest_end?: string | null;
     disabled_total: number; disabled_cached: number; disabled_disk_cached?: number;
@@ -1800,8 +1803,8 @@ export default function FactorList({
               <>
                 <span style={{ fontSize: 12, color: "#6b7280" }}>
                   启用 {cacheStats.total_cached}/{cacheStats.total_code_factors}
-                  {" "}<span style={{ color: "#059669" }}>✓{cacheStats.hash_ok}</span>
-                  {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> ✗{cacheStats.cache_error}</span>}
+                  {" "}<span style={{ color: "#059669" }}>{cacheStats.db_hash_check_skipped ? `Meta ${cacheStats.meta_valid_cached ?? cacheStats.hash_ok}` : `OK ${cacheStats.hash_ok}`}</span>
+                  {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> 错误{cacheStats.cache_error}</span>}
                   {cacheStats.hash_mismatch > 0 && <span style={{ color: "#f59e0b" }}> △{cacheStats.hash_mismatch}</span>}
                   {(cacheStats.reconcile_required || 0) > 0 && <span style={{ color: "#d97706" }}> 元数据待补{cacheStats.reconcile_required}</span>}
                   {cacheStats.no_cache > 0 && <span style={{ color: "#9ca3af" }}> —{cacheStats.no_cache}</span>}
@@ -1811,9 +1814,12 @@ export default function FactorList({
                   {cacheStats.by_source && (
                     <> | 官方缓存{cacheStats.by_source.backtest || 0}</>
                   )}
+                  {cacheStats.db_hash_check_skipped && (
+                    <> | 轻量统计</>
+                  )}
                 </span>
                 <span
-                  title={`磁盘 parquet=${cacheStats.disk_factor_count ?? "-"}\n_meta.json=${cacheStats.meta_factor_count ?? "-"}\n孤儿 parquet=${cacheStats.orphan_parquet_count ?? 0}\n孤儿 meta=${cacheStats.orphan_meta_count ?? 0}\n${cacheStats.single_dir || ""}`}
+                  title={`factor parquet=${cacheStats.factor_parquet_count ?? cacheStats.disk_factor_count ?? "-"}\nall parquet=${cacheStats.all_parquet_count ?? "-"}\nmerged panel=${cacheStats.merged_panel_present ? `${cacheStats.merged_panel_size_mb ?? 0} MB` : "no"}\n_meta.json=${cacheStats.meta_factor_count ?? "-"}\norphan parquet=${cacheStats.orphan_parquet_count ?? 0}\norphan meta=${cacheStats.orphan_meta_count ?? 0}\n${cacheStats.single_dir || ""}`}
                   style={{
                     fontSize: 11,
                     color: (cacheStats.orphan_parquet_count || 0) > 0 ? "#b45309" : "#64748b",
@@ -1823,8 +1829,9 @@ export default function FactorList({
                     borderRadius: 4,
                   }}
                 >
-                  磁盘 {cacheStats.disk_factor_count ?? 0} / Meta {cacheStats.meta_factor_count ?? 0}
+                  磁盘 {cacheStats.factor_parquet_count ?? cacheStats.disk_factor_count ?? 0} / Meta {cacheStats.meta_factor_count ?? 0}
                   {(cacheStats.orphan_parquet_count || 0) > 0 ? `｜待补元数据 ${cacheStats.orphan_parquet_count}` : ""}
+                  {cacheStats.merged_panel_present ? " | merged panel" : ""}
                 </span>
                 {cacheStats.disabled_total > 0 && (
                   <span style={{ fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>

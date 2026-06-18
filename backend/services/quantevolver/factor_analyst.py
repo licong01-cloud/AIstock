@@ -11,19 +11,25 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from decimal import Decimal
 from datetime import datetime, date
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from ...db.pg_pool import get_conn
-from .correlation_engine import CorrelationEngine, CorrelationResult
+from .correlation_engine import CorrelationEngine
 from .factor_official_evaluation_service import CALC_ENGINE
 from .factor_value_loader import FactorValueLoader
 
 logger = logging.getLogger("aistock.quantevolver.factor_analyst")
+_OFFICIAL_FACTOR_VALUE_CACHE_DIR = Path(__file__).resolve().parents[3] / "rdagent_assets" / "factor_values"
+
+
+def _official_factor_value_loader() -> FactorValueLoader:
+    """Return the only factor-value source allowed for official analysis helpers."""
+    return FactorValueLoader(source="single", pipeline_dir=str(_OFFICIAL_FACTOR_VALUE_CACHE_DIR))
 
 # 因子分类类别定义
 FACTOR_CATEGORIES = {
@@ -1136,7 +1142,6 @@ class FactorAnalyst:
         ic = ind.get("ic_mean")
         sharpe = ind.get("top_excess_sharpe")
         ann_ret = ind.get("top_excess_annual_return")
-        icir_ann = ind.get("icir_annualized")
         _hp_class = classify_holding_period(ind.get("ic_decay_half_life"))
 
         # ── 正式评级：只读，从 qe_factor_official_ratings 读取 ──
@@ -1154,7 +1159,7 @@ class FactorAnalyst:
         # ts_info_density: 从因子 parquet 缓存加载时序数据并计算
         ts_density = None
         try:
-            loader = FactorValueLoader()
+            loader = _official_factor_value_loader()
             df_vals = loader.load_single_factor(factor_name)
             if df_vals is not None and len(df_vals) > 0:
                 col = factor_name if factor_name in df_vals.columns else df_vals.columns[0]
@@ -1643,7 +1648,6 @@ class FactorAnalyst:
         # 第一轮：每个类别选最好的1个（优先互补类别）
         seen_categories: set = set()
         # 收集所有类别，优先排列互补需求高的类别
-        all_cats = list(dict.fromkeys(f["category"] for f in candidates))
         for f in candidates:
             cat = f["category"]
             if cat not in seen_categories and len(selected) < target_count:
@@ -1706,123 +1710,60 @@ class FactorAnalyst:
         method: str = "spearman_ewma",
         as_of_date: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """计算因子间相关性矩阵。
+        """Compute an ad-hoc matrix from official single cache without DB writes or fallback estimates."""
+        loader = _official_factor_value_loader()
+        available = set(loader.get_available_factors())
+        computable = [f for f in factor_names if f in available]
+        if len(computable) < 2:
+            return {
+                "ok": False,
+                "factor_count": len(factor_names),
+                "computable_count": len(computable),
+                "correlation_count": 0,
+                "correlations": [],
+                "method": method,
+                "engine": "official_single_cache",
+                "error": "at least two requested factors must exist in official factor_values/single cache",
+                "missing_factors": [f for f in factor_names if f not in available],
+            }
 
-        优先使用 CorrelationEngine 基于真实截面数据计算（Spearman+EWMA）。
-        如果引擎计算失败（数据不足等），回退到基于分类的估算。
-        """
-        # 1. 尝试使用真实计算引擎
-        try:
-            loader = FactorValueLoader()
-            available = set(loader.get_available_factors())
-            computable = [f for f in factor_names if f in available]
-
-            if len(computable) >= 2:
-                engine = CorrelationEngine(loader)
-                result = engine.compute_full_matrix(
-                    computable,
-                    as_of_date=as_of_date,
-                    save_hdf5=True,
-                )
-
-                # 构建返回结构 + 持久化高相关对
-                correlations = []
-                for i, fa in enumerate(result.factor_names):
-                    for j, fb in enumerate(result.factor_names):
-                        if j <= i:
-                            continue
-                        corr = float(result.matrix[i, j])
-                        if np.isnan(corr):
-                            continue
-                        correlations.append({
-                            "factor_a": fa,
-                            "factor_b": fb,
-                            "correlation": round(corr, 6),
-                            "method": method,
-                            "is_estimated": False,
-                        })
-                        # 持久化到 DB（全量存储，供组合分析参考）
-                        self._upsert_correlation(fa, fb, round(corr, 6), method)
-
-                # 对不在 Parquet 中的因子补充分类估算
-                non_computable = [f for f in factor_names if f not in available]
-                if non_computable:
-                    est_corrs = self._estimate_by_category(
-                        non_computable, computable + non_computable, method
-                    )
-                    correlations.extend(est_corrs)
-
-                return {
-                    "ok": True,
-                    "factor_count": len(factor_names),
-                    "computable_count": len(computable),
-                    "correlation_count": len(correlations),
-                    "correlations": correlations,
-                    "method": method,
-                    "engine": "spearman_ewma",
-                    "effective_window": result.effective_window,
-                    "metadata": result.metadata,
-                }
-
-        except Exception as e:
-            logger.warning(f"CorrelationEngine 计算失败，回退到分类估算: {e}")
-
-        # 2. 回退: 基于分类的估算（降级保护）
-        est_corrs = self._estimate_by_category(factor_names, factor_names, method)
-        return {
-            "ok": True,
-            "factor_count": len(factor_names),
-            "computable_count": 0,
-            "correlation_count": len(est_corrs),
-            "correlations": est_corrs,
-            "method": method,
-            "engine": "category_estimation",
-            "note": "基于因子类别估算（引擎不可用时的降级结果）",
-        }
-
-    def _estimate_by_category(
-        self,
-        target_factors: List[str],
-        all_factors: List[str],
-        method: str,
-    ) -> List[Dict[str, Any]]:
-        """基于因子类别估算相关性（降级回退方法）。"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(all_factors))
-                cur.execute(
-                    f"""SELECT factor_name, category
-                        FROM qe_factor_classification
-                        WHERE factor_name IN ({placeholders})""",
-                    all_factors,
-                )
-                factor_cats = {row[0]: row[1] for row in cur.fetchall()}
+        engine = CorrelationEngine(loader)
+        result = engine.compute_full_matrix(
+            computable,
+            as_of_date=as_of_date,
+            save_hdf5=False,
+        )
 
         correlations = []
-        target_set = set(target_factors)
-        for i, fa in enumerate(all_factors):
-            for j, fb in enumerate(all_factors):
+        for i, fa in enumerate(result.factor_names):
+            for j, fb in enumerate(result.factor_names):
                 if j <= i:
                     continue
-                # 至少一个因子在 target 中
-                if fa not in target_set and fb not in target_set:
+                corr = float(result.matrix[i, j])
+                if np.isnan(corr):
                     continue
-                cat_a = factor_cats.get(fa)
-                cat_b = factor_cats.get(fb)
-                if cat_a and cat_b and cat_a == cat_b:
-                    corr = 0.6
-                else:
-                    corr = 0.1
                 correlations.append({
                     "factor_a": fa,
                     "factor_b": fb,
-                    "correlation": corr,
+                    "correlation": round(corr, 6),
                     "method": method,
-                    "is_estimated": True,
+                    "is_estimated": False,
                 })
-                self._upsert_correlation(fa, fb, corr, method)
 
-        return correlations
+        return {
+            "ok": True,
+            "factor_count": len(factor_names),
+            "computable_count": len(computable),
+            "correlation_count": len(correlations),
+            "correlations": correlations,
+            "method": method,
+            "engine": "official_single_cache",
+            "effective_window": result.effective_window,
+            "metadata": result.metadata,
+            "missing_factors": [f for f in factor_names if f not in available],
+            "db_write": False,
+        }
+
 
     # ---- 内部方法 ----
 
@@ -1988,7 +1929,7 @@ class FactorAnalyst:
         ts_density = existing_ts
         if ts_density is None or not skip_if_present:
             try:
-                loader = FactorValueLoader()
+                loader = _official_factor_value_loader()
                 df_vals = loader.load_single_factor(factor_name)
                 if df_vals is not None and len(df_vals) > 0:
                     col = factor_name if factor_name in df_vals.columns else df_vals.columns[0]
@@ -2156,33 +2097,3 @@ class FactorAnalyst:
                     kwargs.get("cross_horizon_consistency"),
                     factor_catalog_id,
                 ))
-
-    def _upsert_correlation(self, factor_a: str, factor_b: str,
-                            correlation: float, method: str) -> None:
-        """UPSERT因子相关性（新表结构：catalog_id 主键，CHECK a_id < b_id）。"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                # 解析 factor catalog IDs
-                cur.execute("""
-                    SELECT DISTINCT ON (factor_name) factor_name, id
-                    FROM aistock_factor_catalog
-                    WHERE factor_name IN (%s, %s)
-                    ORDER BY factor_name, id
-                """, (factor_a, factor_b))
-                catalog_map = {row[0]: row[1] for row in cur.fetchall()}
-                fa_id = catalog_map.get(factor_a)
-                fb_id = catalog_map.get(factor_b)
-                if fa_id is None or fb_id is None:
-                    logger.warning(f"因子 {factor_a} 或 {factor_b} 未在 catalog 中找到，跳过相关性写入")
-                    return
-
-                a_id, b_id = min(fa_id, fb_id), max(fa_id, fb_id)
-                cur.execute("""
-                    INSERT INTO qe_factor_correlations
-                        (factor_a_id, factor_b_id, correlation, method,
-                         as_of_date, computed_at)
-                    VALUES (%s, %s, %s, %s, CURRENT_DATE, NOW())
-                    ON CONFLICT (factor_a_id, factor_b_id) DO UPDATE SET
-                        correlation = EXCLUDED.correlation,
-                        computed_at = NOW()
-                """, (a_id, b_id, correlation, method))

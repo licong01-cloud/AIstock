@@ -1,8 +1,9 @@
-"""Fast-disk artifact store for QE prediction and model-parameter pickles.
+"""Fast-disk artifact store for QE prediction, label, and model-parameter pickles.
 
 P2 deliberately keeps MLflow tracking out of PostgreSQL. Qlib still writes
-local recorder artifacts, and the runner pushes ``pred.pkl``/``params.pkl`` to
-this AIstock-owned store before any workspace cleanup can remove them.
+local recorder artifacts, and the runner pushes ``pred.pkl``/``label.pkl``/
+``params.pkl`` to this AIstock-owned store before any workspace cleanup can
+remove them.
 """
 
 from __future__ import annotations
@@ -170,7 +171,7 @@ def infer_pickle_metadata(path: Path, *, artifact_type: str) -> dict[str, Any]:
             "parser_status": "not_parsed",
             "parser_error": f"skipped: size_bytes={size_bytes} exceeds {METADATA_MAX_BYTES_ENV}={max_bytes}",
         }
-    if artifact_type != "prediction":
+    if artifact_type not in {"prediction", "label"}:
         return {"parser_status": "not_required"}
 
     try:
@@ -289,10 +290,13 @@ class PredictionArtifactStore:
 
         for artifact_type, (filename, fileobj) in files.items():
             normalized_type = safe_store_component(artifact_type, field_name="artifact_type")
-            artifact_name = "pred.pkl" if normalized_type == "prediction" else "params.pkl"
+            artifact_name = {
+                "prediction": "pred.pkl",
+                "label": "label.pkl",
+            }.get(normalized_type, "params.pkl")
             if filename:
                 lower_name = Path(filename).name.lower()
-                if lower_name in {"pred.pkl", "params.pkl", "params_pkl"}:
+                if lower_name in {"pred.pkl", "params.pkl", "params_pkl", "label.pkl"}:
                     artifact_name = "params.pkl" if lower_name == "params_pkl" else lower_name
             sha256, size_bytes = self._write_blob(fileobj)
             blob = self.blob_path(sha256)

@@ -223,6 +223,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
         "selection",
         "planning",
         "execution",
+        "post_close_reconcile",
     ]
 
 

@@ -906,7 +906,7 @@ def _persist_correlations_batch(
         if row.get("id") is not None
     }
     if not catalog_name_to_id:
-        raise RuntimeError("catalog 中无可用于写入相关性的因子 (transformation_status=SUCCESS 且 qe_code_path 存在)")
+        raise RuntimeError("catalog 中无可用于写入相关性的因子")
 
     with get_conn() as conn:
         with conn.cursor() as cur:

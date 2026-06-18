@@ -44,6 +44,8 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
+  AISTOCK_CANONICAL_ROOT: F:/Dev/AIstock
+  AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
   AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
@@ -317,6 +319,11 @@ jobs:
     if: github.event_name == 'schedule' || inputs.run_code_intelligence
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      models: read
     defaults:
       run:
         shell: powershell
@@ -352,22 +359,20 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
-          $changedFiles = @()
-          try {
-            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $changedFiles = @()
-              $global:LASTEXITCODE = 0
-            }
-          } catch {
-            $changedFiles = @()
-          }
-          New-Item -ItemType File -Force -Path $changedFile | Out-Null
-          if (@($changedFiles).Count -gt 0) {
-            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
-          } else {
-            Clear-Content -Path $changedFile
-          }
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
             --language zh `
             --output "$outDir/ua-configure.stdout.json"
@@ -445,27 +450,117 @@ jobs:
               --output "$outDir/llm-nightly-scheduler-advice.json"
           }
 
+      - name: Build LLM nightly discovery hypotheses
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
+            --provider deepseek_api `
+            --invoke-llm `
+            --input-pack "$outDir/discovery-input-pack.json" `
+            --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --output "$outDir/llm-hypotheses.json" `
+            --selected-plans-output "$outDir/selected-plans.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM nightly discovery hypothesis failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
+              --provider deterministic `
+              --input-pack "$outDir/discovery-input-pack.json" `
+              --codegraph-freshness fresh `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+              --allowed-plan-key l0 `
+              --allowed-plan-key validation_module_registry_l0 `
+              --allowed-plan-key validation_catalog_integrity `
+              --allowed-plan-key validation_center_backend `
+              --allowed-plan-key validation_workflow_automation `
+              --allowed-plan-key validation_discovery_issue_intake_readonly `
+              --allowed-plan-key workflow_discovery_root_clean_guard `
+              --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+              --allowed-plan-key validation_center_discovery_run_record_integrity `
+              --output "$outDir/llm-hypotheses.json" `
+              --selected-plans-output "$outDir/selected-plans.json"
+          }
+
+      - name: Run selected readonly discovery plans
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/discovery-plans" | Out-Null
+          conda run -n AIstock python scripts/nightly_discovery_plans.py --json run-selected `
+            --selected-plans "$outDir/selected-plans.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --default-plan-key validation_discovery_issue_intake_readonly `
+            --default-plan-key workflow_discovery_root_clean_guard `
+            --default-plan-key code_intelligence_discovery_affected_tests_quality `
+            --default-plan-key validation_center_discovery_run_record_integrity `
+            --output-dir "$outDir/discovery-plans"
+
+      - name: Build Nightly BugCandidate draft queue
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/bug-candidates" | Out-Null
+          conda run -n AIstock python scripts/nightly_bug_candidate_queue.py --json build `
+            --discovery-manifest "$outDir/discovery-plans/manifest.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --ua-manifest-json "$outDir/ua-summary-manifest.json" `
+            --existing-queue-dir "tmp/validation/nightly_failure_issue/candidate_history" `
+            --output-dir "$outDir/bug-candidates"
+
+      - name: Promote ready Nightly BugCandidates to Issue workflow
+        if: github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          $manifestPath = "$outDir/bug-candidates/manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestPath)) {
+            Write-Host "::warning::Nightly BugCandidate manifest missing; no issue promotion attempted."
+            exit 0
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $refs = @($manifest.issue_payload_refs)
+          if ($refs.Count -eq 0) {
+            Write-Host "gate=nightly_candidate_promotion issue_payloads=0 promoted=0"
+            exit 0
+          }
+          foreach ($ref in $refs) {
+            conda run -n AIstock python scripts/aistock_issue_workflow.py promote-nightly-candidate `
+              --issue-payload "$ref" `
+              --opt-in-auto-file `
+              --create-registry-worktree `
+              --apply `
+              --output-format summary
+          }
+
       - name: Build Nightly adaptive scheduler warning report
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
-          $changedFiles = @()
-          try {
-            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $changedFiles = @()
-              $global:LASTEXITCODE = 0
-            }
-          } catch {
-            $changedFiles = @()
-          }
-          New-Item -ItemType File -Force -Path $changedFile | Out-Null
-          if (@($changedFiles).Count -gt 0) {
-            $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
-          } else {
-            Clear-Content -Path $changedFile
-          }
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
             --provider deepseek_api `
             --require-api-key
@@ -773,5 +868,3 @@ jobs:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
-
-

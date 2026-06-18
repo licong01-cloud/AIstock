@@ -106,7 +106,9 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
     service_text = SERVICE.read_text(encoding="utf-8")
     service_anchors = [
         _line_number(SERVICE, "_complete_chat_with_reactive_recovery"),
-        _line_number(SERVICE, "_maybe_auto_execute_read_only_mcp_route"),
+        _line_number(SERVICE, "_complete_chat_with_react_grounding"),
+        _line_number(SERVICE, "_agentic_function_tools"),
+        _line_number(SERVICE, "_react_messages_for_agentic_synthesis"),
         _line_number(SERVICE, "def build_context_pack"),
         _line_number(SERVICE, "def create_external_agent_session"),
         _line_number(SERVICE, "def route_model"),

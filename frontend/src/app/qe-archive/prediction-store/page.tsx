@@ -164,6 +164,7 @@ function artifactDownloadHref(row: PointerRow, artifact: PredictionStoreArtifact
   const artifactType = String(artifact.artifact_type || "");
   if (artifactType === "prediction") return predictionStoreApi.downloadUrl(row.run.run_id, "prediction");
   if (artifactType === "model_params") return predictionStoreApi.downloadUrl(row.run.run_id, "model_params");
+  if (artifactType === "label") return predictionStoreApi.downloadUrl(row.run.run_id, "label");
   return null;
 }
 
@@ -431,13 +432,13 @@ export default function PredictionStorePage() {
             <a className="pv2-button-ghost" href={predictionStoreApi.downloadUrl(selectedRunId, "model_params")}>下载 params.pkl</a>
           ) : null}
           {selectedRunId && selectedRow && artifactByType(selectedRow, "label") ? (
-            <span className="pv2-help">label.pkl 已在 manifest 中出现，但当前后端未提供 label 只读下载路由</span>
+            <a className="pv2-button-ghost" href={predictionStoreApi.downloadUrl(selectedRunId, "label")}>下载 label.pkl</a>
           ) : null}
         </div>
         <ErrorPanel error={previewError} title="Pred preview 读取失败" />
         <PreviewPanel preview={preview} />
         <div className="pv2-help" style={{ marginTop: 10 }}>
-          当前后端下载路由暴露 pred.pkl 与 params.pkl；若后续 manifest 增加 label.pkl 且后端提供只读下载路由，前端可按相同 manifest 机制展示。
+          下载路由支持 pred.pkl、params.pkl 与 label.pkl；label 缺失时后端返回明确 4xx，不伪造或回退数据。
         </div>
       </SectionCard>
 
@@ -459,7 +460,6 @@ export default function PredictionStorePage() {
               render: ({ row, artifact }) => {
                 const href = artifactDownloadHref(row, artifact);
                 if (href) return <a className="pv2-button-ghost" href={href}>下载</a>;
-                if (String(artifact.artifact_type || "") === "label") return <span className="pv2-muted">等待 label 路由</span>;
                 return <span className="pv2-muted">-</span>;
               },
             },

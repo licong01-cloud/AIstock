@@ -65,7 +65,7 @@ function buildRankMetrics(diagnostics: LoopDiagnostics): LoopRankMetrics {
   const pos = diagnostics.position;
 
   return {
-    cagr: metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute"]),
+    cagr: metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute", "annualized_return", "annual_return"]),
     annualizedReturn: metricNumber(metrics, ["annualized_return", "ann_return"]),
     absMaxDrawdown: metricNumber(ar, ["max_drawdown", "max_drawdown_absolute"]),
     costMaxDrawdown: metricNumber(metrics, ["max_drawdown"]),

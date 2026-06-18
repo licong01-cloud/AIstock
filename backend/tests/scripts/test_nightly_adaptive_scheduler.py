@@ -309,6 +309,20 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "Build compact code intelligence refs for LLM advice" in workflow
     assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
+    assert "Build LLM nightly discovery hypotheses" in workflow
+    assert "nightly-discovery-hypothesis" in workflow
+    assert "llm-hypotheses.json" in workflow
+    assert "selected-plans.json" in workflow
+    assert "Build Nightly BugCandidate draft queue" in workflow
+    assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
+    assert "bug-candidates" in workflow
+    assert "Promote ready Nightly BugCandidates to Issue workflow" in workflow
+    assert "inputs.llm_triage_mode == 'opt_in_auto_file'" in workflow
+    assert "inputs.llm_auto_file_opt_in" in workflow
+    assert "issues: write" in workflow
+    assert "promote-nightly-candidate" in workflow
+    assert "--opt-in-auto-file" in workflow
+    assert "--create-registry-worktree" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
@@ -322,12 +336,18 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
 
 
-def test_nightly_workflow_always_materializes_changed_files_handoff() -> None:
+def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> None:
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     blocks = [block for block in workflow.split("      - name: ") if "nightly-changed-files.txt" in block]
 
     assert len(blocks) == 2
+    assert workflow.count("scripts/nightly_discovery_input_pack.py") == 2
+    assert workflow.count("--allowed-plan-key validation_catalog_integrity") >= 2
+    assert workflow.count("--allowed-plan-key workflow_discovery_root_clean_guard") >= 2
+    assert "git diff --name-only HEAD~1 HEAD" not in workflow
     for block in blocks:
-        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" in block
-        assert "if (@($changedFiles).Count -gt 0)" in block
-        assert "Clear-Content -Path $changedFile" in block
+        assert "--base-ref HEAD~1" in block
+        assert '--output "$outDir/discovery-input-pack.json"' in block
+        assert "--changed-files-output $changedFile" in block
+        assert "New-Item -ItemType File -Force -Path $changedFile | Out-Null" not in block
+        assert "Clear-Content -Path $changedFile" not in block

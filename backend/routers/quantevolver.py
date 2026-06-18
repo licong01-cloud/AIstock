@@ -792,7 +792,7 @@ def list_factors(
             for row in rows:
                 fn = row.get("factor_name")
                 selected_cache = _choose_best_factor_cache_candidate(
-                    _collect_factor_cache_candidates(str(fn)),
+                    _collect_factor_cache_candidates(str(fn), infer_missing_meta_window=False),
                     cache_start_date,
                     cache_end_date,
                 )
@@ -3396,6 +3396,8 @@ def _is_official_factor_cache_path_shape(path_value: Any) -> bool:
 
 _cache_parquet_window_ttl: Dict[str, Dict[str, Any]] = {}
 _PARQUET_WINDOW_TTL_SEC = 300
+_cache_stats_ttl: Dict[str, Any] = {}
+_FACTOR_CACHE_STATS_TTL_SEC = 30
 
 
 def _infer_factor_cache_window_from_parquet(parquet_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -3495,13 +3497,14 @@ def _load_cache_meta(ttl_sec: int = 30, meta_path: Optional[Path] = None) -> dic
 
 
 def _invalidate_cache_meta(meta_path: Optional[Path] = None):
-    """使 meta 内存缓存失效。"""
+    """Invalidate in-process factor-cache metadata caches."""
     if meta_path is None:
         _cache_meta_ttl.clear()
         _cache_parquet_window_ttl.clear()
+        _cache_stats_ttl.clear()
     else:
         _cache_meta_ttl.pop(str(Path(meta_path).resolve()), None)
-
+        _cache_stats_ttl.clear()
 
 def _split_factor_cache_range(date_range: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not date_range or "~" not in str(date_range):
@@ -3539,6 +3542,8 @@ def _factor_cache_candidate_covers(
 def _collect_factor_cache_candidates(
     factor_name: str,
     source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
+    *,
+    infer_missing_meta_window: bool = True,
 ) -> List[Dict[str, Any]]:
     """Collect official shared factor-value cache candidates.
 
@@ -3568,7 +3573,7 @@ def _collect_factor_cache_candidates(
         valid_cache = has_entry and has_file and status != "error"
         reconcile_required = has_file and not has_entry
         inferred_range = None
-        if reconcile_required:
+        if reconcile_required and infer_missing_meta_window:
             cache_start, cache_end, inferred_range = _infer_factor_cache_window_from_parquet(parquet_path)
         if reconcile_required:
             cache_status = "missing_meta_reconcile_required"
@@ -3751,139 +3756,152 @@ def _load_failed_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
         return []
 
 
-@router.get("/factor-cache/stats", summary="因子值缓存统计")
-def factor_cache_stats():
-    """返回缓存总览：总缓存数、占用空间、覆盖率、日期范围分布。"""
-    try:
-        inventory = _factor_cache_inventory()
-        total_size = float(inventory.get("total_size_mb") or 0) * 1024 * 1024
-        disk_factor_count = int(inventory.get("disk_factor_count") or 0)
-        meta_factor_count = int(inventory.get("meta_factor_count") or 0)
-        orphan_parquet_count = int(inventory.get("orphan_parquet_count") or 0)
-        orphan_meta_count = int(inventory.get("orphan_meta_count") or 0)
+@router.get("/factor-cache/stats", summary="Factor value cache stats")
+def factor_cache_stats(include_hash: bool = Query(False, description="Default false returns lightweight disk/meta inventory; true also checks code_text hashes")):
+    """Return a lightweight official factor-cache overview.
 
-        # 代码因子总数 + 可用/禁用因子名集合（从因子库 code_text 查询）
-        db_available_names: set = set()
-        db_disabled_names: set = set()
-        total_code_factors = 0
-        total_disabled_factors = 0
-        # 当前代码 hash：仅使用因子库 code_text
-        db_code_hashes: Dict[str, str] = {}
+    The default path must stay cheap for the factor library UI: it lists disk
+    parquet names, reads _meta.json, and queries factor names only.  It must not
+    read parquet indices or compute DB code hashes unless include_hash=true.
+    """
+    try:
+        include_hash_enabled = include_hash is True
+        cache_key = f"{FACTOR_CACHE_ROOT.resolve()}|include_hash={int(include_hash_enabled)}"
+        now = time.time()
+        active_tasks = sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running")
+        cached_payload = _cache_stats_ttl.get(cache_key)
+        if cached_payload and now - float(cached_payload.get("loaded_at", 0)) < _FACTOR_CACHE_STATS_TTL_SEC:
+            payload = dict(cached_payload.get("payload") or {})
+            payload["active_tasks"] = active_tasks
+            payload["stats_cache_hit"] = True
+            return payload
+
+        inventory = _factor_cache_inventory()
+        meta = _load_cache_meta()
+        factors_meta = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        disk_names = {
+            path.stem
+            for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")
+            if not path.name.startswith("_")
+        } if FACTOR_CACHE_SINGLE_DIR.exists() else set()
+        meta_names = set(factors_meta)
+        error_names = {
+            name
+            for name, entry in factors_meta.items()
+            if isinstance(entry, dict) and str(entry.get("status") or "ok").lower() == "error"
+        }
+
+        db_available_names: set[str] = set()
+        db_disabled_names: set[str] = set()
         try:
-            from ..db.pg_pool import get_conn
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
                         SELECT factor_name, is_available
                         FROM aistock_factor_catalog
                         WHERE code_text IS NOT NULL
+                          AND length(trim(code_text)) > 0
                     """)
                     for fn, avail in cur.fetchall():
                         if avail:
                             db_available_names.add(fn)
-                            total_code_factors += 1
                         else:
                             db_disabled_names.add(fn)
-                            total_disabled_factors += 1
-            db_code_hashes = _get_current_factor_code_hashes(list(db_available_names))
         except Exception as e:
-            logger.error(f"查询因子总数失败: {e}")
-            raise HTTPException(status_code=500, detail=f"数据库查询失败: {e}")
+            logger.error("factor-cache stats DB query failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"factor-cache stats DB query failed: {e}")
 
-        range_dist: Dict[str, int] = {}
-        by_source: Dict[str, int] = {}
+        enabled_disk_names = db_available_names & disk_names
+        enabled_error_names = db_available_names & error_names
+        enabled_effective_names = enabled_disk_names - enabled_error_names
+        enabled_meta_valid_names = (enabled_disk_names & meta_names) - enabled_error_names
+        enabled_reconcile_names = enabled_disk_names - meta_names
+        disabled_disk_names = db_disabled_names & disk_names
+        disabled_error_names = db_disabled_names & error_names
+        disabled_effective_names = disabled_disk_names - disabled_error_names
+        disabled_meta_valid_names = (disabled_disk_names & meta_names) - disabled_error_names
 
-        # 细分缓存状态：cache_ok / cache_error / hash_mismatch / no_cache
-        cache_ok = 0
-        cache_error = 0
+        hash_ok = len(enabled_meta_valid_names)
         hash_mismatch = 0
-        reconcile_required = 0
-        disk_cached_enabled = 0
-        disabled_cached = 0
-        disabled_disk_cached = 0
-
-        for fn in db_available_names:
-            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
-            entry = (selected_cache or {}).get("entry") or {}
-            cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
-            current_hash = db_code_hashes.get(fn)
-
-            if selected_cache and selected_cache.get("valid_cache"):
-                disk_cached_enabled += 1
+        if include_hash_enabled and enabled_meta_valid_names:
+            db_code_hashes = _get_current_factor_code_hashes(sorted(enabled_meta_valid_names))
+            hash_ok = 0
+            for fn in enabled_meta_valid_names:
+                entry = factors_meta.get(fn) or {}
+                cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
+                current_hash = db_code_hashes.get(fn)
                 if current_hash and cached_hash and cached_hash != current_hash:
                     hash_mismatch += 1
                 else:
-                    cache_ok += 1
-                dr = selected_cache.get("cache_date_range") or "unknown"
-                range_dist[dr] = range_dist.get(dr, 0) + 1
-                source_key = str(selected_cache.get("source_key") or "unknown")
-                by_source[source_key] = by_source.get(source_key, 0) + 1
-            elif selected_cache and selected_cache.get("cache_status") == "error":
-                # _meta.json 明确记录了失败
-                cache_error += 1
-            elif selected_cache and selected_cache.get("cache_status") == "missing_meta_reconcile_required":
-                disk_cached_enabled += 1
-                reconcile_required += 1
-                dr = selected_cache.get("cache_date_range") or "metadata_pending"
-                range_dist[dr] = range_dist.get(dr, 0) + 1
-                source_key = str(selected_cache.get("source_key") or "unknown")
-                by_source[source_key] = by_source.get(source_key, 0) + 1
-            # else: no_cache, 不计入
+                    hash_ok += 1
 
-        # 禁用因子缓存统计
-        for fn in db_disabled_names:
-            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
-            if selected_cache and selected_cache.get("valid_cache"):
-                disabled_cached += 1
-                disabled_disk_cached += 1
-                dr = selected_cache.get("cache_date_range") or "unknown"
-                range_dist[dr] = range_dist.get(dr, 0) + 1
-            elif selected_cache and selected_cache.get("cache_status") == "missing_meta_reconcile_required":
-                disabled_disk_cached += 1
+        range_dist: Dict[str, int] = {}
+        by_source: Dict[str, int] = {"backtest": len(enabled_effective_names)}
+        for fn in enabled_meta_valid_names:
+            entry = factors_meta.get(fn) or {}
+            dr = entry.get("date_range") or "unknown"
+            range_dist[dr] = range_dist.get(dr, 0) + 1
+        if enabled_reconcile_names:
+            range_dist["metadata_pending"] = range_dist.get("metadata_pending", 0) + len(enabled_reconcile_names)
+        dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else (inventory.get("date_range") or "unknown")
 
-        dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else "unknown"
-        effective_cached = cache_ok + hash_mismatch + reconcile_required
-
-        return {
+        total_code_factors = len(db_available_names)
+        effective_cached = len(enabled_effective_names)
+        cache_error = len(enabled_error_names)
+        payload = {
             "ok": True,
+            "stats_cache_hit": False,
+            "stats_mode": "lightweight_inventory",
+            "hash_check_enabled": include_hash_enabled,
+            "db_hash_check_skipped": not include_hash_enabled,
             "total_cached": effective_cached,
             "effective_cached": effective_cached,
-            "meta_valid_cached": cache_ok + hash_mismatch,
-            "disk_cached_enabled": disk_cached_enabled,
-            "disk_factor_count": disk_factor_count,
-            "meta_factor_count": meta_factor_count,
-            "orphan_parquet_count": orphan_parquet_count,
-            "orphan_meta_count": orphan_meta_count,
+            "meta_valid_cached": len(enabled_meta_valid_names),
+            "disk_cached_enabled": effective_cached,
+            "disk_factor_count": int(inventory.get("disk_factor_count") or len(disk_names)),
+            "factor_parquet_count": int(inventory.get("factor_parquet_count") or len(disk_names)),
+            "all_parquet_count": int(inventory.get("all_parquet_count") or len(disk_names)),
+            "merged_panel_present": bool(inventory.get("merged_panel_present")),
+            "merged_panel_size_mb": float(inventory.get("merged_panel_size_mb") or 0),
+            "meta_factor_count": int(inventory.get("meta_factor_count") or len(meta_names)),
+            "orphan_parquet_count": int(inventory.get("orphan_parquet_count") or len(disk_names - meta_names)),
+            "orphan_meta_count": int(inventory.get("orphan_meta_count") or len(meta_names - disk_names)),
             "integrity_ok": bool(inventory.get("integrity_ok")),
             "integrity": inventory.get("integrity"),
-            "reconcile_required": reconcile_required,
-            "reconcile_required_sample": list((inventory.get("orphan_parquets") or [])[:20]),
+            "reconcile_required": len(enabled_reconcile_names),
+            "reconcile_required_sample": sorted(enabled_reconcile_names)[:20],
             "total_code_factors": total_code_factors,
             "coverage_pct": round(effective_cached / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
-            "total_size_mb": round(total_size / 1024 / 1024, 1),
+            "total_size_mb": float(inventory.get("total_size_mb") or 0),
+            "all_size_mb": float(inventory.get("all_size_mb") or inventory.get("total_size_mb") or 0),
             "date_range_dominant": dominant_range,
             "date_range_distribution": dict(sorted(range_dist.items(), key=lambda x: -x[1])[:10]),
-            "hash_ok": cache_ok,
+            "hash_ok": hash_ok,
             "hash_mismatch": hash_mismatch,
             "cache_error": cache_error,
             "no_cache": max(total_code_factors - effective_cached - cache_error, 0),
-            "disabled_total": total_disabled_factors,
-            "disabled_cached": disabled_cached,
-            "disabled_disk_cached": disabled_disk_cached,
+            "disabled_total": len(db_disabled_names),
+            "disabled_cached": len(disabled_meta_valid_names),
+            "disabled_disk_cached": len(disabled_effective_names),
+            "disabled_cache_error": len(disabled_error_names),
             "by_source": by_source,
             "cache_root": str(FACTOR_CACHE_ROOT),
             "single_dir": str(FACTOR_CACHE_SINGLE_DIR),
             "meta_path": str(FACTOR_CACHE_META_PATH),
-            "last_generation": inventory.get("generated_at") or _load_cache_meta().get("generated_at"),
+            "last_generation": inventory.get("generated_at") or meta.get("generated_at"),
             "as_of_date": inventory.get("as_of_date"),
             "data_source_mode": inventory.get("data_source_mode"),
             "data_freshness_profile": inventory.get("data_freshness_profile"),
             "window_train_start": inventory.get("window_train_start"),
             "window_backtest_end": inventory.get("window_backtest_end"),
-            "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
+            "active_tasks": active_tasks,
         }
+        _cache_stats_ttl[cache_key] = {"loaded_at": now, "payload": dict(payload)}
+        return payload
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("获取缓存统计失败")
+        logger.exception("factor-cache stats failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -5308,11 +5326,15 @@ def get_factor_transformation_status(
     try:
         from ..services.quantevolver.factor_transformation_service import FactorTransformationService
         svc = FactorTransformationService()
-        return svc.get_factor_transformation_status(
+        result = svc.get_factor_transformation_status(
             factor_source=factor_source,
             limit=limit,
             offset=offset,
         )
+        for item in result.get("items", []):
+            item["has_non_official_code"] = bool(item.pop("has_realtime_code", False))
+            item["non_official_code_path"] = item.pop("qe_code_path", None)
+        return result
     except Exception as e:
         logger.exception("获取因子改造状态失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -5525,12 +5547,12 @@ def get_transformation_job_progress(job_id: str):
 
 
 @router.get("/factor-transformation/factor/{factor_name}/code")
-def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"):
+def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_sync"):
     """
-    获取指定因子的改造后实时代码及原始代码。
+    获取指定因子的非官方改造代码及原始代码。
     改造后代码优先从文件系统 qe_code_path 读取（权威数据源）；
     原始代码优先从文件系统 asset_path 读取（权威数据源）。
-    数据库中的 realtime_code_text / code_text 仅作展示兜底，不作为改造依据。
+    数据库中的历史改造代码字段/code_text 仅作展示兜底，不作为改造依据。
     """
     import os
     try:
@@ -5571,12 +5593,14 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
             except (OSError, UnicodeDecodeError) as e:
                 return None, abs_path, str(e)
 
+        non_official_code_path = result.pop("qe_code_path", None)
         # 从文件系统读取改造后代码（权威数据源）
-        transformed_code, transformed_abs, transformed_err = _read_file_from_path(result.get("qe_code_path"))
+        transformed_code, transformed_abs, transformed_err = _read_file_from_path(non_official_code_path)
         # 从文件系统读取原始代码（权威数据源）
         original_code, original_abs, original_err = _read_file_from_path(result.get("asset_path"))
 
-        result["realtime_code_text"] = transformed_code
+        result["non_official_code_path"] = non_official_code_path
+        result["transformed_code_text"] = transformed_code
         result["code_text"] = original_code
         result["_transformed_code_source"] = "filesystem" if transformed_code else "none"
         result["_original_code_source"] = "filesystem" if original_code else "none"
@@ -5589,7 +5613,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("获取因子实时代码失败")
+        logger.exception("获取因子非官方改造代码失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -5597,7 +5621,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
 def reset_factor_transformation(factor_name: str, source: str = "rdagent_sota"):
     """
     重置指定因子的改造状态为 PENDING，允许重新改造。
-    重置时清空 realtime_code_text 和 qe_code_path（改造相关字段）。
+    重置时清空历史改造代码字段和 qe_code_path（改造相关字段）。
     严禁修改 asset_path 和 code_text（原始因子源代码不可修改）。
     """
     try:
@@ -5639,7 +5663,7 @@ def get_transformation_stats():
                         COUNT(CASE WHEN transformation_status = 'PENDING' OR transformation_status IS NULL THEN 1 END) AS pending,
                         COUNT(CASE WHEN transformation_status NOT IN ('SUCCESS', 'FAILED', 'PENDING') AND transformation_status IS NOT NULL THEN 1 END) AS in_progress,
                         COUNT(CASE WHEN asset_path IS NOT NULL AND asset_path != '' THEN 1 END) AS has_original_code,
-                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_realtime_code
+                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_non_official_code
                     FROM aistock_factor_catalog
                 """)
                 row = cur.fetchone()

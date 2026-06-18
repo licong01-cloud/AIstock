@@ -10,6 +10,7 @@ import pytest
 from backend.services.model_store.artifact_store import (
     PredictionArtifactStore,
     PredictionStoreError,
+    PredictionStoreNotFound,
     validate_store_root,
 )
 from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtractor
@@ -29,23 +30,35 @@ def test_prediction_artifact_store_writes_manifest_and_rejects_hdd_root(tmp_path
     pred_bytes = io.BytesIO()
     pred.to_pickle(pred_bytes)
     pred_bytes.seek(0)
+    label = pd.DataFrame(
+        {"LABEL0": [0.01, -0.02, 0.03]},
+        index=pred.index,
+    )
+    label_bytes = io.BytesIO()
+    label.to_pickle(label_bytes)
+    label_bytes.seek(0)
     params_bytes = io.BytesIO(b"params")
 
     store = PredictionArtifactStore(root=tmp_path / "prediction_store")
     manifest = store.write_artifacts(
         run_key="qear_run_unit",
-        files={"prediction": ("pred.pkl", pred_bytes), "model_params": ("params.pkl", params_bytes)},
+        files={"prediction": ("pred.pkl", pred_bytes), "model_params": ("params.pkl", params_bytes), "label": ("label.pkl", label_bytes)},
         metadata={"experiment_id": "exp_unit", "recorder_id": "rec_unit", "source_node_id": "wsl2-5080"},
     )
 
     assert manifest["mlflow_artifact_uri"] == "aistock-prediction-store://runs/qear_run_unit"
     items = {item["artifact_type"]: item for item in manifest["artifacts"]}
-    assert set(items) == {"prediction", "model_params"}
+    assert set(items) == {"prediction", "model_params", "label"}
     assert items["prediction"]["row_count"] == 3
     assert items["prediction"]["symbol_count"] == 3
     assert items["prediction"]["parser_status"] == "parsed"
+    assert items["label"]["artifact_name"] == "label.pkl"
+    assert items["label"]["row_count"] == 3
+    assert items["label"]["parser_status"] == "parsed"
     assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_type="prediction").exists()
     assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_type="model_params").exists()
+    assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_type="label").exists()
+    assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_name="label.pkl").exists()
 
 
 def test_payload_extractor_attaches_prediction_store_manifest() -> None:
@@ -114,3 +127,51 @@ def test_prediction_store_client_requires_pred_when_upload_enabled(tmp_path: Pat
     marker = tmp_path / client.UPLOAD_MARKER_FILE
     assert marker.exists()
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+def test_prediction_store_client_discovers_label_artifact(tmp_path: Path) -> None:
+    from scripts import qe_prediction_store_client as client
+
+    artifact_dir = tmp_path / "mlruns" / "exp" / "rec_unit" / "artifacts"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "pred.pkl").write_bytes(b"pred")
+    (artifact_dir / "params.pkl").write_bytes(b"params")
+    (artifact_dir / "label.pkl").write_bytes(b"label")
+
+    class Recorder:
+        info = {"id": "rec_unit", "experiment_id": "exp_unit"}
+
+    artifacts = client._find_artifact_paths(  # noqa: SLF001 - runner helper contract coverage.
+        recorder=Recorder(),
+        recorder_ref={"recorder_id": "rec_unit", "target_mlruns_realpath": str(tmp_path / "mlruns")},
+        recorder_id="rec_unit",
+    )
+
+    assert artifacts["prediction"].name == "pred.pkl"
+    assert artifacts["model_params"].name == "params.pkl"
+    assert artifacts["label"].name == "label.pkl"
+
+
+def test_label_download_missing_is_explicit_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from backend.routers import prediction_store as router
+    from backend.services.model_store.service import ModelStoreService
+
+    pred_bytes = io.BytesIO()
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_bytes)
+    pred_bytes.seek(0)
+    store = PredictionArtifactStore(root=tmp_path / "prediction_store")
+    store.write_artifacts(run_key="run_without_label", files={"prediction": ("pred.pkl", pred_bytes)})
+
+    service = ModelStoreService(artifact_store=store)
+    monkeypatch.setattr(service, "_find_run", lambda **_kwargs: None)
+    monkeypatch.setattr(router, "get_model_store_service", lambda: service)
+
+    with pytest.raises(HTTPException) as excinfo:
+        router.download_prediction_artifact("run_without_label", "label")
+
+    assert excinfo.value.status_code == 404
+    assert "label" in str(excinfo.value.detail)
+    with pytest.raises(PredictionStoreNotFound):
+        service.label_path(run_id="run_without_label")

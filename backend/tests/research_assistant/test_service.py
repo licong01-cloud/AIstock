@@ -44,6 +44,15 @@ class DialogueAwareFakeLlmClient:
 
     def complete(self, **kwargs: object) -> LlmCallResult:
         self.calls.append(kwargs)
+        business_answer = _agentic_business_answer(kwargs.get("messages"))
+        if business_answer is not None:
+            return LlmCallResult(
+                content=business_answer,
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={"prompt_tokens": 100, "completion_tokens": 40},
+            )
         messages = kwargs.get("messages", [])
         current_message = str(messages[-1].get("content", "")) if isinstance(messages, list) and messages else ""  # type: ignore[union-attr]
         if "是否可以" in current_message or "能生成 QE 实验和诊断 bug" in current_message:
@@ -64,6 +73,117 @@ class DialogueAwareFakeLlmClient:
 FakeLlmClient = DialogueAwareFakeLlmClient
 
 
+def _tool_payloads_from_messages(messages: object) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    if not isinstance(messages, list):
+        return payloads
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        try:
+            parsed = json.loads(str(message.get("content") or ""))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed.get("type") == "TOOL_RESULT" and isinstance(parsed.get("payload"), dict):
+            payloads.append(parsed["payload"])
+    return payloads
+
+
+def _request_text_from_messages(messages: object) -> str:
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("type") in {"TOOL_RESULT", "REACT_RETRY_DIRECTIVE"}:
+            continue
+        if content.strip():
+            return content
+    return ""
+
+
+def _agentic_business_answer(messages: object) -> str | None:
+    payloads = _tool_payloads_from_messages(messages)
+    if not payloads:
+        return None
+    payload = payloads[-1]
+    request_text = _request_text_from_messages(messages)
+    response_mode = str(payload.get("response_mode") or "")
+    source = str(payload.get("source") or "mcp_tool_event")
+    as_of = str(payload.get("as_of") or payload.get("trade_date") or "2026-06-17")
+    if response_mode == "qe_experiment_status_summary":
+        counts = payload.get("status_counts") if isinstance(payload.get("status_counts"), dict) else {}
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        running = int(counts.get("running") or 0)
+        created = int(counts.get("created") or 0)
+        completed = int(counts.get("completed") or 0)
+        failed = int(counts.get("failed") or 0)
+        if any(term in request_text for term in ("还在运行", "还在跑", "running")):
+            if running == 0:
+                return f"目前无正在运行的 QE 实验；{created} created、{completed} completed。来源 {source}，截至 {as_of}。"
+            names = "、".join(str(item.get("experiment_name") or item.get("task_name") or item.get("experiment_id") or item.get("task_id")) for item in items if isinstance(item, dict) and str(item.get("status") or "") == "running")
+            return f"目前有 {running} 个 QE 实验正在运行：{names}。来源 {source}，截至 {as_of}。"
+        names = "、".join(str(item.get("experiment_name") or item.get("task_name") or item.get("experiment_id") or item.get("task_id")) for item in items[:3] if isinstance(item, dict))
+        return f"当前 QE 实验证据显示 completed={completed}、running={running}、failed={failed}；代表记录包括 {names}。来源 {source}，截至 {as_of}。"
+    if response_mode == "qe_warehouse_business_summary":
+        summary_kind = str(payload.get("summary_kind") or "")
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        health = payload.get("health_summary") if isinstance(payload.get("health_summary"), dict) else {}
+        if (summary_kind == "query_run_leaderboard" or any("cagr" in item for item in items if isinstance(item, dict))) and items and isinstance(items[0], dict):
+            best = items[0]
+            return (
+                f"按 CAGR 口径看，{best.get('experiment_id')} / {best.get('run_id')} 当前最好："
+                f"CAGR={float(best.get('cagr') or 0) * 100:.2f}%，模型={best.get('model_type')}，"
+                f"Sharpe={best.get('sharpe')}，IR={best.get('information_ratio')}。来源 {source}，截至 {as_of}。"
+            )
+        if health:
+            return (
+                f"QE 数仓当前可读：run_count={health.get('run_count')}、pending_outbox={health.get('pending_outbox_count')}、"
+                f"research_valid={health.get('research_valid_counts')}。来源 {source}，截至 {as_of}。"
+            )
+        return f"QE 数仓返回 {len(items)} 条只读记录。来源 {source}，截至 {as_of}。"
+    if response_mode == "local_data_daily_sync_status" or payload.get("local_data_daily_status"):
+        counts = payload.get("group_counts") if isinstance(payload.get("group_counts"), dict) else {}
+        groups = payload.get("status_groups") if isinstance(payload.get("status_groups"), dict) else {}
+        success_names = "、".join(str(item.get("dataset")) for item in (groups.get("success") or []) if isinstance(item, dict))
+        failed_names = "、".join(str(item.get("dataset")) for item in (groups.get("failed") or []) if isinstance(item, dict))
+        running_names = "、".join(str(item.get("dataset")) for item in (groups.get("running") or []) if isinstance(item, dict))
+        blocked_names = "、".join(str(item.get("dataset")) for item in (groups.get("blocked") or []) if isinstance(item, dict))
+        return (
+            f"今天本地数据同步结果：success={counts.get('success', 0)}、failed={counts.get('failed', 0)}、"
+            f"running={counts.get('running', 0)}、blocked={counts.get('blocked', 0)}；"
+            f"已完成 {success_names or '无'}；失败 {failed_names or '无'}；运行中 {running_names or '无'}；阻断 {blocked_names or '无'}。"
+            f"来源 {source}，截至 {as_of}。"
+        )
+    if response_mode == "stock_analysis_evidence_card":
+        symbol = str(payload.get("symbol") or "")
+        sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+        datasets = [str(section.get("dataset")) for section in sections if isinstance(section, dict)]
+        return (
+            f"{symbol} 的全方位分析已覆盖基本情况、近期走势和未来趋势线索；证据维度包括 {', '.join(datasets)}。"
+            f"可用证据支持行情、财务、资金流、技术面与联网基本面一起阅读，但不构成买卖建议。来源 {source}，截至 {as_of}。"
+        )
+    return None
+
+
+class AgenticBusinessSynthesisFakeLlmClient(FakeLlmClient):
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        content = _agentic_business_answer(kwargs.get("messages")) or "需要先读取审计工具结果再回答。"
+        return LlmCallResult(
+            content=content,
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
 class SemanticPlanningFakeLlmClient(DialogueAwareFakeLlmClient):
     def __init__(self, plan: dict[str, object]) -> None:
         super().__init__()
@@ -79,6 +199,19 @@ class SemanticPlanningFakeLlmClient(DialogueAwareFakeLlmClient):
             duration_ms=1,
             usage={"prompt_tokens": 12, "completion_tokens": 8},
         )
+
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        answer = _agentic_business_answer(kwargs.get("messages"))
+        if answer is not None:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content=answer,
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        return super().complete(**kwargs)
 
 
 class PromptTooLongOnceLlmClient(FakeLlmClient):
@@ -165,6 +298,27 @@ class FakeQeExperimentService:
                     "status": "failed",
                     "model_id": "xgb_v1",
                 },
+            ],
+        }
+
+
+class FakeQeExperimentZeroRunningService:
+    def list_experiments(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "ok": True,
+            "total": 20,
+            "items": [
+                {"experiment_id": "created-1", "experiment_name": "created draft 1", "status": "created"},
+                {"experiment_id": "created-2", "experiment_name": "created draft 2", "status": "created"},
+                *[
+                    {
+                        "experiment_id": f"completed-{index:02d}",
+                        "experiment_name": f"completed loop {index:02d}",
+                        "status": "completed",
+                    }
+                    for index in range(1, 19)
+                ],
             ],
         }
 
@@ -1139,11 +1293,13 @@ BUG_357_FORBIDDEN_REPLY_MARKERS = (
     "\u6211\u53ea\u5c55\u793a\u6982\u8981",
     "Insufficient evidence",
     "max tool iterations",
+    "已汇总",
+    "状态汇总：",
 )
 
 
 def _chat_service_with_qe_fakes(fake: FakeLlmClient | None = None) -> ResearchAssistantService:
-    svc = _chat_service(fake)
+    svc = _chat_service(fake or AgenticBusinessSynthesisFakeLlmClient())
     svc.qe_experiment_service_factory = FakeQeExperimentService
     svc.qe_custom_evo_service_factory = FakeQeCustomEvoService
     svc.qe_archive_repository_factory = FakeQeArchiveRepository
@@ -1164,15 +1320,12 @@ def _assert_no_mcp_process_markers(text: str) -> None:
 
 def _assert_bug_356_business_local_data_reply(result: dict[str, object]) -> None:
     text = result["assistant_message"]["content_text"]  # type: ignore[index]
-    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
-    assert "\u540c\u6b65\u5931\u8d25" in text
-    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
-    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
-    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
-    assert "daily_basic" in text
+    assert "success=1" in text
+    assert "failed=1" in text
+    assert "running=2" in text
+    assert "blocked=1" in text
     assert "stock_moneyflow_ts" in text
-    assert "anns_metadata" in text
-    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+    assert "来源 local_data_facade_read_adapter" in text
     for marker in BUG_356_FORBIDDEN_REPLY_MARKERS:
         assert marker not in text
 
@@ -1194,13 +1347,12 @@ def test_bug_357_qe_experiment_list_business_reply_without_diagnostics() -> None
     result = svc.chat_turn(ChatTurnRequest(message="\u76ee\u524d\u6700\u8fd1\u7684 QE \u5b9e\u9a8c\u6709\u54ea\u4e9b\uff1f\u7ed9\u6211\u4e00\u4e2a\u5217\u8868\u548c\u72b6\u6001\u6c47\u603b"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "\u5df2\u6c47\u603b QE \u5b9e\u9a8c\u72b6\u6001\u5982\u4e0b" in text
+    assert "当前 QE 实验证据显示" in text
     assert "completed=1" in text
     assert "running=1" in text
     assert "failed=1" in text
-    assert "exp_completed" in text
     assert "alpha baseline" in text
-    assert "\u672c\u8f6e\u672a\u542f\u52a8\u3001\u6267\u884c\u3001\u7269\u5316\u6216\u4fee\u6539\u4efb\u4f55 QE \u5b9e\u9a8c" in text
+    assert "来源 qe_experiment_read_adapter" in text
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "qe_experiment"
     assert route["tool_name"] == "qe_experiment_list"
@@ -1208,7 +1360,7 @@ def test_bug_357_qe_experiment_list_business_reply_without_diagnostics() -> None
     assert summary["response_mode"] == "qe_experiment_status_summary"
     assert summary["source"] == "qe_experiment_read_adapter"
     assert summary["summary_kind"] == "qe_experiments"
-    assert result["cards"]["react_grounding"]["stopped_reason"] == "business_summary_terminal"
+    assert result["cards"]["react_grounding"]["stopped_reason"] == "final_answer"
 
 
 def test_bug_357_qe_custom_evo_progress_business_reply_without_diagnostics() -> None:
@@ -1217,11 +1369,10 @@ def test_bug_357_qe_custom_evo_progress_business_reply_without_diagnostics() -> 
     result = svc.chat_turn(ChatTurnRequest(message="custom_evo \u4efb\u52a1\u6700\u65b0\u8fdb\u5ea6\u600e\u4e48\u6837\uff1f\u7ed9\u6211\u72b6\u6001\u6c47\u603b"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "\u5df2\u6c47\u603b QE custom_evo \u4efb\u52a1\u8fdb\u5ea6\u5982\u4e0b" in text
+    assert "当前 QE 实验证据显示" in text
     assert "custom evo alpha" in text
-    assert "task-custom-1" in text
-    assert "current_loop=2" in text
-    assert "loops[completed=1" in text
+    assert "completed=1" in text
+    assert "running=1" in text
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "qe_experiment"
     assert route["tool_name"] == "qe_experiment_list"
@@ -1237,12 +1388,11 @@ def test_bug_357_qe_warehouse_health_business_reply_without_diagnostics() -> Non
     result = svc.chat_turn(ChatTurnRequest(message="QE \u6570\u4ed3\u73b0\u5728\u662f\u5426\u6b63\u5e38\uff1f\u7ed9\u6211\u5065\u5eb7\u72b6\u6001\u548c\u5165\u4ed3\u6c47\u603b"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "QE \u6570\u4ed3\u5065\u5eb7\u6c47\u603b\u5982\u4e0b" in text
+    assert "QE 数仓当前可读" in text
     assert "run_count=7" in text
     assert "pending_outbox=1" in text
-    assert "outbox \u72b6\u6001" in text
     assert "research_valid" in text
-    assert "\u672c\u8f6e\u672a\u6267\u884c backfill\u3001\u91cd\u8dd1\u3001\u5199\u5e93\u6216\u4efb\u4f55\u9ad8\u98ce\u9669 QE \u64cd\u4f5c" in text
+    assert "来源 qe_archive_read_adapter" in text
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "qe_warehouse"
     assert route["tool_name"] == "qe_archive_health"
@@ -1258,9 +1408,7 @@ def test_bug_357_qe_warehouse_leaderboard_business_reply_without_diagnostics() -
     result = svc.chat_turn(ChatTurnRequest(message="\u67e5\u770b QE run leaderboard\uff0c\u544a\u8bc9\u6211\u6700\u597d\u7684\u6a21\u578b\u548c\u5173\u952e\u6307\u6807"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "已按 QE 数仓 leaderboard 查询回测收益排行" in text
-    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一" in text
-    assert "| 排名 | 年化收益/CAGR | Run | 实验 | Task | Loop | 模型 | Sharpe | IR | 最大回撤 | IC/ICIR | 完成时间 |" in text
+    assert "按 CAGR 口径看" in text
     assert "run-best" in text
     assert "CatBoost" in text
     assert "22.00%" in text
@@ -1280,11 +1428,11 @@ def test_bug_376_qe_archive_best_return_question_gets_human_leaderboard_answer()
     result = svc.chat_turn(ChatTurnRequest(message="目前进入数仓的 QE 实验，回测效果最好的收益是多少？是哪个实验？"))
 
     text = _assert_bug_357_no_diagnostic_reply(result)
-    assert "结论：当前已入仓 QE run 中，按年化收益/CAGR 排名第一的是 exp_completed" in text
+    assert "按 CAGR 口径看" in text
+    assert "exp_completed" in text
     assert "CAGR=22.00%" in text
-    assert "run=run-best" in text
+    assert "run-best" in text
     assert "模型=CatBoost" in text
-    assert "| 1 | 22.00% | run-best | exp_completed | task-custom-1 | - | CatBoost | 1.4 | 1.1 | - | ICIR=0.8 | 2026-06-13T09:00:00+08:00 |" in text
     assert "run_count=7" not in text
     assert "pending_outbox=1" not in text
     route = result["cards"]["mcp_route_decision"]
@@ -1384,6 +1532,15 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     class LocalDataDailyLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
             return LlmCallResult(
                 content="Catalog route summary only.",
                 provider="fake",
@@ -1405,15 +1562,12 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     assert "Route decision" not in text
     assert "research_assistant_catalog_summary_adapter" not in text
     assert "local_data_health_overview" not in text
-    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
-    assert "\u540c\u6b65\u5931\u8d25" in text
-    assert "\u672a\u540c\u6b65/\u672a\u8fd0\u884c" in text
-    assert "\u8fd0\u884c\u4e2d/\u6392\u961f\u4e2d" in text
-    assert "\u544a\u8b66/\u963b\u65ad/\u9700\u8981\u5904\u7406" in text
-    assert "daily_basic" in text
+    assert "success=1" in text
+    assert "failed=1" in text
+    assert "running=2" in text
+    assert "blocked=1" in text
     assert "stock_moneyflow_ts" in text
-    assert "anns_metadata" in text
-    assert "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65" in text
+    assert "来源 local_data_facade_read_adapter" in text
 
     route = result["cards"]["mcp_route_decision"]
     assert route["tool_name"] == "local_data_get_preset_daily_status"
@@ -1435,6 +1589,15 @@ def test_bug_356_generic_local_data_sync_summary_returns_dataset_status_list_wit
     class LocalDataSummaryLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
             return LlmCallResult(
                 content="Diagnostic route text that must not become the final reply.",
                 provider="fake",
@@ -1459,6 +1622,15 @@ def test_bug_356_each_dataset_sync_detail_returns_all_dataset_statuses_without_d
     class LocalDataDetailLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
             return LlmCallResult(
                 content="Tool-grounded summary for local_data_get_dataset_status; source=preflight as_of=2026-06-13.",
                 provider="fake",
@@ -1481,11 +1653,18 @@ def test_bug_356_each_dataset_sync_detail_returns_all_dataset_statuses_without_d
 
 
 def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
-    class LocalDataSingleShotLlmClient(FakeLlmClient):
+    class LocalDataSynthesisLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
-            if len(self.calls) > 1:
-                raise AssertionError("terminal local-data summary should not ask the LLM to re-compose")
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
             return LlmCallResult(
                 content="Unsourced placeholder answer that must not become the final reply.",
                 provider="fake",
@@ -1494,7 +1673,7 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
                 usage={},
             )
 
-    fake = LocalDataSingleShotLlmClient()
+    fake = LocalDataSynthesisLlmClient()
     svc = _chat_service(fake)
     svc.local_data_service_factory = FakeLocalDataDailyStatusService
 
@@ -1509,16 +1688,98 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
     assert "Unsourced placeholder" not in text
     assert "daily_basic" in text
     assert "stock_moneyflow_ts" in text
-    assert "\u5df2\u540c\u6b65\u6210\u529f" in text
-    assert len(fake.calls) == 1
+    assert "今天本地数据同步结果" in text
+    assert len(fake.calls) >= 2
     react = result["cards"]["react_grounding"]
-    assert react["stopped_reason"] == "evidence_summary_fallback"
-    assert react["iterations"] == 1
+    assert react["stopped_reason"] == "final_answer"
+    assert react["iterations"] >= 2
     assert react["evidence_guard"]["reason"] == "ok"
     assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
 
 
-def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -> None:
+def test_bug_403_same_qe_tool_result_keeps_model_question_specific_answers() -> None:
+    svc = _chat_service_with_qe_fakes()
+    summary = {
+        "response_mode": "qe_experiment_status_summary",
+        "source": "qe_experiment_read_adapter",
+        "as_of": "2026-06-17T12:00:00+00:00",
+        "status_counts": {"created": 2, "completed": 18, "running": 0},
+        "items": [
+            {"experiment_id": "loop9", "experiment_name": "Loop 9 baseline", "status": "completed", "model_type": "LightGBM", "cagr": 0.12},
+            {"experiment_id": "loop12", "experiment_name": "Loop 12 contender", "status": "completed", "model_type": "CatBoost", "cagr": 0.18},
+        ],
+    }
+    cards = {
+        "mcp_execution_result": {"auto_executed": True, "status": "succeeded", "server_key": "aistock-qe", "tool_name": "qe_experiment_list"},
+        "mcp_summary_result": summary,
+        "react_grounding": {"stopped_reason": "max_iterations_exhausted"},
+    }
+    mode_decision = ModeDecision(
+        mode=DialogueMode.PLANNING,
+        intent_type=DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
+        confidence=0.95,
+        mode_reason="explicit_task_request",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    questions = [
+        "哪些实验还在运行？",
+        "完成了几个？",
+        "最优 loop 用什么模型？",
+        "对比 loop9 与 loop12。",
+    ]
+    model_answers = [
+        "目前无正在运行的 QE 实验；2 个 created、18 个 completed。来源 qe_experiment_read_adapter，截至 2026-06-17T12:00:00+00:00。",
+        "完成数量是 18 个；另有 2 个 created、0 个 running。来源 qe_experiment_read_adapter，截至 2026-06-17T12:00:00+00:00。",
+        "当前最优 loop 是 loop12，模型是 CatBoost，cagr=0.18。来源 qe_experiment_read_adapter，截至 2026-06-17T12:00:00+00:00。",
+        "loop9 是 LightGBM 且 cagr=0.12；loop12 是 CatBoost 且 cagr=0.18。来源 qe_experiment_read_adapter，截至 2026-06-17T12:00:00+00:00。",
+    ]
+    answers = [
+        svc._compose_assistant_reply(question, model_answer, cards, mode_decision)
+        for question, model_answer in zip(questions, model_answers, strict=True)
+    ]
+
+    assert "无正在运行" in answers[0]
+    assert "2 个 created、18 个 completed" in answers[0]
+    assert "18" in answers[1]
+    assert "CatBoost" in answers[2]
+    assert "loop9" in answers[3] and "loop12" in answers[3]
+    assert answers == model_answers
+    assert len(set(answers)) == len(answers)
+    for answer in answers:
+        assert "已汇总" not in answer
+        assert "状态汇总：" not in answer
+        assert "来源 qe_experiment_read_adapter" in answer
+
+
+def test_bug_403_running_status_chat_path_answers_none_without_row_dump() -> None:
+    svc = _chat_service(AgenticBusinessSynthesisFakeLlmClient())
+    svc.qe_experiment_service_factory = FakeQeExperimentZeroRunningService
+    svc.qe_custom_evo_service_factory = FakeQeCustomEvoService
+    svc.qe_archive_repository_factory = FakeQeArchiveRepository
+
+    result = svc.chat_turn(ChatTurnRequest(message="哪些 QE 实验还在运行"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "无正在运行" in text
+    assert "2 created、18 completed" in text
+    assert "created-1" not in text
+    assert "completed-18" not in text
+    assert "mcp_execution_result" not in text
+    assert "raw_payload" not in text
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "qe_experiment_list"
+    assert route["side_effect"] == "read_only"
+    assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
+    assert result["cards"]["mcp_summary_result"]["status_counts"] == {"created": 2, "completed": 18}
+    assert result["cards"]["react_grounding"]["evidence_guard"]["reason"] == "ok"
+
+
+def test_bug_403_business_summary_fails_closed_when_synthesis_is_unavailable() -> None:
     svc = _chat_service(FakeLlmClient())
     summary = {
         "local_data_daily_status": True,
@@ -1566,8 +1827,8 @@ def test_bug_346_local_data_daily_status_renderer_wins_over_react_exhaustion() -
         mode_decision,
     )
 
-    assert "Insufficient evidence" not in text
-    assert "daily_basic" in text
+    assert "Insufficient evidence" in text
+    assert "success=1" not in text
     assert "local_data_get_preset_daily_status" not in text
 
 

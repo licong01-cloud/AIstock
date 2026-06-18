@@ -49,6 +49,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
     assert set(MODULE_TOOL_NAMES["qe_archive"]) - qe_archive == {
         "prediction_store_get_pointer",
         "prediction_store_pull_pred",
+        "prediction_store_pull_label",
         "model_store_health",
     }
 

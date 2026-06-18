@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import fnmatch
@@ -14,6 +14,11 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts import nightly_discovery_input_pack  # noqa: E402
+
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.6"
@@ -1243,14 +1248,22 @@ def build_llm_value_summary(
     code_summary = _read_json_object(artifact_dir / "code-intelligence-summary.json")
     adaptive = _read_json_object(artifact_dir / "llm-nightly-adaptive-scheduler.json")
     scheduler = _read_json_object(artifact_dir / "llm-nightly-scheduler-advice.json")
+    hypotheses = _read_json_object(artifact_dir / "llm-hypotheses.json")
     prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
     rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
     ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
+    discovery_manifest = _read_json_object(artifact_dir / "discovery-plans" / "manifest.json")
+    bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
     adaptive_evidence = (
         adaptive.get("llm_invocation_evidence") if isinstance(adaptive.get("llm_invocation_evidence"), dict) else {}
     )
     scheduler_evidence = (
         scheduler.get("llm_invocation_evidence") if isinstance(scheduler.get("llm_invocation_evidence"), dict) else {}
+    )
+    hypothesis_evidence = (
+        hypotheses.get("llm_invocation_evidence")
+        if isinstance(hypotheses.get("llm_invocation_evidence"), dict)
+        else {}
     )
     queue = adaptive.get("queue_summary") if isinstance(adaptive.get("queue_summary"), dict) else {}
     consumption = adaptive.get("advice_consumption") if isinstance(adaptive.get("advice_consumption"), dict) else {}
@@ -1265,22 +1278,30 @@ def build_llm_value_summary(
         or adaptive.get("provider")
         or scheduler.get("effective_provider")
         or scheduler.get("provider")
+        or hypotheses.get("effective_provider")
+        or hypotheses.get("provider")
         or adaptive_evidence.get("provider")
         or scheduler_evidence.get("provider")
+        or hypothesis_evidence.get("provider")
     )
     model = (
         adaptive.get("effective_model")
         or adaptive.get("model")
         or scheduler.get("effective_model")
         or scheduler.get("model")
+        or hypotheses.get("effective_model")
+        or hypotheses.get("model")
         or adaptive_evidence.get("model")
         or scheduler_evidence.get("model")
+        or hypothesis_evidence.get("model")
     )
     warnings: list[str] = []
     if not codegraph:
         warnings.append("CodeGraph freshness artifact is missing.")
     if not adaptive and not scheduler:
         warnings.append("LLM scheduler advice artifact is missing.")
+    if not hypotheses:
+        warnings.append("LLM discovery hypothesis artifact is missing.")
     if not prompt_eval:
         warnings.append("LLM prompt evaluation artifact is missing.")
     if not rollout:
@@ -1294,6 +1315,11 @@ def build_llm_value_summary(
         "adaptive_scheduler_json": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.json", root),
         "adaptive_scheduler_md": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.md", root),
         "scheduler_advice_json": _artifact_ref(artifact_dir / "llm-nightly-scheduler-advice.json", root),
+        "discovery_hypotheses_json": _artifact_ref(artifact_dir / "llm-hypotheses.json", root),
+        "selected_plans_json": _artifact_ref(artifact_dir / "selected-plans.json", root),
+        "discovery_plans_manifest_json": _artifact_ref(artifact_dir / "discovery-plans" / "manifest.json", root),
+        "bug_candidate_queue_manifest_json": _artifact_ref(artifact_dir / "bug-candidates" / "manifest.json", root),
+        "bug_candidate_queue_markdown": _artifact_ref(artifact_dir / "bug-candidates" / "candidate-summary.md", root),
         "test_plan_advice_json": _artifact_ref(artifact_dir / "llm-test-plan-advice.json", root),
         "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
         "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
@@ -1325,15 +1351,40 @@ def build_llm_value_summary(
         "llm": {
             "provider": provider,
             "model": model,
-            "llm_invoked": bool(adaptive.get("llm_invoked") or scheduler.get("llm_invoked") or adaptive_evidence.get("invoked") or scheduler_evidence.get("invoked")),
-            "fallback_used": bool(adaptive_evidence.get("fallback_used") or scheduler_evidence.get("fallback_used")),
-            "advice_consumed": bool(consumption.get("advice_consumed") or adaptive.get("advice_consumed")),
-            "allowed_plan_keys": queue.get("allowed_plan_keys") or adaptive.get("allowed_plan_keys") or [],
+            "llm_invoked": bool(
+                adaptive.get("llm_invoked")
+                or scheduler.get("llm_invoked")
+                or hypotheses.get("llm_invoked")
+                or adaptive_evidence.get("invoked")
+                or scheduler_evidence.get("invoked")
+                or hypothesis_evidence.get("invoked")
+            ),
+            "fallback_used": bool(
+                adaptive_evidence.get("fallback_used")
+                or scheduler_evidence.get("fallback_used")
+                or hypothesis_evidence.get("fallback_used")
+            ),
+            "advice_consumed": bool(
+                consumption.get("advice_consumed")
+                or adaptive.get("advice_consumed")
+                or hypotheses.get("selected_plan_keys")
+            ),
+            "allowed_plan_keys": queue.get("allowed_plan_keys")
+            or adaptive.get("allowed_plan_keys")
+            or hypotheses.get("selected_plan_keys")
+            or [],
             "issue_creation": ((adaptive.get("issue_creation_policy") or {}) if isinstance(adaptive.get("issue_creation_policy"), dict) else {}).get("mode")
             or adaptive.get("issue_creation")
             or rollout.get("mode"),
             "adaptive_scheduler": _artifact_summary(adaptive),
             "scheduler_advice": _artifact_summary(scheduler),
+            "discovery_hypotheses": _artifact_summary(hypotheses),
+            "discovery_hypothesis_count": len(hypotheses.get("hypotheses") or []) if isinstance(hypotheses.get("hypotheses"), list) else 0,
+            "selected_plan_count": len(hypotheses.get("selected_plan_keys") or []) if isinstance(hypotheses.get("selected_plan_keys"), list) else 0,
+            "discovery_executed_plan_count": (discovery_manifest.get("summary") or {}).get("executed_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
+            "discovery_anomaly_count": (discovery_manifest.get("summary") or {}).get("anomaly_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
+            "bug_candidate_count": (bug_candidate_manifest.get("summary") or {}).get("candidate_count") if isinstance(bug_candidate_manifest.get("summary"), dict) else 0,
+            "bug_candidate_issue_payload_count": (bug_candidate_manifest.get("summary") or {}).get("issue_payload_ready_count") if isinstance(bug_candidate_manifest.get("summary"), dict) else 0,
         },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
@@ -1368,6 +1419,9 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
     codegraph_ref = refs.get("codegraph_freshness_md") or refs.get("codegraph_freshness_json") or "missing"
     code_summary_ref = refs.get("code_intelligence_summary_md") or refs.get("code_intelligence_summary_json") or "missing"
     adaptive_ref = refs.get("adaptive_scheduler_md") or refs.get("adaptive_scheduler_json") or "missing"
+    hypotheses_ref = refs.get("discovery_hypotheses_json") or "missing"
+    discovery_manifest_ref = refs.get("discovery_plans_manifest_json") or "missing"
+    bug_candidate_ref = refs.get("bug_candidate_queue_manifest_json") or "missing"
     lines = [
         "## LLM + Code Intelligence Value",
         "",
@@ -1379,6 +1433,9 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
         f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
         f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
+        f"- discovery_hypotheses: `hypotheses={llm.get('discovery_hypothesis_count') or 0}, selected_plans={llm.get('selected_plan_count') or 0}`",
+        f"- discovery_plans: `executed={llm.get('discovery_executed_plan_count') or 0}, anomalies={llm.get('discovery_anomaly_count') or 0}`",
+        f"- bug_candidates: `candidates={llm.get('bug_candidate_count') or 0}, issue_payload_drafts={llm.get('bug_candidate_issue_payload_count') or 0}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
@@ -1389,6 +1446,10 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- codegraph_freshness: `{codegraph_ref}`",
         f"- code_intelligence_summary: `{code_summary_ref}`",
         f"- adaptive_scheduler: `{adaptive_ref}`",
+        f"- discovery_hypotheses: `{hypotheses_ref}`",
+        f"- selected_plans: `{refs.get('selected_plans_json') or 'missing'}`",
+        f"- discovery_plans: `{discovery_manifest_ref}`",
+        f"- bug_candidate_queue: `{bug_candidate_ref}`",
         f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
         f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
         "",
@@ -1919,7 +1980,7 @@ def build_context_artifacts(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     context_path = output_dir / "codegraph-context.md"
     manifest_path = output_dir / "code-intelligence.json"
@@ -1975,7 +2036,7 @@ def build_context_artifacts(
     context_text = _prepend_context_guidance(
         context_text=context_text,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         status=status,
         quality=quality,
     )
@@ -2114,7 +2175,7 @@ def build_affected_tests_artifact(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     out_path = output_dir / "affected-tests.json"
     status = codegraph_status(root, skip_external=skip_external)
@@ -2140,7 +2201,7 @@ def build_affected_tests_artifact(
     codegraph_suggested = list(suggested)
     test_fallback_suggested, test_discovery = _discover_repo_test_fallbacks(
         root=root,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         filter_glob=filter_glob,
     )
     supplement = [path for path in test_fallback_suggested if path not in suggested]
@@ -2189,16 +2250,17 @@ def build_summary(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
@@ -2233,7 +2295,7 @@ def build_summary(
     ]
     if module:
         verify_parts.append(f"--module {module}")
-    verify_parts.extend(f"--changed-file {path}" for path in (changed_files or [])[:12])
+    verify_parts.extend(f"--changed-file {path}" for path in changed[:12])
     freshness_effective = freshness.get("effective") if isinstance(freshness, dict) else {}
     return {
         "schema_version": "aistock_code_intelligence_summary_v1",
@@ -2290,7 +2352,7 @@ def build_client_verification(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / item_id
     output_dir.mkdir(parents=True, exist_ok=True)
     status = codegraph_status(root, skip_external=skip_external)
@@ -2303,14 +2365,14 @@ def build_client_verification(
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         max_symbols=8,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         skip_external=skip_external,
     )
@@ -2719,10 +2781,10 @@ def cmd_context(args: argparse.Namespace) -> int:
 def cmd_affected_tests(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_affected_tests_artifact(
         item_id=args.item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=Path(args.root) if args.root else REPO_ROOT,
         filter_glob=args.filter,
         skip_external=args.skip_external,
@@ -2809,11 +2871,11 @@ def cmd_ua_configure(args: argparse.Namespace) -> int:
 def cmd_summary(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_summary(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         skip_external=args.skip_external,
@@ -2842,11 +2904,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
 def cmd_verify_clients(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_client_verification(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         output_dir=Path(args.output_dir) if args.output_dir else None,
