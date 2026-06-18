@@ -62,6 +62,7 @@ DISCOVERY_DEFAULT_ALLOWED_PLAN_KEYS = (
     "workflow_discovery_root_clean_guard",
     "code_intelligence_discovery_affected_tests_quality",
     "validation_center_discovery_run_record_integrity",
+    "validation_semantic_drift_discovery_readonly",
 )
 DEEPSEEK_ENV_FILE_ENV_VARS = ("AISTOCK_LLM_ENV_FILE", "AISTOCK_ENV_FILE")
 DEEPSEEK_ENV_ROOT_VARS = ("AISTOCK_SELF_HOSTED_SOURCE", "AISTOCK_CANONICAL_ROOT", "AISTOCK_ROOT")
@@ -1073,6 +1074,31 @@ def _discovery_deterministic_hypotheses(
                 expected_failure_modes=["failure intake drift", "candidate evidence quality regression"],
                 recommended_plan_keys=keys,
                 evidence_to_collect=["recent failure fingerprint", "candidate quality summary"],
+                stop_conditions=stop_conditions,
+            )
+
+    if any(
+        path.startswith("prompt_packs/")
+        or path.startswith("scripts/llm_provider_adapter.py")
+        or "semantic" in path
+        for path in changed_files
+    ):
+        keys = first_allowed(
+            [
+                "validation_semantic_drift_discovery_readonly",
+                "code_intelligence_discovery_affected_tests_quality",
+            ],
+            fallback="",
+        )
+        if keys:
+            _append_unique_hypothesis(
+                hypotheses,
+                module=_discovery_module_from_plan(plans_by_key.get(keys[0]), fallback="validation.runner"),
+                risk="P1",
+                why_now="semantic prompt or LLM discovery logic changed recently",
+                expected_failure_modes=["semantic drift candidate missed", "LLM prompt quality regression"],
+                recommended_plan_keys=keys,
+                evidence_to_collect=["semantic drift signal fixture", "code intelligence compact refs"],
                 stop_conditions=stop_conditions,
             )
 

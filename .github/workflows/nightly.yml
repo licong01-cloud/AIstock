@@ -373,6 +373,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
@@ -471,6 +472,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/llm-hypotheses.json" `
             --selected-plans-output "$outDir/selected-plans.json"
           if ($LASTEXITCODE -ne 0) {
@@ -490,6 +492,7 @@ jobs:
               --allowed-plan-key workflow_discovery_root_clean_guard `
               --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
               --allowed-plan-key validation_center_discovery_run_record_integrity `
+              --allowed-plan-key validation_semantic_drift_discovery_readonly `
               --output "$outDir/llm-hypotheses.json" `
               --selected-plans-output "$outDir/selected-plans.json"
           }
@@ -505,6 +508,7 @@ jobs:
             --default-plan-key workflow_discovery_root_clean_guard `
             --default-plan-key code_intelligence_discovery_affected_tests_quality `
             --default-plan-key validation_center_discovery_run_record_integrity `
+            --default-plan-key validation_semantic_drift_discovery_readonly `
             --output-dir "$outDir/discovery-plans"
 
       - name: Build Nightly BugCandidate draft queue
@@ -563,6 +567,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `

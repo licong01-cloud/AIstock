@@ -59,6 +59,7 @@ READONLY_DISCOVERY_PLAN_KEYS = (
     "workflow_discovery_root_clean_guard",
     "code_intelligence_discovery_affected_tests_quality",
     "validation_center_discovery_run_record_integrity",
+    "validation_semantic_drift_discovery_readonly",
 )
 BASELINE_DISCOVERY_PLAN_KEYS = (
     "workflow_discovery_root_clean_guard",
@@ -71,6 +72,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_modules": ["issue_workflow", "validation_center"],
         "preferred_plan_keys": [
             "validation_discovery_issue_intake_readonly",
+            "validation_semantic_drift_discovery_readonly",
             "validation_center_discovery_run_record_integrity",
             "workflow_discovery_root_clean_guard",
         ],
@@ -80,6 +82,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_label": "Paper v2 read-only live / simulation state",
         "focus_modules": ["paper_v2"],
         "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_center_discovery_run_record_integrity",
             "workflow_discovery_root_clean_guard",
@@ -90,6 +93,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_label": "QE archive / factor cache / experiment metrics",
         "focus_modules": ["qe"],
         "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_center_discovery_run_record_integrity",
             "validation_discovery_issue_intake_readonly",
@@ -100,6 +104,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_label": "Research Assistant / MCP evidence",
         "focus_modules": ["research_assistant", "mcp"],
         "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_discovery_issue_intake_readonly",
             "workflow_discovery_root_clean_guard",
@@ -110,6 +115,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_label": "CodeGraph / Understand Anything / LLM prompt quality",
         "focus_modules": ["code_intelligence", "llm_prompt_quality"],
         "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_center_discovery_run_record_integrity",
             "workflow_discovery_root_clean_guard",
@@ -121,6 +127,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_modules": ["issue_workflow", "close_sync"],
         "preferred_plan_keys": [
             "validation_discovery_issue_intake_readonly",
+            "validation_semantic_drift_discovery_readonly",
             "workflow_discovery_root_clean_guard",
             "validation_center_discovery_run_record_integrity",
         ],
@@ -130,6 +137,7 @@ WEEKLY_ROTATION_FOCI = {
         "focus_label": "long-cycle data integrity / DR / retention",
         "focus_modules": ["validation_center", "ops"],
         "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
             "validation_center_discovery_run_record_integrity",
             "workflow_discovery_root_clean_guard",
             "code_intelligence_discovery_affected_tests_quality",
@@ -185,6 +193,7 @@ CHANGED_MODULE_RULES = (
             "prompt_packs/validation_llm/",
         ),
         "plan_keys": (
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_center_discovery_run_record_integrity",
         ),

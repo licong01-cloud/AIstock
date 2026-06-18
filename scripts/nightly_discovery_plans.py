@@ -17,6 +17,7 @@ DISCOVERY_PLAN_KEYS = (
     "workflow_discovery_root_clean_guard",
     "code_intelligence_discovery_affected_tests_quality",
     "validation_center_discovery_run_record_integrity",
+    "validation_semantic_drift_discovery_readonly",
 )
 PRODUCTION_GATES = {
     "production_ddl_gate": "noop",
@@ -393,11 +394,79 @@ def discover_run_record_integrity(root: Path, *, history_limit: int = 40, **_: A
     return finalize_result(result)
 
 
+def _semantic_drift_signal_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_items: list[Any] = []
+    for key in ("semantic_drift_signals", "semantic_drift_candidates", "semantic_drift"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            raw_items.extend(value)
+        elif isinstance(value, dict):
+            nested = value.get("signals") or value.get("candidates") or value.get("items")
+            if isinstance(nested, list):
+                raw_items.extend(nested)
+            else:
+                raw_items.append(value)
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def discover_semantic_drift(
+    root: Path,
+    *,
+    code_intelligence_json: Path | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    plan_key = "validation_semantic_drift_discovery_readonly"
+    result = base_result(plan_key, root=root)
+    payload = read_json(code_intelligence_json)
+    if not payload:
+        result["summary"]["no_candidate_reason"] = "semantic_drift_signal_artifact_missing"
+        return finalize_result(result)
+
+    signals = _semantic_drift_signal_items(payload)
+    result["summary"]["inspected_count"] = len(signals)
+    if not signals:
+        result["summary"]["no_candidate_reason"] = "semantic_drift_signals_absent"
+        return finalize_result(result)
+
+    for signal in signals[:20]:
+        expected = str(signal.get("expected") or signal.get("expected_behavior") or "").strip()
+        actual = str(signal.get("actual") or signal.get("observed") or signal.get("actual_behavior") or "").strip()
+        evidence_refs = [
+            str(item)
+            for item in signal.get("evidence_refs") or signal.get("evidence") or []
+            if str(item).strip()
+        ]
+        title = str(signal.get("title") or signal.get("summary") or "Nightly semantic drift signal").strip()
+        if not evidence_refs:
+            source_ref = payload.get("context_ref") or payload.get("affected_tests_ref") or str(code_intelligence_json)
+            evidence_refs = [str(source_ref)]
+        details = {
+            "summary": str(signal.get("summary") or title),
+            "expected": expected or "LLM/code-intelligence semantic signal should match the current validation contract.",
+            "actual": actual or "A semantic drift signal was reported by the readonly discovery artifact.",
+            "confidence": signal.get("confidence", 0.86),
+            "source": signal.get("source") or "code_intelligence_semantic_drift",
+        }
+        result["anomalies"].append(
+            make_anomaly(
+                plan_key=plan_key,
+                anomaly_type="semantic_drift",
+                severity=str(signal.get("severity") or "P1"),
+                title=title,
+                evidence_refs=evidence_refs,
+                suggested_module=str(signal.get("module") or signal.get("suggested_module") or "validation.runner"),
+                details=details,
+            )
+        )
+    return finalize_result(result)
+
+
 PLAN_RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "validation_discovery_issue_intake_readonly": discover_issue_intake_readonly,
     "workflow_discovery_root_clean_guard": discover_root_clean_guard,
     "code_intelligence_discovery_affected_tests_quality": discover_affected_tests_quality,
     "validation_center_discovery_run_record_integrity": discover_run_record_integrity,
+    "validation_semantic_drift_discovery_readonly": discover_semantic_drift,
 }
 
 

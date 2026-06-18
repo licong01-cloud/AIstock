@@ -2376,6 +2376,12 @@ def validation_center_discovery_run_record_integrity(session: nox.Session) -> No
 
 
 @nox.session(venv_backend="none")
+def validation_semantic_drift_discovery_readonly(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for semantic drift signals."""
+    _run_nightly_discovery_plan(session, "validation_semantic_drift_discovery_readonly")
+
+
+@nox.session(venv_backend="none")
 def nightly_bug_candidate_queue(session: nox.Session) -> None:
     """Validate Nightly BugCandidate draft queue and quality gate artifacts."""
     out_dir = ROOT / "tmp" / "validation" / "nightly_bug_candidate_queue"
@@ -2397,6 +2403,8 @@ def nightly_bug_candidate_queue(session: nox.Session) -> None:
         "code_intelligence_discovery_affected_tests_quality",
         "--default-plan-key",
         "validation_center_discovery_run_record_integrity",
+        "--default-plan-key",
+        "validation_semantic_drift_discovery_readonly",
         external=True,
     )
     session.run(
