@@ -31,24 +31,24 @@
       "timestamp": "2026-06-18T07:23:36.371145Z"
     },
     {
-      "timestamp": "2026-06-18T07:26:53.083929Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Current evidence shows target sizing is implemented in backend/services/simulation_runtime with MiniQMT slot cash/equity authority in backend/services/qmt_strategy_ledger; expanded scope before code edits.",
+      "actor": "codex",
       "added_scope": [
         "backend/services/simulation_runtime",
         "backend/services/qmt_strategy_ledger",
         "backend/tests/simulation_runtime",
         "backend/tests/qmt_strategy_ledger"
-      ]
+      ],
+      "note": "Current evidence shows target sizing is implemented in backend/services/simulation_runtime with MiniQMT slot cash/equity authority in backend/services/qmt_strategy_ledger; expanded scope before code edits.",
+      "timestamp": "2026-06-18T07:26:53.083929Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-18T07:23:36.371148Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6f79d8b63e284e35ad9cd60558cb41d2ceadeab2",
+  "fixed_at": "2026-06-18T08:30:18.195970Z",
   "github_issue_number": 1238,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1238",
   "last_seen_at": "2026-06-18T07:23:36.371148Z",
@@ -56,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1240",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -70,7 +71,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2",
     "simulation_runtime",
@@ -117,6 +118,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 58 passed; nox -s miniqmt_sim_stub_l3 -> 100 passed; nox -s localsim_unattended_l3 -> 74 passed; nox -s l0 -> passed; nox -s validation_module_registry_l0 -> 8 passed; nox -s paper_v2_backend -> 630 passed, 1 skipped, 2 xfailed; PAPER_V2_L3_SKIP_UI=1 nox -s paper_v2_l3 -> passed (UI skipped, backend-only/no restart); ruff check changed backend files -> passed; git diff --check -> passed; PR #1240 checks -> green"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
