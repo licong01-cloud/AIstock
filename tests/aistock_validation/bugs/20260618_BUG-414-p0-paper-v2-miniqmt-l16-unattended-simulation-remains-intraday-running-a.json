@@ -28,10 +28,25 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260618-58ec4c44c2be",
       "timestamp": "2026-06-18T09:21:30.155625Z"
+    },
+    {
+      "timestamp": "2026-06-18T10:24:16.262816Z",
+      "actor": "codex",
+      "action": "implemented_post_close_terminalization",
+      "note": "SimulationLifecycleScheduler adds an auditable post_close_reconcile path after 15:00 for same-day MiniQMT active runs with broker side-effect evidence. Capacity-only SKIPPED_INSUFFICIENT_CAPITAL residuals terminalize as SUCCEEDED with audit_state=succeeded_with_capacity_residual; unresolved open broker orders terminalize as FAILED_TERMINAL; dependent SELL_PROCEEDS_REQUIRED residual BUYs terminalize as FAILED_RETRYABLE for the next-day retry path. The background scheduler runs the post-close reconciliation window without submit=True so no duplicate broker orders are generated."
+    },
+    {
+      "timestamp": "2026-06-18T10:24:16.262816Z",
+      "actor": "codex",
+      "action": "signal_execution_coupling_scan_completed",
+      "note": "Signal/execution scan completed for BUG-414 scope: simulation_runtime remains the canonical shared path Selection -> DailySelectionEvidence/SignalSnapshot -> ExecutionPlan -> LocalSim/MiniQMT bridge; qmt_strategy_ledger SelectionOrderBuilder direct path is fail-fast guarded from product broker order generation (BUG-077 coverage); raw qmt order endpoints are diagnostic-only behind AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS; MiniQMT V25/non-vnpy execution rejection remains expected design-compliance behavior from BUG-345. PaperTradingDayRunner/live_session MiniQMT code still exists as a runtime-client backed Paper v2 path and is already tracked by BUG-293/BUG-354 design-compliance cleanup history; no additional unguarded product bypass was found in this scan."
     }
   ],
   "evidence_uris": [
-    "runtime observation 2026-06-18: MiniQMT L16 simrun_6809d03f7a3ffca5 INTRADAY_RUNNING/PARTIAL with 22 SKIPPED_INSUFFICIENT_CAPITAL residual BUYs"
+    "runtime observation 2026-06-18: MiniQMT L16 simrun_6809d03f7a3ffca5 INTRADAY_RUNNING/PARTIAL with 22 SKIPPED_INSUFFICIENT_CAPITAL residual BUYs",
+    "code: backend/services/simulation_runtime/scheduler.py post_close_reconcile window and post_close_reconcile_once terminalization path",
+    "tests: backend/tests/simulation_runtime/test_lifecycle_scheduler.py post-close capacity residual, open-order terminal failure, dependent-buy retryable failure, and background EOD reconcile regressions",
+    "Signal/execution scan completed for BUG-414 scope: simulation_runtime remains the canonical shared path Selection -> DailySelectionEvidence/SignalSnapshot -> ExecutionPlan -> LocalSim/MiniQMT bridge; qmt_strategy_ledger SelectionOrderBuilder direct path is fail-fast guarded from product broker order generation (BUG-077 coverage); raw qmt order endpoints are diagnostic-only behind AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS; MiniQMT V25/non-vnpy execution rejection remains expected design-compliance behavior from BUG-345. PaperTradingDayRunner/live_session MiniQMT code still exists as a runtime-client backed Paper v2 path and is already tracked by BUG-293/BUG-354 design-compliance cleanup history; no additional unguarded product bypass was found in this scan."
   ],
   "expected": "After close, MiniQMT L16 runs with PARTIAL broker results and capital residuals transition to a clear auditable terminal state; no fake success, no indefinite INTRADAY_RUNNING; regression tests cover capacity residual terminalization, retryability, and signal/execution isolation guards.",
   "first_seen_at": "2026-06-18T09:21:30.155630Z",
@@ -65,7 +80,7 @@
     "fingerprint": "58ec4c44c2be71c9fee978b9",
     "source_event_id": "FE-20260618-58ec4c44c2be"
   },
-  "verification_run_id": null,
+  "verification_run_id": "BUG-414 targeted pytest/ruff/diff-check plus nox l0, validation_module_registry_l0, and PAPER_V2_L3_SKIP_UI=1 paper_v2_l3",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
@@ -76,5 +91,14 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "actual_after_fix": "SimulationLifecycleScheduler adds an auditable post_close_reconcile path after 15:00 for same-day MiniQMT active runs with broker side-effect evidence. Capacity-only SKIPPED_INSUFFICIENT_CAPITAL residuals terminalize as SUCCEEDED with audit_state=succeeded_with_capacity_residual; unresolved open broker orders terminalize as FAILED_TERMINAL; dependent SELL_PROCEEDS_REQUIRED residual BUYs terminalize as FAILED_RETRYABLE for the next-day retry path. The background scheduler runs the post-close reconciliation window without submit=True so no duplicate broker orders are generated.",
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py -> 73 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py -q -> 98 passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 --no-error-on-missing-interpreters -> passed; l0 success, validation_module_registry_l0 8 passed and ownership mapped=12/unmapped=0/ambiguous=0",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 --no-error-on-missing-interpreters -> passed; paper_v2_backend 630 passed, 1 skipped, 2 xfailed; paper_v2_data_quality pass with legacy ledger consistency WARN only; data_quality_deep 10 passed, 21 skipped"
+  ]
 }
