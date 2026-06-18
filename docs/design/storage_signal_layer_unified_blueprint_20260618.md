@@ -281,12 +281,14 @@
 - 包多 Alpha 骨架(`alpha_mode`/`alpha_components`/`alpha_combination_policy`,现 5 包全 single)。
 > **修正**:manifest 是 **DB 内 JSONB**,不是文件;§5.9/§5.10 的"DB 权威"=JSONB+结构化列权威,需 sha 校验的是被引用的 **model/pred 文件 artifact**。组合边表是把 JSONB 里的引用**外提为带 FK 的关系行**。
 
-**待扫(实施前必做的基线门;不扫不开工,防空中楼阁)**:
-- ⬜ `params.pkl` 是否=可加载完整模型(决定"免重训扩展"成立性 / registry 化内容);
-- ⬜ `selection_center`/`paper_v2` 读包的**确切路径**(读 `manifest_json` 还是结构化列)→ 验证"下游零改";
-- ⬜ `candidate→package` 晋升实现内部(`create_candidate_from_qe_loop`);
-- ⬜ `MultiAlphaEngine --pred-backtest` 端到端**是否真跑通**(记忆:"回测未执行");
-- ⬜ qe_archive 列是否足以支撑"删 workspace 后全量分析"(+ `data_snapshot_hash` 现状);
-- ⬜ 是否已有 `prediction_ref`/包↔pred 链接的某种形态。
+**基线扫描结论(2026-06-19 已读源码,现状↔目标)**:
+| 项 | 扫描结论(证据) | 对计划的影响 |
+|---|---|---|
+| ① params.pkl=模型? | ✅ **是可复用模型**(`backtest-only` 靠 `source_model/params.pkl` 跳训练直接回测/推理) | "免重训扩展"成立;registry 化=存 params.pkl(待确认 NN/树两类均覆盖) |
+| ② selection/paper 读包 | ✅ 读 `manifest.alpha_components`(列表)+ manifest_sha256;`load_source_for_strategy_package` | **多包(N 组件)天然可被迭代消费 → 下游零改可信** |
+| ③ candidate→package 晋升 | ✅ **已存在**(C_FundVal 已建;MCP create_candidate_from_qe_loop/create_from_candidate) | 单包来源已通;多组件 manifest 构建=P3-B 新增 |
+| ④ MultiAlphaEngine `--pred-backtest` | ✅ **完整 wired**(run+reuse_prediction+meta_model_runner 合并 combined_prediction+主节点 `qrun --pred-backtest`+subprocess) | **P3-B 复用它而非从零造**;但"回测未执行"→ **需一次端到端冒烟**;reuse_prediction 取自 source experiment,需适配"从包/store 取 pred"(连⑥) |
+| ⑤ qe_archive 全量分析 | ✅ 表很全(run/config/metric/**curve**/factor_importance/**factor_pair**/symbol_summary/model_trial/**run_data_context**/reproducibility_manifest+enhanced_metrics_sha256) | **删 workspace 后分析基本可支撑**;待确认 run_data_context 可锚定数据 vintage |
+| ⑥ 包↔pred 链接 | ❌ **无 `prediction_ref`/pred 指针**(包只引模型/因子) | **真实缺口(隐藏环)**:需给包加 `prediction_ref` 绑定其 store pred |
 
-→ **整合实施计划的第 0 步 = 完成上面这张待扫清单的基线扫描**(读源码 + 跑一次 `--pred-backtest` 冒烟),扫完才进 P2.5/P3.5 开发,确保不是空中楼阁。
+**净结论**:6 项中 **5 项已存在/可行**(params=模型、qe_archive 全、selection 迭代 alpha_components、MultiAlphaEngine 已 wired、候选→包已通);**仅 ⑥ 是真实缺失链**;P3-B 由"从零造"降级为"复用 MultiAlphaEngine + 适配从包取 pred"。**计划有坚实代码基线,非空中楼阁。** 实施前仅剩两个轻量动作:(a) `MultiAlphaEngine --pred-backtest` 端到端冒烟一次;(b) 确认 run_data_context 的 data_vintage 字段。
