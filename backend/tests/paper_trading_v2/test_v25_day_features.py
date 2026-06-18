@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -114,8 +115,21 @@ def test_db_v25_day_feature_provider_fails_when_required_audit_is_missing() -> N
         provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
 
 
-def test_db_v25_day_feature_provider_substitutes_non_finite_free_turnover_with_audit() -> None:
-    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=float("nan"))
+@pytest.mark.parametrize(
+    ("turnover_rate_f", "source_value"),
+    [
+        (float("nan"), "nan"),
+        ("nan", "nan"),
+        (" NaN ", " NaN "),
+        (Decimal("NaN"), "NaN"),
+        (Decimal("sNaN"), "sNaN"),
+    ],
+)
+def test_db_v25_day_feature_provider_substitutes_nan_like_free_turnover_with_audit(
+    turnover_rate_f: Any,
+    source_value: str,
+) -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=turnover_rate_f)
 
     features = provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
 
@@ -132,13 +146,14 @@ def test_db_v25_day_feature_provider_substitutes_non_finite_free_turnover_with_a
             "source_field": "turnover_rate",
             "status": "substituted",
             "reason": "non_finite_source_value",
-            "source_value": "nan",
+            "source_value": source_value,
         }
     ]
 
 
-def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover() -> None:
-    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f="bad")
+@pytest.mark.parametrize("turnover_rate_f", ["bad", None, ""])
+def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover(turnover_rate_f: Any) -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=turnover_rate_f)
 
     with pytest.raises(DataUnavailableError, match="turnover_rate_f is invalid"):
         provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
