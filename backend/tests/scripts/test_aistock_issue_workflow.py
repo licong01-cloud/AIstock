@@ -2315,7 +2315,7 @@ def _nightly_candidate_payload(path: Path, *, ready: bool = True, confidence: fl
     return _write_json(path, payload)
 
 
-def test_promote_nightly_candidate_blocks_apply_without_explicit_opt_in(
+def test_promote_nightly_candidate_blocks_apply_without_isolated_worktree(
     isolated_workflow_root: Path,
 ) -> None:
     payload_path = _nightly_candidate_payload(isolated_workflow_root / "tmp" / "candidate-payload.json")
@@ -2325,13 +2325,14 @@ def test_promote_nightly_candidate_blocks_apply_without_explicit_opt_in(
         queue_manifest=None,
         apply=True,
         opt_in_auto_file=False,
-        create_registry_worktree=True,
+        create_registry_worktree=False,
         create_fix_worktree=False,
         skip_dedupe_search=True,
     )
 
     assert payload["workflow_gate"] == "blocked"
-    assert any("--opt-in-auto-file" in item for item in payload["blocking"])
+    assert any("--create-registry-worktree" in item for item in payload["blocking"])
+    assert not any("--opt-in-auto-file" in item for item in payload["blocking"])
     assert not list(workflow.BUGS_ROOT.glob("*BUG-*.json"))
 
 
@@ -2353,6 +2354,9 @@ def test_promote_nightly_candidate_dry_run_builds_complete_issue_workflow_handof
     )
 
     assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["promotion_mode"] == "deterministic_quality_gate"
+    assert payload["llm_enhancement_opt_in"] is False
+    assert "--opt-in-auto-file" not in payload["next_command"]
     assert payload["submit_bug"]["bug_id"] == "BUG-416"
     body = workflow._render_github_issue_body(
         payload["submit_bug"]["record"],
@@ -2419,13 +2423,15 @@ def test_promote_nightly_candidate_apply_creates_github_linked_bug_in_registry_w
         issue_payload=[str(payload_path)],
         queue_manifest=None,
         apply=True,
-        opt_in_auto_file=True,
+        opt_in_auto_file=False,
         create_registry_worktree=True,
         create_fix_worktree=False,
         skip_dedupe_search=True,
     )
 
     assert payload["workflow_gate"] == "promoted"
+    assert payload["promotion_mode"] == "deterministic_quality_gate"
+    assert payload["llm_enhancement_opt_in"] is False
     assert payload["github_issue_number"] == 900
     assert payload["submit_bug"]["bug_id"] == "BUG-416"
     assert payload["submit_bug"]["nightly_registry_commit"]["workflow_gate"] == "committed"
