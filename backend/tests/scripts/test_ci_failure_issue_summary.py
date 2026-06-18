@@ -1066,6 +1066,9 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     summary_run = next(step for step in full_summary_steps if step.get("name") == "Compose nightly summary")["run"]
     assert "run_dr_requested" in summary_run
     assert "run_nightly_l3_requested" in summary_run
+    assert "nightly_active_discovery_summary.py" in summary_run
+    assert "ACTIVE_DISCOVERY_MANIFEST" in summary_run
+    assert "DISCOVERY_PLAN_MANIFEST" in summary_run
     failure_step = next(step for step in full_summary_steps if step.get("name") == "Build Nightly failure issue context")
     failure_run = failure_step["run"]
     assert "LLM_TRIAGE_MODE" in failure_step["env"]

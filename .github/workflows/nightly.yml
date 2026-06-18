@@ -737,6 +737,9 @@ jobs:
 
           EOF
           fi
+          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
+          DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
+          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
