@@ -6,12 +6,14 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = "aistock_discovery_input_pack_v1"
+ROTATION_SCHEMA_VERSION = "aistock_nightly_discovery_rotation_v1"
+DISCOVERY_STATS_SCHEMA_VERSION = "aistock_nightly_discovery_statistics_v1"
 DIFF_HEADER_PREFIXES = ("--- ", "+++ ", "@@", "diff --git ", "index ")
 BOM_MOJIBAKE_PREFIX_REPLACEMENTS = {
     "\u9518\u7e1c": "a",
@@ -52,6 +54,166 @@ NOISE_TOKENS = {
     "--- changes ---",
     "no changes",
 }
+READONLY_DISCOVERY_PLAN_KEYS = (
+    "validation_discovery_issue_intake_readonly",
+    "workflow_discovery_root_clean_guard",
+    "code_intelligence_discovery_affected_tests_quality",
+    "validation_center_discovery_run_record_integrity",
+    "validation_semantic_drift_discovery_readonly",
+)
+BASELINE_DISCOVERY_PLAN_KEYS = (
+    "workflow_discovery_root_clean_guard",
+    "validation_discovery_issue_intake_readonly",
+)
+WEEKLY_ROTATION_FOCI = {
+    0: {
+        "focus_key": "workflow_validation",
+        "focus_label": "issue workflow / Validation Center",
+        "focus_modules": ["issue_workflow", "validation_center"],
+        "preferred_plan_keys": [
+            "validation_discovery_issue_intake_readonly",
+            "validation_semantic_drift_discovery_readonly",
+            "validation_center_discovery_run_record_integrity",
+            "workflow_discovery_root_clean_guard",
+        ],
+    },
+    1: {
+        "focus_key": "paper_v2_readonly",
+        "focus_label": "Paper v2 read-only live / simulation state",
+        "focus_modules": ["paper_v2"],
+        "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+            "workflow_discovery_root_clean_guard",
+        ],
+    },
+    2: {
+        "focus_key": "qe_archive_metrics",
+        "focus_label": "QE archive / factor cache / experiment metrics",
+        "focus_modules": ["qe"],
+        "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+            "validation_discovery_issue_intake_readonly",
+        ],
+    },
+    3: {
+        "focus_key": "research_assistant_mcp",
+        "focus_label": "Research Assistant / MCP evidence",
+        "focus_modules": ["research_assistant", "mcp"],
+        "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+        ],
+    },
+    4: {
+        "focus_key": "code_intelligence_llm",
+        "focus_label": "CodeGraph / Understand Anything / LLM prompt quality",
+        "focus_modules": ["code_intelligence", "llm_prompt_quality"],
+        "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+            "workflow_discovery_root_clean_guard",
+        ],
+    },
+    5: {
+        "focus_key": "bug_replay_close_sync",
+        "focus_label": "historical bug replay / close-sync integrity",
+        "focus_modules": ["issue_workflow", "close_sync"],
+        "preferred_plan_keys": [
+            "validation_discovery_issue_intake_readonly",
+            "validation_semantic_drift_discovery_readonly",
+            "workflow_discovery_root_clean_guard",
+            "validation_center_discovery_run_record_integrity",
+        ],
+    },
+    6: {
+        "focus_key": "ops_retention",
+        "focus_label": "long-cycle data integrity / DR / retention",
+        "focus_modules": ["validation_center", "ops"],
+        "preferred_plan_keys": [
+            "validation_semantic_drift_discovery_readonly",
+            "validation_center_discovery_run_record_integrity",
+            "workflow_discovery_root_clean_guard",
+            "code_intelligence_discovery_affected_tests_quality",
+        ],
+    },
+}
+CHANGED_MODULE_RULES = (
+    {
+        "module": "issue_workflow",
+        "prefixes": (
+            "scripts/aistock_issue_workflow.py",
+            "scripts/issue_flow.py",
+            "tests/aistock_validation/bugs/",
+            "docs/standards/aistock_issue",
+        ),
+        "plan_keys": (
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+        ),
+    },
+    {
+        "module": "validation_center",
+        "prefixes": (
+            "backend/services/validation/",
+            "backend/routers/validation",
+            "frontend/src/app/validation-center/",
+            "frontend/src/components/validation/",
+            "tests/aistock_validation/",
+        ),
+        "plan_keys": (
+            "validation_center_discovery_run_record_integrity",
+            "validation_discovery_issue_intake_readonly",
+        ),
+    },
+    {
+        "module": "validation_workflow",
+        "prefixes": (
+            ".github/workflows/",
+            "noxfile.py",
+            "tests/aistock_validation/catalog/",
+        ),
+        "plan_keys": (
+            "workflow_discovery_root_clean_guard",
+            "validation_center_discovery_run_record_integrity",
+        ),
+    },
+    {
+        "module": "code_intelligence",
+        "prefixes": (
+            "scripts/code_intelligence",
+            "scripts/nightly_discovery",
+            "scripts/llm_provider_adapter.py",
+            "prompt_packs/validation_llm/",
+        ),
+        "plan_keys": (
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+        ),
+    },
+    {
+        "module": "paper_v2",
+        "prefixes": ("backend/services/paper", "frontend/src/app/paper", "frontend/src/components/paper"),
+        "plan_keys": ("code_intelligence_discovery_affected_tests_quality",),
+    },
+    {
+        "module": "qe",
+        "prefixes": ("backend/services/qe", "frontend/src/app/quantevolver", "tests/qe", "scripts/qe"),
+        "plan_keys": ("code_intelligence_discovery_affected_tests_quality",),
+    },
+    {
+        "module": "research_assistant",
+        "prefixes": ("backend/services/research_assistant", "frontend/src/app/research-assistant", "tests/research-assistant"),
+        "plan_keys": ("code_intelligence_discovery_affected_tests_quality",),
+    },
+)
 
 
 def utc_now() -> str:
@@ -160,6 +322,160 @@ def collect_changed_files(
     return unique_repo_paths(collected)
 
 
+def parse_run_date(value: str | date | datetime | None = None) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(text[:10])
+            except ValueError:
+                pass
+    return datetime.now(timezone.utc).date()
+
+
+def append_unique(target: list[str], values: list[str] | tuple[str, ...]) -> None:
+    for value in values:
+        text = str(value).strip()
+        if text and text not in target:
+            target.append(text)
+
+
+def infer_changed_modules(changed_files: list[str]) -> list[str]:
+    modules: list[str] = []
+    lowered = [normalize_repo_path(path).lower() for path in changed_files]
+    for rule in CHANGED_MODULE_RULES:
+        prefixes = tuple(str(prefix).lower() for prefix in rule["prefixes"])
+        if any(path.startswith(prefix) for path in lowered for prefix in prefixes):
+            append_unique(modules, [str(rule["module"])])
+    return modules
+
+
+def _select_allowed_plan_keys(
+    candidates: list[str],
+    allowed: set[str],
+    *,
+    limit: int,
+    existing: list[str] | None = None,
+) -> list[str]:
+    selected: list[str] = []
+    seen = set(existing or [])
+    for key in candidates:
+        if key in allowed and key not in selected and key not in seen:
+            selected.append(key)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def build_rotation_focus(
+    *,
+    changed_files: list[str],
+    allowed_plan_keys: list[str] | None,
+    module: str | None,
+    run_date: str | date | datetime | None = None,
+    budget_plan_limit: int = 3,
+) -> dict[str, Any]:
+    day = parse_run_date(run_date)
+    focus = WEEKLY_ROTATION_FOCI[day.weekday()]
+    allowed = {str(item) for item in allowed_plan_keys or [] if str(item).strip()}
+    if not allowed:
+        allowed = {"l0", "validation_module_registry_l0", *READONLY_DISCOVERY_PLAN_KEYS}
+    changed_modules = infer_changed_modules(changed_files)
+    selected: list[str] = []
+    reasons: list[dict[str, Any]] = []
+
+    changed_candidates: list[str] = []
+    lowered = [normalize_repo_path(path).lower() for path in changed_files]
+    for rule in CHANGED_MODULE_RULES:
+        prefixes = tuple(str(prefix).lower() for prefix in rule["prefixes"])
+        if any(path.startswith(prefix) for path in lowered for prefix in prefixes):
+            append_unique(changed_candidates, tuple(str(key) for key in rule["plan_keys"]))
+            reasons.append(
+                {
+                    "reason": "changed_module_priority",
+                    "module": rule["module"],
+                    "plan_keys": [key for key in rule["plan_keys"] if key in allowed],
+                }
+            )
+    append_unique(selected, _select_allowed_plan_keys(changed_candidates, allowed, limit=budget_plan_limit))
+
+    if len(selected) < budget_plan_limit:
+        rotation_keys = _select_allowed_plan_keys(
+            [str(key) for key in focus["preferred_plan_keys"]],
+            allowed,
+            limit=budget_plan_limit - len(selected),
+            existing=selected,
+        )
+        append_unique(selected, rotation_keys)
+        if rotation_keys:
+            reasons.append(
+                {
+                    "reason": "weekly_rotation",
+                    "focus_key": focus["focus_key"],
+                    "plan_keys": rotation_keys,
+                }
+            )
+
+    if len(selected) < budget_plan_limit:
+        baseline_keys = _select_allowed_plan_keys(
+            list(BASELINE_DISCOVERY_PLAN_KEYS),
+            allowed,
+            limit=budget_plan_limit - len(selected),
+            existing=selected,
+        )
+        append_unique(selected, baseline_keys)
+        if baseline_keys:
+            reasons.append({"reason": "baseline_safety_net", "plan_keys": baseline_keys})
+
+    focus_modules = list(dict.fromkeys([*changed_modules, *[str(item) for item in focus["focus_modules"]]]))
+    if module and module != "validation" and module not in focus_modules:
+        focus_modules.insert(0, module)
+    no_candidate_reason = (
+        "readonly_rotation_found_no_anomaly_yet" if selected else "no_allowlisted_readonly_discovery_plan_selected"
+    )
+    return {
+        "schema_version": ROTATION_SCHEMA_VERSION,
+        "run_date": day.isoformat(),
+        "weekday": day.weekday(),
+        "focus_key": focus["focus_key"],
+        "focus_label": focus["focus_label"],
+        "focus_modules": focus_modules[:8],
+        "changed_modules": changed_modules,
+        "selected_plan_keys": selected,
+        "selection_reasons": reasons,
+        "budget_plan_limit": budget_plan_limit,
+        "readonly_only": True,
+        "changed_module_priority_applied": bool(changed_modules),
+        "no_candidate_reason": no_candidate_reason,
+    }
+
+
+def build_discovery_statistics(rotation: dict[str, Any]) -> dict[str, Any]:
+    selected = list(rotation.get("selected_plan_keys") or [])
+    return {
+        "schema_version": DISCOVERY_STATS_SCHEMA_VERSION,
+        "candidate_count": 0,
+        "issue_payload_ready_count": 0,
+        "draft_count": 0,
+        "deduped_count": 0,
+        "artifact_only_count": 0,
+        "duplicate_rate": 0.0,
+        "confirmed_real_bug_rate": None,
+        "noise_rate": None,
+        "executed_plan_count": 0,
+        "planned_plan_count": len(selected),
+        "no_candidate_reason": rotation.get("no_candidate_reason"),
+    }
+
+
 def git_snapshot(root: Path = ROOT) -> dict[str, Any]:
     def run_git(args: list[str]) -> str | None:
         proc = subprocess.run(
@@ -193,6 +509,8 @@ def build_discovery_input_pack(
     allowed_plan_keys: list[str] | None = None,
     codegraph_freshness_json: Path | None = None,
     code_intelligence_json: Path | None = None,
+    run_date: str | date | datetime | None = None,
+    budget_plan_limit: int = 3,
     root: Path = ROOT,
 ) -> dict[str, Any]:
     changed = collect_changed_files(
@@ -205,6 +523,15 @@ def build_discovery_input_pack(
     commit = snapshot.get("head")
     run = str(run_id or os.environ.get("GITHUB_RUN_ID") or "local")
     artifact_root = Path("tmp") / "validation" / "nightly_discovery" / run
+    allowed_keys = allowed_plan_keys or ["l0", "validation_module_registry_l0"]
+    rotation = build_rotation_focus(
+        changed_files=changed,
+        allowed_plan_keys=allowed_keys,
+        module=module or "validation",
+        run_date=run_date,
+        budget_plan_limit=budget_plan_limit,
+    )
+    statistics = build_discovery_statistics(rotation)
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run,
@@ -227,7 +554,9 @@ def build_discovery_input_pack(
             "code_intelligence_json": str(code_intelligence_json) if code_intelligence_json else None,
         },
         "understand_anything_refs": {},
-        "allowed_plan_keys": allowed_plan_keys or ["l0", "validation_module_registry_l0"],
+        "allowed_plan_keys": allowed_keys,
+        "rotation": rotation,
+        "discovery_statistics": statistics,
         "readonly_runtime_targets": [],
         "stop_conditions": [
             "no_production_db_write",
@@ -261,6 +590,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allowed-plan-key", action="append", default=None)
     parser.add_argument("--codegraph-freshness-json")
     parser.add_argument("--code-intelligence-json")
+    parser.add_argument("--run-date", help="UTC date for weekly discovery rotation; defaults to today.")
+    parser.add_argument("--budget-plan-limit", type=int, default=3)
     parser.add_argument("--root")
     parser.add_argument("--output")
     parser.add_argument("--changed-files-output")
@@ -280,6 +611,8 @@ def main(argv: list[str] | None = None) -> int:
         allowed_plan_keys=list(args.allowed_plan_key or []) or None,
         codegraph_freshness_json=Path(args.codegraph_freshness_json) if args.codegraph_freshness_json else None,
         code_intelligence_json=Path(args.code_intelligence_json) if args.code_intelligence_json else None,
+        run_date=args.run_date,
+        budget_plan_limit=args.budget_plan_limit,
         root=root,
     )
     write_json(Path(args.output) if args.output else None, payload)
@@ -293,6 +626,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(
             "PASS discovery-input-pack "
             f"changed_files={payload['changed_files_count']} "
+            f"rotation={payload.get('rotation', {}).get('focus_key')} "
+            f"selected_plans={len(payload.get('rotation', {}).get('selected_plan_keys') or [])} "
             f"input_pack={payload.get('artifact_refs', {}).get('input_pack_json')} "
             f"changed_files_ref={payload.get('artifact_refs', {}).get('changed_files_txt')}\n"
         )

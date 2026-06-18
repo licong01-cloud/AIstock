@@ -93,6 +93,11 @@ def load_discovery_plan_results(manifest_path: Path, *, root: Path) -> list[dict
     return results
 
 
+def load_discovery_manifest(path: Path) -> dict[str, Any]:
+    payload = read_json(path)
+    return payload if isinstance(payload, dict) else {}
+
+
 def is_synthetic_anomaly(anomaly: dict[str, Any]) -> bool:
     details = anomaly.get("details") if isinstance(anomaly.get("details"), dict) else {}
     text = " ".join(
@@ -103,6 +108,42 @@ def is_synthetic_anomaly(anomaly: dict[str, Any]) -> bool:
         ]
     ).lower()
     return bool(anomaly.get("synthetic") or details.get("synthetic") or "synthetic" in text or "smoke fixture" in text)
+
+
+def ratio(numerator: int, denominator: int) -> float:
+    return round(float(numerator) / float(denominator), 4) if denominator else 0.0
+
+
+def discovery_effectiveness_summary(
+    *,
+    discovery_manifest: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    issue_payload_refs: list[str],
+) -> dict[str, Any]:
+    candidate_count = len(candidates)
+    deduped_count = sum(1 for item in candidates if item.get("status") == "deduped")
+    artifact_only_count = sum(1 for item in candidates if item.get("status") == "artifact_only")
+    rejected_count = sum(1 for item in candidates if item.get("status") == "rejected")
+    no_candidate_reason = None
+    if candidate_count == 0:
+        summary = discovery_manifest.get("summary") if isinstance(discovery_manifest.get("summary"), dict) else {}
+        no_candidate_reason = summary.get("no_candidate_reason") or "candidate_quality_gate_found_no_actionable_candidate"
+    return {
+        "schema_version": "aistock_nightly_discovery_effectiveness_v1",
+        "candidate_count": candidate_count,
+        "issue_payload_ready_count": len(issue_payload_refs),
+        "draft_count": sum(1 for item in candidates if item.get("status") == "draft"),
+        "deduped_count": deduped_count,
+        "artifact_only_count": artifact_only_count,
+        "rejected_count": rejected_count,
+        "duplicate_rate": ratio(deduped_count, candidate_count),
+        "artifact_only_rate": ratio(artifact_only_count, candidate_count),
+        "issue_payload_ready_rate": ratio(len(issue_payload_refs), candidate_count),
+        "confirmed_real_bug_count": 0,
+        "confirmed_real_bug_rate": None,
+        "noise_rate": None,
+        "no_candidate_reason": no_candidate_reason,
+    }
 
 
 def normalize_severity(value: Any) -> str:
@@ -380,15 +421,21 @@ def build_issue_payload(candidate: dict[str, Any], *, repo: str) -> dict[str, An
 
 def render_summary_markdown(manifest: dict[str, Any]) -> str:
     summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
+    effectiveness = manifest.get("discovery_effectiveness") if isinstance(manifest.get("discovery_effectiveness"), dict) else {}
+    rotation = manifest.get("rotation") if isinstance(manifest.get("rotation"), dict) else {}
     lines = [
         "## Nightly BugCandidate Queue",
         "",
         f"- workflow_gate: `{manifest.get('workflow_gate')}`",
+        f"- rotation_focus: `{rotation.get('focus_key') or 'n/a'}`",
         f"- candidates: `{summary.get('candidate_count', 0)}`",
         f"- issue_payload_drafts: `{summary.get('issue_payload_ready_count', 0)}`",
         f"- drafts: `{summary.get('draft_count', 0)}`",
         f"- deduped: `{summary.get('deduped_count', 0)}`",
         f"- artifact_only: `{summary.get('artifact_only_count', 0)}`",
+        f"- duplicate_rate: `{effectiveness.get('duplicate_rate', 0.0)}`",
+        f"- issue_payload_ready_rate: `{effectiveness.get('issue_payload_ready_rate', 0.0)}`",
+        f"- no_candidate_reason: `{effectiveness.get('no_candidate_reason') or summary.get('no_candidate_reason') or 'n/a'}`",
         "- auto_submit_allowed: `false`",
         "",
         "Detailed JSON stays in the artifact bundle; this summary intentionally stays compact.",
@@ -409,6 +456,7 @@ def build_queue(
     max_issue_payloads_per_module: int = 1,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    discovery_manifest_payload = load_discovery_manifest(discovery_manifest)
     run_date = utc_now()[:10].replace("-", "")
     code_refs = [repo_rel(code_intelligence_json, root=root)] if code_intelligence_json and code_intelligence_json.exists() else []
     ua_refs = [repo_rel(ua_manifest_json, root=root)] if ua_manifest_json and ua_manifest_json.exists() else []
@@ -458,23 +506,25 @@ def build_queue(
             "candidates": candidates,
         },
     )
-    summary = {
-        "candidate_count": len(candidates),
-        "issue_payload_ready_count": len(issue_payload_refs),
-        "draft_count": sum(1 for item in candidates if item.get("status") == "draft"),
-        "deduped_count": sum(1 for item in candidates if item.get("status") == "deduped"),
-        "artifact_only_count": sum(1 for item in candidates if item.get("status") == "artifact_only"),
-        "rejected_count": sum(1 for item in candidates if item.get("status") == "rejected"),
-    }
+    effectiveness = discovery_effectiveness_summary(
+        discovery_manifest=discovery_manifest_payload,
+        candidates=candidates,
+        issue_payload_refs=issue_payload_refs,
+    )
+    summary = dict(effectiveness)
+    summary.pop("schema_version", None)
     manifest = {
         "schema_version": QUEUE_SCHEMA_VERSION,
         "generated_at": utc_now(),
         "workflow_gate": "ready",
         "phase": "phase4_draft_queue_only",
         "discovery_manifest": repo_rel(discovery_manifest, root=root),
+        "rotation": discovery_manifest_payload.get("rotation") or {},
+        "selection_rationale": discovery_manifest_payload.get("selection_rationale"),
         "candidate_queue_ref": repo_rel(queue_path, root=root),
         "issue_payload_refs": issue_payload_refs,
         "summary": summary,
+        "discovery_effectiveness": effectiveness,
         "auto_submit_allowed": False,
         "side_effects": {
             "readonly_inputs": True,

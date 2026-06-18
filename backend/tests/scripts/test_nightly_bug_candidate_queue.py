@@ -26,6 +26,7 @@ def _write_discovery_result(
 def _write_manifest(path: Path, result_path: Path, *, plan_key: str = "workflow_discovery_root_clean_guard") -> None:
     payload = {
         "schema_version": "aistock_nightly_discovery_suite_v1",
+        "rotation": {"focus_key": "workflow_validation", "no_candidate_reason": "readonly_rotation_found_no_anomaly_yet"},
         "results": [
             {
                 "plan_key": plan_key,
@@ -34,6 +35,7 @@ def _write_manifest(path: Path, result_path: Path, *, plan_key: str = "workflow_
                 "artifact": result_path.as_posix(),
             }
         ],
+        "summary": {"no_candidate_reason": None},
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -119,6 +121,35 @@ def test_high_confidence_fixture_generates_complete_github_issue_payload(tmp_pat
     assert issue_payload["production_gates"]["production_ddl_gate"] == "noop"
 
 
+def test_semantic_drift_candidate_generates_complete_issue_payload(tmp_path: Path) -> None:
+    result = tmp_path / "discovery" / "validation_semantic_drift_discovery_readonly.json"
+    manifest = tmp_path / "discovery" / "manifest.json"
+    anomaly = {
+        **_high_confidence_anomaly(plan_key="validation_semantic_drift_discovery_readonly"),
+        "type": "semantic_drift",
+        "title": "Issue payload contract drift",
+        "evidence_refs": ["tmp/validation/code-intelligence/fixture/issue-payload.json"],
+        "suggested_module": "validation.runner",
+        "details": {
+            "summary": "Issue draft is missing required sections.",
+            "expected": "Issue body includes expected, actual, reproduce, evidence, and next command.",
+            "actual": "Issue body only includes a title.",
+            "confidence": 0.91,
+        },
+    }
+    _write_discovery_result(result, plan_key="validation_semantic_drift_discovery_readonly", anomaly=anomaly)
+    _write_manifest(manifest, result, plan_key="validation_semantic_drift_discovery_readonly")
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+    issue_payload = json.loads((tmp_path / payload["issue_payload_refs"][0]).read_text(encoding="utf-8"))
+
+    assert payload["summary"]["issue_payload_ready_count"] == 1
+    assert payload["summary"]["issue_payload_ready_rate"] == 1.0
+    assert issue_payload["candidate"]["failure_kind"] == "semantic_drift"
+    assert issue_payload["candidate"]["source_plan_key"] == "validation_semantic_drift_discovery_readonly"
+    assert "Issue body includes expected" in issue_payload["body"]
+
+
 def test_duplicate_fingerprint_is_marked_deduped(tmp_path: Path) -> None:
     result = tmp_path / "discovery" / "workflow_discovery_root_clean_guard.json"
     manifest = tmp_path / "discovery" / "manifest.json"
@@ -143,6 +174,7 @@ def test_duplicate_fingerprint_is_marked_deduped(tmp_path: Path) -> None:
     )
 
     assert payload["summary"]["deduped_count"] == 1
+    assert payload["summary"]["duplicate_rate"] == 1.0
     assert payload["summary"]["issue_payload_ready_count"] == 0
     candidates = json.loads((tmp_path / payload["candidate_queue_ref"]).read_text(encoding="utf-8"))["candidates"]
     assert candidates[0]["status"] == "deduped"
@@ -173,3 +205,35 @@ def test_cli_prints_compact_success_and_writes_queue(tmp_path: Path, capsys) -> 
     assert '"check": "nightly-bug-candidate-queue"' in stdout
     assert '"issue_payloads": 1' in stdout
     assert (tmp_path / "queue" / "candidate-summary.md").exists()
+
+
+def test_queue_carries_rotation_and_no_candidate_reason(tmp_path: Path) -> None:
+    manifest = tmp_path / "discovery" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_discovery_suite_v1",
+                "rotation": {
+                    "focus_key": "code_intelligence_llm",
+                    "no_candidate_reason": "readonly_rotation_found_no_anomaly_yet",
+                },
+                "results": [],
+                "summary": {
+                    "executed_count": 0,
+                    "anomaly_count": 0,
+                    "no_candidate_reason": "no_discovery_plans_selected",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+    summary_md = (tmp_path / "queue" / "candidate-summary.md").read_text(encoding="utf-8")
+
+    assert payload["rotation"]["focus_key"] == "code_intelligence_llm"
+    assert payload["summary"]["candidate_count"] == 0
+    assert payload["discovery_effectiveness"]["no_candidate_reason"] == "no_discovery_plans_selected"
+    assert "rotation_focus: `code_intelligence_llm`" in summary_md
+    assert "no_candidate_reason: `no_discovery_plans_selected`" in summary_md

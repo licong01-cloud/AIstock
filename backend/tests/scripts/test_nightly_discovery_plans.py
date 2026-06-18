@@ -74,6 +74,42 @@ def test_run_record_integrity_detects_missing_gates(tmp_path: Path) -> None:
     assert result["anomalies"][0]["type"] == "run_record_missing_production_gates"
 
 
+def test_semantic_drift_fixture_generates_candidate(tmp_path: Path) -> None:
+    artifact = tmp_path / "code-intelligence-summary.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "semantic_drift_signals": [
+                    {
+                        "title": "Issue payload contract drift",
+                        "summary": "Expected/actual/reproduce sections are missing from an issue draft.",
+                        "expected": "Nightly issue drafts include expected, actual, reproduce, evidence, and next command.",
+                        "actual": "A draft only contains a title.",
+                        "severity": "P1",
+                        "module": "validation.runner",
+                        "confidence": 0.91,
+                        "evidence_refs": ["tmp/validation/code-intelligence/fixture/issue-payload.json"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = plans.run_plan(
+        "validation_semantic_drift_discovery_readonly",
+        root=tmp_path,
+        code_intelligence_json=artifact,
+    )
+
+    assert result["summary"]["candidate_count"] == 1
+    anomaly = result["anomalies"][0]
+    assert anomaly["type"] == "semantic_drift"
+    assert anomaly["severity"] == "P1"
+    assert anomaly["details"]["confidence"] == 0.91
+    assert anomaly["evidence_refs"] == ["tmp/validation/code-intelligence/fixture/issue-payload.json"]
+
+
 def test_run_selected_executes_only_discovery_plans(tmp_path: Path, monkeypatch) -> None:
     selected = tmp_path / "selected-plans.json"
     selected.write_text(
@@ -82,7 +118,13 @@ def test_run_selected_executes_only_discovery_plans(tmp_path: Path, monkeypatch)
                 "selected_plan_keys": [
                     "validation_catalog_integrity",
                     "workflow_discovery_root_clean_guard",
-                ]
+                ],
+                "rotation": {
+                    "focus_key": "workflow_validation",
+                    "selected_plan_keys": ["workflow_discovery_root_clean_guard"],
+                    "no_candidate_reason": "readonly_rotation_found_no_anomaly_yet",
+                },
+                "discovery_statistics": {"planned_plan_count": 1},
             }
         ),
         encoding="utf-8",
@@ -94,6 +136,10 @@ def test_run_selected_executes_only_discovery_plans(tmp_path: Path, monkeypatch)
     assert manifest["executed_plan_keys"] == ["workflow_discovery_root_clean_guard"]
     assert manifest["skipped_plan_keys"] == ["validation_catalog_integrity"]
     assert manifest["summary"]["executed_count"] == 1
+    assert manifest["rotation"]["focus_key"] == "workflow_validation"
+    assert manifest["summary"]["candidate_count"] == 0
+    assert manifest["summary"]["no_candidate_reason"] == "readonly_rotation_found_no_anomaly_yet"
+    assert manifest["discovery_statistics"]["executed_plan_count"] == 1
     assert (tmp_path / "out" / "workflow_discovery_root_clean_guard.json").exists()
 
 

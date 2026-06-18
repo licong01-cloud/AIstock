@@ -2291,6 +2291,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "scripts/nightly_adaptive_scheduler.py",
         "scripts/nightly_discovery_plans.py",
         "scripts/nightly_bug_candidate_queue.py",
+        "scripts/nightly_active_discovery_summary.py",
         external=True,
     )
     _run_pytest(
@@ -2300,6 +2301,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "backend/tests/scripts/test_nightly_discovery_plans.py",
         "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+        "backend/tests/scripts/test_nightly_active_discovery_summary.py",
         "backend/tests/scripts/test_llm_provider_adapter.py",
         "-q",
         "-p",
@@ -2376,6 +2378,12 @@ def validation_center_discovery_run_record_integrity(session: nox.Session) -> No
 
 
 @nox.session(venv_backend="none")
+def validation_semantic_drift_discovery_readonly(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for semantic drift signals."""
+    _run_nightly_discovery_plan(session, "validation_semantic_drift_discovery_readonly")
+
+
+@nox.session(venv_backend="none")
 def nightly_bug_candidate_queue(session: nox.Session) -> None:
     """Validate Nightly BugCandidate draft queue and quality gate artifacts."""
     out_dir = ROOT / "tmp" / "validation" / "nightly_bug_candidate_queue"
@@ -2397,6 +2405,8 @@ def nightly_bug_candidate_queue(session: nox.Session) -> None:
         "code_intelligence_discovery_affected_tests_quality",
         "--default-plan-key",
         "validation_center_discovery_run_record_integrity",
+        "--default-plan-key",
+        "validation_semantic_drift_discovery_readonly",
         external=True,
     )
     session.run(

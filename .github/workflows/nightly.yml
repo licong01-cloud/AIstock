@@ -359,9 +359,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --run-date $runDate `
             --allowed-plan-key l0 `
             --allowed-plan-key validation_module_registry_l0 `
             --allowed-plan-key validation_catalog_integrity `
@@ -371,6 +373,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
@@ -469,6 +472,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/llm-hypotheses.json" `
             --selected-plans-output "$outDir/selected-plans.json"
           if ($LASTEXITCODE -ne 0) {
@@ -488,6 +492,7 @@ jobs:
               --allowed-plan-key workflow_discovery_root_clean_guard `
               --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
               --allowed-plan-key validation_center_discovery_run_record_integrity `
+              --allowed-plan-key validation_semantic_drift_discovery_readonly `
               --output "$outDir/llm-hypotheses.json" `
               --selected-plans-output "$outDir/selected-plans.json"
           }
@@ -503,6 +508,7 @@ jobs:
             --default-plan-key workflow_discovery_root_clean_guard `
             --default-plan-key code_intelligence_discovery_affected_tests_quality `
             --default-plan-key validation_center_discovery_run_record_integrity `
+            --default-plan-key validation_semantic_drift_discovery_readonly `
             --output-dir "$outDir/discovery-plans"
 
       - name: Build Nightly BugCandidate draft queue
@@ -547,9 +553,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --run-date $runDate `
             --allowed-plan-key l0 `
             --allowed-plan-key validation_module_registry_l0 `
             --allowed-plan-key validation_catalog_integrity `
@@ -559,6 +567,7 @@ jobs:
             --allowed-plan-key workflow_discovery_root_clean_guard `
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
@@ -728,6 +737,9 @@ jobs:
 
           EOF
           fi
+          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
+          DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
+          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
