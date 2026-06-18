@@ -6848,8 +6848,6 @@ def _nightly_candidate_quality_blocking(
     candidate = issue_payload.get("candidate") if isinstance(issue_payload.get("candidate"), dict) else {}
     quality = candidate.get("quality_gate") if isinstance(candidate.get("quality_gate"), dict) else {}
     blocking: list[str] = []
-    if apply and not opt_in_auto_file:
-        blocking.append("promote-nightly-candidate --apply requires --opt-in-auto-file")
     if apply and not (create_registry_worktree or create_fix_worktree):
         blocking.append(
             "promote-nightly-candidate --apply must use --create-registry-worktree or --create-fix-worktree to avoid canonical root BUG JSON writes"
@@ -6986,7 +6984,7 @@ def build_promote_nightly_candidate_plan(
             "candidate_count": len(payloads),
             "evaluated_candidates": evaluated,
             "blocking": ["exactly one Nightly candidate issue payload must be selected for promotion"],
-            "next_command": "python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload <payload-json> --opt-in-auto-file --create-registry-worktree --apply",
+            "next_command": "python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload <payload-json> --create-registry-worktree --apply",
             "production_gates": _production_gates_payload(),
         }
 
@@ -7016,6 +7014,8 @@ def build_promote_nightly_candidate_plan(
             "candidate_confidence": candidate.get("confidence"),
             "candidate_module": candidate.get("module"),
             "candidate_severity": candidate.get("severity"),
+            "promotion_mode": "llm_enhanced_opt_in" if opt_in_auto_file else "deterministic_quality_gate",
+            "llm_enhancement_opt_in": opt_in_auto_file,
             "quality_gate": quality,
             "dedupe": {
                 "fingerprint": candidate.get("dedupe_fingerprint") or candidate.get("fingerprint"),
@@ -7026,7 +7026,7 @@ def build_promote_nightly_candidate_plan(
             "blocking": blocking,
             "next_command": (
                 f"python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload \"{issue_payload_obj.get('_source_path')}\" "
-                "--opt-in-auto-file --create-registry-worktree --apply"
+                "--create-registry-worktree --apply"
             ),
             "production_gates": _production_gates_payload(),
         }
@@ -7084,7 +7084,7 @@ def build_promote_nightly_candidate_plan(
     source_path = str(issue_payload_obj.get("_source_path") or "")
     apply_next_command = (
         f"python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload \"{source_path}\" "
-        "--opt-in-auto-file --create-registry-worktree --apply"
+        "--create-registry-worktree --apply"
     )
     return {
         "schema_version": "aistock_issue_workflow_promote_nightly_candidate_v1",
@@ -7095,6 +7095,8 @@ def build_promote_nightly_candidate_plan(
         "candidate_confidence": candidate.get("confidence"),
         "candidate_module": candidate.get("module"),
         "candidate_severity": candidate.get("severity"),
+        "promotion_mode": "llm_enhanced_opt_in" if opt_in_auto_file else "deterministic_quality_gate",
+        "llm_enhancement_opt_in": opt_in_auto_file,
         "quality_gate": quality,
         "source_payload": _repo_rel(Path(source_path)) if source_path else None,
         "dedupe": {
@@ -10523,7 +10525,11 @@ def build_parser() -> argparse.ArgumentParser:
     promote_nightly.add_argument("--issue-payload", action="append", help="Path to one aistock_bug_candidate_github_issue_payload_v1 JSON file.")
     promote_nightly.add_argument("--queue-manifest", help="Read issue payload refs from a Nightly BugCandidate queue manifest; exactly one ready payload is required.")
     promote_nightly.add_argument("--bug-id", help="Use an already reserved BUG-NNN id.")
-    promote_nightly.add_argument("--opt-in-auto-file", action="store_true", help="Explicitly allow creating a GitHub Issue from a ready Nightly candidate.")
+    promote_nightly.add_argument(
+        "--opt-in-auto-file",
+        action="store_true",
+        help="Explicitly allow LLM-assisted issue text enhancement; deterministic ready candidates can promote without this flag.",
+    )
     promote_nightly.add_argument(
         "--create-registry-worktree",
         action="store_true",

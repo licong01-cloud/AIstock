@@ -523,7 +523,7 @@ jobs:
             --output-dir "$outDir/bug-candidates"
 
       - name: Promote ready Nightly BugCandidates to Issue workflow
-        if: github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -539,12 +539,16 @@ jobs:
             Write-Host "gate=nightly_candidate_promotion issue_payloads=0 promoted=0"
             exit 0
           }
+          $extraArgs = @()
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.llm_triage_mode }}" -eq "opt_in_auto_file" -and "${{ inputs.llm_auto_file_opt_in }}" -eq "true") {
+            $extraArgs += "--opt-in-auto-file"
+          }
           foreach ($ref in $refs) {
             conda run -n AIstock python scripts/aistock_issue_workflow.py promote-nightly-candidate `
               --issue-payload "$ref" `
-              --opt-in-auto-file `
               --create-registry-worktree `
               --apply `
+              @extraArgs `
               --output-format summary
           }
 
