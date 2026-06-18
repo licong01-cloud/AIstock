@@ -385,3 +385,86 @@ def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> No
     assert selected["valid_cache"] is False
     assert selected["cache_status"] == "error"
     assert selected["source_key"] == "backtest"
+
+
+
+def test_factor_cache_stats_is_lightweight_and_counts_disk_meta_gap(monkeypatch, tmp_path) -> None:
+    cache_root = tmp_path / "factor_values"
+    single_dir = cache_root / "single"
+    single_dir.mkdir(parents=True)
+    (single_dir / "FactorA.parquet").write_bytes(b"PAR1" * 10)
+    (single_dir / "FactorB.parquet").write_bytes(b"PAR1" * 20)
+    (single_dir / "_merged_panel.parquet").write_bytes(b"PAR1" * 30)
+    (cache_root / "_meta.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-05-01T00:00:00",
+                "factors": {
+                    "FactorA": {
+                        "status": "ok",
+                        "date_range": "2018-08-01~2026-04-30",
+                        "as_of_date": "2026-04-30",
+                        "window_train_start": "2018-08-01",
+                        "window_backtest_end": "2026-04-28",
+                        "data_source_mode": "backtest_factor_data_dir",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchall(self):
+            return [("FactorA", True), ("FactorB", True), ("DisabledC", False)]
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _Cur()
+
+    def fail_if_heavy_parquet(path):
+        raise AssertionError(f"factor-cache stats must not infer parquet windows by default: {path}")
+
+    monkeypatch.setattr(qe_router, "FACTOR_CACHE_ROOT", cache_root)
+    monkeypatch.setattr(qe_router, "FACTOR_CACHE_SINGLE_DIR", single_dir)
+    monkeypatch.setattr(qe_router, "FACTOR_CACHE_META_PATH", cache_root / "_meta.json")
+    monkeypatch.setattr(qe_router, "get_conn", lambda: _Conn())
+    monkeypatch.setattr(qe_router, "_infer_factor_cache_window_from_parquet", fail_if_heavy_parquet)
+    monkeypatch.setattr(qe_router, "_get_current_factor_code_hashes", lambda names: (_ for _ in ()).throw(AssertionError("hash check skipped by default")))
+    qe_router._invalidate_cache_meta()
+
+    result = qe_router.factor_cache_stats()
+
+    assert result["ok"] is True
+    assert result["stats_mode"] == "lightweight_inventory"
+    assert result["hash_check_enabled"] is False
+    assert result["db_hash_check_skipped"] is True
+    assert result["total_cached"] == 2
+    assert result["total_code_factors"] == 2
+    assert result["coverage_pct"] == 100.0
+    assert result["meta_valid_cached"] == 1
+    assert result["reconcile_required"] == 1
+    assert result["reconcile_required_sample"] == ["FactorB"]
+    assert result["disk_factor_count"] == 2
+    assert result["factor_parquet_count"] == 2
+    assert result["all_parquet_count"] == 3
+    assert result["merged_panel_present"] is True
+    assert result["meta_factor_count"] == 1
+    assert result["orphan_parquet_count"] == 1
+    assert result["no_cache"] == 0
+    assert result["date_range_distribution"]["metadata_pending"] == 1

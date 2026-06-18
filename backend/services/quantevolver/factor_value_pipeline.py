@@ -113,6 +113,18 @@ class FactorValuePipeline:
             result[factor_name] = os.path.join(single_dir, filename)
         return result
 
+    def _all_single_parquet_files(self) -> Dict[str, str]:
+        """Return every parquet file in single/, including helper panels."""
+        single_dir = os.path.join(self._output_dir, "single")
+        if not os.path.isdir(single_dir):
+            return {}
+        result: Dict[str, str] = {}
+        for filename in os.listdir(single_dir):
+            if not filename.endswith(".parquet"):
+                continue
+            result[filename[:-8]] = os.path.join(single_dir, filename)
+        return result
+
     def get_cache_inventory(self) -> Dict[str, Any]:
         """Return a read-only inventory for disk parquet files and meta entries.
 
@@ -123,6 +135,7 @@ class FactorValuePipeline:
         meta = self._load_meta()
         factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
         disk_files = self._disk_single_files()
+        all_parquet_files = self._all_single_parquet_files()
         disk_names = set(disk_files)
         meta_names = set(factors)
         total_size_bytes = 0
@@ -131,6 +144,19 @@ class FactorValuePipeline:
                 total_size_bytes += os.path.getsize(path)
             except OSError:
                 continue
+        all_size_bytes = 0
+        for path in all_parquet_files.values():
+            try:
+                all_size_bytes += os.path.getsize(path)
+            except OSError:
+                continue
+        merged_panel_path = all_parquet_files.get("_merged_panel")
+        merged_panel_size = 0
+        if merged_panel_path:
+            try:
+                merged_panel_size = os.path.getsize(merged_panel_path)
+            except OSError:
+                merged_panel_size = 0
 
         def _first_meta_value(*keys: str) -> Any:
             for key in keys:
@@ -151,12 +177,17 @@ class FactorValuePipeline:
             "single_dir": os.path.join(self._output_dir, "single"),
             "meta_path": self._meta_path(),
             "disk_factor_count": len(disk_names),
+            "factor_parquet_count": len(disk_names),
+            "all_parquet_count": len(all_parquet_files),
             "meta_factor_count": len(meta_names),
             "orphan_parquet_count": len(disk_names - meta_names),
             "orphan_meta_count": len(meta_names - disk_names),
             "orphan_parquets": sorted(disk_names - meta_names),
             "orphan_meta_entries": sorted(meta_names - disk_names),
             "total_size_mb": round(total_size_bytes / 1024 / 1024, 1),
+            "all_size_mb": round(all_size_bytes / 1024 / 1024, 1),
+            "merged_panel_present": bool(merged_panel_path),
+            "merged_panel_size_mb": round(merged_panel_size / 1024 / 1024, 1),
             "as_of_date": _first_meta_value("as_of_date"),
             "generated_at": meta.get("generated_at"),
             "date_range": _first_meta_value("date_range"),

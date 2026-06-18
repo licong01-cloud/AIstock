@@ -1,0 +1,123 @@
+{
+  "actual": "factor-cache/stats 只读接口在当前 575 因子官方缓存规模下 180 秒未返回；_meta.json 仅记录 89 个因子但磁盘已有 575 个因子 parquet，虽然相关性 cache-status 已按磁盘识别 575/575，但 factor-cache stats/meta inventory 仍存在性能和统计误导风险。",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/factor_value_pipeline.py",
+    "backend/services/quantevolver/factor_cache_remote_sync_service.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/tests/quantevolver",
+    "backend/tests/test_factor_cache_wsl_env.py",
+    "backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py",
+    "tests/aistock_validation/bugs/20260618_BUG-410-meta.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-410",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T05:50:56.564315Z",
+  "description": "factor-cache/stats 只读接口在当前 575 因子官方缓存规模下 180 秒未返回；_meta.json 仅记录 89 个因子但磁盘已有 575 个因子 parquet，虽然相关性 cache-status 已按磁盘识别 575/575，但 factor-cache stats/meta inventory 仍存在性能和统计误导风险。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-ee6596d4cf4c",
+      "timestamp": "2026-06-18T05:50:56.564311Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md"
+  ],
+  "expected": "factor-cache stats/cache inventory 接口必须在大规模官方缓存下快速返回轻量统计，默认不得同步扫描重型 parquet 或计算 DB hash；官方缓存状态必须同时暴露 disk/meta/merged_panel/orphan_or_missing_meta 口径，并能基于已有单因子 parquet 识别 575/575 缓存，不触发全量因子独立指标重算，不回退到 factor_values_realtime。",
+  "first_seen_at": "2026-06-18T05:50:56.564315Z",
+  "fix_branch": "bug/BUG-410-meta-20260618",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1231,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1231",
+  "last_seen_at": "2026-06-18T05:50:56.564315Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod GET /api/v1/quantevolver/factor-cache/stats timeout 180s; compare rdagent_assets/factor_values/single/*.parquet factor count with rdagent_assets/factor_values/_meta.json factors count",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "官方因子缓存状态接口同步超时且 Meta 统计不完整",
+  "trigger_condition": {
+    "fingerprint": "ee6596d4cf4cbcd693776b30",
+    "source_event_id": "FE-20260618-ee6596d4cf4c"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/factor_value_pipeline.py",
+      "backend/services/quantevolver/factor_cache_remote_sync_service.py",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "backend/tests/quantevolver",
+      "backend/tests/test_factor_cache_wsl_env.py",
+      "backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/api/v1/quantevolver/factor-cache/stats",
+    "ui_routes": [
+      "/api/v1/quantevolver/factor-cache/stats"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/routers/quantevolver.py backend/services/quantevolver/factor_value_pipeline.py backend/services/quantevolver/factor_cache_remote_sync_service.py -> passed",
+    "python -m ruff check backend/routers/quantevolver.py backend/services/quantevolver/factor_value_pipeline.py backend/services/quantevolver/factor_cache_remote_sync_service.py backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_legacy_factor_paths_removed.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -q -> 47 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed",
+    "targeted frontend ESLint for FactorList.tsx with NODE_PATH to canonical frontend node_modules -> passed",
+    "DESIGN-COMPLIANCE-001: default stats path is lightweight disk/meta inventory; disk parquet is source of truth for cached counts; meta gaps are reconcile_required not no_cache; UI exposes disk/meta/merged-panel details; remote stats separates disk_cached/effective_cached; no full compute/realtime cache path was invoked -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
