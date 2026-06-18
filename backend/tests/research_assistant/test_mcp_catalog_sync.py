@@ -105,7 +105,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert len(qlib_tools) == len(MODULE_TOOL_NAMES["qlib_export"])
     assert any(tool["tool_name"] == "qlib_export_list_snapshots" for tool in qlib_tools)
     qe_tools = [tool for tool in tools if tool["server_key"] == "aistock-qe"]
-    assert len(qe_tools) == 70
+    assert len(qe_tools) == 74
     assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_tools)
     assert any(tool["tool_name"] == "model_registry_list" for tool in qe_tools)
     factor_tools = [tool for tool in tools if tool["server_key"] == "aistock-factor"]
