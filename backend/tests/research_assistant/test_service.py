@@ -32,7 +32,6 @@ from backend.services.research_assistant.service import (
     DialogueIntent,
     DialogueMode,
     LlmCallResult,
-    McpToolCall,
     ModeDecision,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
@@ -1677,6 +1676,11 @@ def test_bug_412_local_data_agentic_tools_do_not_offer_uncovered_manifest_tool()
     assert "success=1" in text
     react_results = result["cards"]["react_grounding"]
     assert react_results["tool_call_count"] >= 2
+    assert react_results["evidence_guard"]["allowed"] is True
+    assert react_results["tool_errors"][0]["reason_code"] == "capability_not_found"
+    assert react_results["tool_errors"][0]["catalog_reason"] == "tool_not_in_audited_catalog"
+    assert react_results["tool_errors"][0]["diagnostic_only"] is True
+    assert react_results["tool_errors"][0]["terminal_program_error"] is False
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["tool_name"] == "local_data_get_preset_daily_status"
@@ -1840,7 +1844,9 @@ def test_bug_404_uncovered_manifest_tool_reports_capability_not_found_without_cr
     assert "Insufficient evidence" not in text
     assert result["cards"]["mcp_execution_result"]["status"] == "failed"
     assert result["cards"]["mcp_execution_result"]["error"]["reason_code"] == "capability_not_found"
+    assert result["cards"]["mcp_execution_result"]["error"]["catalog_reason"] == "tool_not_in_audited_catalog"
     assert result["cards"]["react_grounding"]["tool_errors"][0]["reason_code"] == "capability_not_found"
+    assert result["cards"]["react_grounding"]["tool_errors"][0]["terminal_program_error"] is True
     assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
 
 

@@ -1,0 +1,112 @@
+{
+  "actual": "REPRODUCE: ask '给我国城矿业 基本情况/近期走势/未来趋势 全方位分析' -> reply is the fail-closed text 'Insufficient evidence: business reply synthesis did not pass grounding guard.' Evidence WAS gathered (stock_analysis_evidence_card business synthesis path ran), but the model's synthesized answer was rejected by compose_with_evidence_guard (react_grounding.py:423) and fell back via _business_synthesis_failure_text (service.py:4184). ROOT CAUSE: (1) Guard requires the answer to contain, as a verbatim case-insensitive substring, BOTH a known source value (_has_inline_source, react_grounding.py:352) AND a known as_of value (_has_inline_as_of:357). For a multi-tool comprehensive stock answer (quote+financials+fund_flow+technicals+web fundamentals), the real model paraphrases sources (e.g. says '根据资金流数据' instead of reproducing the literal source_ref token like 'stock-analysis:fund_flow:...') and there are multiple per-tool as_of values, so verbatim matching fails -> missing_inline_tool_evidence / unsourced_numeric_fact. (2) NO regeneration loop: design 4.6 requires 'on violation re-prompt the model with the reason and regenerate (bounded N) before fail-closing', but the agentic path fail-closes immediately on the first guard miss (no retry/regenerate found in react_grounding/service). (3) Helper _append_missing_evidence_citation/_evidence_citation_suffix exist but are not wired to rescue otherwise-grounded answers. IMPACT: the flagship comprehensive multi-source analysis returns 'insufficient' for answerable questions; the fake-LLM 7.3 test passes because the fake crafts a guard-passing string, but real models do not. FIX DIRECTION (must NOT weaken anti-hallucination): implement bounded regeneration that re-prompts the model with the exact source/as_of tokens to cite; and/or make citation detection robust for multi-source synthesis (accept per-tool/per-section citation, wire _append_missing_evidence_citation to attach the evidence suffix when answer is otherwise grounded, give the model the exact source/as_of strings in the synthesis prompt). ACCEPTANCE: add a test with a REAL-style model output that paraphrases sources -> guard either passes via robust detection or triggers bounded regeneration that yields a cited answer; the guocheng comprehensive question returns a synthesized cited analysis, not fail-closed; anti-hallucination still rejects truly unsourced/placeholder/fabricated answers. CONSTRAINTS: fix in worktree not root; no service start; no DDL. Related: BUG-403 (this path), BUG-412 (tool coverage), BUG-404 (graceful turn errors).",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260618_BUG-413-ra-agentic-business-synthesis-fails-grounding-guard-on-real-multi-source.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_evidence_guard.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+    "backend/tests/research_assistant/test_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-413",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T08:27:59.163330Z",
+  "description": "REPRODUCE: ask '给我国城矿业 基本情况/近期走势/未来趋势 全方位分析' -> reply is the fail-closed text 'Insufficient evidence: business reply synthesis did not pass grounding guard.' Evidence WAS gathered (stock_analysis_evidence_card business synthesis path ran), but the model's synthesized answer was rejected by compose_with_evidence_guard (react_grounding.py:423) and fell back via _business_synthesis_failure_text (service.py:4184). ROOT CAUSE: (1) Guard requires the answer to contain, as a verbatim case-insensitive substring, BOTH a known source value (_has_inline_source, react_grounding.py:352) AND a known as_of value (_has_inline_as_of:357). For a multi-tool comprehensive stock answer (quote+financials+fund_flow+technicals+web fundamentals), the real model paraphrases sources (e.g. says '根据资金流数据' instead of reproducing the literal source_ref token like 'stock-analysis:fund_flow:...') and there are multiple per-tool as_of values, so verbatim matching fails -> missing_inline_tool_evidence / unsourced_numeric_fact. (2) NO regeneration loop: design 4.6 requires 'on violation re-prompt the model with the reason and regenerate (bounded N) before fail-closing', but the agentic path fail-closes immediately on the first guard miss (no retry/regenerate found in react_grounding/service). (3) Helper _append_missing_evidence_citation/_evidence_citation_suffix exist but are not wired to rescue otherwise-grounded answers. IMPACT: the flagship comprehensive multi-source analysis returns 'insufficient' for answerable questions; the fake-LLM 7.3 test passes because the fake crafts a guard-passing string, but real models do not. FIX DIRECTION (must NOT weaken anti-hallucination): implement bounded regeneration that re-prompts the model with the exact source/as_of tokens to cite; and/or make citation detection robust for multi-source synthesis (accept per-tool/per-section citation, wire _append_missing_evidence_citation to attach the evidence suffix when answer is otherwise grounded, give the model the exact source/as_of strings in the synthesis prompt). ACCEPTANCE: add a test with a REAL-style model output that paraphrases sources -> guard either passes via robust detection or triggers bounded regeneration that yields a cited answer; the guocheng comprehensive question returns a synthesized cited analysis, not fail-closed; anti-hallucination still rejects truly unsourced/placeholder/fabricated answers. CONSTRAINTS: fix in worktree not root; no service start; no DDL. Related: BUG-403 (this path), BUG-412 (tool coverage), BUG-404 (graceful turn errors).",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-b17794455e53",
+      "timestamp": "2026-06-18T08:27:59.163327Z"
+    },
+    {
+      "timestamp": "2026-06-18T16:05:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded per BUG-413 fix task to RA grounding guard, service synthesis prompt, and targeted tests."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-18T08:27:59.163330Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1242,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1242",
+  "last_seen_at": "2026-06-18T08:27:59.163330Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA agentic business synthesis fails grounding guard on real multi-source answers (false-positive, no regeneration)",
+  "trigger_condition": {
+    "fingerprint": "b17794455e5324d250bfeb03",
+    "source_event_id": "FE-20260618-b17794455e53"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/regenerate",
+    "ui_routes": [
+      "/regenerate"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

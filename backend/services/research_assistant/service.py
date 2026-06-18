@@ -577,6 +577,7 @@ AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
     "For business evidence answers, do not use fixed status-summary templates, do not dump raw JSON, "
     "and do not mention internal route names, server_key, tool_name, summary_first, or mcp_execution_result. "
     "Every factual or numeric claim must cite an actual tool source value and actual as_of/trade_date/report_period value returned by tools. "
+    "When a tool observation includes citation_options, cite those exact source/as_of strings instead of paraphrasing the source. "
     "If the evidence says zero/none, state that honestly and briefly instead of listing all rows. "
     "Write the final answer in the user's language. For write or confirmation requests, only describe the approval/preflight boundary. "
     "Do not invent facts, placeholders, source values, dates, or actions."
@@ -1331,9 +1332,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _render_tool_error_reply(error: dict[str, Any]) -> str:
         route = f"{error.get('server_key')}/{error.get('tool_name')}"
+        catalog_reason = str(error.get("catalog_reason") or "")
+        catalog_fragment = f"catalog_reason={catalog_reason}; " if catalog_reason else ""
         return (
             "工具调用失败："
             f"reason_code={error.get('reason_code') or error.get('code')}; "
+            f"{catalog_fragment}"
             f"tool={route}; "
             f"exception_type={error.get('exception_type') or 'Error'}; "
             f"error_summary={error.get('message') or error.get('human_reason') or ''}"
@@ -1409,8 +1413,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _tool_error_from_cards(cls, cards: dict[str, Any]) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []
         react = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        evidence_guard = react.get("evidence_guard") if isinstance(react.get("evidence_guard"), dict) else {}
+        react_grounding_allowed = bool(evidence_guard.get("allowed") and evidence_guard.get("reason") == "ok")
+        if react_grounding_allowed:
+            return None
         for item in react.get("tool_errors") or []:
             if isinstance(item, dict):
+                if item.get("terminal_program_error") is False:
+                    continue
                 candidates.append(item)
         execution = cards.get("mcp_execution_result") if isinstance(cards.get("mcp_execution_result"), dict) else {}
         if isinstance(execution.get("error"), dict):
@@ -2779,6 +2789,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             function_tool_registry=function_tool_registry,
         )
         cards["react_grounding"] = self._react_grounding_card(react_result)
+        self._populate_cards_from_react_program_error(cards, react_result, task["task_id"])
         trace = self.create_trace_event(
             TraceEventCreate(
                 task_id=task["task_id"],
@@ -4346,6 +4357,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "After tool results are present, write the final answer yourself and address the exact user question.",
                 "Do not return a Python-rendered template or copy a raw tool payload.",
                 "Cite actual source and as_of/trade_date/report_period values found in tool results.",
+                "If citation_options are present, cite their exact source/as_of strings for the relevant facts.",
             ],
         }
         react_messages.append({"role": "system", "content": json.dumps(directive, ensure_ascii=False, sort_keys=True)})
@@ -4551,15 +4563,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _react_grounding_card(react_result: Any) -> dict[str, Any]:
         tool_errors: list[dict[str, Any]] = []
-        for result in react_result.tool_results:
+        tool_results = list(getattr(react_result, "tool_results", []) or [])
+        for index, result in enumerate(tool_results):
             error = result.error_json if isinstance(result.error_json, dict) else {}
             reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
-            if result.status == "failed" and reason_code in ResearchAssistantService.PROGRAM_ERROR_REASON_CODES:
+            if result.status in {"failed", "rejected"} and reason_code in ResearchAssistantService.PROGRAM_ERROR_REASON_CODES:
+                later_success = any(
+                    bool(getattr(item, "executed", False))
+                    and str(getattr(item, "status", "")) in {"succeeded", "success", "ok"}
+                    for item in tool_results[index + 1 :]
+                )
+                terminal_program_error = not (later_success and error.get("recoverable_catalog_rejection"))
                 item = dict(error)
                 item.setdefault("reason_code", reason_code)
                 item.setdefault("server_key", result.server_key)
                 item.setdefault("tool_name", result.tool_name)
                 item.setdefault("message", result.summary)
+                item["terminal_program_error"] = terminal_program_error
+                if not terminal_program_error:
+                    item["diagnostic_only"] = True
                 tool_errors.append(item)
         return {
             "schema_version": "research_assistant_react_grounding_v1",
@@ -4575,6 +4597,42 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "as_of_count": react_result.evidence_guard.as_of_count,
             },
         }
+
+    def _populate_cards_from_react_program_error(self, cards: dict[str, Any], react_result: Any, task_id: str) -> None:
+        if isinstance(cards.get("mcp_execution_result"), dict):
+            return
+        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        tool_errors = react_card.get("tool_errors") if isinstance(react_card.get("tool_errors"), list) else []
+        error = next(
+            (item for item in tool_errors if isinstance(item, dict) and item.get("terminal_program_error") is not False),
+            None,
+        )
+        if not error:
+            return
+        server_key = str(error.get("server_key") or "")
+        tool_name = str(error.get("tool_name") or "")
+        cards["mcp_execution_result"] = {
+            "auto_executed": False,
+            "executed": False,
+            "status": "failed",
+            "route": f"{server_key}/{tool_name}",
+            "server_key": server_key,
+            "tool_name": tool_name,
+            "summary_first": True,
+            "error": error,
+        }
+        try:
+            self.add_task_event(
+                task_id,
+                TaskEventCreate(
+                    event_type="mcp_failed",
+                    severity="error",
+                    message=self._render_tool_error_reply(error),
+                    payload_json={"error": error, "route": f"{server_key}/{tool_name}", "source": "react_grounding"},
+                ),
+            )
+        except Exception:  # noqa: BLE001 - error-card creation must not re-crash chat/turn.
+            logger.exception("failed to persist ReAct program-error event for %s/%s", server_key, tool_name)
 
 
     @staticmethod

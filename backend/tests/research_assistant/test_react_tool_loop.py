@@ -5,7 +5,16 @@ from typing import Any
 
 from backend.services.research_assistant.models import ChatTurnRequest
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.react_grounding import McpToolResult, tool_result_message
+from backend.services.research_assistant.react_grounding import (
+    McpToolCall,
+    McpToolResult,
+    ModelTurn,
+    ReactGroundingConfig,
+    ToolCatalogEntry,
+    ToolGateDecision,
+    run_react_grounding_loop,
+    tool_result_message,
+)
 from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService, _litellm_compatible_messages
 
 
@@ -118,3 +127,281 @@ def test_litellm_compatible_messages_wrap_legacy_tool_messages() -> None:
     assert wrapped["type"] == "INTERNAL_TOOL_OBSERVATION"
     assert "legacy observation" in wrapped["content"]
     assert all(item["role"] != "tool" or item.get("tool_call_id") for item in messages)
+
+
+class _SectionOnlyStockProvider:
+    result = McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        status="succeeded",
+        payload_json={
+            "response_mode": "stock_analysis_evidence_card",
+            "sections": [
+                {
+                    "dataset": "quote",
+                    "source_refs": ["stock-ref:quote:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "quote evidence",
+                },
+                {
+                    "dataset": "fund_flow",
+                    "source_refs": ["stock-ref:fund_flow:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "fund-flow evidence",
+                },
+            ],
+        },
+        summary="section-only stock evidence",
+        executed=True,
+    )
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        return self.result
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        raise AssertionError("BUG-413 stock read-only loop should not request preflight")
+
+
+class _Bug413RegeneratingLlm:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, Any]]] = []
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return ModelTurn(
+                content=json.dumps(
+                    {
+                        "tool_calls": [
+                            {
+                                "server_key": "aistock-stock-analysis",
+                                "tool_name": "stock_analysis_get_quote",
+                                "payload_json": {"symbol": "000688"},
+                                "stable_call_id": "stock_000688",
+                                "reason": "Need stock evidence.",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        if len(self.calls) == 2:
+            return ModelTurn(
+                content="国城矿业近期走势需要结合行情和资金流观察，不能只看单一指标。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        assert "REACT_EVIDENCE_GUARD_REPAIR_DIRECTIVE" in joined
+        assert "missing_inline_tool_evidence" in joined
+        assert "stock-ref:quote:000688" in joined
+        assert "2026-06-16" in joined
+        return ModelTurn(
+            content=(
+                "国城矿业综合分析：基本情况和近期走势只能基于已返回行情、资金流证据谨慎判断；"
+                "未来趋势需继续跟踪基本面和资金变化。"
+                "来源 stock-ref:quote:000688，截至 2026-06-16；"
+                "来源 stock-ref:fund_flow:000688，截至 2026-06-16。"
+            ),
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_bug_413_guard_violation_regenerates_with_exact_citation_options() -> None:
+    fake = _Bug413RegeneratingLlm()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "国城矿业 基本情况/近期走势/未来趋势 全方位分析"}],
+        model_complete=fake.complete,
+        mcp_provider=_SectionOnlyStockProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="国城矿业 基本情况/近期走势/未来趋势 全方位分析",
+        ),
+    )
+
+    assert len(fake.calls) == 3
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "ok"
+    assert result.stopped_reason == "final_answer"
+    assert "stock-ref:quote:000688" in result.final_text
+    assert any(step.get("evidence_guard_reason") == "missing_inline_tool_evidence" for step in result.trace_steps)
+    assert any(step.get("repair") == "regenerate_with_evidence_citation_options" for step in result.trace_steps)
+
+
+class _LocalDataSyncProvider:
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        assert call.tool_name == "local_data_get_preset_daily_status"
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="succeeded",
+            payload_json={
+                "response_mode": "local_data_daily_sync_status",
+                "source": "local_data_facade_read_adapter",
+                "as_of": "2026-06-17",
+                "group_counts": {"success": 1, "failed": 0},
+            },
+            source_refs=["local_data_facade_read_adapter"],
+            as_of="2026-06-17",
+            summary="success=1 failed=0",
+            executed=True,
+        )
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("local-data read-only recovery must not require preflight")
+
+
+class _RecoveringCatalogRejectionLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_unack_alert_count",
+                        stable_call_id="uncovered_alert_count",
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_preset_daily_status",
+                        stable_call_id="covered_daily_status",
+                    )
+                ],
+            )
+        return ModelTurn(
+            content="Local data sync succeeded: success=1 failed=0; source=local_data_facade_read_adapter as_of=2026-06-17.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+class _UnrecoveredCatalogRejectionLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-local-data",
+                        tool_name="local_data_get_unack_alert_count",
+                        stable_call_id="uncovered_alert_count",
+                    )
+                ],
+            )
+        return ModelTurn(
+            content="Insufficient evidence: no covered local-data result.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_bug_404_412_recovered_catalog_rejection_does_not_override_grounded_answer() -> None:
+    fake = _RecoveringCatalogRejectionLlm()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "Was yesterday's local data sync OK?"}],
+        model_complete=fake.complete,
+        mcp_provider=_LocalDataSyncProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_get_preset_daily_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message="Was yesterday's local data sync OK?"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "ok"
+    assert "success=1" in result.final_text
+    assert "reason_code=capability_not_found" not in result.final_text
+    assert "Insufficient evidence" not in result.final_text
+    rejected = result.tool_results[0]
+    assert rejected.status == "rejected"
+    assert rejected.error_json["reason_code"] == "capability_not_found"
+    assert rejected.error_json["catalog_reason"] == "tool_not_in_audited_catalog"
+    assert rejected.error_json["recoverable_catalog_rejection"] is True
+
+
+def test_bug_404_412_unrecovered_catalog_rejection_reports_loud_capability_error() -> None:
+    fake = _UnrecoveredCatalogRejectionLlm()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "Was yesterday's local data sync OK?"}],
+        model_complete=fake.complete,
+        mcp_provider=_LocalDataSyncProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_get_preset_daily_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=3, user_message="Was yesterday's local data sync OK?"),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "explicit_tool_error"
+    assert "reason_code=capability_not_found" in result.final_text
+    assert "tool_not_in_audited_catalog" in result.final_text
+    assert "Insufficient evidence" not in result.final_text
