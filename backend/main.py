@@ -43,6 +43,7 @@ from .routers import (
     qmt,
     qmt_strategy_ledger,
     qe_archive,
+    multi_alpha,
     prediction_store,
     qe_templates,
     research_assistant,
@@ -539,6 +540,7 @@ def create_app() -> FastAPI:
     app.include_router(execution_policy.router, prefix="/api/v1")
     app.include_router(external_research.router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
+    app.include_router(multi_alpha.router, prefix="/api/v1")
     app.include_router(prediction_store.router, prefix="/api/v1")
     app.include_router(qe_templates.router, prefix="/api/v1")
     app.include_router(research_assistant.router, prefix="/api/v1")
