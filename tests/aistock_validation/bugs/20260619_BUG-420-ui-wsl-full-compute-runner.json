@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     "backend/services/dispatch_service.py",
     "tests/aistock_validation/bugs/20260619_BUG-420-ui-wsl-full-compute-runner.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/scripts/run_official_evaluation_wsl.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-420",
@@ -21,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260619-1bc593413737",
       "timestamp": "2026-06-18T19:16:33.888350Z"
+    },
+    {
+      "timestamp": "2026-06-19T03:29:00+08:00",
+      "actor": "codex",
+      "action": "expand_allowed_scope",
+      "note": "Fix requires AIstock WSL compatibility runner and targeted dispatch regression test; RD-Agent repo is dirty, so implementation stays in AIstock side."
     }
   ],
   "evidence_uris": [],
@@ -41,7 +49,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "POST /api/v1/quantevolver/factor-cache/compute with one enabled factor and inspect WSL scheduler custom task mapping",
   "required_verification": [
-    "l0"
+    "l0",
+    "targeted_bug_420_pytest"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
