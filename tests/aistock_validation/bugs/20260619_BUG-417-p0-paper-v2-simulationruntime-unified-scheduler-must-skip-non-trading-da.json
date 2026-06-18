@@ -28,8 +28,8 @@
   "expected": "SimulationRuntime 背景/手动 tick 在进入 selection/planning/execution/submit 前必须以 TradingCalendarStatusService 为权威交易日门禁；非交易日 should_run=false、submit=false、无 lifecycle run_once、无 broker 调用，并包含 next_trading_day 审计信息。",
   "first_seen_at": "2026-06-18T17:46:59.500975Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b029ed8ce03db20e09d257cc29e5599348899417",
+  "fixed_at": "2026-06-18T18:55:10.410550Z",
   "github_issue_number": 1268,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1268",
   "last_seen_at": "2026-06-18T17:46:59.500975Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1272",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -57,6 +58,15 @@
     "fingerprint": "2e86828d7ffc0e7ed96f86c0",
     "source_event_id": "FE-20260619-2e86828d7ffc"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 64 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 11 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
+    "python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_l3 -> passed (paper_v2_l3,l0,paper_v2_backend,paper_v2_data_quality,data_quality_deep,paper_v2_ui; UI 26 passed/1 skipped)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
