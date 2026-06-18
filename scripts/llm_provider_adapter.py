@@ -58,6 +58,10 @@ DISCOVERY_DEFAULT_ALLOWED_PLAN_KEYS = (
     "validation_catalog_integrity",
     "validation_center_backend",
     "validation_workflow_automation",
+    "validation_discovery_issue_intake_readonly",
+    "workflow_discovery_root_clean_guard",
+    "code_intelligence_discovery_affected_tests_quality",
+    "validation_center_discovery_run_record_integrity",
 )
 DEEPSEEK_ENV_FILE_ENV_VARS = ("AISTOCK_LLM_ENV_FILE", "AISTOCK_ENV_FILE")
 DEEPSEEK_ENV_ROOT_VARS = ("AISTOCK_SELF_HOSTED_SOURCE", "AISTOCK_CANONICAL_ROOT", "AISTOCK_ROOT")

@@ -2289,6 +2289,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "scripts/aistock_issue_workflow.py",
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_adaptive_scheduler.py",
+        "scripts/nightly_discovery_plans.py",
         external=True,
     )
     _run_pytest(
@@ -2296,6 +2297,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_nightly_discovery_plans.py",
         "backend/tests/scripts/test_llm_provider_adapter.py",
         "-q",
         "-p",
@@ -2329,6 +2331,46 @@ def validation_workflow_automation(session: nox.Session) -> None:
         str(out_dir / "nightly-adaptive-scheduler.md"),
         external=True,
     )
+
+
+def _run_nightly_discovery_plan(session: nox.Session, plan_key: str) -> None:
+    out_dir = ROOT / "tmp" / "validation" / "nightly_discovery_plans"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "scripts/nightly_discovery_plans.py",
+        "--json",
+        "run",
+        "--plan-key",
+        plan_key,
+        "--output",
+        str(out_dir / f"{plan_key}.json"),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def validation_discovery_issue_intake_readonly(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for issue intake quality."""
+    _run_nightly_discovery_plan(session, "validation_discovery_issue_intake_readonly")
+
+
+@nox.session(venv_backend="none")
+def workflow_discovery_root_clean_guard(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for unexpected root dirty paths."""
+    _run_nightly_discovery_plan(session, "workflow_discovery_root_clean_guard")
+
+
+@nox.session(venv_backend="none")
+def code_intelligence_discovery_affected_tests_quality(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for CodeGraph affected-test quality."""
+    _run_nightly_discovery_plan(session, "code_intelligence_discovery_affected_tests_quality")
+
+
+@nox.session(venv_backend="none")
+def validation_center_discovery_run_record_integrity(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for validation history records."""
+    _run_nightly_discovery_plan(session, "validation_center_discovery_run_record_integrity")
 
 
 @nox.session(venv_backend="none")

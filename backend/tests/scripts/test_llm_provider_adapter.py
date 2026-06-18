@@ -596,7 +596,7 @@ def _discovery_pack(**overrides):
         "input_quality": {"changed_files_status": "ok", "noise_filtered": True},
         "recent_failures": [],
         "recent_bug_clusters": [],
-        "allowed_plan_keys": ["l0", "validation_catalog_integrity", "validation_center_backend"],
+        "allowed_plan_keys": ["l0", "validation_catalog_integrity", "validation_center_backend", "workflow_discovery_root_clean_guard"],
         "stop_conditions": ["no_production_db_write", "allowlisted_plans_only"],
         "production_gates": {
             "production_ddl_gate": "noop",
@@ -621,6 +621,7 @@ def test_nightly_discovery_hypothesis_deterministic_fallback_selects_allowlisted
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["hypotheses"]
     assert payload["selected_plan_keys"] == ["validation_catalog_integrity"]
+    assert "workflow_discovery_root_clean_guard" in payload["discovery_input_pack"]["allowed_plan_keys"]
     assert payload["deterministic_gate"]["shell_commands_allowed"] is False
     assert payload["deterministic_gate"]["production_actions_allowed"] is False
 

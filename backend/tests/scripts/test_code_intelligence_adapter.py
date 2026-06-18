@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -1324,6 +1324,12 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         json.dumps({"selected_plan_keys": ["validation_catalog_integrity"]}),
         encoding="utf-8",
     )
+    discovery_dir = artifact_dir / "discovery-plans"
+    discovery_dir.mkdir()
+    (discovery_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"executed_count": 1, "anomaly_count": 0}}),
+        encoding="utf-8",
+    )
     (artifact_dir / "llm-prompt-evaluation.json").write_text(
         json.dumps(
             {
@@ -1362,6 +1368,7 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert "llm_provider: `deepseek_api`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
     assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
+    assert "discovery_plans: `executed=1, anomalies=0`" in markdown
     assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 
@@ -1977,4 +1984,3 @@ def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, m
     assert payload["fresh_summary_count"] == 1
     assert payload["base_current_summary_count"] == 1
     assert payload["stale_summary_count"] == 0
-
