@@ -1,0 +1,86 @@
+{
+  "actual": "Root main currently has untracked BUG-407/BUG-410 factor-cache validation markdown/screenshots under tests/aistock_validation/history/qe; BUG-410 and BUG-415 reference markdown evidence paths that are not tracked, while BUG-407 has no evidence_uris. This pollutes root and risks losing future debugging baselines if deleted.",
+  "allowed_write_scope": [
+    "scripts/aistock_validate.py",
+    ".codex/skills/verify-aistock-feature/scripts/new_test_run.py",
+    "tests/aistock_validation/bugs/20260618_BUG-407-realtime.json",
+    "tests/aistock_validation/bugs/20260618_BUG-410-meta.json",
+    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
+    "tests/aistock_validation/history/qe/20260618_bug410_post_restart_readonly_validation.md",
+    "tests/aistock_validation/history/qe/evidence/bug407_restart_readonly/factor_correlation.png",
+    "tests/aistock_validation/history/qe/evidence/bug407_restart_readonly/factor_transformation.png",
+    "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_correlation.png",
+    "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_list.png",
+    "tests/aistock_validation/bugs/20260619_BUG-416-validation-history-evidence-can-be-left-untracked-in-canonical-root.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/test_aistock_validate_metadata.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-416",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T16:45:23.902810Z",
+  "description": "Root main currently has untracked BUG-407/BUG-410 factor-cache validation markdown/screenshots under tests/aistock_validation/history/qe; BUG-410 and BUG-415 reference markdown evidence paths that are not tracked, while BUG-407 has no evidence_uris. This pollutes root and risks losing future debugging baselines if deleted.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-f561180764ea",
+      "timestamp": "2026-06-18T16:45:23.902808Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
+    "tests/aistock_validation/history/qe/20260618_bug410_post_restart_readonly_validation.md"
+  ],
+  "expected": "Post-restart validation evidence for official factor cache/correlation/independent-metric checks is tracked through a dedicated PR or an explicit non-root worktree, BUG-407/BUG-410 records point at persisted evidence, and validation record tools refuse to write history artifacts in canonical root main unless an explicit audited override is provided.",
+  "first_seen_at": "2026-06-18T16:45:23.902810Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1264,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1264",
+  "last_seen_at": "2026-06-18T16:45:23.902810Z",
+  "module": "validation_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation_center"
+  ],
+  "title": "Validation history evidence can be left untracked in canonical root",
+  "trigger_condition": {
+    "fingerprint": "f561180764ea648dc128e669",
+    "source_event_id": "FE-20260619-f561180764ea"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

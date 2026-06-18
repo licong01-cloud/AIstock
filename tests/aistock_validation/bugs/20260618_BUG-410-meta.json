@@ -30,7 +30,10 @@
     }
   ],
   "evidence_uris": [
-    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md"
+    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
+    "tests/aistock_validation/history/qe/20260618_bug410_post_restart_readonly_validation.md",
+    "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_list.png",
+    "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_correlation.png"
   ],
   "expected": "factor-cache stats/cache inventory 接口必须在大规模官方缓存下快速返回轻量统计，默认不得同步扫描重型 parquet 或计算 DB hash；官方缓存状态必须同时暴露 disk/meta/merged_panel/orphan_or_missing_meta 口径，并能基于已有单因子 parquet 识别 575/575 缓存，不触发全量因子独立指标重算，不回退到 factor_values_realtime。",
   "first_seen_at": "2026-06-18T05:50:56.564315Z",
@@ -108,7 +111,7 @@
     "targeted frontend ESLint for FactorList.tsx with NODE_PATH to canonical frontend node_modules -> passed",
     "DESIGN-COMPLIANCE-001 matrix -> passed: stats is lightweight by default, disk parquet is cache source of truth, meta gaps are reconcile_required, UI exposes disk/meta/merged panel, remote stats separates disk_cached/effective_cached, no full compute or realtime cache path invoked"
   ],
-  "verification_run_id": null,
+  "verification_run_id": "tests/aistock_validation/history/qe/20260618_bug410_post_restart_readonly_validation.md",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
