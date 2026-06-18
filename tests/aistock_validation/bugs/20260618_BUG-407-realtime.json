@@ -30,8 +30,8 @@
   "expected": "官方独立指标、因子相关性、QE 回测缓存统计和计算路径只基于 aistock_factor_catalog.code_text 与 rdagent_assets/factor_values，不依赖 transformation_status/qe_code_path；factor-transformation 页面和 API 兼容字段应提供明确的 non_official_transformed 命名和文案，避免 realtime cache 误导。",
   "first_seen_at": "2026-06-17T18:42:48.358824Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b7d4722a616583f5752d031cd61c21f0f3f8a0fd",
+  "fixed_at": "2026-06-18T03:11:05.161105Z",
   "github_issue_number": 1215,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1215",
   "last_seen_at": "2026-06-17T18:42:48.358824Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1217",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -90,6 +91,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "static scan: frontend factor-transformation has no has_realtime_code/realtime_code_text/realtime tab/qe_code_path old terms; factor_value_pipeline has no realtime/transformation_status SUCCESS/qe_code_path/last_transformation_at old gating terms -> passed",
+    "python -m py_compile backend/services/quantevolver/factor_value_pipeline.py backend/routers/quantevolver.py backend/tests/quantevolver/test_legacy_factor_paths_removed.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -> passed",
+    "python -m ruff check backend/services/quantevolver/factor_value_pipeline.py backend/routers/quantevolver.py backend/tests/quantevolver/test_legacy_factor_paths_removed.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_legacy_factor_paths_removed.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_evaluation_cache_source.py -q -p no:cacheprovider -> 31 passed",
+    "frontend eslint targeted factor-transformation files via repo node_modules with NODE_PATH -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s l0 validation_module_registry_l0 qe_read_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
