@@ -40,8 +40,8 @@
   "expected": "Post-restart validation evidence for official factor cache/correlation/independent-metric checks is tracked through a dedicated PR or an explicit non-root worktree, BUG-407/BUG-410 records point at persisted evidence, and validation record tools refuse to write history artifacts in canonical root main unless an explicit audited override is provided.",
   "first_seen_at": "2026-06-18T16:45:23.902810Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "402b581da9538033f5f652b3726ca3a7e74367c9",
+  "fixed_at": "2026-06-18T17:30:15.834699Z",
   "github_issue_number": 1264,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1264",
   "last_seen_at": "2026-06-18T16:45:23.902810Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1265",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_center"
   ],
@@ -70,6 +71,11 @@
     "fingerprint": "f561180764ea648dc128e669",
     "source_event_id": "FE-20260619-f561180764ea"
   },
+  "validation_evidence": [
+    "PR #1265 CI checks -> 17 passed, 0 failed",
+    "PR #1265 mergeability -> MERGEABLE",
+    "local gates -> git diff --check, ruff, pytest, compileall, nox l0 validation_module_registry_l0 guardrail_changed_files passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
