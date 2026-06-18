@@ -31,11 +31,12 @@ def get_prediction_store_health() -> dict[str, Any]:
     return {"status": "success", "data": get_model_store_service().health()}
 
 
-@router.post("/artifacts/{run_key}", summary="Upload QE pred.pkl/params.pkl into the AIstock artifact store")
+@router.post("/artifacts/{run_key}", summary="Upload QE pred.pkl/label.pkl/params.pkl into the AIstock artifact store")
 def upload_prediction_artifacts(
     run_key: str,
     pred: UploadFile | None = File(default=None),
     params: UploadFile | None = File(default=None),
+    label: UploadFile | None = File(default=None),
     metadata_json: str | None = Form(default=None),
     experiment_id: str | None = Form(default=None),
     task_id: str | None = Form(default=None),
@@ -66,8 +67,10 @@ def upload_prediction_artifacts(
         files["prediction"] = (pred.filename or "pred.pkl", pred.file)
     if params is not None:
         files["model_params"] = (params.filename or "params.pkl", params.file)
+    if label is not None:
+        files["label"] = (label.filename or "label.pkl", label.file)
     if not files:
-        raise HTTPException(status_code=400, detail="upload requires pred and/or params file")
+        raise HTTPException(status_code=400, detail="upload requires pred, params, and/or label file")
 
     try:
         manifest = PredictionArtifactStore().write_artifacts(run_key=run_key, files=files, metadata=metadata)
@@ -119,7 +122,15 @@ def preview_model_params_artifact(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/artifacts/{run_id}/{artifact_type}", summary="Download persisted pred.pkl or params.pkl")
+@router.get("/label/{run_id}", summary="Get metadata for persisted label.pkl for one run")
+def preview_label_artifact(run_id: str) -> dict[str, Any]:
+    try:
+        return {"status": "success", "data": get_model_store_service().pull_label(run_id=run_id)}
+    except PredictionStoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/artifacts/{run_id}/{artifact_type}", summary="Download persisted pred.pkl, label.pkl, or params.pkl")
 def download_prediction_artifact(run_id: str, artifact_type: str) -> FileResponse:
     normalized = _normalize_artifact_type(artifact_type)
     service = get_model_store_service()
@@ -127,9 +138,12 @@ def download_prediction_artifact(run_id: str, artifact_type: str) -> FileRespons
         if normalized == "prediction":
             path = service.prediction_path(run_id=run_id)
             filename = "pred.pkl"
-        else:
+        elif normalized == "model_params":
             path = service.pull_params_path(run_id=run_id)
             filename = "params.pkl"
+        else:
+            path = service.label_path(run_id=run_id)
+            filename = "label.pkl"
     except PredictionStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, media_type="application/octet-stream", filename=filename)
@@ -153,6 +167,8 @@ def _normalize_artifact_type(value: str) -> str:
         return "prediction"
     if normalized in {"model_params", "params", "params.pkl", "params_pkl"}:
         return "model_params"
+    if normalized in {"label", "label.pkl"}:
+        return "label"
     raise HTTPException(status_code=400, detail=f"unsupported artifact_type={value!r}")
 
 

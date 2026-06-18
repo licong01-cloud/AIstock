@@ -244,6 +244,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_evolution_lineage',
                 'prediction_store_get_pointer',
                 'prediction_store_pull_pred',
+                'prediction_store_pull_label',
                 'model_store_health'),
  'qe_experiment': ('qe_experiment_list',
                    'qe_experiment_get',
