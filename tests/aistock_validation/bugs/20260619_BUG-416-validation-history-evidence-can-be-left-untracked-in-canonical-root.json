@@ -3,7 +3,6 @@
   "allowed_write_scope": [
     "scripts/aistock_validate.py",
     ".codex/skills/verify-aistock-feature/scripts/new_test_run.py",
-    "backend/tests/scripts/test_aistock_validate_metadata.py",
     "tests/aistock_validation/bugs/20260618_BUG-407-realtime.json",
     "tests/aistock_validation/bugs/20260618_BUG-410-meta.json",
     "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
@@ -13,7 +12,8 @@
     "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_correlation.png",
     "tests/aistock_validation/history/qe/evidence/bug410_restart_readonly_factor_list.png",
     "tests/aistock_validation/bugs/20260619_BUG-416-validation-history-evidence-can-be-left-untracked-in-canonical-root.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/test_aistock_validate_metadata.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-416",

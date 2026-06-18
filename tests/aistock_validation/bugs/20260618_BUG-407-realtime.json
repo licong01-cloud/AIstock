@@ -26,7 +26,11 @@
       "timestamp": "2026-06-17T18:42:48.358819Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
+    "tests/aistock_validation/history/qe/evidence/bug407_restart_readonly/factor_transformation.png",
+    "tests/aistock_validation/history/qe/evidence/bug407_restart_readonly/factor_correlation.png"
+  ],
   "expected": "官方独立指标、因子相关性、QE 回测缓存统计和计算路径只基于 aistock_factor_catalog.code_text 与 rdagent_assets/factor_values，不依赖 transformation_status/qe_code_path；factor-transformation 页面和 API 兼容字段应提供明确的 non_official_transformed 命名和文案，避免 realtime cache 误导。",
   "first_seen_at": "2026-06-17T18:42:48.358824Z",
   "fix_branch": null,
@@ -99,7 +103,7 @@
     "frontend eslint targeted factor-transformation files via repo node_modules with NODE_PATH -> passed",
     "QE_READ_L3_SKIP_UI=1 python -m nox -s l0 validation_module_registry_l0 qe_read_l3 -> passed"
   ],
-  "verification_run_id": null,
+  "verification_run_id": "tests/aistock_validation/history/qe/20260618_133456_l3_bug-407-restart-read-only-validation.md",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
