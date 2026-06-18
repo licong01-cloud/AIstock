@@ -286,14 +286,29 @@ def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: P
         "schema_version": "aistock_bug_candidate_v1",
         "candidate_id": "NC-20260618-abc123",
         "title": "Nightly root clean guard detected dirty path",
+        "source_plan_key": "nightly_root_clean_guard",
         "module": "validation.runner",
         "severity": "P1",
         "status": "draft",
+        "confidence": 0.91,
+        "summary": "Nightly found a root pollution candidate.",
+        "expected": "Nightly should keep the root checkout clean.",
+        "actual": "A generated file appeared under the root checkout.",
+        "reproduce": ["python -m nox -s nightly_root_clean_guard"],
         "fingerprint": "nc-abc123",
         "dedupe_fingerprint": "nc-abc123",
         "evidence_refs": ["scripts/nightly_bug_candidate_queue.py"],
         "suggested_validation": ["python -m nox -s nightly_bug_candidate_queue"],
         "allowed_write_scope": ["scripts/nightly_bug_candidate_queue.py"],
+        "codegraph_refs": ["tmp/validation/code-intelligence/codegraph-freshness.json"],
+        "ua_refs": ["tmp/validation/code-intelligence/ua-summary-manifest.json"],
+        "github_issue_payload_ref": "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-abc123.json",
+        "quality_gate": {
+            "workflow_gate": "ready",
+            "issue_payload_ready": True,
+            "auto_submit_allowed": False,
+            "reasons": [],
+        },
     }
     issue_payload = {
         "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
@@ -319,7 +334,72 @@ def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: P
     assert item["fingerprint"] == "nc-abc123"
     assert item["recommended_validation"] == ["python -m nox -s nightly_bug_candidate_queue"]
     assert item["allowed_write_scope"] == ["scripts/nightly_bug_candidate_queue.py"]
+    assert item["issue_payload_ready"] is True
+    assert item["quality_gate_state"] == "ready"
+    assert item["why_not_submitted"] == "awaiting_operator_promotion / auto_submit_disabled"
+    assert item["codegraph_refs"] == ["tmp/validation/code-intelligence/codegraph-freshness.json"]
+    assert item["ua_refs"] == ["tmp/validation/code-intelligence/ua-summary-manifest.json"]
+    assert item["expected"] == "Nightly should keep the root checkout clean."
+    assert item["actual"] == "A generated file appeared under the root checkout."
     assert len(item["source_paths"]) == 2
+
+
+def test_issue_candidate_queue_reads_code_intelligence_bug_candidate_artifacts(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "9001" / "bug-candidates"
+    candidate_dir = queue_dir / "candidates"
+    payload_dir = queue_dir / "issue-payloads"
+    candidate_dir.mkdir(parents=True)
+    payload_dir.mkdir(parents=True)
+    candidate = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-ready",
+        "source_plan_key": "nightly_validation_api_probe",
+        "title": "Validation API probe found stale plan catalog",
+        "module": "validation.center",
+        "severity": "P1",
+        "status": "draft",
+        "confidence": 0.94,
+        "summary": "DeepSeek hypothesis was confirmed by the validation probe.",
+        "expected": "Validation Center should load the requested plan catalog.",
+        "actual": "The API returned plan not found.",
+        "reproduce": ["python -m nox -s validation_center_backend"],
+        "fingerprint": "nc-ready",
+        "dedupe_fingerprint": "nc-ready",
+        "evidence_refs": ["tmp/validation/code-intelligence/9001/discovery-results.json"],
+        "suggested_validation": ["python -m nox -s validation_center_backend"],
+        "allowed_write_scope": ["backend/services/validation/pipeline_center.py"],
+        "codegraph_refs": ["tmp/validation/code-intelligence/9001/codegraph-freshness.json"],
+        "ua_refs": ["tmp/validation/code-intelligence/9001/ua-summary-manifest.json"],
+        "github_issue_payload_ref": "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-ready.json",
+        "quality_gate": {"workflow_gate": "ready", "issue_payload_ready": True, "auto_submit_allowed": False, "reasons": []},
+    }
+    issue_payload = {
+        "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
+        "candidate": candidate,
+        "auto_submit_allowed": False,
+        "dedupe": {"fingerprint": "nc-ready", "marker": "<!-- aistock-nightly-bug-candidate:nc-ready -->"},
+    }
+    (candidate_dir / "NC-20260618-ready.json").write_text(json.dumps(candidate), encoding="utf-8")
+    (payload_dir / "NC-20260618-ready.json").write_text(json.dumps(issue_payload), encoding="utf-8")
+
+    service = _service(repo_root=tmp_path)
+    payload = service.issue_candidates(page=1, page_size=10)
+    summary = service.issue_candidate_summary()
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["source_type"] == "nightly_bug_candidate"
+    assert item["source_plan_key"] == "nightly_validation_api_probe"
+    assert item["confidence"] == 0.94
+    assert item["issue_payload_ready"] is True
+    assert item["github_issue_payload_ref"].endswith("issue-payloads/NC-20260618-ready.json")
+    assert item["why_not_submitted"] == "awaiting_operator_promotion / auto_submit_disabled"
+    assert item["codegraph_refs"] == ["tmp/validation/code-intelligence/9001/codegraph-freshness.json"]
+    assert item["ua_refs"] == ["tmp/validation/code-intelligence/9001/ua-summary-manifest.json"]
+    assert summary["nightly_candidate_count"] == 1
+    assert summary["issue_payload_ready_count"] == 1
+    assert summary["draft_count"] == 1
+    assert summary["no_submit_reason_counts"] == {"auto_submit_disabled": 1, "awaiting_operator_promotion": 1}
 
 
 def test_phase1_cards_include_all_top_navigation_domains() -> None:
