@@ -121,6 +121,35 @@ def test_high_confidence_fixture_generates_complete_github_issue_payload(tmp_pat
     assert issue_payload["production_gates"]["production_ddl_gate"] == "noop"
 
 
+def test_semantic_drift_candidate_generates_complete_issue_payload(tmp_path: Path) -> None:
+    result = tmp_path / "discovery" / "validation_semantic_drift_discovery_readonly.json"
+    manifest = tmp_path / "discovery" / "manifest.json"
+    anomaly = {
+        **_high_confidence_anomaly(plan_key="validation_semantic_drift_discovery_readonly"),
+        "type": "semantic_drift",
+        "title": "Issue payload contract drift",
+        "evidence_refs": ["tmp/validation/code-intelligence/fixture/issue-payload.json"],
+        "suggested_module": "validation.runner",
+        "details": {
+            "summary": "Issue draft is missing required sections.",
+            "expected": "Issue body includes expected, actual, reproduce, evidence, and next command.",
+            "actual": "Issue body only includes a title.",
+            "confidence": 0.91,
+        },
+    }
+    _write_discovery_result(result, plan_key="validation_semantic_drift_discovery_readonly", anomaly=anomaly)
+    _write_manifest(manifest, result, plan_key="validation_semantic_drift_discovery_readonly")
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+    issue_payload = json.loads((tmp_path / payload["issue_payload_refs"][0]).read_text(encoding="utf-8"))
+
+    assert payload["summary"]["issue_payload_ready_count"] == 1
+    assert payload["summary"]["issue_payload_ready_rate"] == 1.0
+    assert issue_payload["candidate"]["failure_kind"] == "semantic_drift"
+    assert issue_payload["candidate"]["source_plan_key"] == "validation_semantic_drift_discovery_readonly"
+    assert "Issue body includes expected" in issue_payload["body"]
+
+
 def test_duplicate_fingerprint_is_marked_deduped(tmp_path: Path) -> None:
     result = tmp_path / "discovery" / "workflow_discovery_root_clean_guard.json"
     manifest = tmp_path / "discovery" / "manifest.json"

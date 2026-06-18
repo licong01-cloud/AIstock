@@ -69,6 +69,7 @@ def test_rotation_uses_weekly_focus_and_changed_module_priority(tmp_path: Path) 
         allowed_plan_keys=[
             "validation_discovery_issue_intake_readonly",
             "workflow_discovery_root_clean_guard",
+            "validation_semantic_drift_discovery_readonly",
             "code_intelligence_discovery_affected_tests_quality",
             "validation_center_discovery_run_record_integrity",
         ],
@@ -79,7 +80,8 @@ def test_rotation_uses_weekly_focus_and_changed_module_priority(tmp_path: Path) 
     rotation = payload["rotation"]
     assert rotation["focus_key"] == "code_intelligence_llm"
     assert rotation["changed_modules"] == ["code_intelligence"]
-    assert rotation["selected_plan_keys"][0] == "code_intelligence_discovery_affected_tests_quality"
+    assert rotation["selected_plan_keys"][0] == "validation_semantic_drift_discovery_readonly"
+    assert "code_intelligence_discovery_affected_tests_quality" in rotation["selected_plan_keys"]
     assert len(rotation["selected_plan_keys"]) <= rotation["budget_plan_limit"]
     assert payload["discovery_statistics"]["planned_plan_count"] == len(rotation["selected_plan_keys"])
 

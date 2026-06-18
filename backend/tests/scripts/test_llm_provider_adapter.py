@@ -708,6 +708,7 @@ def test_nightly_discovery_hypothesis_prefers_rotation_selected_plans():
             changed_files_count=0,
             allowed_plan_keys=[
                 "l0",
+                "validation_semantic_drift_discovery_readonly",
                 "code_intelligence_discovery_affected_tests_quality",
                 "workflow_discovery_root_clean_guard",
             ],
@@ -717,6 +718,7 @@ def test_nightly_discovery_hypothesis_prefers_rotation_selected_plans():
                 "focus_label": "CodeGraph / Understand Anything / LLM prompt quality",
                 "focus_modules": ["code_intelligence"],
                 "selected_plan_keys": [
+                    "validation_semantic_drift_discovery_readonly",
                     "code_intelligence_discovery_affected_tests_quality",
                     "workflow_discovery_root_clean_guard",
                 ],
@@ -735,6 +737,7 @@ def test_nightly_discovery_hypothesis_prefers_rotation_selected_plans():
 
     assert payload["rotation"]["focus_key"] == "code_intelligence_llm"
     assert payload["selected_plan_keys"] == [
+        "validation_semantic_drift_discovery_readonly",
         "code_intelligence_discovery_affected_tests_quality",
         "workflow_discovery_root_clean_guard",
     ]
