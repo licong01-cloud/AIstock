@@ -32,7 +32,7 @@
 | DEF-03 | `service.py:3097` 附近无 importance/recency/relevance/reflection/embedding 打分链路 | 缺陷仍成立，检索层无树形召回与打分 |
 | DEF-04 | `service.py:3137` `graph_relation_refs` 硬编码空 | 缺陷仍成立，图谱未进入推理上下文 |
 | DEF-05 | `service.py:584` 单体服务 | 缺陷仍成立，无 orchestrator/worker Agent Teams |
-| DEF-06 | `qe_evolution_service.py:149` scheduler; `qe_evolution_service.py:1616` 单 loop 提交; `qe_evolution_service.py:5738` 被动 custom/rerun 入口 | 缺陷仍成立，无跨 loop 自主闭环、停止条件、预算守护 |
+| DEF-06 | `qe_evolution_service.py:149` scheduler; `qe_evolution_service.py:1616` 单 loop 提交; `qe_evolution_service.py:5810` 被动 custom/rerun 入口 | 缺陷仍成立，无跨 loop 自主闭环、停止条件、预算守护 |
 | DEF-07 | `backend/services/research_assistant/` grep `arxiv/scholar/tavily/web_search/paper_search` = 0 | 缺陷仍成立，无外部搜索/学术检索接地实现 |
 | DEF-08 | `init_research_assistant_schema_20260521.py:143` `research_memory_items` 无 `parent_key/tree_path`; `init_research_assistant_schema_20260521.py:548` 仅 prompt nodes 有树列 | 缺陷仍成立，记忆表不是真树 |
 | DEF-09 | `models.py:61` `MEMORY_TYPES` | 缺陷仍成立，不含 `user_preference/directive/analysis_note` |
