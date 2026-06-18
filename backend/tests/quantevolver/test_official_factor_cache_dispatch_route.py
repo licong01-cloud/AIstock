@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,6 +52,28 @@ class _FakeComposer:
 
     def _fetch_workspace_config(self, node_id=None):
         return {"factor_data_dir": "/mnt/f/factor_data", "qlib_data_path": "/mnt/f/qlib_bin"}
+
+
+class _NoopCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, *args, **kwargs):
+        return None
+
+
+class _NoopConn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return _NoopCursor()
 
 
 def test_factor_cache_compute_submits_official_dispatch(monkeypatch):
@@ -102,6 +127,90 @@ def test_factor_cache_compute_submits_official_dispatch(monkeypatch):
     assert captured["include_disabled"] is False
     assert captured["batch_size"] == 16
     assert "official_factor_full_test" in router._active_cache_tasks
+
+
+def test_official_full_compute_custom_dispatch_uses_legacy_wsl_runner(monkeypatch):
+    from backend.services import dispatch_service as dispatch_mod
+
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self, base_url):
+            captured["base_url"] = base_url
+
+        async def create_task(self, payload):
+            captured["scheduler_payload"] = payload
+            return {"task": {"id": "remote-1"}}
+
+    svc = dispatch_mod.DispatchService()
+    monkeypatch.setattr(dispatch_mod, "ComputeNodeClient", _FakeClient)
+    monkeypatch.setattr(dispatch_mod, "get_conn", lambda: _NoopConn())
+    def _fake_insert_task(data):
+        captured["insert_task"] = data
+        return {"task_id": "local-1"}
+
+    monkeypatch.setattr(svc, "_insert_task", _fake_insert_task)
+    monkeypatch.setattr(svc, "_add_event", lambda *args, **kwargs: captured.setdefault("events", []).append((args, kwargs)))
+    monkeypatch.setattr(svc, "_update_task_fields", lambda *args, **kwargs: captured.setdefault("updates", []).append((args, kwargs)))
+    monkeypatch.setattr(svc, "_start_collector", lambda *args, **kwargs: captured.setdefault("collector", args))
+
+    result = asyncio.run(
+        svc._create_custom_task(
+            {
+                "task_name": "official-factor-full-smoke",
+                "task_type": "official_factor_full_compute",
+                "payload": {
+                    "factor_names": ["Alpha_Test"],
+                    "start_date": "2018-08-01",
+                    "end_date": "2026-04-30",
+                    "cache_source": "official_offline_backtest_factor_data",
+                },
+            },
+            {"node_id": "wsl2-5080", "api_base_url": "http://127.0.0.1:9000"},
+        )
+    )
+
+    assert result["status"] == "running"
+    assert captured["insert_task"]["task_type"] == "official_factor_full_compute"
+    scheduler_payload = captured["scheduler_payload"]
+    assert scheduler_payload["task_type"] == "official_evaluation"
+    assert scheduler_payload["payload"]["handler_task_type"] == "official_factor_full_compute"
+    assert scheduler_payload["payload"]["task_type"] == "official_factor_full_compute"
+    assert scheduler_payload["payload"]["cache_source"] == "official_offline_backtest_factor_data"
+
+
+def test_official_evaluation_wsl_runner_delegates_full_compute_payload(monkeypatch, tmp_path, capsys):
+    from backend.scripts import run_official_evaluation_wsl as runner
+
+    payload = {
+        "handler_task_type": "official_factor_full_compute",
+        "factor_names": ["Alpha_Test"],
+        "start_date": "2018-08-01",
+        "end_date": "2026-04-30",
+    }
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    captured = {}
+
+    class _FakeFullCompute:
+        def compute(self, data):
+            captured["payload"] = data
+            return {"success": True, "status": "success", "cache_source": "official_offline_backtest_factor_data"}
+
+    class _LegacyEvaluationShouldNotRun:
+        def __init__(self):
+            raise AssertionError("official_factor_full_compute payload must not use legacy local evaluation")
+
+    monkeypatch.setattr(runner, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(runner, "OfficialFactorBatchComputeService", lambda: _FakeFullCompute())
+    monkeypatch.setattr(runner, "FactorOfficialEvaluationService", _LegacyEvaluationShouldNotRun)
+    monkeypatch.setattr(sys, "argv", [str(Path(runner.__file__)), str(payload_path)])
+
+    assert runner.main() == 0
+    emitted = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert emitted["type"] == "result"
+    assert emitted["data"]["success"] is True
+    assert captured["payload"] == payload
 
 
 def test_factor_cache_compute_explicit_factors_can_include_disabled(monkeypatch):
