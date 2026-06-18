@@ -227,6 +227,15 @@ def write_json(path: Path | None, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def read_json(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def split_csv(values: list[str] | None) -> list[str]:
     result: list[str] = []
     for value in values or []:
@@ -375,11 +384,73 @@ def _select_allowed_plan_keys(
     return selected
 
 
+def build_previous_discovery_feedback(manifest_path: Path | None) -> dict[str, Any]:
+    manifest = read_json(manifest_path)
+    if not manifest:
+        return {
+            "schema_version": "aistock_nightly_discovery_feedback_v1",
+            "source_manifest": str(manifest_path) if manifest_path else None,
+            "signals": [],
+            "preferred_plan_keys": [],
+            "focus_modules": [],
+            "feedback_gate": "missing",
+        }
+
+    summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
+    effectiveness = manifest.get("discovery_effectiveness") if isinstance(manifest.get("discovery_effectiveness"), dict) else {}
+    rotation = manifest.get("rotation") if isinstance(manifest.get("rotation"), dict) else {}
+    selected = [str(item) for item in rotation.get("selected_plan_keys") or [] if str(item).strip()]
+    focus_modules = [str(item) for item in rotation.get("focus_modules") or [] if str(item).strip()]
+    candidates = int(summary.get("candidate_count") or effectiveness.get("candidate_count") or 0)
+    ready = int(summary.get("issue_payload_ready_count") or effectiveness.get("issue_payload_ready_count") or 0)
+    deduped = int(summary.get("deduped_count") or effectiveness.get("deduped_count") or 0)
+    rejected = int(summary.get("rejected_count") or effectiveness.get("rejected_count") or 0)
+    artifact_only = int(summary.get("artifact_only_count") or effectiveness.get("artifact_only_count") or 0)
+    no_candidate_reason = effectiveness.get("no_candidate_reason") or summary.get("no_candidate_reason")
+
+    signals: list[str] = []
+    preferred: list[str] = []
+    if candidates == 0 and selected:
+        signals.append(f"no_candidate:{no_candidate_reason or 'unknown'}")
+        append_unique(preferred, selected[:2])
+    if candidates and ready == 0:
+        signals.append("candidate_without_issue_payload")
+        append_unique(preferred, selected[:2])
+    if deduped:
+        signals.append("deduped_candidates")
+        append_unique(preferred, ["validation_discovery_issue_intake_readonly"])
+    if candidates and ready == 0:
+        append_unique(preferred, ["validation_semantic_drift_discovery_readonly"])
+    if rejected or artifact_only:
+        signals.append("quality_gate_noise")
+        append_unique(preferred, ["code_intelligence_discovery_affected_tests_quality"])
+    if not preferred and selected:
+        append_unique(preferred, selected[:1])
+
+    return {
+        "schema_version": "aistock_nightly_discovery_feedback_v1",
+        "source_manifest": str(manifest_path) if manifest_path else None,
+        "signals": signals[:8],
+        "preferred_plan_keys": preferred[:4],
+        "focus_modules": focus_modules[:6],
+        "previous_summary": {
+            "candidate_count": candidates,
+            "issue_payload_ready_count": ready,
+            "deduped_count": deduped,
+            "rejected_count": rejected,
+            "artifact_only_count": artifact_only,
+            "no_candidate_reason": no_candidate_reason,
+        },
+        "feedback_gate": "ready",
+    }
+
+
 def build_rotation_focus(
     *,
     changed_files: list[str],
     allowed_plan_keys: list[str] | None,
     module: str | None,
+    feedback: dict[str, Any] | None = None,
     run_date: str | date | datetime | None = None,
     budget_plan_limit: int = 3,
 ) -> dict[str, Any]:
@@ -406,6 +477,23 @@ def build_rotation_focus(
                 }
             )
     append_unique(selected, _select_allowed_plan_keys(changed_candidates, allowed, limit=budget_plan_limit))
+
+    feedback_candidates = list(feedback.get("preferred_plan_keys") or []) if isinstance(feedback, dict) else []
+    feedback_keys = _select_allowed_plan_keys(
+        [str(key) for key in feedback_candidates],
+        allowed,
+        limit=max(budget_plan_limit - len(selected), 0),
+        existing=selected,
+    )
+    append_unique(selected, feedback_keys)
+    if feedback_keys:
+        reasons.append(
+            {
+                "reason": "previous_discovery_feedback",
+                "plan_keys": feedback_keys,
+                "signals": list(feedback.get("signals") or [])[:6],
+            }
+        )
 
     if len(selected) < budget_plan_limit:
         rotation_keys = _select_allowed_plan_keys(
@@ -435,7 +523,10 @@ def build_rotation_focus(
         if baseline_keys:
             reasons.append({"reason": "baseline_safety_net", "plan_keys": baseline_keys})
 
-    focus_modules = list(dict.fromkeys([*changed_modules, *[str(item) for item in focus["focus_modules"]]]))
+    feedback_modules = list(feedback.get("focus_modules") or []) if isinstance(feedback, dict) else []
+    focus_modules = list(
+        dict.fromkeys([*changed_modules, *[str(item) for item in feedback_modules], *[str(item) for item in focus["focus_modules"]]])
+    )
     if module and module != "validation" and module not in focus_modules:
         focus_modules.insert(0, module)
     no_candidate_reason = (
@@ -449,8 +540,10 @@ def build_rotation_focus(
         "focus_label": focus["focus_label"],
         "focus_modules": focus_modules[:8],
         "changed_modules": changed_modules,
+        "feedback_focus_modules": feedback_modules,
         "selected_plan_keys": selected,
         "selection_reasons": reasons,
+        "feedback": feedback or {},
         "budget_plan_limit": budget_plan_limit,
         "readonly_only": True,
         "changed_module_priority_applied": bool(changed_modules),
@@ -509,6 +602,7 @@ def build_discovery_input_pack(
     allowed_plan_keys: list[str] | None = None,
     codegraph_freshness_json: Path | None = None,
     code_intelligence_json: Path | None = None,
+    previous_candidate_manifest: Path | None = None,
     run_date: str | date | datetime | None = None,
     budget_plan_limit: int = 3,
     root: Path = ROOT,
@@ -524,10 +618,12 @@ def build_discovery_input_pack(
     run = str(run_id or os.environ.get("GITHUB_RUN_ID") or "local")
     artifact_root = Path("tmp") / "validation" / "nightly_discovery" / run
     allowed_keys = allowed_plan_keys or ["l0", "validation_module_registry_l0"]
+    feedback = build_previous_discovery_feedback(previous_candidate_manifest)
     rotation = build_rotation_focus(
         changed_files=changed,
         allowed_plan_keys=allowed_keys,
         module=module or "validation",
+        feedback=feedback,
         run_date=run_date,
         budget_plan_limit=budget_plan_limit,
     )
@@ -556,6 +652,7 @@ def build_discovery_input_pack(
         "understand_anything_refs": {},
         "allowed_plan_keys": allowed_keys,
         "rotation": rotation,
+        "previous_discovery_feedback": feedback,
         "discovery_statistics": statistics,
         "readonly_runtime_targets": [],
         "stop_conditions": [
@@ -590,6 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allowed-plan-key", action="append", default=None)
     parser.add_argument("--codegraph-freshness-json")
     parser.add_argument("--code-intelligence-json")
+    parser.add_argument("--previous-candidate-manifest")
     parser.add_argument("--run-date", help="UTC date for weekly discovery rotation; defaults to today.")
     parser.add_argument("--budget-plan-limit", type=int, default=3)
     parser.add_argument("--root")
@@ -611,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         allowed_plan_keys=list(args.allowed_plan_key or []) or None,
         codegraph_freshness_json=Path(args.codegraph_freshness_json) if args.codegraph_freshness_json else None,
         code_intelligence_json=Path(args.code_intelligence_json) if args.code_intelligence_json else None,
+        previous_candidate_manifest=Path(args.previous_candidate_manifest) if args.previous_candidate_manifest else None,
         run_date=args.run_date,
         budget_plan_limit=args.budget_plan_limit,
         root=root,

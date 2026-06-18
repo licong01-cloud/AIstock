@@ -374,6 +374,7 @@ jobs:
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
             --allowed-plan-key validation_semantic_drift_discovery_readonly `
+            --previous-candidate-manifest "tmp/validation/nightly_failure_issue/candidate_history/latest/manifest.json" `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
@@ -572,6 +573,7 @@ jobs:
             --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
             --allowed-plan-key validation_center_discovery_run_record_integrity `
             --allowed-plan-key validation_semantic_drift_discovery_readonly `
+            --previous-candidate-manifest "tmp/validation/nightly_failure_issue/candidate_history/latest/manifest.json" `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
