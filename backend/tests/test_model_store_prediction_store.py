@@ -104,6 +104,34 @@ def test_payload_extractor_attaches_prediction_store_manifest() -> None:
     assert artifact["metadata"]["row_count"] == 10
     assert extracted.reproducibility_manifest.artifact_manifest_sha256 is not None
 
+
+def test_prediction_artifact_store_accepts_label_manifest(tmp_path: Path) -> None:
+    label = pd.DataFrame(
+        {"label": [0.1, -0.2]},
+        index=pd.MultiIndex.from_product(
+            [[pd.Timestamp("2026-01-02")], ["000001.SZ", "000002.SZ"]],
+            names=["datetime", "instrument"],
+        ),
+    )
+    label_bytes = io.BytesIO()
+    label.to_pickle(label_bytes)
+    label_bytes.seek(0)
+
+    store = PredictionArtifactStore(root=tmp_path / "prediction_store")
+    manifest = store.write_artifacts(
+        run_key="qear_run_label",
+        files={"label": ("label.pkl", label_bytes)},
+        metadata={"experiment_id": "exp_label"},
+    )
+
+    items = {item["artifact_type"]: item for item in manifest["artifacts"]}
+    assert set(items) == {"label"}
+    assert items["label"]["artifact_name"] == "label.pkl"
+    assert items["label"]["row_count"] == 2
+    assert items["label"]["parser_status"] == "parsed"
+    assert store.resolve_artifact_path(manifest["mlflow_artifact_uri"], artifact_type="label").exists()
+
+
 def test_prediction_store_client_requires_pred_when_upload_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts import qe_prediction_store_client as client
 
@@ -175,3 +203,39 @@ def test_label_download_missing_is_explicit_404(tmp_path: Path, monkeypatch: pyt
     assert "label" in str(excinfo.value.detail)
     with pytest.raises(PredictionStoreNotFound):
         service.label_path(run_id="run_without_label")
+
+
+def test_prediction_store_client_rejects_manifest_missing_uploaded_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import qe_prediction_store_client as client
+
+    label_path = tmp_path / "label.pkl"
+    label_path.write_bytes(b"label")
+
+    class Response:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "data": {
+                    "manifest": {
+                        "artifacts": [
+                            {"artifact_type": "prediction"},
+                        ],
+                    },
+                },
+            }
+
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://backend.local:8001")
+    monkeypatch.setattr(client.requests, "post", lambda *args, **kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="manifest missing artifact types"):
+        client._post_artifacts(  # noqa: SLF001 - validate runner helper contract.
+            run_key="run_missing_label",
+            artifacts={"prediction": label_path, "label": label_path},
+            metadata={},
+        )

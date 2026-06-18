@@ -262,6 +262,14 @@ def _post_artifacts(*, run_key: str, artifacts: dict[str, Path], metadata: dict[
     manifest = (data_obj or {}).get("manifest") if isinstance(data_obj, dict) else None
     if not isinstance(manifest, dict):
         raise RuntimeError(f"upload endpoint response missing data.manifest: {payload!r}")
+    returned_types = {
+        str(item.get("artifact_type") or "")
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict)
+    }
+    missing_types = sorted(set(artifacts) - returned_types)
+    if missing_types:
+        raise RuntimeError(f"upload endpoint manifest missing artifact types: {missing_types}")
     return manifest
 
 

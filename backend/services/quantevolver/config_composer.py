@@ -10,11 +10,12 @@ QuantEvolver Phase 2: ConfigComposer（配置组装器）
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
-import hashlib
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,7 @@ from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
 )
+from .callback_urls import build_aistock_callback_base_url
 from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
@@ -329,7 +331,7 @@ class ConfigComposer:
                 cur.execute(
                     "SELECT workspace_base, factor_data_dir, qlib_data_path, "
                     "       qlib_minute_path, qlib_rdagent_root, factor_cache_dir, "
-                    "       api_base_url, ssh_user "
+                    "       api_base_url, ssh_user, callback_url "
                     "FROM infra.compute_nodes WHERE node_id = %s",
                     (node_id,),
                 )
@@ -363,7 +365,40 @@ class ConfigComposer:
             "qlib_minute_path": row[3],
             "qlib_rdagent_root": row[4],
             "factor_cache_dir": factor_cache_dir,
+            "callback_url": row[8],
         }
+
+    def _prediction_store_base_url(
+        self,
+        *,
+        node_id: Optional[str] = None,
+        node_callback_url: Optional[str] = None,
+        full_callback_url: Optional[str] = None,
+    ) -> Optional[str]:
+        explicit_base = (os.getenv("AISTOCK_PREDICTION_STORE_BASE_URL") or "").strip()
+        if explicit_base:
+            return build_aistock_callback_base_url(
+                full_callback_url=explicit_base,
+                node_id=node_id,
+            )
+
+        remote_node = bool(node_id and node_id != "wsl2-5080")
+        callback_base_configured = any(
+            (os.getenv(name) or "").strip()
+            for name in (
+                "AISTOCK_QE_CALLBACK_BASE_URL",
+                "AISTOCK_BACKEND_CALLBACK_BASE_URL",
+                "AISTOCK_BACKEND_BASE_URL",
+            )
+        )
+        if full_callback_url or node_callback_url or remote_node or callback_base_configured:
+            return build_aistock_callback_base_url(
+                full_callback_url=full_callback_url,
+                node_id=node_id,
+                node_callback_url=node_callback_url,
+                require_env_base=remote_node and not (full_callback_url or node_callback_url),
+            )
+        return None
 
     def _generate_unique_experiment_id(self) -> str:
         """生成基于日期时间的唯一实验ID，格式: qe_YYYYMMDD_HHMMSS"""
@@ -1415,12 +1450,14 @@ class ConfigComposer:
 
         # 生成WSL命令（直接使用 qe_workspace WSL路径）
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
+        prediction_store_base_url = self._prediction_store_base_url()
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            prediction_store_base_url=prediction_store_base_url,
         )
 
         # 保存实验记录到数据库
@@ -1470,6 +1507,9 @@ class ConfigComposer:
         execution_algo_params: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        task_id: Optional[str] = None,
+        loop_index: Optional[int] = None,
         train_only: bool = False,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
@@ -1568,6 +1608,14 @@ class ConfigComposer:
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
         qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
+        prediction_store_base_url = self._prediction_store_base_url(
+            node_id=node_id,
+            node_callback_url=rdagent_cfg.get("callback_url"),
+            full_callback_url=callback_url,
+        )
+        prediction_store_run_key = (
+            f"{task_id}_L{loop_index}" if task_id and loop_index is not None else None
+        )
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
@@ -1742,6 +1790,11 @@ class ConfigComposer:
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
         )
         wsl_command = self._generate_wsl_command(
             wsl_path,
@@ -1753,6 +1806,11 @@ class ConfigComposer:
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2407,12 +2465,14 @@ class ConfigComposer:
 
         # 生成WSL命令
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
+        prediction_store_base_url = self._prediction_store_base_url()
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            prediction_store_base_url=prediction_store_base_url,
         )
 
         # 更新数据库中的WSL命令和状态
@@ -4304,6 +4364,11 @@ class ConfigComposer:
         train_only: bool = False,
         factor_cache_dir: Optional[str] = None,
         seed_ensemble_enabled: bool = False,
+        node_id: Optional[str] = None,
+        prediction_store_base_url: Optional[str] = None,
+        prediction_store_run_key: Optional[str] = None,
+        task_id: Optional[str] = None,
+        loop_index: Optional[int] = None,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -4327,6 +4392,24 @@ class ConfigComposer:
             env_lines.append("export num_features=20")
         elif has_custom_factors:
             env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
+
+        if node_id:
+            quoted_node = shlex.quote(str(node_id))
+            env_lines.append(f"export AISTOCK_NODE_ID={quoted_node}")
+            env_lines.append(f"export QE_NODE_ID={quoted_node}")
+        if prediction_store_base_url:
+            env_lines.append(
+                f"export AISTOCK_PREDICTION_STORE_BASE_URL={shlex.quote(prediction_store_base_url)}"
+            )
+        if prediction_store_run_key:
+            env_lines.append(f"export AISTOCK_PREDICTION_STORE_RUN_KEY={shlex.quote(prediction_store_run_key)}")
+            env_lines.append(f"export QE_ARCHIVE_RUN_ID={shlex.quote(prediction_store_run_key)}")
+        if task_id:
+            env_lines.append(f"export QE_TASK_ID={shlex.quote(str(task_id))}")
+        if loop_index is not None:
+            loop_index_text = str(int(loop_index))
+            env_lines.append(f"export QE_LOOP_INDEX={loop_index_text}")
+            env_lines.append(f"export QE_LOOP_ID=Loop{loop_index_text}")
 
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
@@ -4379,7 +4462,12 @@ class ConfigComposer:
                               backtest_freq: str = "1min",
                               train_only: bool = False,
                               factor_cache_dir: Optional[str] = None,
-                              seed_ensemble_enabled: bool = False) -> str:
+                              seed_ensemble_enabled: bool = False,
+                              node_id: Optional[str] = None,
+                              prediction_store_base_url: Optional[str] = None,
+                              prediction_store_run_key: Optional[str] = None,
+                              task_id: Optional[str] = None,
+                              loop_index: Optional[int] = None) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -4397,6 +4485,11 @@ class ConfigComposer:
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
             seed_ensemble_enabled=seed_ensemble_enabled,
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
         )
         env_block = "\n".join(env_lines)
 
@@ -4465,6 +4558,9 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 cd {wsl_path}
 conda activate rdagent-gpu
+
+# 设置环境变量
+{env_block}
 
 {_link_data_manual}
 
