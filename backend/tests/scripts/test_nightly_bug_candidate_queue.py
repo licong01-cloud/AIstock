@@ -117,7 +117,8 @@ def test_high_confidence_fixture_generates_complete_github_issue_payload(tmp_pat
     assert "## Reproduce" in issue_payload["body"]
     assert "aistock-nightly-bug-candidate" in issue_payload["body"]
     assert "promote-nightly-candidate" in issue_payload["body"]
-    assert "--opt-in-auto-file --create-registry-worktree --apply" in issue_payload["body"]
+    assert "--issue-payload <this-payload-json> --create-registry-worktree --apply" in issue_payload["body"]
+    assert "--opt-in-auto-file" not in issue_payload["body"]
     assert issue_payload["production_gates"]["production_ddl_gate"] == "noop"
 
 

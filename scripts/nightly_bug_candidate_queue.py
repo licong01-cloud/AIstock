@@ -239,9 +239,17 @@ def normalize_candidate(
         "failure_kind": str(anomaly.get("type") or "nightly_discovery_anomaly"),
         "title": str(anomaly.get("title") or "Nightly discovery anomaly")[:240],
         "summary": details.get("summary") or str(anomaly.get("title") or "Nightly discovery anomaly"),
+        "llm_hypothesis": details.get("llm_hypothesis")
+        or details.get("hypothesis")
+        or anomaly.get("hypothesis")
+        or anomaly.get("why_now"),
         "expected": details.get("expected")
         or f"{plan_key} should not report {anomaly.get('type') or 'anomaly'} candidates for a healthy workspace.",
         "actual": details.get("actual") or str(anomaly.get("title") or "Anomaly was detected."),
+        "verification_result": details.get("verification_result")
+        or details.get("validation_result")
+        or details.get("probe_result")
+        or anomaly.get("verification_result"),
         "reproduce": reproduce,
         "evidence_refs": evidence_refs,
         "codegraph_refs": codegraph_refs,
@@ -254,6 +262,10 @@ def normalize_candidate(
         "created_at": utc_now(),
         "status": "draft",
         "next_command": "review_candidate_then_submit_bug",
+        "active_discovery_reason": details.get("active_discovery_reason")
+        or details.get("why_detected")
+        or anomaly.get("reason")
+        or anomaly.get("type"),
         "source_anomaly": {
             "schema_version": anomaly.get("schema_version") or "aistock_nightly_discovery_anomaly_v1",
             "type": anomaly.get("type"),
@@ -390,7 +402,7 @@ def render_issue_body(candidate: dict[str, Any]) -> str:
         (
             "Review this draft, then promote it with "
             "`python scripts/aistock_issue_workflow.py promote-nightly-candidate "
-            "--issue-payload <this-payload-json> --opt-in-auto-file --create-registry-worktree --apply` "
+            "--issue-payload <this-payload-json> --create-registry-worktree --apply` "
             "before any fix work."
         ),
     ]

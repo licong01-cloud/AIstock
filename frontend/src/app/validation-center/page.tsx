@@ -237,12 +237,16 @@ function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssu
                 </td>
                 <td>
                   <strong>{display(item.summary || item.source_type)}</strong><br />
+                  <span className="pv2-muted">Hypothesis: {display(item.llm_hypothesis || item.active_discovery_reason)}</span><br />
+                  <span className="pv2-muted">Verification: {display(item.verification_result || item.quality_gate_state)}</span><br />
                   <span className="pv2-muted">Expected: {display(item.expected)}</span><br />
                   <span className="pv2-muted">Actual: {display(item.actual)}</span><br />
                   <details className="pv2-readable-item"><summary>Reproduce / evidence</summary><BadgeList items={item.reproduce} empty="No reproduce command" /><BadgeList items={(item.evidence_refs || []).slice(0, 4)} empty="No compact evidence refs" /></details>
                 </td>
                 <td>
                   {item.github_issue_url ? <a href={item.github_issue_url}>{display(item.github_issue_number || item.github_issue_url)}</a> : <span className="pv2-muted">{display(item.why_not_submitted || "not promoted yet")}</span>}<br />
+                  <span className="pv2-muted">mode {display(item.promotion_mode || "review_required")}</span><br />
+                  <span className="pv2-muted">LLM text opt-in {display(item.llm_enhancement_opt_in)}</span><br />
                   <BadgeList items={item.no_submit_reasons} empty="No blocking reason" />
                 </td>
                 <td>

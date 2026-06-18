@@ -292,8 +292,10 @@ def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: P
         "status": "draft",
         "confidence": 0.91,
         "summary": "Nightly found a root pollution candidate.",
+        "llm_hypothesis": "DeepSeek suggested the root clean guard after graph freshness changed.",
         "expected": "Nightly should keep the root checkout clean.",
         "actual": "A generated file appeared under the root checkout.",
+        "verification_result": "workflow_discovery_root_clean_guard reproduced the dirty path.",
         "reproduce": ["python -m nox -s nightly_root_clean_guard"],
         "fingerprint": "nc-abc123",
         "dedupe_fingerprint": "nc-abc123",
@@ -303,6 +305,9 @@ def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: P
         "codegraph_refs": ["tmp/validation/code-intelligence/codegraph-freshness.json"],
         "ua_refs": ["tmp/validation/code-intelligence/ua-summary-manifest.json"],
         "github_issue_payload_ref": "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-abc123.json",
+        "promotion_mode": "deterministic_quality_gate",
+        "llm_enhancement_opt_in": False,
+        "active_discovery_reason": "root cleanliness regression",
         "quality_gate": {
             "workflow_gate": "ready",
             "issue_payload_ready": True,
@@ -341,6 +346,11 @@ def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: P
     assert item["ua_refs"] == ["tmp/validation/code-intelligence/ua-summary-manifest.json"]
     assert item["expected"] == "Nightly should keep the root checkout clean."
     assert item["actual"] == "A generated file appeared under the root checkout."
+    assert item["llm_hypothesis"] == "DeepSeek suggested the root clean guard after graph freshness changed."
+    assert item["verification_result"] == "workflow_discovery_root_clean_guard reproduced the dirty path."
+    assert item["promotion_mode"] == "deterministic_quality_gate"
+    assert item["llm_enhancement_opt_in"] is False
+    assert item["active_discovery_reason"] == "root cleanliness regression"
     assert len(item["source_paths"]) == 2
 
 
