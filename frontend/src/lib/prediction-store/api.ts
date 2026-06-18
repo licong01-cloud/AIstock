@@ -104,6 +104,8 @@ export type ParamsPreview = {
   pointer?: PredictionStorePointer;
 };
 
+export type LabelPreview = ParamsPreview;
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -161,7 +163,13 @@ export const predictionStoreApi = {
     );
     return response.data;
   },
-  downloadUrl(runId: string, artifactType: "prediction" | "model_params"): string {
+  async label(runId: string): Promise<LabelPreview> {
+    const response = await apiFetch<{ status: string; data: LabelPreview }>(
+      `/prediction-store/label/${encodeURIComponent(runId)}`,
+    );
+    return response.data;
+  },
+  downloadUrl(runId: string, artifactType: "prediction" | "model_params" | "label"): string {
     return `${API_BASE}/prediction-store/artifacts/${encodeURIComponent(runId)}/${artifactType}`;
   },
 };

@@ -44,6 +44,7 @@ TOOL_NAMES = (
     "qe_archive_query_evolution_lineage",
     "prediction_store_get_pointer",
     "prediction_store_pull_pred",
+    "prediction_store_pull_label",
     "model_store_health",
 )
 TOOL_COUNT = len(TOOL_NAMES)
@@ -387,6 +388,11 @@ def register(registry: "ModuleRegistry") -> None:
         safe_run_id = registry.sanitize(run_id, "run_id")
         bounded_head = max(0, min(int(head), 1000))
         return prediction_store_client.get(f"/pred/{safe_run_id}", params={"head": bounded_head})
+
+    @registry.mcp.tool(name="prediction_store_pull_label")
+    def prediction_store_pull_label(run_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return prediction_store_client.get(f"/label/{safe_run_id}")
 
     @registry.mcp.tool(name="model_store_health")
     def model_store_health() -> Any:
