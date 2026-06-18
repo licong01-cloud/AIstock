@@ -30,8 +30,8 @@
   "expected": "Official full factor compute must complete all enabled factors in WSL without process-level HDF5/PyTables segfaults; factor result output should be captured safely while preserving original factor code semantics.",
   "first_seen_at": "2026-06-18T20:19:48.707189Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "91f045436ad02220029d37631e164cd2b5eec9d0",
+  "fixed_at": "2026-06-18T20:44:13.973476Z",
   "github_issue_number": 1280,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1280",
   "last_seen_at": "2026-06-18T20:19:48.707189Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1281",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -59,6 +60,16 @@
     "fingerprint": "f5ec77215672527061612004",
     "source_event_id": "FE-20260619-f5ec77215672"
   },
+  "validation_evidence": [
+    "PR #1281 CI -> 20 passed, 0 failed, 0 pending; non-blocking docs/workflow/LLM prompt checks recorded",
+    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q -p no:cacheprovider -> 6 passed",
+    "C:/Users/lc999/miniconda3/Scripts/ruff.exe check backend/services/quantevolver/offline_code_text_factor_executor.py backend/tests/quantevolver/test_official_factor_batch_compute.py -> passed",
+    "git diff --check -> passed",
+    "WSL smoke debug_tools/qe/20260619_factor_cache_full_chain_validation/run_bug421_smoke.sh -> gate_status=passed success_count=4 failed=0 no HDF5 warning/segfault",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed; full UI service check skipped because no validation 8011/3011 services were running"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
