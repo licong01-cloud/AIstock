@@ -313,6 +313,9 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "nightly-discovery-hypothesis" in workflow
     assert "llm-hypotheses.json" in workflow
     assert "selected-plans.json" in workflow
+    assert "Build Nightly BugCandidate draft queue" in workflow
+    assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
+    assert "bug-candidates" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
