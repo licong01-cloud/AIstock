@@ -7,9 +7,12 @@ export interface LoopLike {
   action_type?: string;
   config_json?: AnyRecord | null;
   metrics_json?: AnyRecord | null;
+  metrics_summary?: AnyRecord | null;
+  sota_metric_summary?: AnyRecord | null;
   agent_analysis?: AnyRecord | string | null;
   is_sota?: boolean;
   status?: string;
+  [key: string]: any;
 }
 
 export interface LoopModelDiagnostics {
@@ -282,10 +285,36 @@ function pickCommentText(loop: LoopLike): LoopComment {
 
 export function extractLoopDiagnostics(loop: LoopLike, overrideEnhanced?: AnyRecord | null): LoopDiagnostics {
   const cfg = asRecord(loop.config_json) || {};
-  const metrics = asRecord(loop.metrics_json) || {};
+  const loopTopLevelMetrics: AnyRecord = {
+    cagr: loop.cagr,
+    annualized_return: loop.annualized_return,
+    annual_return: loop.annual_return,
+    max_drawdown: loop.max_drawdown,
+    calmar: loop.calmar,
+    ic: loop.ic,
+    IC: loop.IC,
+    rank_ic: loop.rank_ic,
+    Rank_IC: loop.Rank_IC,
+    icir: loop.icir,
+    information_ratio: loop.information_ratio,
+    sharpe: loop.sharpe,
+  };
+  const baseSummary = asRecord(loop.metrics_summary);
+  const sotaPrimary = asRecord(asRecord(loop.sota_metric_summary)?.primary);
+  const loopBaseMetrics = mergeRecords(
+    loopTopLevelMetrics,
+    baseSummary,
+    asRecord(loop.sota_metric_summary),
+    sotaPrimary,
+  );
+  const metrics = mergeRecords(
+    loopBaseMetrics,
+    asRecord(loop.metrics_json),
+  );
   const enhanced = getEnhancedMetrics(loop, overrideEnhanced);
 
   const absoluteReturns = mergeRecords(
+    loopBaseMetrics,
     asRecord(enhanced.summary),
     asRecord(metrics.summary),
     asRecord(enhanced.absolute_returns),
