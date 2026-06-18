@@ -886,6 +886,12 @@ def _compact_discovery_input_pack(
         if isinstance(source.get("understand_anything_refs"), dict)
         else {}
     )
+    rotation = source.get("rotation") if isinstance(source.get("rotation"), dict) else {}
+    statistics = (
+        source.get("discovery_statistics")
+        if isinstance(source.get("discovery_statistics"), dict)
+        else {}
+    )
     return {
         "schema_version": source.get("schema_version"),
         "run_id": source.get("run_id"),
@@ -901,6 +907,32 @@ def _compact_discovery_input_pack(
         "understand_anything_refs": understand_refs,
         "code_intelligence_refs": refs,
         "allowed_plan_keys": plan_keys[:12],
+        "rotation": {
+            "schema_version": rotation.get("schema_version"),
+            "run_date": rotation.get("run_date"),
+            "weekday": rotation.get("weekday"),
+            "focus_key": rotation.get("focus_key"),
+            "focus_label": rotation.get("focus_label"),
+            "focus_modules": list(rotation.get("focus_modules") or [])[:8],
+            "changed_modules": list(rotation.get("changed_modules") or [])[:8],
+            "selected_plan_keys": list(rotation.get("selected_plan_keys") or [])[:6],
+            "selection_reasons": list(rotation.get("selection_reasons") or [])[:6],
+            "budget_plan_limit": rotation.get("budget_plan_limit"),
+            "readonly_only": rotation.get("readonly_only", True),
+            "no_candidate_reason": rotation.get("no_candidate_reason"),
+        } if rotation else {},
+        "discovery_statistics": {
+            "schema_version": statistics.get("schema_version"),
+            "candidate_count": statistics.get("candidate_count", 0),
+            "issue_payload_ready_count": statistics.get("issue_payload_ready_count", 0),
+            "draft_count": statistics.get("draft_count", 0),
+            "deduped_count": statistics.get("deduped_count", 0),
+            "duplicate_rate": statistics.get("duplicate_rate", 0.0),
+            "confirmed_real_bug_rate": statistics.get("confirmed_real_bug_rate"),
+            "noise_rate": statistics.get("noise_rate"),
+            "planned_plan_count": statistics.get("planned_plan_count"),
+            "no_candidate_reason": statistics.get("no_candidate_reason"),
+        } if statistics else {},
         "stop_conditions": [
             str(item)
             for item in source.get("stop_conditions") or [
@@ -964,6 +996,23 @@ def _discovery_deterministic_hypotheses(
     changed_files = [str(path).replace("\\", "/").lower() for path in compact_pack.get("changed_files") or []]
     stop_conditions = list(compact_pack.get("stop_conditions") or [])
     allowed = set(allowed_plan_keys)
+    rotation = compact_pack.get("rotation") if isinstance(compact_pack.get("rotation"), dict) else {}
+    rotation_keys = [
+        str(key)
+        for key in rotation.get("selected_plan_keys") or []
+        if str(key).strip() in allowed
+    ]
+    if rotation_keys:
+        _append_unique_hypothesis(
+            hypotheses,
+            module=str((rotation.get("focus_modules") or [compact_pack.get("module") or "validation"])[0]),
+            risk="P2",
+            why_now=f"weekly rotation focus: {rotation.get('focus_label') or rotation.get('focus_key')}",
+            expected_failure_modes=["rotated readonly discovery anomaly", "low-signal regression missed by fixed baseline"],
+            recommended_plan_keys=rotation_keys[:3],
+            evidence_to_collect=["discovery rotation summary", "selected readonly plan manifest"],
+            stop_conditions=stop_conditions,
+        )
 
     def first_allowed(candidates: list[str], fallback: str = "l0") -> list[str]:
         for key in candidates:
@@ -2001,6 +2050,8 @@ def build_nightly_discovery_hypotheses(
             "warning": "codegraph_freshness_not_fresh" if codegraph_warning else None,
         },
         "code_intelligence_refs": compact_pack.get("code_intelligence_refs") or {},
+        "rotation": compact_pack.get("rotation") or {},
+        "discovery_statistics": compact_pack.get("discovery_statistics") or {},
         "hypotheses": hypotheses,
         "selected_plan_keys": selected_plan_keys,
         "selected_plans": selected_plan_gates,
@@ -2015,6 +2066,7 @@ def build_nightly_discovery_hypotheses(
             "schema_valid": True,
             "warning_only": True,
             "selected_plan_count": len(selected_plan_keys),
+            "rotation_focus_key": (compact_pack.get("rotation") or {}).get("focus_key"),
             "rejected_plan_count": len(rejected_plan_keys),
             "workspace_path_allowed": workspace["allowed"],
             "allowlist_enforced": True,
@@ -2605,6 +2657,8 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             "changed_files": payload.get("changed_files") or [],
             "codegraph": payload.get("codegraph") or {},
             "code_intelligence_refs": payload.get("code_intelligence_refs") or {},
+            "rotation": payload.get("rotation") or {},
+            "discovery_statistics": payload.get("discovery_statistics") or {},
             "hypotheses": payload.get("hypotheses") or [],
             "selected_plan_keys": payload.get("selected_plan_keys") or [],
             "selected_plans": payload.get("selected_plans") or [],
@@ -2837,6 +2891,8 @@ def cmd_nightly_discovery_hypothesis(args: argparse.Namespace) -> int:
                 "llm_invocation_evidence": advice["llm_invocation_evidence"],
                 "run_id": advice.get("run_id"),
                 "warning_only": True,
+                "rotation": advice.get("rotation") or {},
+                "discovery_statistics": advice.get("discovery_statistics") or {},
                 "selected_plan_keys": advice.get("selected_plan_keys") or [],
                 "selected_plans": advice.get("selected_plans") or [],
                 "rejected_plan_keys": advice.get("rejected_plan_keys") or [],

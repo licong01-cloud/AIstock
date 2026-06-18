@@ -82,7 +82,13 @@ def test_run_selected_executes_only_discovery_plans(tmp_path: Path, monkeypatch)
                 "selected_plan_keys": [
                     "validation_catalog_integrity",
                     "workflow_discovery_root_clean_guard",
-                ]
+                ],
+                "rotation": {
+                    "focus_key": "workflow_validation",
+                    "selected_plan_keys": ["workflow_discovery_root_clean_guard"],
+                    "no_candidate_reason": "readonly_rotation_found_no_anomaly_yet",
+                },
+                "discovery_statistics": {"planned_plan_count": 1},
             }
         ),
         encoding="utf-8",
@@ -94,6 +100,10 @@ def test_run_selected_executes_only_discovery_plans(tmp_path: Path, monkeypatch)
     assert manifest["executed_plan_keys"] == ["workflow_discovery_root_clean_guard"]
     assert manifest["skipped_plan_keys"] == ["validation_catalog_integrity"]
     assert manifest["summary"]["executed_count"] == 1
+    assert manifest["rotation"]["focus_key"] == "workflow_validation"
+    assert manifest["summary"]["candidate_count"] == 0
+    assert manifest["summary"]["no_candidate_reason"] == "readonly_rotation_found_no_anomaly_yet"
+    assert manifest["discovery_statistics"]["executed_plan_count"] == 1
     assert (tmp_path / "out" / "workflow_discovery_root_clean_guard.json").exists()
 
 
