@@ -7,6 +7,7 @@
     "frontend/src/app/quantevolver/components/FactorList.tsx",
     "backend/tests/quantevolver",
     "backend/tests/test_factor_cache_wsl_env.py",
+    "backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py",
     "tests/aistock_validation/bugs/20260618_BUG-410-meta.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -33,7 +34,7 @@
   ],
   "expected": "factor-cache stats/cache inventory 接口必须在大规模官方缓存下快速返回轻量统计，默认不得同步扫描重型 parquet 或计算 DB hash；官方缓存状态必须同时暴露 disk/meta/merged_panel/orphan_or_missing_meta 口径，并能基于已有单因子 parquet 识别 575/575 缓存，不触发全量因子独立指标重算，不回退到 factor_values_realtime。",
   "first_seen_at": "2026-06-18T05:50:56.564315Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-410-meta-20260618",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 1231,
@@ -87,7 +88,8 @@
       "backend/services/quantevolver/factor_cache_remote_sync_service.py",
       "frontend/src/app/quantevolver/components/FactorList.tsx",
       "backend/tests/quantevolver",
-      "backend/tests/test_factor_cache_wsl_env.py"
+      "backend/tests/test_factor_cache_wsl_env.py",
+      "backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py"
     ],
     "ui_issue": true,
     "ui_route": "/api/v1/quantevolver/factor-cache/stats",
@@ -96,6 +98,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m py_compile backend/routers/quantevolver.py backend/services/quantevolver/factor_value_pipeline.py backend/services/quantevolver/factor_cache_remote_sync_service.py -> passed",
+    "python -m ruff check backend/routers/quantevolver.py backend/services/quantevolver/factor_value_pipeline.py backend/services/quantevolver/factor_cache_remote_sync_service.py backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_legacy_factor_paths_removed.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -q -> 47 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_backend 14 passed",
+    "targeted frontend ESLint for FactorList.tsx with NODE_PATH to canonical frontend node_modules -> passed",
+    "DESIGN-COMPLIANCE-001: default stats path is lightweight disk/meta inventory; disk parquet is source of truth for cached counts; meta gaps are reconcile_required not no_cache; UI exposes disk/meta/merged-panel details; remote stats separates disk_cached/effective_cached; no full compute/realtime cache path was invoked -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

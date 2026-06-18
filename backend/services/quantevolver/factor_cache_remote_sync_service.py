@@ -367,6 +367,16 @@ class FactorCacheRemoteSyncService:
             return []
         return sorted(str(name) for name in factors)
 
+    def _local_disk_factor_stats(self) -> Dict[str, int]:
+        if not self.local_single_dir.is_dir():
+            return {}
+        stats: Dict[str, int] = {}
+        for path in self.local_single_dir.glob("*.parquet"):
+            if path.name.startswith("_"):
+                continue
+            stats[path.stem] = path.stat().st_size
+        return stats
+
     def _local_factor_entries(self, factor_names: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
         wanted = {str(name) for name in factor_names or [] if str(name or "").strip()}
         factors = self.load_local_meta().get("factors") or {}
@@ -503,10 +513,11 @@ class FactorCacheRemoteSyncService:
         }
 
     def get_stats(self, node_id: Optional[str] = None, include_factor_status: bool = True) -> Dict[str, Any]:
+        local_disk_stats = self._local_disk_factor_stats()
         local_entries = self._local_factor_entries()
-        local_disk_names = set(local_entries)
+        local_disk_names = set(local_disk_stats)
         local_meta_names = set(self._local_meta_factor_names())
-        local_size = sum(int(entry.get("_size_bytes") or 0) for entry in local_entries.values())
+        local_size = sum(local_disk_stats.values())
         local_meta_count = len(local_meta_names)
         local_orphan_count = len(local_disk_names - local_meta_names)
         local_orphan_meta_count = len(local_meta_names - local_disk_names)
@@ -515,6 +526,7 @@ class FactorCacheRemoteSyncService:
             for entry in local_entries.values()
             if str(entry.get("_metadata_status") or "ok") != "ok"
         )
+        local_effective_count = len(local_entries)
         nodes = self.list_remote_nodes()
         selected_node_id = node_id or (nodes[0].node_id if nodes else None)
         remote_nodes: List[Dict[str, Any]] = []
@@ -572,7 +584,8 @@ class FactorCacheRemoteSyncService:
                         "missing": missing,
                         "stale": stale,
                         "metadata_pending": metadata_pending,
-                        "local_disk_factor_count": len(local_entries),
+                        "local_disk_factor_count": len(local_disk_names),
+                        "local_effective_factor_count": local_effective_count,
                         "local_meta_factor_count": local_meta_count,
                         "local_orphan_parquet_count": local_orphan_count,
                         "local_orphan_meta_count": local_orphan_meta_count,
@@ -586,10 +599,11 @@ class FactorCacheRemoteSyncService:
                         "error": str(exc),
                         "remote_cached": 0,
                         "synced": 0,
-                        "missing": len(local_entries),
+                        "missing": local_effective_count,
                         "stale": 0,
                         "metadata_pending": local_metadata_pending,
-                        "local_disk_factor_count": len(local_entries),
+                        "local_disk_factor_count": len(local_disk_names),
+                        "local_effective_factor_count": local_effective_count,
                         "local_meta_factor_count": local_meta_count,
                         "local_orphan_parquet_count": local_orphan_count,
                         "local_orphan_meta_count": local_orphan_meta_count,
@@ -602,8 +616,9 @@ class FactorCacheRemoteSyncService:
             "ok": True,
             "local": {
                 "cache_root": str(self.local_cache_root),
-                "cached": len(local_entries),
-                "disk_cached": len(local_entries),
+                "cached": local_effective_count,
+                "disk_cached": len(local_disk_names),
+                "effective_cached": local_effective_count,
                 "meta_cached": local_meta_count,
                 "orphan_parquet_count": local_orphan_count,
                 "orphan_meta_count": local_orphan_meta_count,
