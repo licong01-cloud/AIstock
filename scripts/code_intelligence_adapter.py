@@ -1248,6 +1248,7 @@ def build_llm_value_summary(
     code_summary = _read_json_object(artifact_dir / "code-intelligence-summary.json")
     adaptive = _read_json_object(artifact_dir / "llm-nightly-adaptive-scheduler.json")
     scheduler = _read_json_object(artifact_dir / "llm-nightly-scheduler-advice.json")
+    hypotheses = _read_json_object(artifact_dir / "llm-hypotheses.json")
     prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
     rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
     ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
@@ -1256,6 +1257,11 @@ def build_llm_value_summary(
     )
     scheduler_evidence = (
         scheduler.get("llm_invocation_evidence") if isinstance(scheduler.get("llm_invocation_evidence"), dict) else {}
+    )
+    hypothesis_evidence = (
+        hypotheses.get("llm_invocation_evidence")
+        if isinstance(hypotheses.get("llm_invocation_evidence"), dict)
+        else {}
     )
     queue = adaptive.get("queue_summary") if isinstance(adaptive.get("queue_summary"), dict) else {}
     consumption = adaptive.get("advice_consumption") if isinstance(adaptive.get("advice_consumption"), dict) else {}
@@ -1270,22 +1276,30 @@ def build_llm_value_summary(
         or adaptive.get("provider")
         or scheduler.get("effective_provider")
         or scheduler.get("provider")
+        or hypotheses.get("effective_provider")
+        or hypotheses.get("provider")
         or adaptive_evidence.get("provider")
         or scheduler_evidence.get("provider")
+        or hypothesis_evidence.get("provider")
     )
     model = (
         adaptive.get("effective_model")
         or adaptive.get("model")
         or scheduler.get("effective_model")
         or scheduler.get("model")
+        or hypotheses.get("effective_model")
+        or hypotheses.get("model")
         or adaptive_evidence.get("model")
         or scheduler_evidence.get("model")
+        or hypothesis_evidence.get("model")
     )
     warnings: list[str] = []
     if not codegraph:
         warnings.append("CodeGraph freshness artifact is missing.")
     if not adaptive and not scheduler:
         warnings.append("LLM scheduler advice artifact is missing.")
+    if not hypotheses:
+        warnings.append("LLM discovery hypothesis artifact is missing.")
     if not prompt_eval:
         warnings.append("LLM prompt evaluation artifact is missing.")
     if not rollout:
@@ -1299,6 +1313,8 @@ def build_llm_value_summary(
         "adaptive_scheduler_json": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.json", root),
         "adaptive_scheduler_md": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.md", root),
         "scheduler_advice_json": _artifact_ref(artifact_dir / "llm-nightly-scheduler-advice.json", root),
+        "discovery_hypotheses_json": _artifact_ref(artifact_dir / "llm-hypotheses.json", root),
+        "selected_plans_json": _artifact_ref(artifact_dir / "selected-plans.json", root),
         "test_plan_advice_json": _artifact_ref(artifact_dir / "llm-test-plan-advice.json", root),
         "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
         "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
@@ -1330,15 +1346,36 @@ def build_llm_value_summary(
         "llm": {
             "provider": provider,
             "model": model,
-            "llm_invoked": bool(adaptive.get("llm_invoked") or scheduler.get("llm_invoked") or adaptive_evidence.get("invoked") or scheduler_evidence.get("invoked")),
-            "fallback_used": bool(adaptive_evidence.get("fallback_used") or scheduler_evidence.get("fallback_used")),
-            "advice_consumed": bool(consumption.get("advice_consumed") or adaptive.get("advice_consumed")),
-            "allowed_plan_keys": queue.get("allowed_plan_keys") or adaptive.get("allowed_plan_keys") or [],
+            "llm_invoked": bool(
+                adaptive.get("llm_invoked")
+                or scheduler.get("llm_invoked")
+                or hypotheses.get("llm_invoked")
+                or adaptive_evidence.get("invoked")
+                or scheduler_evidence.get("invoked")
+                or hypothesis_evidence.get("invoked")
+            ),
+            "fallback_used": bool(
+                adaptive_evidence.get("fallback_used")
+                or scheduler_evidence.get("fallback_used")
+                or hypothesis_evidence.get("fallback_used")
+            ),
+            "advice_consumed": bool(
+                consumption.get("advice_consumed")
+                or adaptive.get("advice_consumed")
+                or hypotheses.get("selected_plan_keys")
+            ),
+            "allowed_plan_keys": queue.get("allowed_plan_keys")
+            or adaptive.get("allowed_plan_keys")
+            or hypotheses.get("selected_plan_keys")
+            or [],
             "issue_creation": ((adaptive.get("issue_creation_policy") or {}) if isinstance(adaptive.get("issue_creation_policy"), dict) else {}).get("mode")
             or adaptive.get("issue_creation")
             or rollout.get("mode"),
             "adaptive_scheduler": _artifact_summary(adaptive),
             "scheduler_advice": _artifact_summary(scheduler),
+            "discovery_hypotheses": _artifact_summary(hypotheses),
+            "discovery_hypothesis_count": len(hypotheses.get("hypotheses") or []) if isinstance(hypotheses.get("hypotheses"), list) else 0,
+            "selected_plan_count": len(hypotheses.get("selected_plan_keys") or []) if isinstance(hypotheses.get("selected_plan_keys"), list) else 0,
         },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
@@ -1373,6 +1410,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
     codegraph_ref = refs.get("codegraph_freshness_md") or refs.get("codegraph_freshness_json") or "missing"
     code_summary_ref = refs.get("code_intelligence_summary_md") or refs.get("code_intelligence_summary_json") or "missing"
     adaptive_ref = refs.get("adaptive_scheduler_md") or refs.get("adaptive_scheduler_json") or "missing"
+    hypotheses_ref = refs.get("discovery_hypotheses_json") or "missing"
     lines = [
         "## LLM + Code Intelligence Value",
         "",
@@ -1384,6 +1422,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
         f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
         f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
+        f"- discovery_hypotheses: `hypotheses={llm.get('discovery_hypothesis_count') or 0}, selected_plans={llm.get('selected_plan_count') or 0}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
@@ -1394,6 +1433,8 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- codegraph_freshness: `{codegraph_ref}`",
         f"- code_intelligence_summary: `{code_summary_ref}`",
         f"- adaptive_scheduler: `{adaptive_ref}`",
+        f"- discovery_hypotheses: `{hypotheses_ref}`",
+        f"- selected_plans: `{refs.get('selected_plans_json') or 'missing'}`",
         f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
         f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
         "",
