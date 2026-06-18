@@ -1,7 +1,8 @@
 # 统一存储 + 信号层 + 策略包统一模型 架构蓝图(独立框架)
 
 > 文档类型:设计蓝图。日期 2026-06-18。作者:strategy session。
-> **Rev 3(2026-06-19):新增 §5.8 命名规范 + §5.9 组合模型与数据库设计(实体表+关系表,消除自引用嵌套隐患)。**
+> **Rev 4(2026-06-19):schema 精简定稿——单包阶段 0 新表(仅加列),多 Alpha 阶段补唯一 1 张 `strategy_package_components`;新增 §5.9.1 表数量/实施补表 + §5.10 文件↔DB 完整性对账;DB 结构化为唯一权威,manifest 降派生。**
+> Rev 3(2026-06-19):新增 §5.8 命名规范 + §5.9 组合模型与数据库设计(实体表+关系表,消除自引用嵌套隐患)。
 > Rev 2(2026-06-19):统一为单一一级概念「策略包」(`alpha_mode` 区分 单/组合);取消独立的"腿/Alpha 组件库"实体。
 > Rev 1(2026-06-18):§11 六项决策确认。
 > 状态:**独立蓝图,框架与决策已确认**;待与既有方案(P1-P6 / P2 / P3 / eval)整合为分期实施步骤(§10「待整合」,本文不做整合、不含代码改动)。
@@ -147,8 +148,20 @@
 - **`strategy_package_components`(组合边表,新增)**:`parent_package_id`(FK→组合)、`child_package_id`(FK→单包)、**钉死的 `child_manifest_sha256`**、`component_weight`、`score_normalization`、`position`;唯一约束 `(parent_package_id, position)`。
 - **硬约束**:① 子包必须 `alpha_mode=single`(CHECK/触发器)→ **禁止组合套组合,深度=1、天然无环**;② FK 完整性;③ **退役守卫**(单包被未退役组合引用时禁止/告警退役)。
 - **冻结(固化)**:多 Alpha 包创建即冻结——pin 每子包 `(package_id+manifest_sha256+权重+归一)` + `alpha_combination_policy` + 组合回测证据 → 算父 `manifest_sha256` → frozen 状态;**子包后续变化不影响已冻结组合**(钉 sha);采用新版本=新建组合版本。
-- **真相源分工**:manifest JSON 存**冻结快照**(内容);**关系表是关系索引/完整性层**,与 manifest 同步,支持"谁引用了此单包"反查与退役守卫。
+- **真相源分工(DB 权威)**:**DB 结构化(strategy_packages 列 + 组合边表)= 唯一权威**;manifest 文件 = 从 DB 渲染的**冻结派生快照**(仅复现/传输/审计,`manifest_sha256` 入库),**不可独立编辑、不作权威**。
 - **区分**:单包 = 实体表中无组合边的行;组合 = 实体表一行 + 关系表 N 条边(+ `alpha_mode`/命名/asset_checks 分支)。
+
+### 5.9.1 表数量(精简)与实施补表节奏
+- **大多数是"列",不是"表"**:文件资产 = `uri+sha256` 成对列(model/pred/manifest…);包级指标 = JSONB 列 + 少数热字段(cagr/mdd/sharpe/topk_return_20/cagr_cv)提升为索引列;正交 = P3-A **按需计算,不持久化建表**;历史 = **版本行**(冻结不可变,re-vintage=新版本行),**不建 metrics 历史表**。
+- **表数量**:现在(单包阶段)**0 新表**——仅在 `strategy_packages` 加列(alpha_mode/signal_domain/display_name/legacy_name/data_vintage/各 uri+sha/champion 指针)。
+- **实施补表**:**多 Alpha 实现阶段补建唯一 1 张关系表 `strategy_package_components`**(M:N 组合,FK+深度1+退役守卫)。**该表与多 Alpha 组合引擎(P3-B)同期交付,开发完成即可立即开始:多 Alpha 组合回测 → 组合包 → 模拟盘/荐股 验证。**
+
+### 5.10 文件↔DB 完整性与对账(DB 权威,fail-loud)
+- **内容寻址 + sha 列**:每个文件 artifact 在包行存 `uri+sha256`。
+- **用前校验(verify-on-use)**:回测/paper/荐股加载任何 artifact 前比对文件 sha == DB sha,**不符硬失败、阻断使用**(禁静默)。
+- **原子/outbox 写**:先写内容寻址 artifact 再单事务写 DB(记 sha);崩溃留可检测 marker。
+- **对账 job**:周期校验 artifact 存在+sha 匹配、组合边==预期、无悬挂 → 不符**隔离+告警**。
+- **资格门升级**:现有 `asset_eligibility`/asset_checks 扩入"文件↔DB sha 一致 + 组合一致";**不过门的包禁入 paper/荐股/被组合**。出现不对应 → 置 FAIL → 自动隔离 → 从 DB 权威重渲 manifest / 恢复 artifact / 标废,全程不静默。
 
 ---
 
