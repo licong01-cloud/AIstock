@@ -333,6 +333,7 @@ def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> 
     assert len(blocks) == 2
     assert workflow.count("scripts/nightly_discovery_input_pack.py") == 2
     assert workflow.count("--allowed-plan-key validation_catalog_integrity") >= 2
+    assert workflow.count("--allowed-plan-key workflow_discovery_root_clean_guard") >= 2
     assert "git diff --name-only HEAD~1 HEAD" not in workflow
     for block in blocks:
         assert "--base-ref HEAD~1" in block

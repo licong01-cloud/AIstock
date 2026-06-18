@@ -360,6 +360,10 @@ jobs:
             --allowed-plan-key validation_catalog_integrity `
             --allowed-plan-key validation_center_backend `
             --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
@@ -454,6 +458,10 @@ jobs:
             --allowed-plan-key validation_catalog_integrity `
             --allowed-plan-key validation_center_backend `
             --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
             --output "$outDir/llm-hypotheses.json" `
             --selected-plans-output "$outDir/selected-plans.json"
           if ($LASTEXITCODE -ne 0) {
@@ -469,9 +477,26 @@ jobs:
               --allowed-plan-key validation_catalog_integrity `
               --allowed-plan-key validation_center_backend `
               --allowed-plan-key validation_workflow_automation `
+              --allowed-plan-key validation_discovery_issue_intake_readonly `
+              --allowed-plan-key workflow_discovery_root_clean_guard `
+              --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+              --allowed-plan-key validation_center_discovery_run_record_integrity `
               --output "$outDir/llm-hypotheses.json" `
               --selected-plans-output "$outDir/selected-plans.json"
           }
+
+      - name: Run selected readonly discovery plans
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/discovery-plans" | Out-Null
+          conda run -n AIstock python scripts/nightly_discovery_plans.py --json run-selected `
+            --selected-plans "$outDir/selected-plans.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --default-plan-key validation_discovery_issue_intake_readonly `
+            --default-plan-key workflow_discovery_root_clean_guard `
+            --default-plan-key code_intelligence_discovery_affected_tests_quality `
+            --default-plan-key validation_center_discovery_run_record_integrity `
+            --output-dir "$outDir/discovery-plans"
 
       - name: Build Nightly adaptive scheduler warning report
         run: |
@@ -486,6 +511,10 @@ jobs:
             --allowed-plan-key validation_catalog_integrity `
             --allowed-plan-key validation_center_backend `
             --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
