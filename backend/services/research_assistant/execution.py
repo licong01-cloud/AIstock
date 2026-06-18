@@ -1518,12 +1518,14 @@ class ResearchAssistantExecutionMixin:
         try:
             daily = service.get_preset_daily_status()
         except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            reason_code = "data_source_unavailable" if any(term in message.lower() for term in ("connection", "refused", "timeout", "unavailable", "offline")) else "tool_execution_error"
             return {
                 "status": "failed",
                 "result_json": {},
                 "result_cards": [{"title": f"{server_key}/{tool_name}", "summary": f"local-data read failed: {exc}"}],
                 "artifact_refs": [],
-                "error_json": {"code": "local_data_daily_status_read_failed", "human_reason": str(exc), "retryable": True},
+                "error_json": {"code": reason_code, "reason_code": reason_code, "human_reason": message, "exception_type": type(exc).__name__, "retryable": True},
                 "retry_count": 0,
                 "transport": "local_data_facade_read_adapter",
             }

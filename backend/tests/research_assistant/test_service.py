@@ -36,6 +36,7 @@ from backend.services.research_assistant.service import (
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
 )
+from backend.services.research_assistant.react_grounding import McpToolCall
 
 
 class DialogueAwareFakeLlmClient:
@@ -474,6 +475,11 @@ class FakeLocalDataDailyStatusService:
                 ]
             },
         }
+
+
+class FailingLocalDataDailyStatusService(FakeLocalDataDailyStatusService):
+    def get_preset_daily_status(self) -> dict[str, object]:
+        raise ConnectionError("local data facade offline: 127.0.0.1:8001 refused")
 
 
 def test_catalog_readiness_blocks_chat_until_seeded() -> None:
@@ -1695,6 +1701,173 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
     assert react["iterations"] >= 2
     assert react["evidence_guard"]["reason"] == "ok"
     assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
+
+
+def test_bug_404_uncovered_manifest_tool_reports_capability_not_found_without_crashing() -> None:
+    class UncoveredToolLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return LlmCallResult(
+                    content="",
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                    tool_calls=[
+                        McpToolCall(
+                            server_key="aistock-local-data",
+                            tool_name="local_data_get_unack_alert_count",
+                            payload_json={},
+                            stable_call_id="call_uncovered_local_data",
+                        )
+                    ],
+                )
+            return LlmCallResult(
+                content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = UncoveredToolLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="昨天的本地数据同步任务是否运行正常？",
+            dialogue_mode_override="analysis",
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "reason_code=capability_not_found" in text
+    assert "aistock-local-data/local_data_get_unack_alert_count" in text
+    assert "approved capability not found for tool" in text
+    assert "Insufficient evidence" not in text
+    assert result["cards"]["mcp_execution_result"]["status"] == "failed"
+    assert result["cards"]["mcp_execution_result"]["error"]["reason_code"] == "capability_not_found"
+    assert result["cards"]["react_grounding"]["tool_errors"][0]["reason_code"] == "capability_not_found"
+    assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
+
+
+def test_bug_404_data_source_unavailable_is_explicit_not_insufficient() -> None:
+    class LocalDataUnavailableLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
+            return LlmCallResult(
+                content="Fallback text that must not hide tool failures.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(LocalDataUnavailableLlmClient())
+    svc.local_data_service_factory = FailingLocalDataDailyStatusService
+
+    result = svc.chat_turn(
+        ChatTurnRequest(
+            message="检查当前本地数据同步任务运行情况，今天数据哪些完成了同步",
+            dialogue_mode_override="analysis",
+        )
+    )
+
+    text = result["assistant_message"]["content_text"]
+    assert "reason_code=data_source_unavailable" in text
+    assert "local data facade offline: 127.0.0.1:8001 refused" in text
+    assert "aistock-local-data/local_data_get_preset_daily_status" in text
+    assert "Insufficient evidence" not in text
+    assert result["cards"]["mcp_execution_result"]["error"]["reason_code"] == "data_source_unavailable"
+    assert result["cards"]["react_grounding"]["tool_errors"][0]["reason_code"] == "data_source_unavailable"
+    assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
+
+
+def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> None:
+    class ClarificationThenAnswerLlmClient(FakeLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.plan_calls: list[dict[str, object]] = []
+
+        def complete_tool_plan(self, **kwargs: object) -> LlmCallResult:
+            self.plan_calls.append(kwargs)
+            plan = (
+                {
+                    "status": "clarification",
+                    "domain": "stock_analysis",
+                    "confidence": 0.82,
+                    "reason": "Need to confirm the analysis dimension.",
+                    "clarification_questions": ["请确认要基本面、走势、资金面还是全方位分析？"],
+                }
+                if len(self.plan_calls) == 1
+                else {
+                    "status": "no_tool",
+                    "domain": "stock_analysis",
+                    "confidence": 0.7,
+                    "reason": "User clarified that a comprehensive answer is needed.",
+                }
+            )
+            return LlmCallResult(
+                content=json.dumps(plan, ensure_ascii=False),
+                provider="fake",
+                model="fake-semantic-planner",
+                duration_ms=1,
+                usage={},
+            )
+
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="已收到全方位分析要求；当前测试环境未接入实时行情，因此先给出可继续取证的明确答复。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = ClarificationThenAnswerLlmClient()
+    svc = _chat_service(fake)
+
+    first = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本情况近期走势未来趋势怎样"))
+    follow_up = svc.chat_turn(
+        ChatTurnRequest(
+            message="给我全方位的分析",
+            conversation_id=first["conversation"]["conversation_id"],
+        )
+    )
+
+    assert first["assistant_message"]["content_text"].strip()
+    assert follow_up["assistant_message"]["content_text"].strip()
+    assert "全方位分析要求" in follow_up["assistant_message"]["content_text"]
+
+
+def test_bug_404_unexpected_chat_turn_error_returns_explicit_message() -> None:
+    class ExplodingLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            raise RuntimeError("model gateway exploded")
+
+    svc = _chat_service(ExplodingLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="请分析这个问题", dialogue_mode_override="analysis"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "reason_code=chat_turn_unexpected_error" in text
+    assert "RuntimeError" in text
+    assert "model gateway exploded" in text
+    assert text.strip()
+    assert result["cards"]["error_card"]["reason_code"] == "chat_turn_unexpected_error"
+    assert result["cards"]["mcp_execution_result"]["error"]["reason_code"] == "chat_turn_unexpected_error"
 
 
 def test_bug_403_same_qe_tool_result_keeps_model_question_specific_answers() -> None:

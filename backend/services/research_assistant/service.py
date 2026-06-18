@@ -319,127 +319,156 @@ class _ServiceReactMcpProvider:
                 payload[key] = value
 
     def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
-        route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        payload = dict(call.payload_json)
-        payload.setdefault("request", self.user_message)
-        payload.setdefault("route", route)
-        payload.setdefault("mcp_route_decision", route)
-        payload["server_key"] = call.server_key
-        payload["tool_name"] = call.tool_name
-        call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
-        payload["selected_tool"] = {
-            "server_key": call.server_key,
-            "tool_name": call.tool_name,
-            "domain": route.get("domain") or call_domain,
-        }
-        self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
-        payload.setdefault("limit", self.service._mcp_route_limit(route))
-        capability_key = self.service._capability_key_for_tool(call, route)
-        proposal = self.service.create_action_proposal(
-            ActionProposalCreate(
-                task_id=self.task["task_id"],
-                conversation_id=self.conversation_id,
-                capability_key=capability_key,
-                proposal_type="mcp_tool",
-                title=f"Summary-first MCP read: {call.server_key}/{call.tool_name}",
-                summary=f"Auto-execute low-risk read-only MCP summary for route {call.server_key}/{call.tool_name}.",
-                input_json=payload,
-                expected_result_json={"summary_first": True, "server_key": call.server_key, "tool_name": call.tool_name},
-                context_pack_id=self.context_pack.get("context_pack_id"),
-                idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_read": call.server_key, "tool_name": call.tool_name, "payload": payload}),
-                created_by="research_assistant_react_grounding",
+        try:
+            route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+            payload = dict(call.payload_json)
+            payload.setdefault("request", self.user_message)
+            payload.setdefault("route", route)
+            payload.setdefault("mcp_route_decision", route)
+            payload["server_key"] = call.server_key
+            payload["tool_name"] = call.tool_name
+            call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
+            payload["selected_tool"] = {
+                "server_key": call.server_key,
+                "tool_name": call.tool_name,
+                "domain": route.get("domain") or call_domain,
+            }
+            self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
+            payload.setdefault("limit", self.service._mcp_route_limit(route))
+            capability_key = self.service._capability_key_for_tool(call, route)
+            proposal = self.service.create_action_proposal(
+                ActionProposalCreate(
+                    task_id=self.task["task_id"],
+                    conversation_id=self.conversation_id,
+                    capability_key=capability_key,
+                    proposal_type="mcp_tool",
+                    title=f"Summary-first MCP read: {call.server_key}/{call.tool_name}",
+                    summary=f"Auto-execute low-risk read-only MCP summary for route {call.server_key}/{call.tool_name}.",
+                    input_json=payload,
+                    expected_result_json={"summary_first": True, "server_key": call.server_key, "tool_name": call.tool_name},
+                    context_pack_id=self.context_pack.get("context_pack_id"),
+                    idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_read": call.server_key, "tool_name": call.tool_name, "payload": payload}),
+                    created_by="research_assistant_react_grounding",
+                )
             )
-        )
-        preflight = self.service.preflight_action_proposal(
-            proposal["action_proposal_id"],
-            ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
-        )
-        if preflight["proposal"]["status"] != "preflight_passed":
+            preflight = self.service.preflight_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+            if preflight["proposal"]["status"] != "preflight_passed":
+                result = McpToolResult(
+                    server_key=call.server_key,
+                    tool_name=call.tool_name,
+                    status="preflight_blocked",
+                    summary="read-only preflight did not pass",
+                    source_refs=["preflight"],
+                    as_of=utc_now().date().isoformat(),
+                    action_proposal_id=proposal["action_proposal_id"],
+                    preflight=preflight["preflight"],
+                    executed=False,
+                    blocked_reason="preflight_blocked",
+                )
+                self.cards["mcp_execution_result"] = {
+                    "auto_executed": False,
+                    "status": "preflight_blocked",
+                    "route": f"{call.server_key}/{call.tool_name}",
+                    "server_key": call.server_key,
+                    "tool_name": call.tool_name,
+                    "action_proposal_id": proposal["action_proposal_id"],
+                    "preflight": preflight["preflight"],
+                    "summary_first": True,
+                }
+                return result
+            executed = self.service.execute_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+            tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+            summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
             result = McpToolResult(
                 server_key=call.server_key,
                 tool_name=call.tool_name,
-                status="preflight_blocked",
-                summary="read-only preflight did not pass",
-                source_refs=["preflight"],
-                as_of=utc_now().date().isoformat(),
+                status=str(executed.get("status") or "unknown"),
+                payload_json=summary_result,
+                source_refs=self.service._mcp_result_source_refs(summary_result, tool_event),
+                as_of=self.service._mcp_result_as_of(summary_result),
+                artifact_refs=list(summary_result.get("artifact_refs") or tool_event.get("artifact_refs") or []),
+                summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
+                tool_event_id=tool_event.get("tool_event_id"),
                 action_proposal_id=proposal["action_proposal_id"],
                 preflight=preflight["preflight"],
-                executed=False,
-                blocked_reason="preflight_blocked",
+                executed=bool(executed.get("executed")),
+                error_json=dict(executed.get("error") or {}),
             )
-            self.cards["mcp_execution_result"] = {
-                "auto_executed": False,
-                "status": "preflight_blocked",
-                "route": f"{call.server_key}/{call.tool_name}",
-                "server_key": call.server_key,
-                "tool_name": call.tool_name,
-                "action_proposal_id": proposal["action_proposal_id"],
-                "preflight": preflight["preflight"],
-                "summary_first": True,
-            }
+            if result.status == "failed" and result.error_json:
+                result.error_json = self.service._normalize_tool_error_payload(
+                    call,
+                    result.error_json,
+                    stage="tool_execution",
+                )
+                result.blocked_reason = str(result.error_json.get("reason_code") or result.error_json.get("code") or "tool_execution_error")
+                result.summary = self.service._render_tool_error_reply(result.error_json)
+            self.service._populate_cards_from_tool_execution(self.cards, proposal, executed, result)
             return result
-        executed = self.service.execute_action_proposal(
-            proposal["action_proposal_id"],
-            ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
-        )
-        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
-        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
-        result = McpToolResult(
-            server_key=call.server_key,
-            tool_name=call.tool_name,
-            status=str(executed.get("status") or "unknown"),
-            payload_json=summary_result,
-            source_refs=self.service._mcp_result_source_refs(summary_result, tool_event),
-            as_of=self.service._mcp_result_as_of(summary_result),
-            artifact_refs=list(summary_result.get("artifact_refs") or tool_event.get("artifact_refs") or []),
-            summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
-            tool_event_id=tool_event.get("tool_event_id"),
-            action_proposal_id=proposal["action_proposal_id"],
-            preflight=preflight["preflight"],
-            executed=bool(executed.get("executed")),
-            error_json=dict(executed.get("error") or {}),
-        )
-        self.service._populate_cards_from_tool_execution(self.cards, proposal, executed, result)
-        return result
+        except Exception as exc:  # noqa: BLE001 - explicit tool error must be returned to the chat turn.
+            return self.service._mcp_tool_failure_result(call, exc, stage="tool_dispatch", cards=self.cards, task_id=self.task["task_id"])
 
     def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
-        route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
-        payload = dict(call.payload_json)
-        payload.setdefault("request", self.user_message)
-        payload.setdefault("route", route)
-        payload.setdefault("mcp_route_decision", route)
-        payload["server_key"] = call.server_key
-        payload["tool_name"] = call.tool_name
-        call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
-        payload["selected_tool"] = {
-            "server_key": call.server_key,
-            "tool_name": call.tool_name,
-            "domain": route.get("domain") or call_domain,
-        }
-        self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
-        capability_key = self.service._capability_key_for_tool(call, route)
-        proposal = self.service.create_action_proposal(
-            ActionProposalCreate(
-                task_id=self.task["task_id"],
-                conversation_id=self.conversation_id,
-                capability_key=capability_key,
-                proposal_type="mcp_tool",
-                title=f"Preflight MCP action: {call.server_key}/{call.tool_name}",
-                summary=f"Generate preflight and confirmation card for {call.server_key}/{call.tool_name}; ReAct will not execute write/high-risk tools.",
-                input_json=payload,
-                expected_result_json={"preflight_only": True, "server_key": call.server_key, "tool_name": call.tool_name},
-                context_pack_id=self.context_pack.get("context_pack_id"),
-                idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_preflight": call.server_key, "tool_name": call.tool_name, "payload": payload}),
-                created_by="research_assistant_react_grounding",
+        try:
+            route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+            payload = dict(call.payload_json)
+            payload.setdefault("request", self.user_message)
+            payload.setdefault("route", route)
+            payload.setdefault("mcp_route_decision", route)
+            payload["server_key"] = call.server_key
+            payload["tool_name"] = call.tool_name
+            call_domain = self.service._domain_for_mcp_tool(call.tool_name) or ""
+            payload["selected_tool"] = {
+                "server_key": call.server_key,
+                "tool_name": call.tool_name,
+                "domain": route.get("domain") or call_domain,
+            }
+            self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
+            capability_key = self.service._capability_key_for_tool(call, route)
+            proposal = self.service.create_action_proposal(
+                ActionProposalCreate(
+                    task_id=self.task["task_id"],
+                    conversation_id=self.conversation_id,
+                    capability_key=capability_key,
+                    proposal_type="mcp_tool",
+                    title=f"Preflight MCP action: {call.server_key}/{call.tool_name}",
+                    summary=f"Generate preflight and confirmation card for {call.server_key}/{call.tool_name}; ReAct will not execute write/high-risk tools.",
+                    input_json=payload,
+                    expected_result_json={"preflight_only": True, "server_key": call.server_key, "tool_name": call.tool_name},
+                    context_pack_id=self.context_pack.get("context_pack_id"),
+                    idempotency_key=sha256_json({"task_id": self.task["task_id"], "react_mcp_preflight": call.server_key, "tool_name": call.tool_name, "payload": payload}),
+                    created_by="research_assistant_react_grounding",
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 - capability/preflight setup errors are user-visible tool errors.
+            return self.service._mcp_tool_failure_result(call, exc, stage="preflight_setup", cards=self.cards, task_id=self.task["task_id"])
         try:
             preflight = self.service.preflight_action_proposal(
                 proposal["action_proposal_id"],
                 ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
             )
         except Exception as exc:
-            preflight = {"proposal": proposal, "preflight": {"passed": False, "approval_required": True, "failed_checks": [{"check": "preflight", "detail": str(exc)}]}}
+            error_payload = self.service._tool_error_payload(call, exc, stage="preflight")
+            logger.exception(
+                "research assistant MCP preflight failed: reason_code=%s tool=%s/%s",
+                error_payload["reason_code"],
+                call.server_key,
+                call.tool_name,
+            )
+            preflight = {
+                "proposal": proposal,
+                "preflight": {
+                    "passed": False,
+                    "approval_required": True,
+                    "failed_checks": [{"check": "preflight", "detail": error_payload["message"], "reason_code": error_payload["reason_code"]}],
+                    "error": error_payload,
+                },
+            }
         proposal_state = preflight.get("proposal") if isinstance(preflight.get("proposal"), dict) else proposal
         preflight_payload = preflight.get("preflight") if isinstance(preflight.get("preflight"), dict) else {}
         status = str(proposal_state.get("status") or "preflight_required")
@@ -483,6 +512,7 @@ class _ServiceReactMcpProvider:
             preflight=preflight_payload,
             executed=False,
             blocked_reason="preflight_confirmation_required",
+            error_json=dict(preflight_payload.get("error") or {}),
         )
 
 
@@ -1216,6 +1246,15 @@ class ResearchAssistantLlmClient:
 
 
 class ResearchAssistantService(ResearchAssistantExecutionMixin):
+    PROGRAM_ERROR_REASON_CODES = {
+        "capability_not_found",
+        "tool_not_in_audited_catalog",
+        "tool_execution_error",
+        "data_source_unavailable",
+        "tool_result_compaction_error",
+        "chat_turn_unexpected_error",
+    }
+
     @staticmethod
     def default_workflow_capabilities() -> list[dict[str, Any]]:
         return _default_workflow_capabilities()
@@ -1226,6 +1265,173 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.semantic_tool_planner = SemanticToolPlanner(self.llm_client)
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
+
+    @staticmethod
+    def _exception_reason_code(exc: BaseException, *, server_key: str = "", tool_name: str = "") -> str:
+        message = str(exc)
+        lowered = message.lower()
+        if isinstance(exc, KeyError) and "approved capability not found for tool" in lowered:
+            return "capability_not_found"
+        unavailable_terms = (
+            "connection refused",
+            "refused",
+            "connection reset",
+            "timed out",
+            "timeout",
+            "connection",
+            "unavailable",
+            "offline",
+            "database is locked",
+            "could not connect",
+        )
+        if (server_key == "aistock-local-data" or tool_name.startswith("local_data_")) and any(term in lowered for term in unavailable_terms):
+            return "data_source_unavailable"
+        return "tool_execution_error"
+
+    @classmethod
+    def _tool_error_payload(cls, call: McpToolCall, exc: BaseException, *, stage: str) -> dict[str, Any]:
+        reason_code = cls._exception_reason_code(exc, server_key=call.server_key, tool_name=call.tool_name)
+        return {
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": stage,
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    @classmethod
+    def _normalize_tool_error_payload(
+        cls,
+        call: McpToolCall,
+        error: dict[str, Any],
+        *,
+        stage: str,
+    ) -> dict[str, Any]:
+        raw_code = str(error.get("reason_code") or error.get("code") or "")
+        raw_message = str(error.get("human_reason") or error.get("message") or error.get("error_summary") or raw_code)
+        reason_code = raw_code
+        if not reason_code or reason_code in {"execution_failed", "local_data_daily_status_read_failed"}:
+            synthetic = RuntimeError(raw_message)
+            reason_code = cls._exception_reason_code(synthetic, server_key=call.server_key, tool_name=call.tool_name)
+        return {
+            "reason_code": reason_code or "tool_execution_error",
+            "code": reason_code or "tool_execution_error",
+            "stage": stage,
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "exception_type": str(error.get("exception_type") or error.get("error_type") or raw_code or "ToolExecutionError"),
+            "message": raw_message,
+            "retryable": bool(error.get("retryable", False)),
+            "audit_link": error.get("audit_link"),
+            "next_step": error.get("next_step"),
+        }
+
+    @staticmethod
+    def _render_tool_error_reply(error: dict[str, Any]) -> str:
+        route = f"{error.get('server_key')}/{error.get('tool_name')}"
+        return (
+            "工具调用失败："
+            f"reason_code={error.get('reason_code') or error.get('code')}; "
+            f"tool={route}; "
+            f"exception_type={error.get('exception_type') or 'Error'}; "
+            f"error_summary={error.get('message') or error.get('human_reason') or ''}"
+        ).strip()
+
+    @staticmethod
+    def _render_chat_turn_error_reply(error: dict[str, Any]) -> str:
+        return (
+            "对话轮处理失败："
+            f"reason_code={error.get('reason_code') or error.get('code')}; "
+            f"stage={error.get('stage') or 'chat_turn'}; "
+            f"exception_type={error.get('exception_type') or 'Error'}; "
+            f"error_summary={error.get('message') or error.get('human_reason') or ''}"
+        ).strip()
+
+    def _mcp_tool_failure_result(
+        self,
+        call: McpToolCall,
+        exc: BaseException,
+        *,
+        stage: str,
+        cards: dict[str, Any] | None = None,
+        task_id: str | None = None,
+    ) -> McpToolResult:
+        error = self._tool_error_payload(call, exc, stage=stage)
+        logger.exception(
+            "research assistant MCP tool failed: reason_code=%s tool=%s/%s stage=%s",
+            error["reason_code"],
+            call.server_key,
+            call.tool_name,
+            stage,
+        )
+        result = McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="failed",
+            summary=self._render_tool_error_reply(error),
+            error_json=error,
+            executed=False,
+            blocked_reason=str(error["reason_code"]),
+            stable_call_id=call.stable_call_id,
+        )
+        if isinstance(cards, dict):
+            cards["mcp_execution_result"] = {
+                "auto_executed": False,
+                "executed": False,
+                "status": "failed",
+                "route": f"{call.server_key}/{call.tool_name}",
+                "server_key": call.server_key,
+                "tool_name": call.tool_name,
+                "summary_first": True,
+                "error": error,
+            }
+            cards.setdefault("tool_errors", [])
+            if isinstance(cards["tool_errors"], list):
+                cards["tool_errors"].append(error)
+        if task_id:
+            try:
+                self.add_task_event(
+                    task_id,
+                    TaskEventCreate(
+                        event_type="mcp_failed",
+                        severity="error",
+                        message=self._render_tool_error_reply(error),
+                        payload_json={"error": error, "route": f"{call.server_key}/{call.tool_name}"},
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - error-card creation must not re-crash chat/turn.
+                logger.exception("failed to persist MCP tool failure event for %s/%s", call.server_key, call.tool_name)
+        return result
+
+    @classmethod
+    def _tool_error_from_cards(cls, cards: dict[str, Any]) -> dict[str, Any] | None:
+        candidates: list[dict[str, Any]] = []
+        react = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        for item in react.get("tool_errors") or []:
+            if isinstance(item, dict):
+                candidates.append(item)
+        execution = cards.get("mcp_execution_result") if isinstance(cards.get("mcp_execution_result"), dict) else {}
+        if isinstance(execution.get("error"), dict):
+            candidates.append(execution["error"])
+        for item in candidates:
+            reason_code = str(item.get("reason_code") or item.get("code") or "")
+            if reason_code in cls.PROGRAM_ERROR_REASON_CODES:
+                return item
+        return None
+
+    @classmethod
+    def _chat_turn_unexpected_error_payload(cls, exc: BaseException) -> dict[str, Any]:
+        return {
+            "reason_code": "chat_turn_unexpected_error",
+            "code": "chat_turn_unexpected_error",
+            "stage": "chat_turn",
+            "server_key": None,
+            "tool_name": None,
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+        }
 
 
     def run_agent_team(
@@ -2370,6 +2576,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
 
     def chat_turn(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._chat_turn_impl(request)
+        except ResearchAssistantCatalogNotReadyError:
+            raise
+        except RuntimeError as exc:
+            if str(exc).startswith("High-risk Research Assistant task stopped"):
+                raise
+            logger.exception("research assistant chat_turn failed; returning explicit structured error")
+            return self._chat_turn_error_response(request, exc)
+        except Exception as exc:  # noqa: BLE001 - chat/turn must return an explicit error message, not HTTP 4xx/5xx.
+            logger.exception("research assistant chat_turn failed; returning explicit structured error")
+            return self._chat_turn_error_response(request, exc)
+
+    def _chat_turn_impl(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
         self.ensure_catalog_ready()
         conversation = (
@@ -2558,6 +2778,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             function_tools=function_tools,
             function_tool_registry=function_tool_registry,
         )
+        cards["react_grounding"] = self._react_grounding_card(react_result)
         trace = self.create_trace_event(
             TraceEventCreate(
                 task_id=task["task_id"],
@@ -2587,7 +2808,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 cost_json={"usage": llm_result.usage},
             )
         )
-        cards["react_grounding"] = self._react_grounding_card(react_result)
         cards["context_health"] = context_health
         cards["runtime_code"] = self.runtime_code_visibility()
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
@@ -2661,6 +2881,140 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mode_decision": mode_decision_json,
             "context_health": context_health,
             "cards": public_cards,
+        }
+
+    def _chat_turn_error_response(self, request: ChatTurnRequest | dict[str, Any], exc: BaseException) -> dict[str, Any]:
+        data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
+        error = self._chat_turn_unexpected_error_payload(exc)
+        assistant_text = self._render_chat_turn_error_reply(error)
+        cards = {
+            "intent_type": "error",
+            "dialogue_mode": "recovery",
+            "status_rail": [{"label": "error", "status": "failed"}],
+            "safety": {"no_silent_error": True},
+            "error_card": {
+                "title": "Research Assistant chat_turn failed",
+                "summary": assistant_text,
+                "reason_code": error["reason_code"],
+                "error": error,
+            },
+            "mcp_execution_result": {
+                "auto_executed": False,
+                "executed": False,
+                "status": "failed",
+                "error": error,
+            },
+        }
+        conversation: dict[str, Any] | None = None
+        user_message: dict[str, Any] | None = None
+        assistant_message: dict[str, Any] | None = None
+        task: dict[str, Any] | None = None
+        trace: dict[str, Any] | None = None
+        try:
+            conversation = (
+                self.repository.get_record("conversations", data.conversation_id)
+                if data.conversation_id
+                else self.create_conversation(ConversationCreate(title=self._conversation_title(data.message), user_id=data.user_id))
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to create fallback conversation for chat_turn error")
+        try:
+            task = self.create_task(
+                TaskCreate(
+                    title=self._conversation_title(data.message),
+                    task_type="assistant_chat_turn",
+                    risk_level=data.risk_level,
+                    input_json={"user_message": data.message, "error": error},
+                    created_by=data.created_by,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to create fallback task for chat_turn error")
+        if conversation:
+            try:
+                user_message = self.add_conversation_message(
+                    ConversationMessageCreate(
+                        conversation_id=str(conversation["conversation_id"]),
+                        role="user",
+                        content_text=data.message,
+                        task_id=task.get("task_id") if isinstance(task, dict) else None,
+                        content_json={"phase": data.phase, "dialogue_intent": "error", "dialogue_mode": "recovery"},
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to persist fallback user message for chat_turn error")
+            try:
+                assistant_message = self.add_conversation_message(
+                    ConversationMessageCreate(
+                        conversation_id=str(conversation["conversation_id"]),
+                        role="assistant",
+                        content_text=assistant_text,
+                        task_id=task.get("task_id") if isinstance(task, dict) else None,
+                        content_json={"cards": cards, "dialogue_intent": "error", "dialogue_mode": "recovery", "audit_summary": {"error": error}},
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to persist fallback assistant message for chat_turn error")
+        if task:
+            try:
+                trace = self.create_trace_event(
+                    TraceEventCreate(
+                        task_id=task["task_id"],
+                        event_type="llm_failed",
+                        component="research_assistant.chat_turn",
+                        status="failed",
+                        payload_json={"error": error},
+                    )
+                )
+                self.add_task_event(
+                    task["task_id"],
+                    TaskEventCreate(
+                        event_type="llm_failed",
+                        severity="error",
+                        message=assistant_text,
+                        payload_json={"error": error, "trace_id": trace["trace_id"]},
+                    ),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to persist fallback task event for chat_turn error")
+        conversation_id = (conversation or {}).get("conversation_id") or data.conversation_id or "unpersisted_error_conversation"
+        fallback_user = user_message or {
+            "message_id": "unpersisted_user_error",
+            "conversation_id": conversation_id,
+            "role": "user",
+            "content_text": data.message,
+            "task_id": (task or {}).get("task_id"),
+            "content_json": {"phase": data.phase, "dialogue_intent": "error", "dialogue_mode": "recovery"},
+            "is_visible": True,
+        }
+        fallback_assistant = assistant_message or {
+            "message_id": "unpersisted_assistant_error",
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content_text": assistant_text,
+            "task_id": (task or {}).get("task_id"),
+            "content_json": {"audit_summary": {"error": error}},
+            "is_visible": True,
+        }
+        task_events = []
+        if task:
+            try:
+                task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
+            except Exception:  # noqa: BLE001
+                task_events = []
+        return {
+            "conversation": self._public_conversation(conversation) if conversation else {"conversation_id": conversation_id, "user_id": data.user_id, "title": self._conversation_title(data.message), "status": "error"},
+            "user_message": self._public_conversation_message(fallback_user),
+            "assistant_message": self._public_conversation_message(fallback_assistant),
+            "task": self._public_task(task),
+            "task_events": self._public_task_events(task_events),
+            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{(task or {}).get('task_id', 'unpersisted')}/events", "default_limit": self.configured_limit("task_events_detail")},
+            "prompt_bundle": None,
+            "context_pack": None,
+            "trace": {"trace_id": (trace or {}).get("trace_id"), "status": "failed", "duration_ms": None, "model_profile_id": None},
+            "mode_decision": {"mode": "recovery", "intent_type": "error"},
+            "context_health": {"show_badge": False},
+            "cards": self._public_chat_cards(cards),
         }
 
     @staticmethod
@@ -2765,6 +3119,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mcp_tool_event",
             "mcp_execution_result",
             "react_grounding",
+            "tool_errors",
+            "error_card",
         }
         public = {key: value for key, value in cards.items() if key in public_keys}
         if isinstance(public.get("mcp_summary_result"), dict):
@@ -4152,12 +4508,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _react_grounding_card(react_result: Any) -> dict[str, Any]:
+        tool_errors: list[dict[str, Any]] = []
+        for result in react_result.tool_results:
+            error = result.error_json if isinstance(result.error_json, dict) else {}
+            reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
+            if result.status == "failed" and reason_code in ResearchAssistantService.PROGRAM_ERROR_REASON_CODES:
+                item = dict(error)
+                item.setdefault("reason_code", reason_code)
+                item.setdefault("server_key", result.server_key)
+                item.setdefault("tool_name", result.tool_name)
+                item.setdefault("message", result.summary)
+                tool_errors.append(item)
         return {
             "schema_version": "research_assistant_react_grounding_v1",
             "iterations": react_result.iterations,
             "tool_call_count": len(react_result.tool_calls),
             "tool_result_count": len(react_result.tool_results),
             "stopped_reason": react_result.stopped_reason,
+            "tool_errors": tool_errors,
             "evidence_guard": {
                 "allowed": react_result.evidence_guard.allowed,
                 "reason": react_result.evidence_guard.reason,
@@ -4330,6 +4698,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "as_of": result.as_of,
             "response_mode": summary_result.get("response_mode"),
         }
+        if result.error_json:
+            cards["mcp_execution_result"]["error"] = dict(result.error_json)
+            cards.setdefault("tool_errors", [])
+            if isinstance(cards["tool_errors"], list):
+                cards["tool_errors"].append(dict(result.error_json))
         cards["status_rail"] = self._mcp_executed_status_rail()
 
     def _read_only_mcp_auto_execution_eligibility(self, route: dict[str, Any], mode_decision: ModeDecision) -> dict[str, Any]:
@@ -4449,6 +4822,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         text = self._strip_assistant_tool_choice_markup(raw_text)
         react_active = isinstance(cards.get("react_grounding"), dict)
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
+        tool_error = self._tool_error_from_cards(cards)
+        if tool_error:
+            return self._apply_main_reply_policy(self._render_tool_error_reply(tool_error), mode_decision)
         if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             if self._is_business_synthesis_summary(summary):
