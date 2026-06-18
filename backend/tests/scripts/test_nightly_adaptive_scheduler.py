@@ -309,6 +309,10 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "Build compact code intelligence refs for LLM advice" in workflow
     assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
+    assert "Build LLM nightly discovery hypotheses" in workflow
+    assert "nightly-discovery-hypothesis" in workflow
+    assert "llm-hypotheses.json" in workflow
+    assert "selected-plans.json" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
@@ -328,6 +332,7 @@ def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> 
 
     assert len(blocks) == 2
     assert workflow.count("scripts/nightly_discovery_input_pack.py") == 2
+    assert workflow.count("--allowed-plan-key validation_catalog_integrity") >= 2
     assert "git diff --name-only HEAD~1 HEAD" not in workflow
     for block in blocks:
         assert "--base-ref HEAD~1" in block

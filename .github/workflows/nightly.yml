@@ -355,6 +355,11 @@ jobs:
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
@@ -434,6 +439,40 @@ jobs:
               --output "$outDir/llm-nightly-scheduler-advice.json"
           }
 
+      - name: Build LLM nightly discovery hypotheses
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
+            --provider deepseek_api `
+            --invoke-llm `
+            --input-pack "$outDir/discovery-input-pack.json" `
+            --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --output "$outDir/llm-hypotheses.json" `
+            --selected-plans-output "$outDir/selected-plans.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM nightly discovery hypothesis failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
+              --provider deterministic `
+              --input-pack "$outDir/discovery-input-pack.json" `
+              --codegraph-freshness fresh `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+              --allowed-plan-key l0 `
+              --allowed-plan-key validation_module_registry_l0 `
+              --allowed-plan-key validation_catalog_integrity `
+              --allowed-plan-key validation_center_backend `
+              --allowed-plan-key validation_workflow_automation `
+              --output "$outDir/llm-hypotheses.json" `
+              --selected-plans-output "$outDir/selected-plans.json"
+          }
+
       - name: Build Nightly adaptive scheduler warning report
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -442,6 +481,11 @@ jobs:
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
             --output "$outDir/discovery-input-pack.json" `
             --changed-files-output $changedFile
           conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
