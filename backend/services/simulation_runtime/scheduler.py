@@ -47,6 +47,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
@@ -5152,8 +5153,10 @@ class SimulationLifecycleBackgroundScheduler:
         self,
         *,
         lifecycle_scheduler: SimulationLifecycleScheduler | None = None,
+        trading_calendar_service: Any | None = None,
     ) -> None:
         self.lifecycle_scheduler = lifecycle_scheduler or SimulationLifecycleScheduler()
+        self._trading_calendar_service = trading_calendar_service or TradingCalendarStatusService()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -5215,6 +5218,7 @@ class SimulationLifecycleBackgroundScheduler:
             "limit": self._limit,
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
+            "trading_calendar_policy": self._trading_calendar_policy(),
         }
 
     def run_once(self, *, as_of_time: datetime | None = None) -> dict[str, Any]:
@@ -5227,11 +5231,34 @@ class SimulationLifecycleBackgroundScheduler:
             "data_source": self._data_source,
             "data_source_policy": self._data_source_policy(),
             "window": decision["window"],
-            "should_run": decision["should_run"],
-            "submit": decision["submit"],
+            "should_run": False,
+            "submit": False,
+            "reason": None,
+            "trading_calendar": None,
             "processed": [],
             "errors": [],
         }
+        try:
+            calendar_status = self._trading_day_status(trade_date=trade_date)
+        except DataUnavailableError as exc:
+            payload = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "context": getattr(exc, "context", None),
+            }
+            result["reason"] = "trading_calendar_unavailable"
+            result["errors"].append(payload)
+            logger.warning("Simulation runtime scheduler trading calendar gate failed: %s", payload)
+            return self._record_result(started_at=now, result=result)
+        result["trading_calendar"] = calendar_status
+        if not bool(calendar_status.get("is_trading_day")):
+            result["reason"] = "non_trading_day"
+            result["skip_reason"] = "non_trading_day"
+            result["next_trading_day"] = calendar_status.get("next_trading_day")
+            return self._record_result(started_at=now, result=result)
+        result["should_run"] = decision["should_run"]
+        result["submit"] = decision["submit"]
+        result["reason"] = decision["reason"]
         if decision["should_run"]:
             try:
                 if decision["reason"] == "eod_reconcile":
@@ -5279,10 +5306,7 @@ class SimulationLifecycleBackgroundScheduler:
                 }
                 result["errors"].append(payload)
                 logger.warning("Simulation runtime scheduler tick failed: %s", payload)
-        result["completed_at"] = datetime.now().isoformat()
-        self._last_run_at = now
-        self._last_result = result
-        return result
+        return self._record_result(started_at=now, result=result)
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -5302,6 +5326,55 @@ class SimulationLifecycleBackgroundScheduler:
         should_run = action in {"selection_evidence", "execution_plan", "submit", "eod_reconcile"}
         submit = bool(self._default_submit and action == "submit")
         return {"window": active, "should_run": should_run, "submit": submit, "reason": action}
+
+    def _trading_day_status(self, *, trade_date: date) -> dict[str, Any]:
+        service = self._trading_calendar_service
+        status_method = getattr(service, "status", None)
+        if callable(status_method):
+            raw_status = dict(status_method(as_of_date=trade_date))
+            raw_status.setdefault("as_of_date", trade_date.isoformat())
+            raw_status["is_trading_day"] = bool(raw_status.get("is_trading_day"))
+            if not raw_status["is_trading_day"] and not raw_status.get("next_trading_day"):
+                raw_status["next_trading_day"] = self._next_trading_day_iso(trade_date)
+            return {
+                "schema_version": "simulation_runtime_trading_day_gate_v1",
+                "service": type(service).__name__,
+                "policy": "skip_non_trading_day_before_selection_planning_submit",
+                **raw_status,
+            }
+        is_trading_day_method = getattr(service, "is_trading_day", None)
+        if not callable(is_trading_day_method):
+            raise DataUnavailableError(
+                "simulation runtime scheduler trading calendar service lacks status/is_trading_day",
+                context={"trade_date": trade_date.isoformat(), "service": type(service).__name__},
+            )
+        is_trading_day = bool(is_trading_day_method(trade_date))
+        return {
+            "schema_version": "simulation_runtime_trading_day_gate_v1",
+            "service": type(service).__name__,
+            "policy": "skip_non_trading_day_before_selection_planning_submit",
+            "ok": True,
+            "as_of_date": trade_date.isoformat(),
+            "is_trading_day": is_trading_day,
+            "next_trading_day": None if is_trading_day else self._next_trading_day_iso(trade_date),
+        }
+
+    def _next_trading_day_iso(self, trade_date: date) -> str | None:
+        next_method = getattr(self._trading_calendar_service, "next_trading_day", None)
+        if callable(next_method):
+            next_day = next_method(trade_date)
+            return next_day.isoformat() if isinstance(next_day, date) else str(next_day)
+        next_after_method = getattr(self._trading_calendar_service, "next_trading_day_after", None)
+        if callable(next_after_method):
+            next_day = next_after_method(trade_date)
+            return next_day.isoformat() if isinstance(next_day, date) else str(next_day)
+        return None
+
+    def _record_result(self, *, started_at: datetime, result: dict[str, Any]) -> dict[str, Any]:
+        result["completed_at"] = datetime.now().isoformat()
+        self._last_run_at = started_at
+        self._last_result = result
+        return result
 
     @staticmethod
     def _trade_date(now: datetime) -> date:
@@ -5334,6 +5407,14 @@ class SimulationLifecycleBackgroundScheduler:
             "local_sim_same_day": MinuteDataSource.TDX_REALTIME.value,
             "local_sim_historical": "persisted_portfolio_data_source",
             "miniqmt_sim": MinuteDataSource.MINIQMT_REALTIME.value,
+        }
+
+    def _trading_calendar_policy(self) -> dict[str, str]:
+        return {
+            "service": type(self._trading_calendar_service).__name__,
+            "source_of_truth": "TradingCalendarStatusService",
+            "non_trading_day": "skip_no_selection_plan_submit",
+            "calendar_unavailable": "fail_closed_no_submit",
         }
 
     @staticmethod

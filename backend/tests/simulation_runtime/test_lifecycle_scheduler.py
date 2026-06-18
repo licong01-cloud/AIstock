@@ -3079,16 +3079,111 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
         ),
     )
     monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
-    background = SimulationLifecycleBackgroundScheduler(lifecycle_scheduler=lifecycle)
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
 
     result = background.run_once(as_of_time=datetime(2026, 5, 21, 9, 22, tzinfo=UTC))
 
     assert result["should_run"] is True
     assert result["submit"] is False
     assert result["window"]["window_id"] == "planning"
+    assert result["trading_calendar"]["is_trading_day"] is True
     assert result["summary"]["planned_count"] == 2
     assert background.status()["default_submit"] is False
     assert background.status()["last_result"]["summary"]["total_bindings"] == 2
+
+
+def test_background_scheduler_skips_non_trading_day_before_lifecycle_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SpyLifecycleScheduler:
+        def __init__(self) -> None:
+            self.run_once_calls: list[dict[str, Any]] = []
+            self.post_close_calls: list[dict[str, Any]] = []
+
+        def status(self) -> dict[str, Any]:
+            return {"ok": True, "scheduler": "spy_lifecycle_scheduler"}
+
+        def run_once(self, **kwargs):
+            self.run_once_calls.append(kwargs)
+            raise AssertionError("non-trading day must not call lifecycle run_once")
+
+        def post_close_reconcile_once(self, **kwargs):
+            self.post_close_calls.append(kwargs)
+            raise AssertionError("non-trading day must not call post-close reconcile")
+
+    class StatusCalendar:
+        def __init__(self) -> None:
+            self.calls: list[date | None] = []
+
+        def status(self, *, as_of_date: date | None = None) -> dict[str, Any]:
+            self.calls.append(as_of_date)
+            return {
+                "ok": True,
+                "as_of_date": "2026-06-19",
+                "is_trading_day": False,
+                "next_trading_day": "2026-06-22",
+            }
+
+    next_trading_day = date(2026, 6, 22)
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "true")
+    lifecycle = SpyLifecycleScheduler()
+    calendar = StatusCalendar()
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,  # type: ignore[arg-type]
+        trading_calendar_service=calendar,
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 6, 19, 9, 30, tzinfo=UTC))
+
+    assert result["window"]["window_id"] == "execution"
+    assert result["should_run"] is False
+    assert result["submit"] is False
+    assert result["reason"] == "non_trading_day"
+    assert result["skip_reason"] == "non_trading_day"
+    assert result["next_trading_day"] == next_trading_day.isoformat()
+    assert result["trading_calendar"]["is_trading_day"] is False
+    assert calendar.calls == [date(2026, 6, 19)]
+    assert result["processed"] == []
+    assert result["errors"] == []
+    assert lifecycle.run_once_calls == []
+    assert lifecycle.post_close_calls == []
+    assert background.status()["last_result"]["reason"] == "non_trading_day"
+
+
+def test_background_scheduler_fails_closed_when_trading_calendar_is_unavailable() -> None:
+    class MissingCalendar:
+        def is_trading_day(self, trade_date: date) -> bool:
+            raise DataUnavailableError(
+                "calendar missing",
+                context={"trade_date": trade_date.isoformat()},
+            )
+
+    class SpyLifecycleScheduler:
+        def __init__(self) -> None:
+            self.run_once_calls: list[dict[str, Any]] = []
+
+        def run_once(self, **kwargs):
+            self.run_once_calls.append(kwargs)
+            raise AssertionError("calendar failure must not call lifecycle run_once")
+
+    lifecycle = SpyLifecycleScheduler()
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,  # type: ignore[arg-type]
+        trading_calendar_service=MissingCalendar(),
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 6, 19, 9, 30, tzinfo=UTC))
+
+    assert result["should_run"] is False
+    assert result["submit"] is False
+    assert result["reason"] == "trading_calendar_unavailable"
+    assert result["processed"] == []
+    assert result["errors"][0]["type"] == "DataUnavailableError"
+    assert result["errors"][0]["context"] == {"trade_date": "2026-06-19"}
+    assert lifecycle.run_once_calls == []
 
 
 def test_background_scheduler_runs_post_close_reconcile_without_submit_by_default(
@@ -3160,7 +3255,10 @@ def test_background_scheduler_runs_post_close_reconcile_without_submit_by_defaul
     run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
     repo.update_simulation_daily_run(run.run_id, status=SimulationDailyRunStatus.INTRADAY_RUNNING)
     monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
-    background = SimulationLifecycleBackgroundScheduler(lifecycle_scheduler=lifecycle)
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
 
     result = background.run_once(as_of_time=datetime(2026, 5, 21, 15, 5, tzinfo=UTC))
     latest = repo.get_simulation_daily_run(run.run_id)
@@ -3168,6 +3266,7 @@ def test_background_scheduler_runs_post_close_reconcile_without_submit_by_defaul
     assert result["should_run"] is True
     assert result["submit"] is False
     assert result["window"]["window_id"] == "post_close_reconcile"
+    assert result["trading_calendar"]["is_trading_day"] is True
     assert result["processed"] == []
     assert result["summary"]["stale_terminalized_count"] == 1
     assert result["terminalized_runs"][0]["run_id"] == run.run_id
