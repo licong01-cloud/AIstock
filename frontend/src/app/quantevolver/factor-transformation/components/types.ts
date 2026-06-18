@@ -13,15 +13,15 @@ export type FactorItem = {
   source: string;
   transformation_status: TransformStatus | null;
   last_transformation_at: string | null;
-  /** 是否有非官方改造代码（基于 qe_code_path 文件路径判断） */
-  has_realtime_code: boolean;
+  /** 是否有非官方改造代码（基于 non_official_code_path 文件路径判断） */
+  has_non_official_code: boolean;
   /** 是否有原始代码（基于 asset_path 文件路径判断） */
   has_original_code: boolean;
   is_sota_factor: boolean | null;
   ic: number | null;
   sharpe: number | null;
   /** 非官方改造代码在文件系统中的相对路径 */
-  qe_code_path: string | null;
+  non_official_code_path: string | null;
   /** 原始因子代码在文件系统中的相对路径（权威数据源） */
   asset_path: string | null;
 };
@@ -46,20 +46,20 @@ export type Stats = {
   pending: number;
   in_progress: number;
   has_original_code: number;
-  has_realtime_code: number;
+  has_non_official_code: number;
 };
 
 export type CodeDetail = {
   factor_name: string;
   source: string;
   transformation_status: string | null;
-  /** 非官方改造代码内容（从文件系统 qe_code_path 读取，仅用于展示） */
-  realtime_code_text: string | null;
+  /** 非官方改造代码内容（从文件系统 non_official_code_path 读取，仅用于展示） */
+  transformed_code_text: string | null;
   /** 原始代码内容（从文件系统 asset_path 读取，仅用于展示） */
   code_text: string | null;
   last_transformation_at: string | null;
   /** 非官方改造代码在文件系统中的相对路径 */
-  qe_code_path: string | null;
+  non_official_code_path: string | null;
   /** 原始因子代码在文件系统中的相对路径（权威数据源） */
   asset_path: string | null;
   /** 代码来源标记（filesystem / none） */

@@ -1,0 +1,106 @@
+{
+  "actual": "FactorValuePipeline.get_computable_factors 仍查询 transformation_status 和 qe_code_path；factor-transformation UI/后端 DTO 仍暴露 has_realtime_code/realtime_code_text/realtime tab。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/factor_value_pipeline.py",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/factor-transformation",
+    "backend/tests/quantevolver",
+    "tests/aistock_validation/bugs/20260618_BUG-407-realtime.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-407",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T18:42:48.358824Z",
+  "description": "FactorValuePipeline.get_computable_factors 仍查询 transformation_status 和 qe_code_path；factor-transformation UI/后端 DTO 仍暴露 has_realtime_code/realtime_code_text/realtime tab。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-fdeefc472d96",
+      "timestamp": "2026-06-17T18:42:48.358819Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "官方独立指标、因子相关性、QE 回测缓存统计和计算路径只基于 aistock_factor_catalog.code_text 与 rdagent_assets/factor_values，不依赖 transformation_status/qe_code_path；factor-transformation 页面和 API 兼容字段应提供明确的 non_official_transformed 命名和文案，避免 realtime cache 误导。",
+  "first_seen_at": "2026-06-17T18:42:48.358824Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1215,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1215",
+  "last_seen_at": "2026-06-17T18:42:48.358824Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n get_computable_factors|has_realtime_code|realtime_code_text|tab.*realtime backend/services/quantevolver backend/routers/quantevolver.py frontend/src/app/quantevolver/factor-transformation",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "官方因子缓存路径残留非官方改造依赖和 realtime 命名",
+  "trigger_condition": {
+    "fingerprint": "fdeefc472d96027e8da56687",
+    "source_event_id": "FE-20260618-fdeefc472d96"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/quantevolver/factor_value_pipeline.py",
+      "backend/routers/quantevolver.py",
+      "frontend/src/app/quantevolver/factor-transformation",
+      "backend/tests/quantevolver"
+    ],
+    "ui_issue": true,
+    "ui_route": "/simulation",
+    "ui_routes": [
+      "/simulation"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

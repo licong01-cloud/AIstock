@@ -27,7 +27,7 @@ export default function FactorTransformationPage() {
   const [codeModal, setCodeModal] = useState<{
     open: boolean;
     data: CodeDetail | null;
-    tab: "original" | "realtime";
+    tab: "original" | "non_official";
   }>({ open: false, data: null, tab: "original" });
   const [progressPanel, setProgressPanel] = useState<ProgressEntry | null>(null);
   const [pageSize, setPageSize] = useState(20);
@@ -264,7 +264,7 @@ export default function FactorTransformationPage() {
         { label: "进行中",       value: stats.in_progress,       color: "#0891b2" },
         { label: "改造成功",     value: stats.success,           color: "#16a34a" },
         { label: "改造失败",     value: stats.failed,            color: "#dc2626" },
-        { label: "非官方改造代码", value: stats.has_realtime_code, color: "#059669" },
+        { label: "非官方改造代码", value: stats.has_non_official_code, color: "#059669" },
       ]
     : [];
 

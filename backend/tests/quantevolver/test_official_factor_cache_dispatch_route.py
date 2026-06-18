@@ -9,6 +9,40 @@ from starlette.background import BackgroundTasks
 from backend.routers import quantevolver as router
 
 
+class _FactorCodeConn:
+    def __init__(self, row):
+        self.row = row
+        self.cur = type("Cur", (), {})()
+        self.cur.description = [
+            ("factor_name",),
+            ("source",),
+            ("transformation_status",),
+            ("last_transformation_at",),
+            ("qe_code_path",),
+            ("asset_path",),
+        ]
+        self.cur.fetchone = lambda: self.row
+        self.cur.execute = lambda *args, **kwargs: None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        conn = self
+
+        class _CursorCM:
+            def __enter__(self):
+                return conn.cur
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        return _CursorCM()
+
+
 class _FakeComposer:
     def _get_experiment_record(self, experiment_id):
         return {"node_id": "node-a"}
@@ -175,3 +209,61 @@ def test_factor_list_metric_buttons_submit_official_cache_compute():
     assert "official-evaluation/compute" not in task_metrics
     assert "activeSnapshot" not in batch_metrics
     assert "activeSnapshot" not in task_metrics
+
+
+def test_factor_transformation_status_exposes_non_official_fields(monkeypatch):
+    class _FakeTransformationService:
+        def get_factor_transformation_status(self, **kwargs):
+            return {
+                "ok": True,
+                "total": 1,
+                "items": [
+                    {
+                        "factor_name": "factor_a",
+                        "source": "rdagent_task_sync",
+                        "has_realtime_code": 1,
+                        "qe_code_path": "rdagent_assets/qe_factors/factor_a.py",
+                        "has_original_code": True,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.factor_transformation_service.FactorTransformationService",
+        lambda: _FakeTransformationService(),
+    )
+
+    result = router.get_factor_transformation_status()
+    item = result["items"][0]
+
+    assert item["has_non_official_code"] is True
+    assert item["non_official_code_path"] == "rdagent_assets/qe_factors/factor_a.py"
+    assert "has_realtime_code" not in item
+    assert "qe_code_path" not in item
+
+
+def test_factor_transformation_code_endpoint_exposes_non_official_fields(monkeypatch, tmp_path):
+    transformed = tmp_path / "factor_a_live.py"
+    original = tmp_path / "factor_a_original.py"
+    transformed.write_text("LIVE_CODE = 1", encoding="utf-8")
+    original.write_text("OFFICIAL_CODE = 1", encoding="utf-8")
+    row = (
+        "factor_a",
+        "rdagent_task_sync",
+        "SUCCESS",
+        None,
+        str(transformed),
+        str(original),
+    )
+    monkeypatch.setattr(router, "get_conn", lambda: _FactorCodeConn(row))
+
+    result = router.get_factor_non_official_code("factor_a")
+    factor = result["factor"]
+
+    assert result["ok"] is True
+    assert factor["non_official_code_path"] == str(transformed)
+    assert factor["transformed_code_text"] == "LIVE_CODE = 1"
+    assert factor["code_text"] == "OFFICIAL_CODE = 1"
+    assert "qe_code_path" not in factor
+    assert "realtime_code_text" not in factor
+
