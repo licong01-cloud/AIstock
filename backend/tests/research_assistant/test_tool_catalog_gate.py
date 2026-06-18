@@ -13,7 +13,14 @@ from backend.services.research_assistant.react_grounding import (
     run_react_grounding_loop,
 )
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import LlmCallResult, ResearchAssistantService, _extract_litellm_tool_calls
+from backend.services.research_assistant.service import (
+    DialogueIntent,
+    DialogueMode,
+    LlmCallResult,
+    ModeDecision,
+    ResearchAssistantService,
+    _extract_litellm_tool_calls,
+)
 
 
 class RecordingProvider:
@@ -88,6 +95,40 @@ def test_native_function_tool_calls_are_parsed_into_mcp_calls() -> None:
     assert calls[0].tool_name == "stock_analysis_get_quote"
     assert calls[0].payload_json == {"symbol": "600584", "analysis_date": "2026-06-16"}
     assert calls[0].reason == "native_function_call:stock_analysis_get_quote"
+
+
+def test_agentic_function_tools_only_expose_capability_backed_manifest_tools() -> None:
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=object())
+    svc.seed_catalogs()
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST,
+        confidence=0.95,
+        mode_reason="test_read_only_gate",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    manifest_pairs = {(str(tool.get("server_key")), str(tool.get("tool_name"))) for tool in svc._manifest_mcp_catalog_records()}
+    function_tools, registry = svc._agentic_function_tools(mode_decision)
+    offered_pairs = {(mapping["server_key"], mapping["tool_name"]) for mapping in registry.values()}
+    react_pairs = {
+        (entry.server_key, entry.tool_name)
+        for entry in svc._react_tool_catalog_entries(capability_backed_only=True)
+    }
+
+    uncovered_manifest_tool = ("aistock-local-data", "local_data_get_unack_alert_count")
+    covered_local_data_tool = ("aistock-local-data", "local_data_get_preset_daily_status")
+    assert uncovered_manifest_tool in manifest_pairs
+    assert covered_local_data_tool in manifest_pairs
+    assert uncovered_manifest_tool not in offered_pairs
+    assert uncovered_manifest_tool not in react_pairs
+    assert covered_local_data_tool in offered_pairs
+    assert covered_local_data_tool in react_pairs
+    assert function_tools
 
 
 class HighRiskToolLlm:

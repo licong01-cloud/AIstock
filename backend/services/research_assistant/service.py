@@ -3170,7 +3170,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self.semantic_tool_planner.plan(
                 user_message=user_message,
                 model_profile=model_profile,
-                tool_catalog=self._manifest_mcp_catalog_records(),
+                tool_catalog=self._capability_backed_mcp_catalog_records(),
             )
         except Exception:  # noqa: BLE001 - semantic planning is best-effort; legacy route keeps chat usable.
             logger.exception("semantic MCP tool planner failed; falling back to legacy route")
@@ -3271,12 +3271,54 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "\n".join(lines)
 
 
+    @staticmethod
+    def _mcp_ref_pair(server_key: Any, tool_name: Any) -> tuple[str, str] | None:
+        server = str(server_key or "").strip()
+        tool = str(tool_name or "").strip()
+        if not server or not tool:
+            return None
+        try:
+            server = canonicalize_server_key(server)
+        except KeyError:
+            return None
+        return server, tool
+
+    def _approved_capability_mcp_tool_refs(self) -> set[tuple[str, str]]:
+        capabilities = [
+            dict(item)
+            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+            if str(item.get("status") or "") == "approved"
+        ]
+        capabilities.extend(
+            dict(item)
+            for item in self._workflow_capabilities()
+            if str(item.get("status") or "approved") == "approved"
+        )
+        refs: set[tuple[str, str]] = set()
+        for capability in capabilities:
+            canonical = self._canonicalize_capability_mcp_refs(capability)
+            for ref in canonical.get("mcp_tool_refs") if isinstance(canonical.get("mcp_tool_refs"), list) else []:
+                if not isinstance(ref, dict):
+                    continue
+                pair = self._mcp_ref_pair(ref.get("server_key"), ref.get("tool_name"))
+                if pair:
+                    refs.add(pair)
+        return refs
+
+    def _capability_backed_mcp_catalog_records(self) -> list[dict[str, Any]]:
+        executable_refs = self._approved_capability_mcp_tool_refs()
+        return [
+            tool
+            for tool in self._manifest_mcp_catalog_records()
+            if self._mcp_ref_pair(tool.get("server_key"), tool.get("tool_name")) in executable_refs
+        ]
+
     def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
         if mode_decision.mode not in {DialogueMode.PLANNING, DialogueMode.ANALYSIS, DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}:
             return [], {}
         if mode_decision.allowed_tool_side_effect == "none":
             return [], {}
-        tools = self._manifest_mcp_catalog_records()
+        tools = self._capability_backed_mcp_catalog_records()
         allowed: list[dict[str, Any]] = []
         for tool in tools:
             side_effect = str(tool.get("side_effect_level") or "read_only")
@@ -4024,7 +4066,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             messages=react_messages,
             model_complete=model_complete,
             mcp_provider=provider,
-            catalog_entries=self._react_tool_catalog_entries(),
+            catalog_entries=self._react_tool_catalog_entries(capability_backed_only=True),
             config=self._react_grounding_config(runtime_config, user_message=user_message, token_budget=budget_plan.effective_window_tokens),
             seeded_tool_calls=[route_seed] if route_seed else None,
             fallback_tool_calls=fallback_tool_calls,
@@ -4074,8 +4116,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     merged[key] = value
         return merged
 
-    def _react_tool_catalog_entries(self) -> list[ToolCatalogEntry]:
-        tools = self._manifest_mcp_catalog_records()
+    def _react_tool_catalog_entries(self, *, capability_backed_only: bool = False) -> list[ToolCatalogEntry]:
+        tools = self._capability_backed_mcp_catalog_records() if capability_backed_only else self._manifest_mcp_catalog_records()
         return [
             ToolCatalogEntry(
                 server_key=str(tool.get("server_key") or ""),
@@ -4361,6 +4403,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         capability = self.repository.find_one("capabilities", {"capability_key": capability_key, "status": "approved"})
         if not capability:
             return {"eligible": False, "reason": "capability_not_approved", "capability_key": capability_key}
+        if self._mcp_ref_pair(route["server_key"], route["tool_name"]) not in self._approved_capability_mcp_tool_refs():
+            return {"eligible": False, "reason": "capability_not_covering_tool", "capability_key": capability_key}
         return {
             "eligible": True,
             "reason": "low_risk_read_only_summary_first",
