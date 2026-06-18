@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any, Callable, Iterator, Protocol
 
 from backend.db.pg_pool import get_conn
@@ -337,6 +338,13 @@ class DbV25DayFeatureProvider:
         try:
             parsed = float(value)
         except (TypeError, ValueError) as exc:
+            if cls._is_nan_like_value(value):
+                return cls._substitute_free_float_turnover_rate(
+                    value,
+                    turnover_rate_raw=turnover_rate_raw,
+                    trade_date=trade_date,
+                    audit=audit,
+                )
             raise DataUnavailableError(
                 "V25 day_features turnover_rate_f is invalid",
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "value": value},
@@ -344,6 +352,29 @@ class DbV25DayFeatureProvider:
         if math.isfinite(parsed):
             return parsed / 100.0
 
+        return cls._substitute_free_float_turnover_rate(
+            value,
+            turnover_rate_raw=turnover_rate_raw,
+            trade_date=trade_date,
+            audit=audit,
+        )
+
+    @staticmethod
+    def _is_nan_like_value(value: Any) -> bool:
+        if isinstance(value, Decimal):
+            return value.is_nan()
+        if isinstance(value, str):
+            return value.strip().lower() == "nan"
+        return False
+
+    @staticmethod
+    def _substitute_free_float_turnover_rate(
+        value: Any,
+        *,
+        turnover_rate_raw: float,
+        trade_date: date,
+        audit: list[dict[str, Any]],
+    ) -> float:
         # Some daily_basic rows contain PostgreSQL numeric NaN for turnover_rate_f
         # while same-row turnover_rate is valid. Keep the vector finite and audited
         # without introducing neutral/zero defaults or reading future intraday data.
