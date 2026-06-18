@@ -1,0 +1,70 @@
+{
+  "actual": "Backend dispatch uses official_factor_full_compute, but WSL scheduler custom handler does not map that task type in current runtime, so the UI path can fail before full compute starts.",
+  "allowed_write_scope": [
+    "backend/services/dispatch_service.py",
+    "tests/aistock_validation/bugs/20260619_BUG-420-ui-wsl-full-compute-runner.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-420",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T19:16:33.888354Z",
+  "description": "Backend dispatch uses official_factor_full_compute, but WSL scheduler custom handler does not map that task type in current runtime, so the UI path can fail before full compute starts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-1bc593413737",
+      "timestamp": "2026-06-18T19:16:33.888350Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "UI factor-cache/compute must execute the official full factor compute runner in WSL and use rdagent_assets/factor_values as the only cache root.",
+  "first_seen_at": "2026-06-18T19:16:33.888354Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1275,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1275",
+  "last_seen_at": "2026-06-18T19:16:33.888354Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/quantevolver/factor-cache/compute with one enabled factor and inspect WSL scheduler custom task mapping",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "UI触发官方全量因子缓存计算时WSL调度未执行full compute runner",
+  "trigger_condition": {
+    "fingerprint": "1bc5934137371a5e688f72f6",
+    "source_event_id": "FE-20260619-1bc593413737"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
