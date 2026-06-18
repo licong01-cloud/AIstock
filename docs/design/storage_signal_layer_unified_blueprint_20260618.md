@@ -187,7 +187,7 @@
 - **单 Alpha 模拟盘 = 跑单包(已验证,如 pkg_a2f5… 已 150 paper 组合);多 Alpha 选股 = 跑组合包**。
 
 ### 7.1 组合在 QE 实验中产生(只有回测过的组合才进 paper/荐股)
-- 组合 = 选 N 个单 Alpha 策略包 → 选权重方案 → 加权 blend → **`qrun --pred-backtest` 组合回测**(复用 `MultiAlphaEngine`)→ 产 QE 归档的**组合后指标** = 多 Alpha 包的 backtest evidence。
+- 组合 = 选 N 个单 Alpha 策略包 → 选权重方案 → 加权 blend → **新建的 QE 多 Alpha 实验回测**(从头实现,**不复用旧 `MultiAlphaEngine` 手工组合**;复用的是 QE 标准回测引擎喂入组合 score)→ 产 QE 归档的**组合后指标** = 多 Alpha 包的 backtest evidence。
 - **硬原则**:**只有经 QE 回测、有 backtest evidence 的组合**才允许晋升多 Alpha 包并进 paper/荐股(由资格门 `source_backtest_evidence` 强制)。
 - **UI:扩展现有 QE `quantevolver/compose` 页**(非独立新模块):选单包 → 权重方案 → 跑组合回测 → 看组合指标 → 晋升;配合 §5.5 策略包库过滤视图。风格用 QE 演进页基线。
 
@@ -229,7 +229,7 @@
 - 与 P2 doc:label 去重 + registry 候选门控为增量。
 - 与 P3 正交(#1227)+ P3-B 组合:组合引擎产出多 Alpha 策略包。
 - 与 eval(#1184):包级指标复用其 Top-K/CAGR/MDD 口径。
-- 复用既有 `MultiAlphaEngine`(reuse_prediction + `--pred-backtest` + combiner)与 `strategy_packages_*`,不重造。
+- 多 Alpha 组合回测**按新架构从头实现**(旧 `MultiAlphaEngine` 手工组合历史未跑通,不复用);复用 `strategy_packages_*`(候选→包)+ QE 标准回测引擎 + prediction-store。
 
 ---
 
@@ -287,8 +287,8 @@
 | ① params.pkl=模型? | ✅ **是可复用模型**(`backtest-only` 靠 `source_model/params.pkl` 跳训练直接回测/推理) | "免重训扩展"成立;registry 化=存 params.pkl(待确认 NN/树两类均覆盖) |
 | ② selection/paper 读包 | ✅ 读 `manifest.alpha_components`(列表)+ manifest_sha256;`load_source_for_strategy_package` | **多包(N 组件)天然可被迭代消费 → 下游零改可信** |
 | ③ candidate→package 晋升 | ✅ **已存在**(C_FundVal 已建;MCP create_candidate_from_qe_loop/create_from_candidate) | 单包来源已通;多组件 manifest 构建=P3-B 新增 |
-| ④ MultiAlphaEngine `--pred-backtest` | ✅ **完整 wired**(run+reuse_prediction+meta_model_runner 合并 combined_prediction+主节点 `qrun --pred-backtest`+subprocess) | **P3-B 复用它而非从零造**;但"回测未执行"→ **需一次端到端冒烟**;reuse_prediction 取自 source experiment,需适配"从包/store 取 pred"(连⑥) |
-| ⑤ qe_archive 全量分析 | ✅ 表很全(run/config/metric/**curve**/factor_importance/**factor_pair**/symbol_summary/model_trial/**run_data_context**/reproducibility_manifest+enhanced_metrics_sha256) | **删 workspace 后分析基本可支撑**;待确认 run_data_context 可锚定数据 vintage |
+| ④ 多 Alpha 组合回测引擎 | 旧 `MultiAlphaEngine`(手工组合)虽 wired 但**历史多次尝试失败、从未跑通** | **决策:不复用、不验证旧代码;P3-B 按新架构从头实现**(新 QE 多 Alpha 实验回测,见详细设计) |
+| ⑤ qe_archive 全量分析 + vintage | ✅ 表很全 + **run_data_context 含 `data_version_hash`/`dataset_snapshot_id`/`feature_snapshot_id`/`factor_cache_snapshot_id`/qlib_dataset_version/全窗口/pit_cutoff** | **删 workspace 后分析 + 精确复现锚定齐全**(vintage 已有,无需新增) |
 | ⑥ 包↔pred 链接 | ❌ **无 `prediction_ref`/pred 指针**(包只引模型/因子) | **真实缺口(隐藏环)**:需给包加 `prediction_ref` 绑定其 store pred |
 
-**净结论**:6 项中 **5 项已存在/可行**(params=模型、qe_archive 全、selection 迭代 alpha_components、MultiAlphaEngine 已 wired、候选→包已通);**仅 ⑥ 是真实缺失链**;P3-B 由"从零造"降级为"复用 MultiAlphaEngine + 适配从包取 pred"。**计划有坚实代码基线,非空中楼阁。** 实施前仅剩两个轻量动作:(a) `MultiAlphaEngine --pred-backtest` 端到端冒烟一次;(b) 确认 run_data_context 的 data_vintage 字段。
+**净结论**:6 项中 **5 项已存在/可行**(params=模型、qe_archive 全 + vintage 齐、selection 迭代 alpha_components、候选→包已通、qe backtest 引擎可喂组合 pred);**仅 ⑥ 是真实缺失链**;**④ 旧 MultiAlphaEngine 不复用,P3-B 新建**。**计划有坚实代码基线,非空中楼阁;基线核验已收口,进入详细分期设计**(见 `multi_alpha_phased_design_20260619.md`)。
