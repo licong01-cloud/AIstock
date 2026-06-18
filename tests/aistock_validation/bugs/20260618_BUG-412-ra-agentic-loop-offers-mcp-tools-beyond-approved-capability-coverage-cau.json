@@ -27,11 +27,6 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "timestamp": "2026-06-18T08:45:00Z",
-      "previous_scope": [
-        "tests/aistock_validation/bugs/20260618_BUG-412-ra-agentic-loop-offers-mcp-tools-beyond-approved-capability-coverage-cau.json",
-        "tests/aistock_validation/bugs/.bug_id_allocator.json"
-      ],
       "new_scope": [
         "tests/aistock_validation/bugs/20260618_BUG-412-ra-agentic-loop-offers-mcp-tools-beyond-approved-capability-coverage-cau.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json",
@@ -39,15 +34,20 @@
         "backend/tests/research_assistant/test_service.py",
         "backend/tests/research_assistant/test_tool_catalog_gate.py"
       ],
-      "note": "BUG-412 fix requires aligning Research Assistant agentic function-tool exposure with approved capability-backed execution in service.py, plus targeted RA backend tests. Scope remains pure backend/test and excludes runtime, DB, and DDL changes."
+      "note": "BUG-412 fix requires aligning Research Assistant agentic function-tool exposure with approved capability-backed execution in service.py, plus targeted RA backend tests. Scope remains pure backend/test and excludes runtime, DB, and DDL changes.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260618_BUG-412-ra-agentic-loop-offers-mcp-tools-beyond-approved-capability-coverage-cau.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-18T08:45:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-18T08:23:19.838128Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2c9a6a354985a95cf45d5a7253e0d3810c237c19",
+  "fixed_at": "2026-06-18T20:49:24.816031Z",
   "github_issue_number": 1241,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1241",
   "last_seen_at": "2026-06-18T08:23:19.838128Z",
@@ -55,6 +55,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1253",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -104,6 +105,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1253 merged and main CI passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
