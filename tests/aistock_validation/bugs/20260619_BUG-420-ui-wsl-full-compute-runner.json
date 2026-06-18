@@ -25,18 +25,18 @@
       "timestamp": "2026-06-18T19:16:33.888350Z"
     },
     {
-      "timestamp": "2026-06-19T03:29:00+08:00",
-      "actor": "codex",
       "action": "expand_allowed_scope",
-      "note": "Fix requires AIstock WSL compatibility runner and targeted dispatch regression test; RD-Agent repo is dirty, so implementation stays in AIstock side."
+      "actor": "codex",
+      "note": "Fix requires AIstock WSL compatibility runner and targeted dispatch regression test; RD-Agent repo is dirty, so implementation stays in AIstock side.",
+      "timestamp": "2026-06-19T03:29:00+08:00"
     }
   ],
   "evidence_uris": [],
   "expected": "UI factor-cache/compute must execute the official full factor compute runner in WSL and use rdagent_assets/factor_values as the only cache root.",
   "first_seen_at": "2026-06-18T19:16:33.888354Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "48e806c0ec39d787a07d32b033efad534643d678",
+  "fixed_at": "2026-06-18T19:53:47.558589Z",
   "github_issue_number": 1275,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1275",
   "last_seen_at": "2026-06-18T19:16:33.888354Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1277",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -64,6 +65,12 @@
     "fingerprint": "1bc5934137371a5e688f72f6",
     "source_event_id": "FE-20260619-1bc593413737"
   },
+  "validation_evidence": [
+    "PR CI -> passed (20 passed, 0 failed, 0 pending)",
+    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -p no:cacheprovider -> 9 passed",
+    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s l0 -> passed",
+    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
