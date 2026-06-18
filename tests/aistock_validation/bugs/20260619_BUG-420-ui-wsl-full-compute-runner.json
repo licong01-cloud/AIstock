@@ -35,8 +35,8 @@
   "expected": "UI factor-cache/compute must execute the official full factor compute runner in WSL and use rdagent_assets/factor_values as the only cache root.",
   "first_seen_at": "2026-06-18T19:16:33.888354Z",
   "fix_branch": null,
-  "fix_commit": "48e806c0ec39d787a07d32b033efad534643d678",
-  "fixed_at": "2026-06-18T19:53:47.558589Z",
+  "fix_commit": "1acd776aca4ae71daf7b90a533951761f32bd712",
+  "fixed_at": "2026-06-18T19:56:33.604192Z",
   "github_issue_number": 1275,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1275",
   "last_seen_at": "2026-06-18T19:16:33.888354Z",
@@ -44,7 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1277",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1278",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,10 +66,7 @@
     "source_event_id": "FE-20260619-1bc593413737"
   },
   "validation_evidence": [
-    "PR CI -> passed (20 passed, 0 failed, 0 pending)",
-    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -p no:cacheprovider -> 9 passed",
-    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s l0 -> passed",
-    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_module_registry_l0 -> passed"
+    "close-sync PR CI -> passed (14 passed, 0 failed, 0 pending)"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
