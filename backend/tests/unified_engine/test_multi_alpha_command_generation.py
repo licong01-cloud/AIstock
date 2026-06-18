@@ -17,7 +17,7 @@ from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.multi_alpha_resource_planner import plan_assignments
 from backend.services.quantevolver.multi_alpha_result_collector import MultiAlphaResultCollector
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
-from backend.services.quantevolver.callback_urls import build_aistock_callback_url
+from backend.services.quantevolver.callback_urls import build_aistock_callback_base_url, build_aistock_callback_url
 from backend.routers import quantevolver as quantevolver_router
 from backend.routers.quantevolver import _build_multi_alpha_group_command
 
@@ -150,6 +150,37 @@ class TestQELoopCallbackUrls:
 
         assert url == "http://aistock.local/cb/qe"
 
+    def test_prediction_store_base_uses_same_remote_callback_resolution(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://192.168.50.14:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            url = build_aistock_callback_base_url(
+                node_id="rdagent-node1",
+                node_callback_url="http://127.0.0.1:8001",
+                require_env_base=True,
+            )
+
+        assert url == "http://192.168.50.14:8001"
+
+    def test_prediction_store_base_rejects_remote_localhost(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://127.0.0.1:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            with pytest.raises(ValueError, match="localhost is not allowed"):
+                build_aistock_callback_base_url(
+                    node_id="rdagent-node1",
+                    node_callback_url="http://192.168.50.14:8001",
+                    require_env_base=True,
+                )
+
 
 class TestConfigComposerCommandGeneration:
     def test_build_auto_wsl_command_parts_uses_factor_cache_root(self):
@@ -171,6 +202,30 @@ class TestConfigComposerCommandGeneration:
         assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in core_parts[0]
         assert '$HOME/miniconda3/etc/profile.d/conda.sh' in core_parts[0]
         assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in core_parts[0]
+
+    def test_build_auto_wsl_command_parts_injects_prediction_store_env(self):
+        composer = ConfigComposer()
+        env_lines, core_parts = composer._build_auto_wsl_command_parts(
+            "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+            backtest_freq="1min",
+            node_id="rdagent-node1",
+            prediction_store_base_url="http://192.168.50.14:8001",
+            prediction_store_run_key="qe_task_L3",
+            task_id="qe_task",
+            loop_index=3,
+        )
+
+        assert "export AISTOCK_NODE_ID=rdagent-node1" in env_lines
+        assert "export QE_NODE_ID=rdagent-node1" in env_lines
+        assert "export AISTOCK_PREDICTION_STORE_BASE_URL=http://192.168.50.14:8001" in env_lines
+        assert "export AISTOCK_PREDICTION_STORE_RUN_KEY=qe_task_L3" in env_lines
+        assert "export QE_ARCHIVE_RUN_ID=qe_task_L3" in env_lines
+        assert "export QE_TASK_ID=qe_task" in env_lines
+        assert "export QE_LOOP_ID=Loop3" in env_lines
+        command = " && ".join(core_parts)
+        assert "AISTOCK_PREDICTION_STORE_BASE_URL=http://192.168.50.14:8001" in command
+        assert "AISTOCK_PREDICTION_STORE_RUN_KEY=qe_task_L3" in command
+        assert "localhost" not in command
 
     def test_build_conda_activate_chain_expands_tilde_and_supports_fallbacks(self):
         chain = ConfigComposer._build_conda_activate_chain()

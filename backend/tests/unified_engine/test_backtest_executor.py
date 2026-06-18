@@ -505,6 +505,10 @@ class TestWorkspaceClientParams:
 
         _, kwargs = client.create_and_run_loop.call_args
         assert kwargs.get("callback_url") == "http://aistock/callback/task_001"
+        compose_kwargs = composer.compose_experiment_in_memory.call_args.kwargs
+        assert compose_kwargs["callback_url"] == "http://aistock/callback/task_001"
+        assert compose_kwargs["task_id"] == "task_test"
+        assert compose_kwargs["loop_index"] == 1
 
     def test_model_source_passed_in_backtest_only(self):
         composer = make_mock_composer()

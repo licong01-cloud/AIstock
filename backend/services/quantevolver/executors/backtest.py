@@ -103,6 +103,9 @@ class BacktestExecutor(BaseExecutor):
                 execution_algo_params=config.execution_algo_params,
                 strategy_params=strategy_params if strategy_params else None,
                 node_id=ctx.node_id,
+                callback_url=ctx.callback_url,
+                task_id=ctx.task_id,
+                loop_index=ctx.loop_index,
             )
             return compose_res_local, stock_pool_payload
 
