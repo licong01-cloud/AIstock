@@ -28,18 +28,18 @@
       "timestamp": "2026-06-18T08:27:59.163327Z"
     },
     {
-      "timestamp": "2026-06-18T16:05:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Scope expanded per BUG-413 fix task to RA grounding guard, service synthesis prompt, and targeted tests."
+      "actor": "codex",
+      "note": "Scope expanded per BUG-413 fix task to RA grounding guard, service synthesis prompt, and targeted tests.",
+      "timestamp": "2026-06-18T16:05:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-18T08:27:59.163330Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ea8d650ab3a28c5a0b10f9a51f358ae2d9c5430e",
+  "fixed_at": "2026-06-18T20:38:28.824285Z",
   "github_issue_number": 1242,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1242",
   "last_seen_at": "2026-06-18T08:27:59.163330Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1266",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -95,6 +96,17 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1266 checks passed: 20 passed, 0 pending, 0 failed",
+    "python -m pytest backend/tests/research_assistant/test_evidence_guard.py backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_stock_analysis_mcp.py backend/tests/research_assistant/test_service.py -q -> 87 passed",
+    "python -m nox -s research_assistant_backend -> 259 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s ra_phase7_full_accept with PLAYWRIGHT_SKIP_WEBSERVER=1 and prestarted test server on 3011 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m ruff check changed RA files -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
