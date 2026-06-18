@@ -56,6 +56,8 @@ SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
     "superseded_by_later_branch_success",
 }
+NIGHTLY_BUG_CANDIDATE_ISSUE_PAYLOAD_SCHEMA = "aistock_bug_candidate_github_issue_payload_v1"
+NIGHTLY_BUG_CANDIDATE_READY_THRESHOLD = 0.80
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 COMMITTABLE_BUG_REGISTRY_PATHS = (
     "tests/aistock_validation/bugs",
@@ -583,6 +585,30 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     return compact
 
 
+def _compact_promote_nightly_candidate(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "dry_run",
+        "candidate_id",
+        "candidate_confidence",
+        "candidate_module",
+        "candidate_severity",
+        "github_issue_number",
+    )
+    if isinstance(value.get("dedupe"), dict):
+        compact["dedupe"] = _pick(value["dedupe"], "fingerprint", "issue_already_exists")
+    if isinstance(value.get("quality_gate"), dict):
+        compact["quality_gate"] = _pick(value["quality_gate"], "workflow_gate", "issue_payload_ready", "auto_submit_allowed", "reasons")
+    if isinstance(value.get("submit_bug"), dict):
+        submit_bug = value["submit_bug"]
+        compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
+        if isinstance(submit_bug.get("github"), dict):
+            compact["submit_bug"]["github"] = _pick(submit_bug["github"], "created", "number", "url")
+    return compact
+
+
 def _compact_ci_issue_janitor(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -835,6 +861,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_ci_issue_janitor(payload) or {})
     elif schema.endswith("_promote_ci_issue_v1"):
         compact.update(_compact_promote_ci_issue(payload) or {})
+    elif schema.endswith("_promote_nightly_candidate_v1"):
+        compact.update(_compact_promote_nightly_candidate(payload) or {})
     elif schema == "aistock_code_intelligence_client_verification_v1":
         compact.update(_compact_code_intelligence_client_verification(payload))
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
@@ -930,6 +958,15 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
             (
                 f"{prefix} promote-ci-issue workflow_gate={gate} classification={triage.get('classification_recommendation') or 'unknown'} "
                 f"next={compact.get('next_command') or compact.get('triage_action') or 'none'}"
+            )
+        ]
+    if schema.endswith("_promote_nightly_candidate_v1"):
+        submit = compact.get("submit_bug") if isinstance(compact.get("submit_bug"), dict) else {}
+        return [
+            (
+                f"{prefix} promote-nightly-candidate workflow_gate={gate} candidate={compact.get('candidate_id') or 'unknown'} "
+                f"bug={submit.get('bug_id') or 'not_created'} issue={compact.get('github_issue_number') or 'not_created'} "
+                f"next={compact.get('next_command') or submit.get('next_command') or 'none'}"
             )
         ]
     if schema.endswith("_start_v1"):
@@ -2053,9 +2090,11 @@ def _maybe_create_registry_worktree(
         return plan
     if worktree.exists():
         raise WorkflowError(f"target registry worktree already exists: {worktree}")
-    _git(["fetch", "origin", "main"])
-    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    git_root = _canonical_root() if _canonical_root().exists() else REPO_ROOT
+    _git(["fetch", "origin", "main"], cwd=git_root)
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch, base="origin/main", cwd=git_root)
     plan["created"] = True
+    plan["git_root"] = str(git_root)
     return plan
 
 
@@ -2086,9 +2125,15 @@ def _maybe_create_fix_chain_worktree(
     return plan
 
 
-def _git_worktree_add_new_branch(*, worktree: Path, branch: str, base: str = "origin/main") -> None:
+def _git_worktree_add_new_branch(
+    *,
+    worktree: Path,
+    branch: str,
+    base: str = "origin/main",
+    cwd: Path | None = None,
+) -> None:
     # Keep options before the path; some Git versions otherwise infer `main` from origin/main in linked worktrees.
-    _git(["worktree", "add", "-b", branch, str(worktree), base])
+    _git(["worktree", "add", "-b", branch, str(worktree), base], cwd=cwd)
 
 
 def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
@@ -3207,6 +3252,16 @@ def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any])
         "## Evidence",
         *[f"- {item}" for item in evidence or ["n/a"]],
         "",
+    ])
+    for section in record.get("github_issue_extra_sections") or []:
+        text = str(section or "").strip()
+        if text:
+            lines.extend([text, ""])
+    lines.extend([
+        "## Next Step",
+        "",
+        f"`python scripts/aistock_issue_workflow.py run --bug-id {record.get('bug_id')} --mode plan --create-worktree`",
+        "",
         "## Workflow Gates",
         "- production_ddl_gate: `noop`",
         "- production_frontend_dependency_gate: `noop`",
@@ -3239,6 +3294,8 @@ def build_submit_bug_plan(
     create_fix_worktree: bool = False,
     registry_pr_only: bool = False,
     dry_run: bool = False,
+    github_issue_extra_sections: list[str] | None = None,
+    extra_github_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     effective_apply = apply and not dry_run
     if create_fix_worktree and create_registry_worktree:
@@ -3342,6 +3399,8 @@ def build_submit_bug_plan(
         record.setdefault("production_ddl_gate", "noop")
         record.setdefault("production_frontend_dependency_gate", "noop")
         record.setdefault("production_backend_dependency_gate", "noop")
+        if github_issue_extra_sections:
+            record["github_issue_extra_sections"] = [str(section) for section in github_issue_extra_sections if str(section or "").strip()]
         ui_hints = _ui_intake_hints(
             title=title,
             module=module,
@@ -3367,6 +3426,10 @@ def build_submit_bug_plan(
             _repo_rel(_allocator_path(registry_root), registry_root),
         )
         github_result: dict[str, Any] | None = None
+        github_labels = flow._unique_strings(
+            _issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)
+            + list(extra_github_labels or [])
+        )
 
         if effective_apply and bug_path.exists():
             raise WorkflowError(f"BUG JSON already exists: {bug_path}")
@@ -3389,7 +3452,7 @@ def build_submit_bug_plan(
                     "--body-file",
                     str(github_body_for_create),
                     "--label",
-                    _csv_arg(_issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)),
+                    _csv_arg(github_labels),
                 ],
         cwd=github_create_root,
                 timeout=120,
@@ -3463,7 +3526,7 @@ def build_submit_bug_plan(
         "record": record,
         "ui_intake_hints": ui_hints,
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
-        "github_issue_labels": _issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints),
+        "github_issue_labels": github_labels,
         "registry_pr_only": registry_pr_only,
         "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
         "bug_id_allocation": {
@@ -6716,6 +6779,337 @@ def build_promote_ci_issue_plan(
     }
 
 
+def _nightly_payload_path(path_text: str) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _load_nightly_candidate_issue_payload(path_text: str) -> dict[str, Any]:
+    path = _nightly_payload_path(path_text)
+    if not path.exists():
+        raise WorkflowError(f"Nightly candidate issue payload not found: {path}")
+    payload = _load_json(path)
+    if payload.get("schema_version") != NIGHTLY_BUG_CANDIDATE_ISSUE_PAYLOAD_SCHEMA:
+        raise WorkflowError(
+            "Nightly candidate issue payload schema mismatch: "
+            f"{payload.get('schema_version')!r}"
+        )
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, dict):
+        raise WorkflowError("Nightly candidate issue payload is missing candidate object")
+    payload["_source_path"] = str(path)
+    return payload
+
+
+def _load_nightly_candidate_issue_payloads(
+    *,
+    issue_payload: list[str] | None = None,
+    queue_manifest: str | None = None,
+) -> list[dict[str, Any]]:
+    payload_paths = list(issue_payload or [])
+    if queue_manifest:
+        manifest_path = _nightly_payload_path(queue_manifest)
+        manifest = _load_json(manifest_path)
+        for ref in manifest.get("issue_payload_refs") or []:
+            if not str(ref or "").strip():
+                continue
+            ref_path = Path(str(ref))
+            payload_paths.append(str(ref_path if ref_path.is_absolute() else REPO_ROOT / ref_path))
+    if not payload_paths:
+        raise WorkflowError("--issue-payload or --queue-manifest is required")
+    seen: set[str] = set()
+    payloads: list[dict[str, Any]] = []
+    for path_text in payload_paths:
+        normalized = str(_nightly_payload_path(path_text).resolve())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        payloads.append(_load_nightly_candidate_issue_payload(path_text))
+    return payloads
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def _nightly_candidate_quality_blocking(
+    issue_payload: dict[str, Any],
+    *,
+    apply: bool,
+    opt_in_auto_file: bool,
+    create_registry_worktree: bool,
+    create_fix_worktree: bool,
+) -> list[str]:
+    candidate = issue_payload.get("candidate") if isinstance(issue_payload.get("candidate"), dict) else {}
+    quality = candidate.get("quality_gate") if isinstance(candidate.get("quality_gate"), dict) else {}
+    blocking: list[str] = []
+    if apply and not opt_in_auto_file:
+        blocking.append("promote-nightly-candidate --apply requires --opt-in-auto-file")
+    if apply and not (create_registry_worktree or create_fix_worktree):
+        blocking.append(
+            "promote-nightly-candidate --apply must use --create-registry-worktree or --create-fix-worktree to avoid canonical root BUG JSON writes"
+        )
+    if issue_payload.get("mode") not in {"draft_only", "ready_for_auto_file"}:
+        blocking.append(f"unsupported issue payload mode: {issue_payload.get('mode')!r}")
+    if quality.get("issue_payload_ready") is not True:
+        blocking.append("candidate quality_gate.issue_payload_ready is not true")
+    try:
+        confidence = float(candidate.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = -1.0
+    if confidence < NIGHTLY_BUG_CANDIDATE_READY_THRESHOLD:
+        blocking.append(f"candidate confidence {confidence} is below {NIGHTLY_BUG_CANDIDATE_READY_THRESHOLD}")
+    if quality.get("auto_submit_allowed") not in {False, None} and quality.get("auto_submit_allowed") is not True:
+        blocking.append("candidate quality_gate.auto_submit_allowed is invalid")
+    source_anomaly = candidate.get("source_anomaly") if isinstance(candidate.get("source_anomaly"), dict) else {}
+    if source_anomaly.get("synthetic") is True:
+        blocking.append("synthetic nightly candidates cannot be promoted")
+    gates = candidate.get("production_gates") if isinstance(candidate.get("production_gates"), dict) else {}
+    if any(value != "noop" for value in gates.values()):
+        blocking.append("nightly candidate requires non-noop production gates")
+    for field in ("title", "module", "severity", "expected", "actual"):
+        if not str(candidate.get(field) or "").strip():
+            blocking.append(f"candidate missing {field}")
+    if not candidate.get("reproduce"):
+        blocking.append("candidate missing reproduce")
+    if not candidate.get("evidence_refs"):
+        blocking.append("candidate missing evidence_refs")
+    if not candidate.get("allowed_write_scope"):
+        blocking.append("candidate missing allowed_write_scope")
+    return blocking
+
+
+def _github_search_issue_by_marker(marker: str) -> dict[str, Any] | None:
+    if not marker.strip():
+        return None
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "all",
+            "--search",
+            marker,
+            "--limit",
+            "5",
+            "--json",
+            "number,url,state,title",
+        ],
+        timeout=60,
+    )
+    if not result.get("ok"):
+        return None
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError:
+        return None
+    for issue in issues if isinstance(issues, list) else []:
+        if isinstance(issue, dict) and issue.get("number"):
+            return issue
+    return None
+
+
+def _nightly_extra_issue_sections(candidate: dict[str, Any], issue_payload: dict[str, Any]) -> list[str]:
+    lines: list[str] = [
+        "## Suggested Validation",
+        "",
+        *[f"- `{cmd}`" for cmd in candidate.get("suggested_validation") or []],
+        "",
+        "## CodeGraph / Understand Anything Refs",
+        "",
+        *[f"- `{ref}`" for ref in (candidate.get("codegraph_refs") or []) + (candidate.get("ua_refs") or [])],
+        "",
+        "## Dedupe Fingerprint",
+        "",
+        f"`{candidate.get('dedupe_fingerprint') or candidate.get('fingerprint')}`",
+        str((issue_payload.get("dedupe") or {}).get("marker") or "").strip(),
+    ]
+    return ["\n".join(line for line in lines if line is not None)]
+
+
+def _first_reproduce_command(candidate: dict[str, Any]) -> str:
+    reproduce = candidate.get("reproduce")
+    if isinstance(reproduce, list) and reproduce:
+        return str(reproduce[0])
+    return str(reproduce or "Review nightly discovery candidate payload.")
+
+
+def _first_nox_session(candidate: dict[str, Any]) -> str | None:
+    for command in candidate.get("suggested_validation") or []:
+        match = re.search(r"\bnox\s+-s\s+([A-Za-z0-9_.-]+)", str(command))
+        if match:
+            return match.group(1)
+    return None
+
+
+def build_promote_nightly_candidate_plan(
+    *,
+    issue_payload: list[str] | None = None,
+    queue_manifest: str | None = None,
+    apply: bool,
+    opt_in_auto_file: bool = False,
+    bug_id: str | None = None,
+    create_registry_worktree: bool = False,
+    create_fix_worktree: bool = False,
+    skip_dedupe_search: bool = False,
+) -> dict[str, Any]:
+    payloads = _load_nightly_candidate_issue_payloads(
+        issue_payload=issue_payload,
+        queue_manifest=queue_manifest,
+    )
+    if len(payloads) != 1:
+        evaluated = []
+        for payload in payloads:
+            candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+            evaluated.append(
+                {
+                    "candidate_id": candidate.get("candidate_id") or payload.get("candidate_id"),
+                    "payload": _repo_rel(Path(str(payload.get("_source_path")))) if payload.get("_source_path") else None,
+                    "quality_gate": (candidate.get("quality_gate") or {}).get("workflow_gate")
+                    if isinstance(candidate.get("quality_gate"), dict)
+                    else None,
+                }
+            )
+        return {
+            "schema_version": "aistock_issue_workflow_promote_nightly_candidate_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "candidate_selection_required",
+            "dry_run": not apply,
+            "candidate_count": len(payloads),
+            "evaluated_candidates": evaluated,
+            "blocking": ["exactly one Nightly candidate issue payload must be selected for promotion"],
+            "next_command": "python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload <payload-json> --opt-in-auto-file --create-registry-worktree --apply",
+            "production_gates": _production_gates_payload(),
+        }
+
+    issue_payload_obj = payloads[0]
+    candidate = issue_payload_obj["candidate"]
+    candidate_id = str(candidate.get("candidate_id") or issue_payload_obj.get("candidate_id") or "unknown")
+    quality = candidate.get("quality_gate") if isinstance(candidate.get("quality_gate"), dict) else {}
+    dedupe = issue_payload_obj.get("dedupe") if isinstance(issue_payload_obj.get("dedupe"), dict) else {}
+    marker = str(dedupe.get("marker") or "")
+    existing_issue = None if skip_dedupe_search else _github_search_issue_by_marker(marker)
+    blocking = _nightly_candidate_quality_blocking(
+        issue_payload_obj,
+        apply=apply,
+        opt_in_auto_file=opt_in_auto_file,
+        create_registry_worktree=create_registry_worktree,
+        create_fix_worktree=create_fix_worktree,
+    )
+    if existing_issue:
+        blocking.append(f"dedupe marker already exists in GitHub Issue #{existing_issue.get('number')}")
+    if blocking:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_nightly_candidate_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked",
+            "dry_run": not apply,
+            "candidate_id": candidate_id,
+            "candidate_confidence": candidate.get("confidence"),
+            "candidate_module": candidate.get("module"),
+            "candidate_severity": candidate.get("severity"),
+            "quality_gate": quality,
+            "dedupe": {
+                "fingerprint": candidate.get("dedupe_fingerprint") or candidate.get("fingerprint"),
+                "marker": marker,
+                "issue_already_exists": bool(existing_issue),
+                "existing_issue": existing_issue,
+            },
+            "blocking": blocking,
+            "next_command": (
+                f"python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload \"{issue_payload_obj.get('_source_path')}\" "
+                "--opt-in-auto-file --create-registry-worktree --apply"
+            ),
+            "production_gates": _production_gates_payload(),
+        }
+
+    evidence_refs = flow._unique_strings(
+        [
+            *_as_str_list(candidate.get("evidence_refs")),
+            *_as_str_list(candidate.get("codegraph_refs")),
+            *_as_str_list(candidate.get("ua_refs")),
+            str(issue_payload_obj.get("_source_path") or ""),
+        ]
+    )
+    labels = flow._unique_strings(
+        [str(item) for item in issue_payload_obj.get("labels") or [] if str(item or "").strip()]
+        + ["nightly-discovery", "needs-triage"]
+    )
+    plan = build_submit_bug_plan(
+        title=str(candidate.get("title") or issue_payload_obj.get("title") or "Nightly discovery candidate"),
+        module=str(candidate.get("module") or "validation.runner"),
+        severity=str(candidate.get("severity") or "P2"),
+        description=str(candidate.get("summary") or issue_payload_obj.get("body") or candidate.get("title") or ""),
+        expected=str(candidate.get("expected") or "Nightly discovery should not report this anomaly in a healthy workspace."),
+        actual=str(candidate.get("actual") or candidate.get("summary") or "Nightly discovery reported an anomaly."),
+        reproduce_command=_first_reproduce_command(candidate),
+        evidence_refs=evidence_refs,
+        changed_files=_as_str_list(candidate.get("allowed_write_scope")),
+        plan_key=str(candidate.get("source_plan_key") or "nightly_bug_candidate_queue"),
+        nox_session=_first_nox_session(candidate),
+        candidate_type="regression",
+        bug_id=bug_id,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=True,
+        apply=apply,
+        create_registry_worktree=create_registry_worktree,
+        create_fix_worktree=create_fix_worktree,
+        registry_pr_only=False,
+        dry_run=False,
+        github_issue_extra_sections=_nightly_extra_issue_sections(candidate, issue_payload_obj),
+        extra_github_labels=labels,
+    )
+    if apply and create_registry_worktree and not create_fix_worktree and plan.get("bug_id"):
+        registry_root = Path(str(plan.get("registry_root") or REPO_ROOT))
+        registry_commit = _commit_bug_registration_in_fix_worktree(registry_root, str(plan["bug_id"]))
+        absolute_issue_json = registry_root / str(plan.get("bug_json_path") or "")
+        next_command = (
+            f"python scripts/aistock_issue_workflow.py run --bug-id {plan['bug_id']} "
+            f"--issue-json \"{absolute_issue_json}\" --mode plan --create-worktree"
+        )
+        plan["nightly_registry_commit"] = registry_commit
+        plan["next_command"] = next_command
+        if isinstance(plan.get("fix_chain"), dict):
+            plan["fix_chain"]["next_command"] = next_command
+            plan["fix_chain"]["run_next_command"] = next_command
+    source_path = str(issue_payload_obj.get("_source_path") or "")
+    apply_next_command = (
+        f"python scripts/aistock_issue_workflow.py promote-nightly-candidate --issue-payload \"{source_path}\" "
+        "--opt-in-auto-file --create-registry-worktree --apply"
+    )
+    return {
+        "schema_version": "aistock_issue_workflow_promote_nightly_candidate_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "promoted" if apply else "ready_for_apply",
+        "dry_run": not apply,
+        "candidate_id": candidate_id,
+        "candidate_confidence": candidate.get("confidence"),
+        "candidate_module": candidate.get("module"),
+        "candidate_severity": candidate.get("severity"),
+        "quality_gate": quality,
+        "source_payload": _repo_rel(Path(source_path)) if source_path else None,
+        "dedupe": {
+            "fingerprint": candidate.get("dedupe_fingerprint") or candidate.get("fingerprint"),
+            "marker": marker,
+            "issue_already_exists": False,
+        },
+        "github_issue_number": (plan.get("github") or {}).get("number"),
+        "github_issue_url": (plan.get("github") or {}).get("url"),
+        "submit_bug": plan,
+        "next_command": plan.get("next_command") if apply else apply_next_command,
+        "production_gates": _production_gates_payload(),
+    }
+
+
 def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
     current = str(state.get("state") or "")
     worktree = str(state.get("worktree") or state.get("cwd") or "").strip()
@@ -9829,6 +10223,21 @@ def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
 
 
+def cmd_promote_nightly_candidate(args: argparse.Namespace) -> int:
+    payload = build_promote_nightly_candidate_plan(
+        issue_payload=list(args.issue_payload or []),
+        queue_manifest=args.queue_manifest,
+        apply=args.apply,
+        opt_in_auto_file=args.opt_in_auto_file,
+        bug_id=args.bug_id,
+        create_registry_worktree=args.create_registry_worktree,
+        create_fix_worktree=args.create_fix_worktree,
+        skip_dedupe_search=args.skip_dedupe_search,
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted"} else 2
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     payload = build_run_plan(
         bug_id=args.bug_id,
@@ -10106,6 +10515,29 @@ def build_parser() -> argparse.ArgumentParser:
     promote_ci.add_argument("--apply", action="store_true")
     add_output_options(promote_ci)
     promote_ci.set_defaults(func=cmd_promote_ci_issue)
+
+    promote_nightly = sub.add_parser(
+        "promote-nightly-candidate",
+        help="Safely promote one high-quality Nightly BugCandidate payload into GitHub Issue + linked BUG JSON.",
+    )
+    promote_nightly.add_argument("--issue-payload", action="append", help="Path to one aistock_bug_candidate_github_issue_payload_v1 JSON file.")
+    promote_nightly.add_argument("--queue-manifest", help="Read issue payload refs from a Nightly BugCandidate queue manifest; exactly one ready payload is required.")
+    promote_nightly.add_argument("--bug-id", help="Use an already reserved BUG-NNN id.")
+    promote_nightly.add_argument("--opt-in-auto-file", action="store_true", help="Explicitly allow creating a GitHub Issue from a ready Nightly candidate.")
+    promote_nightly.add_argument(
+        "--create-registry-worktree",
+        action="store_true",
+        help="Create a clean registry worktree before writing BUG JSON; required for normal Nightly promotion.",
+    )
+    promote_nightly.add_argument(
+        "--create-fix-worktree",
+        action="store_true",
+        help="Create and seed the eventual fix worktree after issue creation; mutually exclusive with registry worktree.",
+    )
+    promote_nightly.add_argument("--skip-dedupe-search", action="store_true", help="Skip GitHub marker search; intended for offline tests only.")
+    promote_nightly.add_argument("--apply", action="store_true")
+    add_output_options(promote_nightly)
+    promote_nightly.set_defaults(func=cmd_promote_nightly_candidate)
 
     run = sub.add_parser("run", help="Run the Phase 1 issue workflow state machine for one BUG.")
     run.add_argument("--bug-id", required=True)

@@ -316,6 +316,13 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "Build Nightly BugCandidate draft queue" in workflow
     assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
     assert "bug-candidates" in workflow
+    assert "Promote ready Nightly BugCandidates to Issue workflow" in workflow
+    assert "inputs.llm_triage_mode == 'opt_in_auto_file'" in workflow
+    assert "inputs.llm_auto_file_opt_in" in workflow
+    assert "issues: write" in workflow
+    assert "promote-nightly-candidate" in workflow
+    assert "--opt-in-auto-file" in workflow
+    assert "--create-registry-worktree" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow

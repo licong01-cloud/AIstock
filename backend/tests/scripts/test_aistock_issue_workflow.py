@@ -2230,6 +2230,217 @@ def test_submit_bug_can_plan_registry_worktree_without_writes(isolated_workflow_
     assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
 
 
+def test_registry_worktree_creation_uses_canonical_root_not_disposable_checkout(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = isolated_workflow_root / "canonical"
+    canonical.mkdir(parents=True)
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        calls.append((args, cwd))
+        return ""
+
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical)
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_git_worktree_add_new_branch", lambda **_kwargs: calls.append((["worktree-add"], canonical)))
+
+    plan = workflow._maybe_create_registry_worktree(
+        title="Nightly candidate",
+        module="validation.runner",
+        severity="P1",
+        create=True,
+        dry_run=False,
+    )
+
+    assert plan["git_root"] == str(canonical)
+    assert calls[0] == (["fetch", "origin", "main"], canonical)
+    assert calls[1][0] == ["worktree-add"]
+
+
+def _nightly_candidate_payload(path: Path, *, ready: bool = True, confidence: float = 0.91) -> Path:
+    candidate = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-workflow",
+        "source": "nightly_discovery",
+        "source_plan_key": "workflow_discovery_root_clean_guard",
+        "module": "validation.runner",
+        "severity": "P1",
+        "confidence": confidence,
+        "title": "Unexpected dirty path in nightly workspace",
+        "summary": "Nightly discovered a root-cleanliness regression.",
+        "expected": "Nightly workspace should stay clean except ignored tmp validation artifacts.",
+        "actual": "A tracked workflow file was dirty before nightly execution.",
+        "reproduce": ["python scripts/nightly_discovery_plans.py --json run --plan-key workflow_discovery_root_clean_guard"],
+        "evidence_refs": ["scripts/aistock_issue_workflow.py"],
+        "codegraph_refs": ["tmp/validation/code-intelligence/codegraph-freshness.json"],
+        "ua_refs": ["tmp/validation/code-intelligence/ua-summary-manifest.json"],
+        "dedupe_fingerprint": "nc-workflow-root-dirty",
+        "fingerprint": "nc-workflow-root-dirty",
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+        "suggested_validation": ["python -m nox -s workflow_discovery_root_clean_guard"],
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+        "source_anomaly": {"synthetic": False},
+        "quality_gate": {
+            "schema_version": "aistock_bug_candidate_quality_gate_v1",
+            "workflow_gate": "ready" if ready else "draft",
+            "issue_payload_ready": ready,
+            "threshold": 0.8,
+            "reasons": [] if ready else ["confidence_below_threshold"],
+            "auto_submit_allowed": False,
+        },
+    }
+    payload = {
+        "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
+        "mode": "draft_only",
+        "repo": "licong01-cloud/AIstock",
+        "candidate_id": candidate["candidate_id"],
+        "title": "[P1] Unexpected dirty path in nightly workspace",
+        "body": "## Failure / Anomaly Summary\nNightly discovered a root-cleanliness regression.\n",
+        "labels": ["P1", "severity:p1", "module:validation.runner", "nightly-discovery"],
+        "candidate": candidate,
+        "dedupe": {
+            "fingerprint": candidate["dedupe_fingerprint"],
+            "marker": "<!-- aistock-nightly-bug-candidate:nc-workflow-root-dirty -->",
+            "search_query": "repo:licong01-cloud/AIstock is:issue in:body nc-workflow-root-dirty",
+        },
+        "auto_submit_allowed": False,
+        "production_gates": candidate["production_gates"],
+    }
+    return _write_json(path, payload)
+
+
+def test_promote_nightly_candidate_blocks_apply_without_explicit_opt_in(
+    isolated_workflow_root: Path,
+) -> None:
+    payload_path = _nightly_candidate_payload(isolated_workflow_root / "tmp" / "candidate-payload.json")
+
+    payload = workflow.build_promote_nightly_candidate_plan(
+        issue_payload=[str(payload_path)],
+        queue_manifest=None,
+        apply=True,
+        opt_in_auto_file=False,
+        create_registry_worktree=True,
+        create_fix_worktree=False,
+        skip_dedupe_search=True,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert any("--opt-in-auto-file" in item for item in payload["blocking"])
+    assert not list(workflow.BUGS_ROOT.glob("*BUG-*.json"))
+
+
+def test_promote_nightly_candidate_dry_run_builds_complete_issue_workflow_handoff(
+    isolated_workflow_root: Path,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 415})
+    payload_path = _nightly_candidate_payload(isolated_workflow_root / "tmp" / "candidate-payload.json")
+
+    payload = workflow.build_promote_nightly_candidate_plan(
+        issue_payload=[str(payload_path)],
+        queue_manifest=None,
+        apply=False,
+        opt_in_auto_file=False,
+        create_registry_worktree=False,
+        create_fix_worktree=False,
+        skip_dedupe_search=True,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["submit_bug"]["bug_id"] == "BUG-416"
+    body = workflow._render_github_issue_body(
+        payload["submit_bug"]["record"],
+        {"candidate_id": payload["submit_bug"]["candidate_id"]},
+    )
+    assert "## Expected" in body
+    assert "## Actual" in body
+    assert "## Next Step" in body
+    assert "promote-nightly-candidate" not in body
+    assert "CodeGraph / Understand Anything Refs" in body
+    assert "aistock-nightly-bug-candidate:nc-workflow-root-dirty" in body
+    assert payload["submit_bug"]["github"]["planned"] is True
+
+
+def test_promote_nightly_candidate_apply_creates_github_linked_bug_in_registry_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "registry-nightly"
+    allocator = registry / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 415})
+    payload_path = _nightly_candidate_payload(isolated_workflow_root / "tmp" / "candidate-payload.json")
+    created_issue_body: dict[str, str] = {}
+
+    def fake_registry_worktree(**kwargs: Any) -> dict[str, Any]:
+        registry.mkdir(parents=True, exist_ok=True)
+        return {
+            "create_worktree": kwargs["create"],
+            "dry_run": kwargs["dry_run"],
+            "branch": "bug/registry-validation-nightly",
+            "worktree": str(registry),
+            "base": "origin/main",
+            "created": kwargs["create"],
+        }
+
+    def fake_execute(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> dict[str, Any]:
+        assert args[:3] == ["gh", "issue", "create"]
+        body_path = Path(args[args.index("--body-file") + 1])
+        created_issue_body["body"] = body_path.read_text(encoding="utf-8")
+        assert cwd == registry
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "https://github.com/licong01-cloud/AIstock/issues/900",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_maybe_create_registry_worktree", fake_registry_worktree)
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_commit_bug_registration_in_fix_worktree",
+        lambda root, bug_id: {
+            "workflow_gate": "committed",
+            "root": str(root),
+            "branch": "bug/registry-validation-nightly",
+            "commit": "abc123def456",
+            "changed_files": ["tests/aistock_validation/bugs/20260618_BUG-416-unexpected-dirty-path-in-nightly-workspace.json"],
+        },
+    )
+
+    payload = workflow.build_promote_nightly_candidate_plan(
+        issue_payload=[str(payload_path)],
+        queue_manifest=None,
+        apply=True,
+        opt_in_auto_file=True,
+        create_registry_worktree=True,
+        create_fix_worktree=False,
+        skip_dedupe_search=True,
+    )
+
+    assert payload["workflow_gate"] == "promoted"
+    assert payload["github_issue_number"] == 900
+    assert payload["submit_bug"]["bug_id"] == "BUG-416"
+    assert payload["submit_bug"]["nightly_registry_commit"]["workflow_gate"] == "committed"
+    bug_path = registry / payload["submit_bug"]["bug_json_path"]
+    assert bug_path.exists()
+    record = json.loads(bug_path.read_text(encoding="utf-8"))
+    assert record["github_issue_number"] == 900
+    assert record["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/900"
+    assert record["production_ddl_gate"] == "noop"
+    assert "scripts/aistock_issue_workflow.py" in record["allowed_write_scope"]
+    assert "CodeGraph / Understand Anything Refs" in created_issue_body["body"]
+    assert "python scripts/aistock_issue_workflow.py run --bug-id BUG-416 --mode plan --create-worktree" in created_issue_body["body"]
+    assert str(bug_path) in payload["next_command"]
+
+
 def test_submit_bug_allocator_scans_stale_worktrees(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
