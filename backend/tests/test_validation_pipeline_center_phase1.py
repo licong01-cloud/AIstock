@@ -279,6 +279,49 @@ def test_issue_candidate_queue_reads_persisted_history_without_tmp(tmp_path: Pat
     assert item["source_path"] == "tests/aistock_validation/history/issue_candidates/nightly/ci-abc123.json"
 
 
+def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "bug-candidates"
+    queue_dir.mkdir(parents=True)
+    candidate_payload = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-abc123",
+        "title": "Nightly root clean guard detected dirty path",
+        "module": "validation.runner",
+        "severity": "P1",
+        "status": "draft",
+        "fingerprint": "nc-abc123",
+        "dedupe_fingerprint": "nc-abc123",
+        "evidence_refs": ["scripts/nightly_bug_candidate_queue.py"],
+        "suggested_validation": ["python -m nox -s nightly_bug_candidate_queue"],
+        "allowed_write_scope": ["scripts/nightly_bug_candidate_queue.py"],
+    }
+    issue_payload = {
+        "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
+        "title": "[P1] Nightly root clean guard detected dirty path",
+        "candidate": {
+            "candidate_id": "NC-20260618-abc123",
+            "module": "validation.runner",
+            "severity": "P1",
+            "status": "draft",
+            "fingerprint": "nc-abc123",
+        },
+        "dedupe": {"fingerprint": "nc-abc123", "marker": "<!-- aistock-nightly-bug-candidate:nc-abc123 -->"},
+    }
+    (queue_dir / "candidate.json").write_text(json.dumps(candidate_payload), encoding="utf-8")
+    (queue_dir / "issue-payload.json").write_text(json.dumps(issue_payload), encoding="utf-8")
+
+    payload = _service(repo_root=tmp_path).issue_candidates(page=1, page_size=10)
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["candidate_id"] == "NC-20260618-abc123"
+    assert item["source_type"] == "nightly_bug_candidate"
+    assert item["fingerprint"] == "nc-abc123"
+    assert item["recommended_validation"] == ["python -m nox -s nightly_bug_candidate_queue"]
+    assert item["allowed_write_scope"] == ["scripts/nightly_bug_candidate_queue.py"]
+    assert len(item["source_paths"]) == 2
+
+
 def test_phase1_cards_include_all_top_navigation_domains() -> None:
     cards = _service().cards_summary()["cards"]
     card_ids = {item["card_id"] for item in cards}

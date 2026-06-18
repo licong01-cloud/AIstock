@@ -1067,13 +1067,27 @@ class ValidationPipelineCenterService:
                 except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 item = self._candidate_item_from_payload(path, payload)
-                if not item:
-                    continue
-                key = str(item.get("fingerprint") or item.get("candidate_id") or item.get("source_path"))
-                if key in by_key:
-                    by_key[key] = self._merge_candidate_items(by_key[key], item)
+                items: list[dict[str, Any]]
+                if item:
+                    items = [item]
+                elif payload.get("schema_version") == "aistock_bug_candidate_queue_v1" and isinstance(payload.get("candidates"), list):
+                    items = [
+                        queue_item
+                        for queue_item in (
+                            self._candidate_item_from_payload(path, candidate)
+                            for candidate in payload.get("candidates") or []
+                            if isinstance(candidate, dict)
+                        )
+                        if queue_item
+                    ]
                 else:
-                    by_key[key] = item
+                    continue
+                for queue_item in items:
+                    key = str(queue_item.get("fingerprint") or queue_item.get("candidate_id") or queue_item.get("source_path"))
+                    if key in by_key:
+                        by_key[key] = self._merge_candidate_items(by_key[key], queue_item)
+                    else:
+                        by_key[key] = queue_item
         return list(by_key.values())
 
     def _candidate_item_from_payload(self, path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1085,8 +1099,14 @@ class ValidationPipelineCenterService:
         handoff = payload.get("agent_handoff") if isinstance(payload.get("agent_handoff"), dict) else {}
         dedupe = payload.get("dedupe") if isinstance(payload.get("dedupe"), dict) else {}
         schema = str(payload.get("schema_version") or candidate.get("schema_version") or event.get("schema_version") or "")
+        if schema == "aistock_bug_candidate_queue_v1":
+            return None
 
-        if not candidate and not schema.startswith(("aistock_ci_failure_", "aistock_failure_event_")) and "fingerprint" not in payload:
+        if (
+            not candidate
+            and not schema.startswith(("aistock_ci_failure_", "aistock_failure_event_", "aistock_bug_candidate_"))
+            and "fingerprint" not in payload
+        ):
             return None
 
         issue_number = (
@@ -1126,7 +1146,7 @@ class ValidationPipelineCenterService:
             or self._candidate_severity_from_labels(payload.get("labels"))
             or "P1"
         )
-        created_at = candidate.get("created_at") or event.get("timestamp") or failure_event.get("timestamp") or self._candidate_path_mtime(path)
+        created_at = candidate.get("created_at") or payload.get("created_at") or event.get("timestamp") or failure_event.get("timestamp") or self._candidate_path_mtime(path)
         evidence_refs = self._candidate_string_list(candidate.get("evidence"))
         evidence_refs.extend(self._candidate_string_list(payload.get("evidence_refs")))
         evidence_refs.extend(self._candidate_string_list(event.get("evidence_refs")))
@@ -1136,21 +1156,22 @@ class ValidationPipelineCenterService:
         required_verification = self._candidate_string_list(candidate.get("required_validation"))
         required_verification.extend(self._candidate_string_list(candidate.get("required_verification")))
         required_verification.extend(self._candidate_string_list(payload.get("required_verification")))
+        required_verification.extend(self._candidate_string_list(payload.get("suggested_validation")))
         required_verification.extend(self._candidate_string_list(handoff.get("required_verification")))
         if not required_verification:
             required_verification = self._candidate_string_list([event.get("reproduce_command"), failure_event.get("reproduce_command")])
 
         return {
             "schema_version": CANDIDATE_QUEUE_SCHEMA,
-            "candidate_id": candidate.get("candidate_id") or payload.get("pack_id") or event.get("event_id") or failure_event.get("event_id") or f"CAND-{str(fingerprint)[:16]}",
+            "candidate_id": candidate.get("candidate_id") or payload.get("candidate_id") or payload.get("pack_id") or event.get("event_id") or failure_event.get("event_id") or f"CAND-{str(fingerprint)[:16]}",
             "title": candidate.get("title") or payload.get("title") or payload.get("problem_statement") or event.get("normalized_error") or failure_event.get("normalized_error") or "Issue workflow candidate",
             "source_type": self._candidate_source_type(schema),
             "source_schema": schema or "unknown",
             "module_id": str(module_id),
             "severity": str(severity).upper(),
-            "status": str(candidate.get("status") or payload.get("candidate_status") or event.get("candidate_status") or failure_event.get("candidate_status") or "new"),
+            "status": str(candidate.get("status") or payload.get("status") or payload.get("candidate_status") or event.get("candidate_status") or failure_event.get("candidate_status") or "new"),
             "fingerprint": str(fingerprint),
-            "dedupe_key": candidate.get("dedupe_key") or dedupe.get("marker") or dedupe.get("search_query"),
+            "dedupe_key": candidate.get("dedupe_key") or payload.get("dedupe_fingerprint") or dedupe.get("marker") or dedupe.get("search_query"),
             "run_count": int(payload.get("run_count") or payload.get("occurrence_count") or payload.get("recurrence_count") or 1),
             "github_issue_number": issue_number,
             "github_issue_url": issue_url,
@@ -1179,6 +1200,12 @@ class ValidationPipelineCenterService:
             return "ci_github_issue_payload"
         if schema == "aistock_failure_event_v1":
             return "failure_event"
+        if schema == "aistock_bug_candidate_v1":
+            return "nightly_bug_candidate"
+        if schema == "aistock_bug_candidate_github_issue_payload_v1":
+            return "nightly_bug_candidate_issue_payload"
+        if schema == "aistock_bug_candidate_queue_v1":
+            return "nightly_bug_candidate_queue"
         return "issue_flow_candidate"
 
     @staticmethod

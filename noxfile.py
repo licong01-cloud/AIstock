@@ -2290,6 +2290,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_adaptive_scheduler.py",
         "scripts/nightly_discovery_plans.py",
+        "scripts/nightly_bug_candidate_queue.py",
         external=True,
     )
     _run_pytest(
@@ -2298,6 +2299,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "backend/tests/scripts/test_nightly_discovery_plans.py",
+        "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
         "backend/tests/scripts/test_llm_provider_adapter.py",
         "-q",
         "-p",
@@ -2371,6 +2373,45 @@ def code_intelligence_discovery_affected_tests_quality(session: nox.Session) -> 
 def validation_center_discovery_run_record_integrity(session: nox.Session) -> None:
     """Run readonly active-discovery checks for validation history records."""
     _run_nightly_discovery_plan(session, "validation_center_discovery_run_record_integrity")
+
+
+@nox.session(venv_backend="none")
+def nightly_bug_candidate_queue(session: nox.Session) -> None:
+    """Validate Nightly BugCandidate draft queue and quality gate artifacts."""
+    out_dir = ROOT / "tmp" / "validation" / "nightly_bug_candidate_queue"
+    discovery_dir = out_dir / "discovery"
+    queue_dir = out_dir / "queue"
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "scripts/nightly_discovery_plans.py",
+        "--json",
+        "run-selected",
+        "--output-dir",
+        str(discovery_dir),
+        "--default-plan-key",
+        "validation_discovery_issue_intake_readonly",
+        "--default-plan-key",
+        "workflow_discovery_root_clean_guard",
+        "--default-plan-key",
+        "code_intelligence_discovery_affected_tests_quality",
+        "--default-plan-key",
+        "validation_center_discovery_run_record_integrity",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/nightly_bug_candidate_queue.py",
+        "--json",
+        "build",
+        "--discovery-manifest",
+        str(discovery_dir / "manifest.json"),
+        "--output-dir",
+        str(queue_dir),
+        "--existing-queue-dir",
+        str(ROOT / "tmp" / "validation" / "nightly_failure_issue" / "candidate_history"),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

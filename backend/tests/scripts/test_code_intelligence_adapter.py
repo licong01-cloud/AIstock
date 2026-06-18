@@ -1330,6 +1330,13 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         json.dumps({"summary": {"executed_count": 1, "anomaly_count": 0}}),
         encoding="utf-8",
     )
+    bug_candidate_dir = artifact_dir / "bug-candidates"
+    bug_candidate_dir.mkdir()
+    (bug_candidate_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"candidate_count": 2, "issue_payload_ready_count": 1}}),
+        encoding="utf-8",
+    )
+    (bug_candidate_dir / "candidate-summary.md").write_text("## Nightly BugCandidate Queue\n", encoding="utf-8")
     (artifact_dir / "llm-prompt-evaluation.json").write_text(
         json.dumps(
             {
@@ -1363,12 +1370,16 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["llm"]["allowed_plan_keys"] == ["l0", "validation_module_registry_l0"]
     assert payload["llm"]["discovery_hypothesis_count"] == 1
     assert payload["llm"]["selected_plan_count"] == 1
+    assert payload["llm"]["bug_candidate_count"] == 2
+    assert payload["llm"]["bug_candidate_issue_payload_count"] == 1
     assert payload["understand_anything"]["summary_count"] == 2
     assert "LLM + Code Intelligence Value" in markdown
     assert "llm_provider: `deepseek_api`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
     assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
     assert "discovery_plans: `executed=1, anomalies=0`" in markdown
+    assert "bug_candidates: `candidates=2, issue_payload_drafts=1`" in markdown
+    assert "bug-candidates/manifest.json" in markdown
     assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 

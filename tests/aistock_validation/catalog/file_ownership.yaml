@@ -82,6 +82,7 @@ rules:
       - scripts/ci_failure_issue_summary.py
       - scripts/nightly_adaptive_scheduler.py
       - scripts/nightly_discovery_plans.py
+      - scripts/nightly_bug_candidate_queue.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
     impact_modules: [validation.center, validation.runner, validation.module_quality]
@@ -136,6 +137,7 @@ rules:
       - backend/tests/scripts/test_issue_flow.py
       - backend/tests/scripts/test_ci_failure_issue_summary.py
       - backend/tests/scripts/test_nightly_discovery_*.py
+      - backend/tests/scripts/test_nightly_bug_candidate_*.py
     primary_module: tests.backend
     impact_modules: [validation.center, validation.runner, validation.coverage, validation.guardrails, validation.module_quality]
     layer: backend_test
