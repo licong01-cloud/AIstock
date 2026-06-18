@@ -377,6 +377,7 @@ class ValidationPipelineCenterService:
 
     def issue_candidate_summary(self) -> dict[str, Any]:
         items = self.issue_candidates(page=1, page_size=10000)["items"]
+        outcome = self._candidate_outcome_metrics(items)
         by_status = Counter(str(item.get("status") or "unknown") for item in items)
         by_module = Counter(str(item.get("module_id") or "unknown") for item in items)
         by_severity = Counter(str(item.get("severity") or "unknown") for item in items)
@@ -395,6 +396,10 @@ class ValidationPipelineCenterService:
             reason_codes.append("no_issue_ready_candidate")
         if len(items) - linked_issue_count > 0:
             reason_codes.append("missing_github_issue_links")
+        if outcome["confirmed_issue_count"]:
+            reason_codes.append("confirmed_nightly_issue")
+        elif items:
+            reason_codes.append("no_confirmed_nightly_issue_yet")
         return {
             "schema_version": CANDIDATE_QUEUE_SCHEMA,
             "generated_at": _now_iso(),
@@ -413,6 +418,7 @@ class ValidationPipelineCenterService:
             "by_source_type": dict(sorted(by_source_type.items())),
             "by_quality_gate": dict(sorted(by_quality_gate.items())),
             "no_submit_reason_counts": dict(sorted(no_submit_reason_counts.items())),
+            "outcome_metrics": outcome,
             "reason_codes": reason_codes,
             "data_state": "complete",
             "production_8001_touched": False,
@@ -1323,6 +1329,46 @@ class ValidationPipelineCenterService:
     def _candidate_first_string(value: Any) -> str | None:
         items = ValidationPipelineCenterService._candidate_string_list(value)
         return items[0] if items else None
+
+    def _candidate_outcome_metrics(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        bugs = self.finding_store.list_bugs(page_size=10000)["items"]
+        bugs_by_issue = {
+            str(value): bug
+            for bug in bugs
+            for value in (bug.get("github_issue_number"), bug.get("github_issue_url"))
+            if value
+        }
+        confirmed = 0
+        false_positive = 0
+        promoted = 0
+        deduped = 0
+        open_unlinked = 0
+        for item in items:
+            if item.get("github_issue_number") or item.get("github_issue_url"):
+                promoted += 1
+            if str(item.get("status") or "").lower() == "deduped":
+                deduped += 1
+            if not (item.get("github_issue_number") or item.get("github_issue_url")):
+                open_unlinked += 1
+            bug = bugs_by_issue.get(str(item.get("github_issue_number"))) or bugs_by_issue.get(str(item.get("github_issue_url")))
+            if bug:
+                workflow = _workflow_state(bug.get("status"))
+                if workflow in {"fixed", "verified", "closed"}:
+                    confirmed += 1
+                elif str(bug.get("status") or "").lower() in {"rejected", "false_positive", "not_a_bug"}:
+                    false_positive += 1
+        total = len(items)
+        return {
+            "candidate_count": total,
+            "promoted_issue_count": promoted,
+            "confirmed_issue_count": confirmed,
+            "false_positive_count": false_positive,
+            "deduped_count": deduped,
+            "open_unlinked_count": open_unlinked,
+            "promotion_rate": round(promoted / total, 4) if total else 0.0,
+            "confirmation_rate": round(confirmed / promoted, 4) if promoted else 0.0,
+            "false_positive_rate": round(false_positive / promoted, 4) if promoted else 0.0,
+        }
 
     @staticmethod
     def _candidate_severity_from_labels(value: Any) -> str | None:

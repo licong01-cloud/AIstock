@@ -127,7 +127,7 @@ class _FakeModuleRegistry:
         return [SimpleNamespace(module_id="validation.center"), SimpleNamespace(module_id="validation.runner")]
 
 
-def _service(repo_root: Path | None = None) -> ValidationPipelineCenterService:
+def _service(repo_root: Path | None = None, extra_bugs: list[dict] | None = None) -> ValidationPipelineCenterService:
     return ValidationPipelineCenterService(
         repo_root=repo_root,
         history_store=_FakeHistoryStore(),
@@ -152,7 +152,7 @@ def _service(repo_root: Path | None = None) -> ValidationPipelineCenterService:
                     "status": "detected",
                     "allowed_write_scope": [],
                 },
-            ],
+            ] + list(extra_bugs or []),
             findings=[
                 {
                     "finding_id": "legacy_1",
@@ -392,7 +392,20 @@ def test_issue_candidate_queue_reads_code_intelligence_bug_candidate_artifacts(t
     (candidate_dir / "NC-20260618-ready.json").write_text(json.dumps(candidate), encoding="utf-8")
     (payload_dir / "NC-20260618-ready.json").write_text(json.dumps(issue_payload), encoding="utf-8")
 
-    service = _service(repo_root=tmp_path)
+    service = _service(
+        repo_root=tmp_path,
+        extra_bugs=[
+            {
+                "bug_id": "BUG-999",
+                "title": "Validation API probe found stale plan catalog",
+                "module": "validation.center",
+                "severity": "P1",
+                "status": "verified",
+                "github_issue_number": 1250,
+                "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1250",
+            }
+        ],
+    )
     payload = service.issue_candidates(page=1, page_size=10)
     summary = service.issue_candidate_summary()
 
@@ -410,6 +423,57 @@ def test_issue_candidate_queue_reads_code_intelligence_bug_candidate_artifacts(t
     assert summary["issue_payload_ready_count"] == 1
     assert summary["draft_count"] == 1
     assert summary["no_submit_reason_counts"] == {"auto_submit_disabled": 1, "awaiting_operator_promotion": 1}
+    assert summary["outcome_metrics"]["promoted_issue_count"] == 0
+    assert summary["outcome_metrics"]["confirmed_issue_count"] == 0
+
+
+def test_issue_candidate_summary_reports_discovery_outcomes(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "9002" / "bug-candidates"
+    queue_dir.mkdir(parents=True)
+    candidate = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-promoted",
+        "source_plan_key": "workflow_discovery_root_clean_guard",
+        "title": "Root dirty file was promoted",
+        "module": "validation.runner",
+        "severity": "P1",
+        "status": "draft",
+        "confidence": 0.95,
+        "summary": "A real workflow issue was found and fixed.",
+        "expected": "Root stays clean.",
+        "actual": "Root became dirty.",
+        "reproduce": ["python -m nox -s workflow_discovery_root_clean_guard"],
+        "fingerprint": "nc-promoted",
+        "dedupe_fingerprint": "nc-promoted",
+        "evidence_refs": ["tmp/validation/code-intelligence/9002/root-clean.json"],
+        "suggested_validation": ["python -m nox -s validation_workflow_automation"],
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+        "github_issue_number": 1251,
+        "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1251",
+        "quality_gate": {"workflow_gate": "ready", "issue_payload_ready": True, "auto_submit_allowed": False, "reasons": []},
+    }
+    (queue_dir / "candidate.json").write_text(json.dumps(candidate), encoding="utf-8")
+
+    summary = _service(
+        repo_root=tmp_path,
+        extra_bugs=[
+            {
+                "bug_id": "BUG-998",
+                "title": "Root dirty file was promoted",
+                "module": "validation.runner",
+                "severity": "P1",
+                "status": "closed",
+                "github_issue_number": 1251,
+                "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1251",
+            }
+        ],
+    ).issue_candidate_summary()
+
+    assert summary["outcome_metrics"]["candidate_count"] == 1
+    assert summary["outcome_metrics"]["promoted_issue_count"] == 1
+    assert summary["outcome_metrics"]["confirmed_issue_count"] == 1
+    assert summary["outcome_metrics"]["confirmation_rate"] == 1.0
+    assert "confirmed_nightly_issue" in summary["reason_codes"]
 
 
 def test_phase1_cards_include_all_top_navigation_domains() -> None:
