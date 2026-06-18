@@ -32,6 +32,7 @@ from backend.services.research_assistant.service import (
     DialogueIntent,
     DialogueMode,
     LlmCallResult,
+    McpToolCall,
     ModeDecision,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
@@ -1583,6 +1584,97 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     assert summary["group_counts"]["running"] == 2
     assert summary["group_counts"]["blocked"] == 1
 
+
+
+def test_bug_412_local_data_agentic_tools_do_not_offer_uncovered_manifest_tool() -> None:
+    class LocalDataNativeToolLlmClient(FakeLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.offered_tool_pairs: list[set[tuple[str, str]]] = []
+            self.tool_call_attempt = 0
+
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            registry = kwargs.get("tool_registry") if isinstance(kwargs.get("tool_registry"), dict) else {}
+            if registry:
+                offered = {
+                    (str(mapping.get("server_key")), str(mapping.get("tool_name")))
+                    for mapping in registry.values()
+                    if isinstance(mapping, dict)
+                }
+                self.offered_tool_pairs.append(offered)
+            answer = _agentic_business_answer(kwargs.get("messages"))
+            if answer is not None:
+                return LlmCallResult(
+                    content=answer,
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
+            if self.tool_call_attempt == 0:
+                self.tool_call_attempt += 1
+                return LlmCallResult(
+                    content="",
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                    tool_calls=[
+                        McpToolCall(
+                            server_key="aistock-local-data",
+                            tool_name="local_data_get_unack_alert_count",
+                            payload_json={},
+                            stable_call_id="native-uncovered-local-data-alert-count",
+                            reason="native_function_call:local_data_get_unack_alert_count",
+                        )
+                    ],
+                )
+            if self.tool_call_attempt == 1:
+                self.tool_call_attempt += 1
+                return LlmCallResult(
+                    content="",
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                    tool_calls=[
+                        McpToolCall(
+                            server_key="aistock-local-data",
+                            tool_name="local_data_get_preset_daily_status",
+                            payload_json={"trade_date": "2026-06-17"},
+                            stable_call_id="native-local-data-daily-status",
+                            reason="native_function_call:local_data_get_preset_daily_status",
+                        )
+                    ],
+                )
+            return LlmCallResult(
+                content="Insufficient evidence: expected local-data tool result first.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = LocalDataNativeToolLlmClient()
+    svc = _chat_service(fake)
+    svc.local_data_service_factory = FakeLocalDataDailyStatusService
+
+    result = svc.chat_turn(ChatTurnRequest(message="\u6628\u5929\u7684\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u662f\u5426\u8fd0\u884c\u6b63\u5e38\uff1f"))
+
+    offered = set().union(*fake.offered_tool_pairs)
+    assert ("aistock-local-data", "local_data_get_unack_alert_count") not in offered
+    assert ("aistock-local-data", "local_data_get_preset_daily_status") in offered
+    text = result["assistant_message"]["content_text"]
+    assert "approved capability not found" not in text
+    assert "Insufficient evidence" not in text
+    assert "success=1" in text
+    react_results = result["cards"]["react_grounding"]
+    assert react_results["tool_call_count"] >= 2
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["tool_name"] == "local_data_get_preset_daily_status"
+    assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
 
 
 def test_bug_356_generic_local_data_sync_summary_returns_dataset_status_list_without_diagnostics() -> None:
