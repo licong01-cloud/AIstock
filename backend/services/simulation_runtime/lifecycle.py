@@ -102,6 +102,27 @@ def _pre_trade_blocked_order_generation_payload(plan: ExecutionPlan) -> dict[str
     }
 
 
+def _target_equity_basis_payload(
+    *,
+    binding: SimulationReleaseBinding,
+    target_total_equity: float | None,
+    target_equity_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if target_total_equity is None:
+        return {
+            "schema_version": "simulation_target_equity_basis_v1",
+            "source": "binding.capital_allocation",
+            "total_equity": float(binding.capital_allocation),
+            "capital_allocation": float(binding.capital_allocation),
+        }
+    payload = dict(target_equity_context or {})
+    payload.setdefault("schema_version", "simulation_target_equity_basis_v1")
+    payload.setdefault("source", "dynamic_account_equity")
+    payload["total_equity"] = float(target_total_equity)
+    payload["capital_allocation"] = float(binding.capital_allocation)
+    return payload
+
+
 class SimulationLifecycleOrchestrator:
     """Build and submit one broker-neutral simulation day lifecycle."""
 
@@ -135,6 +156,8 @@ class SimulationLifecycleOrchestrator:
         top_k: int | None = None,
         execution_policy_payload: dict[str, Any] | None = None,
         tail_policy_payload: dict[str, Any] | None = None,
+        target_total_equity: float | None = None,
+        target_equity_context: dict[str, Any] | None = None,
         created_by: str | None = None,
     ) -> SimulationPlanBuildResult:
         self._validate_release_binding(runtime_release=runtime_release, binding=binding)
@@ -157,7 +180,7 @@ class SimulationLifecycleOrchestrator:
             signal_snapshot=signal_snapshot,
             runtime_release=runtime_release,
             binding=binding,
-            total_equity=binding.capital_allocation,
+            total_equity=target_total_equity if target_total_equity is not None else binding.capital_allocation,
             top_k=top_k,
             manifest=manifest,
             current_positions=current_positions or {},
@@ -180,6 +203,11 @@ class SimulationLifecycleOrchestrator:
                 "order_intent_count": len(rebalance.order_intents),
                 "trading_rule_decision_count": len(rebalance.trading_rule_decisions),
                 "pre_trade_blocked_symbol_count": _pre_trade_blocked_symbol_count(pre_trade_tradability),
+                "target_equity_basis": _target_equity_basis_payload(
+                    binding=binding,
+                    target_total_equity=target_total_equity,
+                    target_equity_context=target_equity_context,
+                ),
                 "last_stage": "PLANNING_EXECUTION",
             },
         )

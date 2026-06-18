@@ -9,6 +9,7 @@ that a backend tick cannot duplicate orders.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 from collections.abc import Callable
@@ -84,6 +85,69 @@ DEFAULT_SCHEDULER_WINDOWS = (
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 
+
+def _build_dynamic_target_equity_basis(
+    *,
+    binding: SimulationReleaseBinding,
+    cash: float,
+    frozen_cash: float,
+    positions: dict[str, PositionLot],
+    prices: dict[str, float],
+    source: str,
+) -> tuple[float, dict[str, Any]]:
+    invalid_marks: list[dict[str, Any]] = []
+    market_value = 0.0
+    for symbol, position in positions.items():
+        quantity = int(position.quantity)
+        if quantity <= 0:
+            continue
+        raw_price = prices.get(symbol)
+        try:
+            price = float(raw_price) if raw_price is not None else float("nan")
+        except (TypeError, ValueError):
+            price = float("nan")
+        if not math.isfinite(price) or price <= 0:
+            invalid_marks.append({"symbol": symbol, "price": raw_price})
+            continue
+        market_value += quantity * price
+    if invalid_marks:
+        raise DataUnavailableError(
+            "dynamic target sizing requires positive finite marks for all held positions",
+            context={
+                "strategy_id": binding.strategy_id,
+                "binding_id": binding.binding_id,
+                "broker_backend": binding.broker_backend.value,
+                "invalid_marks": invalid_marks,
+            },
+        )
+    total_equity = float(cash) + float(frozen_cash) + market_value
+    if total_equity <= 0:
+        raise RuntimeConfigInvalidError(
+            "dynamic target sizing requires positive strategy-slot total_equity",
+            context={
+                "strategy_id": binding.strategy_id,
+                "binding_id": binding.binding_id,
+                "broker_backend": binding.broker_backend.value,
+                "cash": float(cash),
+                "frozen_cash": float(frozen_cash),
+                "market_value": market_value,
+            },
+        )
+    return total_equity, {
+        "schema_version": "simulation_target_equity_basis_v1",
+        "source": source,
+        "strategy_id": binding.strategy_id,
+        "binding_id": binding.binding_id,
+        "broker_backend": binding.broker_backend.value,
+        "cash": float(cash),
+        "frozen_cash": float(frozen_cash),
+        "market_value": market_value,
+        "total_equity": total_equity,
+        "capital_allocation": float(binding.capital_allocation),
+        "position_count": sum(1 for position in positions.values() if int(position.quantity) > 0),
+    }
+
+
 _MINIQMT_DEPENDENT_BUY_RETRY_ERROR_CODES = frozenset(
     {
         "SELL_PROCEEDS_REQUIRED",
@@ -145,6 +209,8 @@ class SimulationRunContext:
     realized_pnl: float = 0.0
     market_data_source: str | None = None
     pre_trade_tradability: dict[str, dict[str, Any]] = field(default_factory=dict)
+    target_total_equity: float | None = None
+    target_equity_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -434,6 +500,14 @@ class ProductionSimulationRunContextProvider:
             positions=positions,
             trade_date=trade_date,
         )
+        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=cash,
+            frozen_cash=0.0,
+            positions=positions,
+            prices=prices,
+            source="paper_v2_portfolio_dynamic_equity",
+        )
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -443,9 +517,12 @@ class ProductionSimulationRunContextProvider:
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
             context_diagnostics={
                 "localsim_tplus1_settlement": settlement_diagnostics,
                 "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+                "target_equity_basis": target_equity_context,
             },
             market_data_source=(
                 getattr(local_broker, "data_source").value
@@ -592,6 +669,16 @@ class ProductionSimulationRunContextProvider:
             if self._qmt_reconciliation_service_factory is not None
             else QmtStrategyLedgerReconciliationService(repository=qmt_repository)
         )
+        cash = float(account.cash)
+        frozen_cash = float(account.frozen_cash)
+        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=cash,
+            frozen_cash=frozen_cash,
+            positions=positions,
+            prices=prices,
+            source="miniqmt_strategy_slot_dynamic_equity",
+        )
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -605,10 +692,13 @@ class ProductionSimulationRunContextProvider:
             context_diagnostics={
                 "miniqmt_broker_position_reconciliation": reconciliation_diagnostics,
                 "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
+                "target_equity_basis": target_equity_context,
             },
-            cash=float(account.cash),
-            frozen_cash=float(account.frozen_cash),
+            cash=cash,
+            frozen_cash=frozen_cash,
             realized_pnl=float(account.realized_pnl),
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
             price_by_symbol=prices,
             market_data_source=MinuteDataSource.MINIQMT_REALTIME.value,
             pre_trade_tradability=pre_trade_tradability,
@@ -4569,6 +4659,10 @@ class SimulationLifecycleScheduler:
             valid_no_candidate=selection.valid_no_candidate,
             no_candidate_reason=selection.no_candidate_reason,
         )
+        target_total_equity, target_equity_context = self._target_equity_basis_for_context(
+            binding=binding,
+            context=context,
+        )
         return self.orchestrator.build_execution_plan(
             runtime_release=runtime_release,
             binding=binding,
@@ -4582,7 +4676,48 @@ class SimulationLifecycleScheduler:
             top_k=context.top_k,
             execution_policy_payload=context.execution_policy_payload,
             tail_policy_payload=context.tail_policy_payload,
+            target_total_equity=target_total_equity,
+            target_equity_context=target_equity_context,
             created_by=created_by,
+        )
+
+    @staticmethod
+    def _target_equity_basis_for_context(
+        *,
+        binding: SimulationReleaseBinding,
+        context: SimulationRunContext,
+    ) -> tuple[float | None, dict[str, Any] | None]:
+        if context.target_total_equity is not None:
+            return float(context.target_total_equity), dict(context.target_equity_context or {})
+        cash = context.cash
+        frozen_cash = context.frozen_cash
+        if cash is None:
+            if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and context.qmt_ledger_repository is not None:
+                account = context.qmt_ledger_repository.get_virtual_account(binding.strategy_id)
+                cash = float(account.cash)
+                frozen_cash = float(account.frozen_cash)
+            elif binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and (
+                context.qmt_sync_service is not None
+                or context.qmt_reconciliation_service is not None
+                or bool(context.broker_positions)
+            ):
+                raise DataUnavailableError(
+                    "MiniQMT target sizing requires strategy-slot dynamic cash/equity context",
+                    context={"strategy_id": binding.strategy_id, "binding_id": binding.binding_id},
+                )
+            else:
+                return None, None
+        return _build_dynamic_target_equity_basis(
+            binding=binding,
+            cash=float(cash),
+            frozen_cash=float(frozen_cash),
+            positions=context.current_positions,
+            prices=SimulationLifecycleScheduler._performance_marks(context),
+            source=(
+                "miniqmt_strategy_slot_dynamic_equity"
+                if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                else "paper_v2_portfolio_dynamic_equity"
+            ),
         )
 
     def _pre_trade_tradability_for_planning(

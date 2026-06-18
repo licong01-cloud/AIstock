@@ -604,6 +604,75 @@ def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_e
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_intents[0]
 
 
+def test_scheduler_sizes_miniqmt_targets_from_dynamic_strategy_slot_equity() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            frozen_cash=Decimal("10000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    candidates = [
+        SelectionCandidate(
+            symbol="000001.SZ",
+            score=0.99,
+            rank=1,
+            target_weight=0.10,
+            reference_price=10.0,
+            reason="daily_strategy_buy_or_retain",
+        )
+    ]
+    context = SimulationRunContext(
+        portfolio_id=qmt_binding.strategy_id,
+        current_positions={
+            "000003.SZ": PositionLot(
+                portfolio_id=qmt_binding.strategy_id,
+                symbol="000003.SZ",
+                quantity=1000,
+                available_quantity=1000,
+                avg_cost=9.0,
+                trade_date=date(2026, 5, 20),
+            )
+        },
+        current_prices={"000003.SZ": 20.0},
+        qmt_ledger_repository=qmt_repo,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=candidates),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={qmt_binding.binding_id: context}),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+
+    assert result.planned_count == 1
+    plan = result.results[0].execution_plan
+    assert plan is not None
+    buy = next(intent for intent in plan.intents if intent.symbol == "000001.SZ")
+    assert buy.order_quantity == 1300
+    run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    basis = run.run_payload_json["target_equity_basis"]
+    assert basis["source"] == "miniqmt_strategy_slot_dynamic_equity"
+    assert basis["cash"] == 100_000.0
+    assert basis["frozen_cash"] == 10_000.0
+    assert basis["market_value"] == 20_000.0
+    assert basis["total_equity"] == 130_000.0
+    assert basis["capital_allocation"] == 100_000.0
+
+
 def test_scheduler_persists_no_rebalance_evidence_when_targets_match_current_positions() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     scheduler = SimulationLifecycleScheduler(
@@ -3648,7 +3717,11 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
     preview_intents = qmt_repo.list_order_intents_by_batch(payload["qmt_batch_id"])
     quantity_by_symbol = {intent.symbol: intent.quantity for intent in preview_intents}
     assert quantity_by_symbol["000001.SZ"] == 4700
-    assert quantity_by_symbol["688001.SH"] == 2375
+    assert quantity_by_symbol["688001.SH"] == 2389
+    assert payload["target_equity_basis"]["source"] == "miniqmt_strategy_slot_dynamic_equity"
+    assert payload["target_equity_basis"]["cash"] == 100_000.0
+    assert payload["target_equity_basis"]["market_value"] == 616.0
+    assert payload["target_equity_basis"]["total_equity"] == 100_616.0
     assert [intent.submit_status for intent in preview_intents] == [
         IntentSubmitStatus.CREATED,
         IntentSubmitStatus.CREATED,
