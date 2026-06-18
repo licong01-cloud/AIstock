@@ -8,9 +8,13 @@ AIstock service, repository, database, or domain modules.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+
+
+logger = logging.getLogger("aistock.research_assistant.react_grounding")
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,13 @@ ToolResultCompactor = Callable[[McpToolResult], McpToolResult]
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 _TOOL_CHOICE_RE = re.compile(r"<assistant_tool_choice\b[^>]*>(.*?)</assistant_tool_choice>", re.IGNORECASE | re.DOTALL)
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?\s*(?:%|days?|items?)?")
+PROGRAM_ERROR_REASON_CODES = {
+    "capability_not_found",
+    "tool_not_in_audited_catalog",
+    "tool_execution_error",
+    "data_source_unavailable",
+    "tool_result_compaction_error",
+}
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -272,6 +283,100 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
                 for key, value in payload["status_groups"].items()
             }
     return compact
+
+
+def _classify_exception_reason(exc: BaseException, call: McpToolCall) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if isinstance(exc, KeyError) and "approved capability not found for tool" in lowered:
+        return "capability_not_found"
+    unavailable_terms = (
+        "connection refused",
+        "connection reset",
+        "timed out",
+        "timeout",
+        "unavailable",
+        "offline",
+        "database is locked",
+        "could not connect",
+    )
+    if call.server_key == "aistock-local-data" and any(term in lowered for term in unavailable_terms):
+        return "data_source_unavailable"
+    return "tool_execution_error"
+
+
+def exception_result(call: McpToolCall, exc: BaseException, *, stage: str) -> McpToolResult:
+    reason_code = _classify_exception_reason(exc, call)
+    error = {
+        "reason_code": reason_code,
+        "code": reason_code,
+        "stage": stage,
+        "server_key": call.server_key,
+        "tool_name": call.tool_name,
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+    }
+    return McpToolResult(
+        server_key=call.server_key,
+        tool_name=call.tool_name,
+        status="failed",
+        summary=_render_program_error_summary(error),
+        error_json=error,
+        executed=False,
+        blocked_reason=reason_code,
+        stable_call_id=call.stable_call_id,
+    )
+
+
+def _program_error_results(results: list[McpToolResult]) -> list[McpToolResult]:
+    program_errors: list[McpToolResult] = []
+    for result in results:
+        error = result.error_json if isinstance(result.error_json, dict) else {}
+        reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
+        if result.status in {"failed", "rejected"} and reason_code in PROGRAM_ERROR_REASON_CODES:
+            program_errors.append(result)
+    return program_errors
+
+
+def _render_program_error_summary(error: dict[str, Any]) -> str:
+    reason_code = str(error.get("reason_code") or error.get("code") or "tool_execution_error")
+    route = f"{error.get('server_key')}/{error.get('tool_name')}"
+    exc_type = str(error.get("exception_type") or error.get("error_type") or "Error")
+    message = str(error.get("message") or error.get("human_reason") or error.get("error_summary") or "")
+    return (
+        "工具调用失败："
+        f"reason_code={reason_code}; tool={route}; exception_type={exc_type}; "
+        f"error_summary={message}"
+    ).strip()
+
+
+def _render_program_error_reply(results: list[McpToolResult]) -> str:
+    lines = ["本轮无法完成工具取证，因为检测到真实工具/能力错误（不是 evidence insufficient）："]
+    for result in results[:3]:
+        error = result.error_json if isinstance(result.error_json, dict) else {}
+        if not error:
+            error = {
+                "reason_code": result.blocked_reason or "tool_execution_error",
+                "server_key": result.server_key,
+                "tool_name": result.tool_name,
+                "message": result.summary,
+            }
+        lines.append(f"- {_render_program_error_summary(error)}")
+    if len(results) > 3:
+        lines.append(f"- 另有 {len(results) - 3} 个工具错误，详见本轮诊断卡。")
+    return "\n".join(lines)
+
+
+def _text_reports_program_error(text: str, results: list[McpToolResult]) -> bool:
+    lowered = text.lower()
+    if "reason_code" not in lowered:
+        return False
+    for result in results:
+        error = result.error_json if isinstance(result.error_json, dict) else {}
+        reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
+        if reason_code and reason_code.lower() in lowered:
+            return True
+    return False
 
 
 TERMINAL_SUMMARY_RESPONSE_MODES = {"local_data_daily_sync_status", "stock_analysis_evidence_card"}
@@ -424,6 +529,11 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
     text = strip_internal_chain(answer_text).strip()
     source_count = sum(1 for item in collected_results if item.source_refs)
     as_of_count = sum(1 for item in collected_results if item.as_of)
+    program_errors = _program_error_results(collected_results)
+    if program_errors and _text_reports_program_error(text, program_errors):
+        return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+    if program_errors:
+        return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
     placeholder = _contains_placeholder(text, config.placeholder_patterns)
     if placeholder:
         return EvidenceGuardDecision(False, "Insufficient evidence: placeholder tokens are not allowed in factual answers.", f"placeholder_blocked:{placeholder}", source_count, as_of_count)
@@ -469,7 +579,7 @@ def rejection_result(call: McpToolCall, decision: ToolGateDecision) -> McpToolRe
         tool_name=call.tool_name,
         status="rejected",
         summary=decision.reason,
-        error_json={"code": decision.action, "reason": decision.reason},
+        error_json={"code": decision.action, "reason_code": decision.reason, "reason": decision.reason},
         executed=False,
         blocked_reason=decision.reason,
         stable_call_id=call.stable_call_id,
@@ -569,6 +679,12 @@ def run_react_grounding_loop(
                 final_text = guard.text
                 stopped_reason = "final_answer"
                 return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
+            program_errors = _program_error_results(collected_results)
+            if program_errors:
+                explicit = _render_program_error_reply(program_errors)
+                error_guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+                stopped_reason = "tool_error"
+                return ReactGroundingResult(explicit, working_messages, collected_calls, collected_results, trace_steps, error_guard, iteration, stopped_reason, model_turns)
             fallback_calls = sorted((fallback_tool_calls() if fallback_tool_calls else []), key=lambda call: call.sorted_key())
             already_called = {(call.server_key, call.tool_name) for call in collected_calls}
             fallback_calls = [call for call in fallback_calls if (call.server_key, call.tool_name) not in already_called]
@@ -593,17 +709,37 @@ def run_react_grounding_loop(
         iteration_results: list[McpToolResult] = []
         for call in sorted(calls, key=lambda item: item.sorted_key()):
             collected_calls.append(call)
-            decision = assert_tool_in_catalog(call, catalog_entries)
-            if not decision.allowed:
-                result = rejection_result(call, decision)
-            elif decision.action == "execute_read_only":
-                result = mcp_provider.execute_read_only(call, decision)
-            elif decision.action == "preflight_confirmation_only":
-                result = mcp_provider.preflight_confirmation_only(call, decision)
-            else:
-                result = rejection_result(call, decision)
+            try:
+                decision = assert_tool_in_catalog(call, catalog_entries)
+                if not decision.allowed:
+                    result = rejection_result(call, decision)
+                elif decision.action == "execute_read_only":
+                    result = mcp_provider.execute_read_only(call, decision)
+                elif decision.action == "preflight_confirmation_only":
+                    result = mcp_provider.preflight_confirmation_only(call, decision)
+                else:
+                    result = rejection_result(call, decision)
+            except Exception as exc:  # noqa: BLE001 - one tool failure must not abort the whole chat turn.
+                logger.exception(
+                    "research assistant ReAct tool failed: tool=%s/%s stage=tool_dispatch",
+                    call.server_key,
+                    call.tool_name,
+                )
+                result = exception_result(call, exc, stage="tool_dispatch")
             if tool_result_compactor is not None:
-                result = tool_result_compactor(result)
+                try:
+                    result = tool_result_compactor(result)
+                except Exception as exc:  # noqa: BLE001 - report compaction failures explicitly instead of hiding them.
+                    logger.exception(
+                        "research assistant ReAct tool result compaction failed: tool=%s/%s",
+                        call.server_key,
+                        call.tool_name,
+                    )
+                    result = exception_result(call, exc, stage="tool_result_compaction")
+                    result.error_json["reason_code"] = "tool_result_compaction_error"
+                    result.error_json["code"] = "tool_result_compaction_error"
+                    result.blocked_reason = "tool_result_compaction_error"
+                    result.summary = _render_program_error_summary(result.error_json)
             result.stable_call_id = call.stable_call_id
             iteration_results.append(result)
         iteration_results.sort(key=lambda item: item.sorted_key())
@@ -613,8 +749,17 @@ def run_react_grounding_loop(
         if any(item.status in {"failed", "rejected"} for item in iteration_results):
             working_messages.append(_retry_directive(iteration_results))
 
+    program_errors = _program_error_results(collected_results)
     if final_text:
         guard = compose_with_evidence_guard(final_text, collected_results, config)
+        if program_errors and (not guard.allowed or "insufficient evidence" in guard.text.lower()):
+            explicit = _render_program_error_reply(program_errors)
+            guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+            stopped_reason = "tool_error"
+    elif program_errors:
+        explicit = _render_program_error_reply(program_errors)
+        guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+        stopped_reason = "tool_error"
     else:
         guard = EvidenceGuardDecision(False, "Insufficient evidence: max tool iterations reached without reliable evidence.", "max_tool_iterations_exhausted", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
     return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, config.max_tool_iterations, stopped_reason, model_turns)

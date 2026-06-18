@@ -1,0 +1,91 @@
+{
+  "actual": "澄清后追问曾出现静默无回复；agentic 循环选到 manifest 只读但 capability 未覆盖的工具（如 aistock-local-data/local_data_get_unack_alert_count）时，_capability_key_for_tool 抛 KeyError 并让 chat/turn 404/崩溃。数据源读取异常也可能被上层 insufficient evidence 掩盖。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260617_BUG-404-ra-assistant-returns-no-reply-on-follow-up-after-clarification-silent-no.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-404",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "chat/turn returns HTTP 200 with explicit structured error details for capability_not_found/tool_execution_error/data_source_unavailable.",
+    "Clarification follow-up always yields a non-empty assistant reply or explicit concrete error.",
+    "Real tool/program/data-source errors are distinguishable from insufficient evidence and logged."
+  ],
+  "created_at": "2026-06-17T10:46:15.763036Z",
+  "description": "更正范围：Research Assistant 对话轮在两类情形下必须保持 no-silent-error：一是澄清后追问不得静默无回复；二是 agentic 工具/能力解析或执行报错不得让 chat/turn 以 4xx/5xx 崩溃。真实程序错误、能力未覆盖或数据源不可访问必须在本轮 HTTP 200 回复中以可定位方式显式上报，包含 reason_code、server_key/tool_name、异常类型和原始错误摘要；不得把真实错误软化为笼统话术，也不得用 insufficient evidence 掩盖。Insufficient evidence 仅用于证据确实不足。约束：不启/重启 8001/3000/19080，不碰生产 DB，无 DDL。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-60967062e92b",
+      "timestamp": "2026-06-17T10:46:15.763029Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "timestamp": "2026-06-18T12:27:07Z",
+      "note": "Revised BUG-404 scope per user: no silent/no crash for clarification follow-up plus explicit concrete reporting for tool/capability/data-source failures; scope expanded to RA service/react loop/execution references and related tests; production gates remain noop."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "任意 chat/turn 都返回非空助手消息；单个工具/能力/数据源失败不炸整轮，而是在回复和卡片中明确包含 reason_code、工具标识、异常类型与原始错误摘要，并记录日志/事件。真实错误不得呈现为 insufficient evidence；只有证据确实不足时才使用 insufficient。",
+  "first_seen_at": "2026-06-17T10:46:15.763036Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1209,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1209",
+  "last_seen_at": "2026-06-17T10:46:15.763036Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not start or restart production runtime services 8001/3000/19080.",
+    "Do not touch production DB or apply DDL.",
+    "Do not soften real tool/program errors into insufficient evidence."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA chat turns never crash or go silent on clarification follow-up and tool/capability failures",
+  "trigger_condition": {
+    "fingerprint": "60967062e92bdd8f8ec837fa",
+    "source_event_id": "FE-20260617-60967062e92b"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_ready"
+}
