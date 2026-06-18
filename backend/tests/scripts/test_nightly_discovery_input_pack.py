@@ -57,6 +57,45 @@ def test_build_discovery_input_pack_writes_compact_contract(tmp_path: Path) -> N
     assert payload["input_quality"]["noise_filtered"] is True
     assert payload["production_gates"]["production_ddl_gate"] == "noop"
     assert "no_production_db_write" in payload["stop_conditions"]
+    assert payload["rotation"]["readonly_only"] is True
+    assert payload["discovery_statistics"]["candidate_count"] == 0
+
+
+def test_rotation_uses_weekly_focus_and_changed_module_priority(tmp_path: Path) -> None:
+    payload = pack.build_discovery_input_pack(
+        run_id="rotation-test",
+        run_date="2026-06-19",
+        changed_files=["scripts/nightly_discovery_plans.py"],
+        allowed_plan_keys=[
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+        ],
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    rotation = payload["rotation"]
+    assert rotation["focus_key"] == "code_intelligence_llm"
+    assert rotation["changed_modules"] == ["code_intelligence"]
+    assert rotation["selected_plan_keys"][0] == "code_intelligence_discovery_affected_tests_quality"
+    assert len(rotation["selected_plan_keys"]) <= rotation["budget_plan_limit"]
+    assert payload["discovery_statistics"]["planned_plan_count"] == len(rotation["selected_plan_keys"])
+
+
+def test_rotation_explains_no_allowlisted_discovery_plan(tmp_path: Path) -> None:
+    payload = pack.build_discovery_input_pack(
+        run_id="rotation-empty",
+        run_date="2026-06-15",
+        allowed_plan_keys=["l0"],
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    assert payload["rotation"]["focus_key"] == "workflow_validation"
+    assert payload["rotation"]["selected_plan_keys"] == []
+    assert payload["rotation"]["no_candidate_reason"] == "no_allowlisted_readonly_discovery_plan_selected"
 
 
 def test_cli_writes_input_pack_and_changed_files(tmp_path: Path, capsys) -> None:

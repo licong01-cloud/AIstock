@@ -435,6 +435,21 @@ def selected_plan_keys(path: Path | None) -> list[str]:
     return []
 
 
+def selected_plan_metadata(path: Path | None) -> dict[str, Any]:
+    payload = read_json(path)
+    rotation = payload.get("rotation") if isinstance(payload.get("rotation"), dict) else {}
+    statistics = (
+        payload.get("discovery_statistics")
+        if isinstance(payload.get("discovery_statistics"), dict)
+        else {}
+    )
+    return {
+        "rotation": rotation,
+        "discovery_statistics": statistics,
+        "selection_rationale": payload.get("selection_rationale"),
+    }
+
+
 def run_selected(
     *,
     selected_plans: Path | None,
@@ -445,6 +460,7 @@ def run_selected(
     history_limit: int = 40,
 ) -> dict[str, Any]:
     selected_keys = selected_plan_keys(selected_plans)
+    metadata = selected_plan_metadata(selected_plans)
     discovery_keys = [key for key in selected_keys if key in DISCOVERY_PLAN_KEYS]
     if not discovery_keys:
         discovery_keys = [key for key in default_plan_keys or [] if key in DISCOVERY_PLAN_KEYS]
@@ -464,22 +480,46 @@ def run_selected(
                 "plan_key": plan_key,
                 "status": result.get("status"),
                 "anomaly_count": result.get("summary", {}).get("anomaly_count", 0),
+                "candidate_count": result.get("summary", {}).get("candidate_count", 0),
                 "artifact": (output_dir / f"{plan_key}.json").as_posix(),
             }
         )
     skipped = [key for key in selected_keys if key not in DISCOVERY_PLAN_KEYS]
+    anomaly_count = sum(int(item.get("anomaly_count") or 0) for item in results)
+    candidate_count = sum(int(item.get("candidate_count") or 0) for item in results)
+    no_candidate_reason = None
+    if not results:
+        no_candidate_reason = "no_discovery_plans_selected"
+    elif candidate_count == 0:
+        no_candidate_reason = (
+            (metadata.get("rotation") or {}).get("no_candidate_reason")
+            or "executed_readonly_discovery_plans_found_no_anomalies"
+        )
     manifest = {
         "schema_version": SUITE_RESULT_SCHEMA_VERSION,
         "generated_at": utc_now(),
         "selected_plan_keys": selected_keys,
         "executed_plan_keys": discovery_keys,
         "skipped_plan_keys": skipped,
+        "rotation": metadata.get("rotation") or {},
+        "discovery_statistics": {
+            **(metadata.get("discovery_statistics") or {}),
+            "executed_plan_count": len(results),
+            "candidate_count": candidate_count,
+            "no_candidate_reason": no_candidate_reason,
+        },
+        "selection_rationale": metadata.get("selection_rationale"),
         "results": results,
         "summary": {
             "executed_count": len(results),
-            "anomaly_count": sum(int(item.get("anomaly_count") or 0) for item in results),
+            "anomaly_count": anomaly_count,
+            "candidate_count": candidate_count,
+            "issue_payload_ready_count": 0,
+            "deduped_count": 0,
+            "duplicate_rate": 0.0,
+            "confirmed_real_bug_rate": None,
             "readonly": True,
-            "no_candidate_reason": "no_discovery_plans_selected" if not results else None,
+            "no_candidate_reason": no_candidate_reason,
         },
         "side_effects": READONLY_SIDE_EFFECTS,
         "production_gates": PRODUCTION_GATES,

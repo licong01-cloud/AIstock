@@ -699,6 +699,49 @@ def test_nightly_discovery_hypothesis_rejects_non_allowlist_plan():
     assert payload["deterministic_gate"]["allowlist_enforced"] is True
 
 
+def test_nightly_discovery_hypothesis_prefers_rotation_selected_plans():
+    payload = adapter.build_nightly_discovery_hypotheses(
+        "deterministic",
+        adapter.load_config(),
+        discovery_input_pack=_discovery_pack(
+            changed_files=[],
+            changed_files_count=0,
+            allowed_plan_keys=[
+                "l0",
+                "code_intelligence_discovery_affected_tests_quality",
+                "workflow_discovery_root_clean_guard",
+            ],
+            rotation={
+                "schema_version": "aistock_nightly_discovery_rotation_v1",
+                "focus_key": "code_intelligence_llm",
+                "focus_label": "CodeGraph / Understand Anything / LLM prompt quality",
+                "focus_modules": ["code_intelligence"],
+                "selected_plan_keys": [
+                    "code_intelligence_discovery_affected_tests_quality",
+                    "workflow_discovery_root_clean_guard",
+                ],
+                "readonly_only": True,
+                "no_candidate_reason": "readonly_rotation_found_no_anomaly_yet",
+            },
+            discovery_statistics={
+                "schema_version": "aistock_nightly_discovery_statistics_v1",
+                "planned_plan_count": 2,
+                "candidate_count": 0,
+                "issue_payload_ready_count": 0,
+            },
+        ),
+        codegraph_freshness="fresh",
+    )
+
+    assert payload["rotation"]["focus_key"] == "code_intelligence_llm"
+    assert payload["selected_plan_keys"] == [
+        "code_intelligence_discovery_affected_tests_quality",
+        "workflow_discovery_root_clean_guard",
+    ]
+    assert payload["hypotheses"][0]["why_now"].startswith("weekly rotation focus")
+    assert payload["discovery_statistics"]["planned_plan_count"] == 2
+
+
 def test_nightly_discovery_hypothesis_rejects_shell_command_fields(monkeypatch):
     def fake_raw_chat(*args, **kwargs):
         return (
@@ -777,6 +820,7 @@ def test_nightly_discovery_hypothesis_cli_uses_compact_success_output(capsys, tm
     assert artifact["schema_version"] == adapter.DISCOVERY_HYPOTHESIS_SCHEMA_VERSION
     assert artifact["public_artifact"] is True
     assert selected_payload["selected_plan_keys"] == ["validation_catalog_integrity"]
+    assert "rotation" in selected_payload
 
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")

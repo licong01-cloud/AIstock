@@ -359,9 +359,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --run-date $runDate `
             --allowed-plan-key l0 `
             --allowed-plan-key validation_module_registry_l0 `
             --allowed-plan-key validation_catalog_integrity `
@@ -547,9 +549,11 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
           conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
+            --run-date $runDate `
             --allowed-plan-key l0 `
             --allowed-plan-key validation_module_registry_l0 `
             --allowed-plan-key validation_catalog_integrity `
