@@ -21,6 +21,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_workflow_discovery_root_clean_guard": "workflow_discovery_root_clean_guard",
     "nox_code_intelligence_discovery_affected_tests_quality": "code_intelligence_discovery_affected_tests_quality",
     "nox_validation_center_discovery_run_record_integrity": "validation_center_discovery_run_record_integrity",
+    "nox_nightly_bug_candidate_queue": "nightly_bug_candidate_queue",
     "nox_validation_catalog_integrity": "validation_catalog_integrity",
     "nox_validation_center_live_readonly": "validation_center_live_readonly",
     "nox_validation_center_real_port_ui": "validation_center_real_port_ui",
