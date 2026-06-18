@@ -7,7 +7,11 @@
     "backend/routers/paper_trading_v2.py",
     "backend/services/paper_trading_v2",
     "tests/aistock_validation/bugs/20260618_BUG-411-p0-paper-v2-miniqmt-target-sizing-must-use-dynamic-strategy-slot-equity.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime",
+    "backend/services/qmt_strategy_ledger",
+    "backend/tests/simulation_runtime",
+    "backend/tests/qmt_strategy_ledger"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-411",
@@ -25,6 +29,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260618-8d77ddfdfd16",
       "timestamp": "2026-06-18T07:23:36.371145Z"
+    },
+    {
+      "timestamp": "2026-06-18T07:26:53.083929Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Current evidence shows target sizing is implemented in backend/services/simulation_runtime with MiniQMT slot cash/equity authority in backend/services/qmt_strategy_ledger; expanded scope before code edits.",
+      "added_scope": [
+        "backend/services/simulation_runtime",
+        "backend/services/qmt_strategy_ledger",
+        "backend/tests/simulation_runtime",
+        "backend/tests/qmt_strategy_ledger"
+      ]
     }
   ],
   "evidence_uris": [],
@@ -56,7 +72,9 @@
   "severity": "P0",
   "status": "open",
   "suspected_modules": [
-    "paper_v2"
+    "paper_v2",
+    "simulation_runtime",
+    "qmt_strategy_ledger"
   ],
   "title": "[P0][Paper v2][MiniQMT] target sizing must use dynamic strategy-slot equity instead of fixed capital allocation",
   "trigger_condition": {
