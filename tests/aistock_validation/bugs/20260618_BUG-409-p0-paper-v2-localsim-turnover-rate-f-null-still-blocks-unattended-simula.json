@@ -30,8 +30,8 @@
   "expected": "LocalSim V25 day_features should handle authoritative missing free-float turnover values consistently when same-row turnover_rate is finite and auditable, without zero/default fallback; malformed non-numeric values must still fail fast. The scheduler should be able to recover/retry the current-day LocalSim run after the fix.",
   "first_seen_at": "2026-06-18T05:24:59.259545Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "befec917cd2cab1ad8629279ef7a26aa0803ecee",
+  "fixed_at": "2026-06-18T05:49:17.193523Z",
   "github_issue_number": 1228,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1228",
   "last_seen_at": "2026-06-18T05:24:59.259545Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1229",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -59,6 +60,14 @@
     "fingerprint": "6db24e45e56002fa6e724162",
     "source_event_id": "FE-20260618-6db24e45e560"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 11 passed",
+    "read-only DbV25DayFeatureProvider.load_day_features('000736.SZ', date(2026,6,18)) with root .env -> OK; finite vector; free_float_turnover_rate=0.040369; audit reason=missing_source_value",
+    "git diff --check -> passed",
+    "python -m py_compile backend/services/paper_trading_v2/day_features.py backend/tests/paper_trading_v2/test_v25_day_features.py -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> success; l0 success; validation_module_registry_l0 8 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep all successful; 630 backend tests passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
