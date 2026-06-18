@@ -1,0 +1,117 @@
+{
+  "actual": "frontend/src/app/quantevolver/factors/page.tsx 硬编码 backtestEnd=2026-03-10，页面当前窗口显示 2018-08-01~2026-03-10；stats API 仍显示 575/575，相关性页说明为 2018-08-01~2026-04-30/现有 meta 推断 2026-04-28。",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/factors/page.tsx",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "tests/aistock_validation/bugs/20260618_BUG-415-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-415",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T09:53:11.456271Z",
+  "description": "frontend/src/app/quantevolver/factors/page.tsx 硬编码 backtestEnd=2026-03-10，页面当前窗口显示 2018-08-01~2026-03-10；stats API 仍显示 575/575，相关性页说明为 2018-08-01~2026-04-30/现有 meta 推断 2026-04-28。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-642351097ef1",
+      "timestamp": "2026-06-18T09:53:11.456268Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/20260618_bug410_post_restart_readonly_validation.md"
+  ],
+  "expected": "因子库独立页面默认显示官方全量数据集窗口 2018-08-01~2026-04-30；只有实验/组合上下文明确传入回测窗口时才使用子区间；UI、相关性和后端官方缓存口径一致，不影响 QE 回测子窗口命中。",
+  "first_seen_at": "2026-06-18T09:53:11.456271Z",
+  "fix_branch": null,
+  "fix_commit": "14e32ce060e7f6341325514d7029ae90ebdfcf94",
+  "fixed_at": "2026-06-18T10:46:44.604629Z",
+  "github_issue_number": 1246,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1246",
+  "last_seen_at": "2026-06-18T09:53:11.456271Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1248",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://127.0.0.1:3000/quantevolver/factors after backend/frontend restart; observe official factor cache current window; compare FactorList default FACTOR_CACHE_DEFAULT_END=2026-04-30 and factors/page.tsx backtestEnd=2026-03-10.",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "因子库官方缓存默认窗口仍被旧回测日期覆盖",
+  "trigger_condition": {
+    "fingerprint": "642351097ef1e000e74a4502",
+    "source_event_id": "FE-20260618-642351097ef1"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/factors/page.tsx",
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/575",
+    "ui_routes": [
+      "/575"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "GitHub PR #1248 checks -> green; gh pr checks reported Passed: 17 Failed: 0",
+    "git diff --check origin/main...HEAD and git diff --cached --check -> passed",
+    "targeted ESLint for factors/page.tsx and ComputePanel.tsx -> passed; warning only: Next pages directory cannot be found",
+    "frontend TypeScript transpile smoke for factors/page.tsx and ComputePanel.tsx -> passed after rebase",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed after rebase onto origin/main",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed after rebase; qe_read_backend 14 passed",
+    "read-only API factor-cache stats/correlation overview -> passed; 575/575 official cache; no compute POST",
+    "Playwright UI on dev frontend 3011 for factors/correlation pages -> passed; default window 2018-08-01~2026-04-30; old 2026-03-10 absent; no non-GET, console, request, or 4xx/5xx errors"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

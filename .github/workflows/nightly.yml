@@ -498,6 +498,17 @@ jobs:
             --default-plan-key validation_center_discovery_run_record_integrity `
             --output-dir "$outDir/discovery-plans"
 
+      - name: Build Nightly BugCandidate draft queue
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/bug-candidates" | Out-Null
+          conda run -n AIstock python scripts/nightly_bug_candidate_queue.py --json build `
+            --discovery-manifest "$outDir/discovery-plans/manifest.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --ua-manifest-json "$outDir/ua-summary-manifest.json" `
+            --existing-queue-dir "tmp/validation/nightly_failure_issue/candidate_history" `
+            --output-dir "$outDir/bug-candidates"
+
       - name: Build Nightly adaptive scheduler warning report
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
