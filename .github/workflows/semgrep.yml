@@ -25,8 +25,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect docs-lite lane
-        id: docs_lite
+      - name: Detect Semgrep fast lane
+        id: fast_lane
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -39,27 +39,16 @@ jobs:
           else
             git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_COMMIT}" > tmp/validation/semgrep/semgrep_changed_files.txt
           fi
-          DOCS_LITE=1
-          while IFS= read -r path; do
-            case "${path}" in
-              docs/architecture/*|docs/analysis/*|docs/operations/*|docs/operations_*.md|README.md)
-                ;;
-              docs/standards/*|docs/codex_project_memory.md|AGENTS.md|AGENTS.override.md|.codex/*|.claude/*)
-                DOCS_LITE=0
-                break
-                ;;
-              "")
-                ;;
-              *)
-                DOCS_LITE=0
-                break
-                ;;
-            esac
-          done < tmp/validation/semgrep/semgrep_changed_files.txt
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/semgrep/semgrep_changed_files.txt \
+            --output-json tmp/validation/semgrep/change-classification.json
+          DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
+          REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
+          echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Python 3.12
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -67,11 +56,11 @@ jobs:
           cache-dependency-path: .github/requirements/semgrep.txt
 
       - name: Install Semgrep
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
         run: python -m pip install --prefer-binary -r .github/requirements/semgrep.txt
 
       - name: Run Semgrep
-        if: steps.docs_lite.outputs.docs_lite != '1'
+        if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -90,12 +79,10 @@ jobs:
             printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/semgrep/semgrep.json
           fi
 
-      - name: Emit docs-lite semgrep no-op record
-        if: steps.docs_lite.outputs.docs_lite == '1'
+      - name: Emit fast-lane semgrep no-op record
+        if: steps.fast_lane.outputs.docs_lite == '1' || steps.fast_lane.outputs.registry_sync == '1'
         run: |
-          {
-            echo '{"docs_lite":true,"validation":"version_change_record_only","semgrep":"skipped"}'
-          } > tmp/validation/semgrep/semgrep.json
+          python -c "import json; data=json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'semgrep': 'skipped'}, ensure_ascii=False))" > tmp/validation/semgrep/semgrep.json
           cat tmp/validation/semgrep/semgrep.json
 
       - name: Upload Semgrep report

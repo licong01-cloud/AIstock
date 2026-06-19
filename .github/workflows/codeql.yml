@@ -16,18 +16,19 @@ permissions:
 
 jobs:
   docs-lite:
-    name: CodeQL docs-lite no-op
+    name: CodeQL fast-lane no-op
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
-      docs_lite: ${{ steps.docs_lite.outputs.docs_lite }}
+      docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
+      registry_sync: ${{ steps.fast_lane.outputs.registry_sync }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect docs-lite lane
-        id: docs_lite
+      - name: Detect CodeQL fast lane
+        id: fast_lane
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -40,26 +41,15 @@ jobs:
           else
             git diff-tree --no-commit-id --name-only --diff-filter=ACMRT -r "${HEAD_COMMIT}" > tmp/validation/codeql/changed_files.txt
           fi
-          DOCS_LITE=1
-          while IFS= read -r path; do
-            case "${path}" in
-              docs/architecture/*|docs/analysis/*|docs/operations/*|docs/operations_*.md|README.md)
-                ;;
-              docs/standards/*|docs/codex_project_memory.md|AGENTS.md|AGENTS.override.md|.codex/*|.claude/*)
-                DOCS_LITE=0
-                break
-                ;;
-              "")
-                ;;
-              *)
-                DOCS_LITE=0
-                break
-                ;;
-            esac
-          done < tmp/validation/codeql/changed_files.txt
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/codeql/changed_files.txt \
+            --output-json tmp/validation/codeql/change-classification.json
+          DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
+          REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
-          if [ "${DOCS_LITE}" = "1" ]; then
-            printf '{"docs_lite":true,"validation":"version_change_record_only","codeql":"skipped"}\n' > tmp/validation/codeql/codeql.json
+          echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
+          if [ "${DOCS_LITE}" = "1" ] || [ "${REGISTRY_SYNC}" = "1" ]; then
+            python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'codeql': 'skipped'}, ensure_ascii=False))" > tmp/validation/codeql/codeql.json
             cat tmp/validation/codeql/codeql.json
           fi
 
@@ -79,22 +69,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Docs-lite CodeQL no-op
-        if: needs.docs-lite.outputs.docs_lite == '1'
+      - name: Fast-lane CodeQL no-op
+        if: needs.docs-lite.outputs.docs_lite == '1' || needs.docs-lite.outputs.registry_sync == '1'
         run: |
           mkdir -p tmp/validation/codeql
-          printf '{"docs_lite":true,"validation":"version_change_record_only","codeql":"skipped","language":"${{ matrix.language }}"}\n' > tmp/validation/codeql/codeql-${{ matrix.language }}.json
+          printf '{"docs_lite":%s,"registry_sync":%s,"validation":"fast_lane_noop","codeql":"skipped","language":"${{ matrix.language }}"}\n' \
+            "${{ needs.docs-lite.outputs.docs_lite == '1' }}" \
+            "${{ needs.docs-lite.outputs.registry_sync == '1' }}" \
+            > tmp/validation/codeql/codeql-${{ matrix.language }}.json
           cat tmp/validation/codeql/codeql-${{ matrix.language }}.json
 
       - name: Initialize CodeQL
-        if: needs.docs-lite.outputs.docs_lite != '1'
+        if: needs.docs-lite.outputs.docs_lite != '1' && needs.docs-lite.outputs.registry_sync != '1'
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Perform CodeQL Analysis
-        if: needs.docs-lite.outputs.docs_lite != '1'
+        if: needs.docs-lite.outputs.docs_lite != '1' && needs.docs-lite.outputs.registry_sync != '1'
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"

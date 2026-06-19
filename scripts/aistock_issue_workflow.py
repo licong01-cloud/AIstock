@@ -1586,6 +1586,8 @@ def _write_state(
             payload.pop(key, None)
     if stop_reason:
         payload["stop_reason"] = stop_reason
+    elif state not in {"blocked"}:
+        payload.pop("stop_reason", None)
     _write_json(_state_path(bug_id, root), payload)
     _append_event(
         bug_id,
@@ -6030,6 +6032,20 @@ def build_postmortem_plan(
     root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events = _read_events(canonical_bug_id, root)
     timing = _augment_timing_with_issue_record(_workflow_timing_summary(canonical_bug_id, root), state, root)
+    embedded_pre_cleanup = state.get("pre_cleanup_postmortem") if isinstance(state, dict) else None
+    embedded_pre_cleanup_fallback: dict[str, Any] | None = None
+    if isinstance(embedded_pre_cleanup, dict):
+        embedded_timing = embedded_pre_cleanup.get("timing_summary")
+        if isinstance(embedded_timing, dict) and (embedded_timing.get("event_count") or 0) > (timing.get("event_count") or 0):
+            timing = dict(embedded_timing)
+            timing.setdefault("notes", []).append(
+                "timing_summary uses pre-cleanup phase evidence embedded in cleanup state to avoid losing source fix timing."
+            )
+            embedded_pre_cleanup_fallback = {
+                "reason": "pre_cleanup_postmortem_embedded_in_cleanup_state",
+                "current_event_count": (_workflow_timing_summary(canonical_bug_id, root).get("event_count") or 0),
+                "prior_event_count": embedded_timing.get("event_count") or 0,
+            }
     if state.get("state") == "complete" and (timing.get("event_count") or 0) <= 1:
         prior = _load_prior_postmortem(canonical_bug_id, roots)
         prior_timing = prior.get("timing_summary") if isinstance(prior, dict) else {}
@@ -6093,6 +6109,9 @@ def build_postmortem_plan(
         "production_gates": state.get("production_gates") or {},
         "recent_events": events[-20:],
     }
+    if embedded_pre_cleanup_fallback:
+        payload["workflow_gate"] = "artifact_fallback"
+        payload["artifact_fallback"] = embedded_pre_cleanup_fallback
     if persist_artifacts is None:
         persist_artifacts = _workflow_artifacts_enabled() or str(state.get("state") or "") == "blocked"
     payload["artifact_policy"] = "persisted" if persist_artifacts else "compact_success_no_artifact"
@@ -8180,7 +8199,7 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         return {"already_merged": True, "view": payload}
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
-    result = _run_command(["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"], cwd=REPO_ROOT, timeout=180)
+    result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
     try:
         verified = _verify_pr_merged(pr_url)
     except WorkflowError as exc:
@@ -8219,7 +8238,7 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_workflow_command(
         bug_id,
-        ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"],
+        ["gh", "pr", "merge", pr_url, "--squash"],
         state="merged",
         cwd=REPO_ROOT,
         timeout=180,
@@ -8768,7 +8787,7 @@ def _merge_close_sync_pr_if_ready(
             "workflow_gate": "ready_for_merge",
             "auto_merge": False,
             "pr_url": pr_url,
-            "next_command": f"gh pr merge {pr_url} --squash --delete-branch",
+            "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
         result = _merge_pr_if_ready_for_bug(bug_id, pr_url)
@@ -10385,6 +10404,7 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
             state="complete",
             root=REPO_ROOT,
             cleanup_evidence=cleanup_evidence,
+            pre_cleanup_postmortem=payload.get("pre_cleanup_postmortem"),
             next_actions=[],
         )
         payload["complete_state"] = state
