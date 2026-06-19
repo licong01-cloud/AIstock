@@ -1283,6 +1283,9 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
             {
                 "understand_anything_status": "available",
                 "understand_anything_summary_ref": "tmp/validation/code-intelligence/12345/ua-validation-summary.md",
+                "context_ref": "tmp/issue_workflow/nightly-12345/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/nightly-12345/affected-tests.json",
+                "context": {"context_quality": {"broad_scan_required": False}},
             }
         ),
         encoding="utf-8",
@@ -1314,6 +1317,7 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
                 "model": "deepseek-v4-pro",
                 "llm_invoked": True,
                 "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "rotation": {"selected_plan_keys": ["workflow_discovery_root_clean_guard"]},
                 "hypotheses": [{"id": "H-001", "recommended_plan_keys": ["validation_catalog_integrity"]}],
                 "selected_plan_keys": ["validation_catalog_integrity"],
             }
@@ -1333,7 +1337,18 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     bug_candidate_dir = artifact_dir / "bug-candidates"
     bug_candidate_dir.mkdir()
     (bug_candidate_dir / "manifest.json").write_text(
-        json.dumps({"summary": {"candidate_count": 2, "issue_payload_ready_count": 1}}),
+        json.dumps(
+            {
+                "summary": {
+                    "candidate_count": 2,
+                    "high_value_candidate_count": 1,
+                    "issue_payload_ready_count": 1,
+                    "accepted_count": 1,
+                    "rejected_count": 0,
+                    "closed_count": 0,
+                }
+            }
+        ),
         encoding="utf-8",
     )
     (bug_candidate_dir / "candidate-summary.md").write_text("## Nightly BugCandidate Queue\n", encoding="utf-8")
@@ -1372,13 +1387,25 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["llm"]["selected_plan_count"] == 1
     assert payload["llm"]["bug_candidate_count"] == 2
     assert payload["llm"]["bug_candidate_issue_payload_count"] == 1
+    assert payload["value_metrics"]["llm_advice_generated"] is True
+    assert payload["value_metrics"]["llm_advice_consumed"] is True
+    assert payload["value_metrics"]["llm_advice_changed_plan"] is True
+    assert payload["value_metrics"]["codegraph_refs_used"] >= 2
+    assert payload["value_metrics"]["ua_refs_used"] >= 1
+    assert payload["value_metrics"]["broad_scan_avoided"] is True
+    assert payload["value_metrics"]["high_value_candidates"] == 1
+    assert payload["value_metrics"]["candidate_feedback"]["accepted_count"] == 1
+    assert payload["value_metrics"]["candidate_feedback"]["placeholders_present"] is True
     assert payload["understand_anything"]["summary_count"] == 2
     assert "LLM + Code Intelligence Value" in markdown
     assert "llm_provider: `deepseek_api`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
+    assert "advice_changed_plan: `True`" in markdown
+    assert "graph_refs: `codegraph=" in markdown
     assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
     assert "discovery_plans: `executed=1, anomalies=0`" in markdown
-    assert "bug_candidates: `candidates=2, issue_payload_drafts=1`" in markdown
+    assert "bug_candidates: `candidates=2, high_value=1, issue_payload_drafts=1`" in markdown
+    assert "candidate_feedback: `available=True, accepted=1, rejected=0, closed=0, pending=1`" in markdown
     assert "bug-candidates/manifest.json" in markdown
     assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown

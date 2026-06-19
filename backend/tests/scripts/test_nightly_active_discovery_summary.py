@@ -18,9 +18,19 @@ def test_active_discovery_summary_renders_gate_counts_and_reason(tmp_path: Path)
                 "rotation": {"focus_key": "code_intelligence_llm"},
                 "summary": {
                     "candidate_count": 3,
+                    "high_value_candidate_count": 2,
                     "issue_payload_ready_count": 1,
                     "deduped_count": 1,
+                    "accepted_count": 1,
                     "no_candidate_reason": None,
+                },
+                "value_metrics": {
+                    "codegraph_refs_used": 2,
+                    "ua_refs_used": 1,
+                    "broad_scan_avoided": True,
+                    "llm_advice_changed_plan": True,
+                    "candidate_feedback_available": True,
+                    "candidate_feedback": {"accepted_count": 1, "rejected_count": 0, "closed_count": 0},
                 },
             }
         ),
@@ -38,8 +48,18 @@ def test_active_discovery_summary_renders_gate_counts_and_reason(tmp_path: Path)
     assert payload["rotation_focus"] == "code_intelligence_llm"
     assert payload["executed_plans"] == 5
     assert payload["candidates"] == 3
+    assert payload["high_value_candidates"] == 2
+    assert payload["codegraph_refs_used"] == 2
+    assert payload["ua_refs_used"] == 1
+    assert payload["broad_scan_avoided"] is True
+    assert payload["llm_advice_changed_plan"] is True
+    assert payload["accepted"] == 1
     assert "- active_discovery: `ready`" in markdown
+    assert "- high_value_candidates: `2`" in markdown
     assert "- issue_payload_drafts: `1`" in markdown
+    assert "- graph_refs: `codegraph=2, ua=1, broad_scan_avoided=true`" in markdown
+    assert "- llm_advice_changed_plan: `true`" in markdown
+    assert "- feedback: `available=true, accepted=1, rejected=0, closed=0`" in markdown
 
 
 def test_active_discovery_summary_explains_missing_artifact(tmp_path: Path) -> None:

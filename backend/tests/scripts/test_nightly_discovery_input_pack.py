@@ -116,13 +116,22 @@ def test_previous_candidate_manifest_biases_next_rotation(tmp_path: Path) -> Non
                 },
                 "summary": {
                     "candidate_count": 2,
+                    "high_value_candidate_count": 1,
                     "issue_payload_ready_count": 0,
                     "deduped_count": 1,
+                    "accepted_count": 1,
+                    "closed_count": 1,
                 },
                 "discovery_effectiveness": {
                     "candidate_count": 2,
+                    "high_value_candidate_count": 1,
                     "issue_payload_ready_count": 0,
                     "deduped_count": 1,
+                    "accepted_count": 1,
+                    "closed_count": 1,
+                    "confirmed_real_bug_count": 1,
+                    "confirmed_real_bug_rate": 0.5,
+                    "noise_rate": 0.0,
                     "no_candidate_reason": None,
                 },
             }
@@ -152,6 +161,16 @@ def test_previous_candidate_manifest_biases_next_rotation(tmp_path: Path) -> Non
     assert "validation_discovery_issue_intake_readonly" in rotation["selected_plan_keys"]
     assert rotation["feedback"]["signals"] == ["candidate_without_issue_payload", "deduped_candidates"]
     assert rotation["feedback_focus_modules"] == ["validation_center"]
+    previous = payload["previous_discovery_feedback"]["previous_summary"]
+    assert previous["high_value_candidate_count"] == 1
+    assert previous["accepted_count"] == 1
+    assert previous["closed_count"] == 1
+    assert previous["confirmed_real_bug_rate"] == 0.5
+    stats = payload["discovery_statistics"]
+    assert stats["candidate_feedback_available"] is True
+    assert stats["accepted_count"] == 1
+    assert stats["closed_count"] == 1
+    assert stats["confirmed_real_bug_count"] == 1
 
 
 def test_cli_writes_input_pack_and_changed_files(tmp_path: Path, capsys) -> None:

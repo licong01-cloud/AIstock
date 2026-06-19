@@ -357,6 +357,24 @@ def append_unique(target: list[str], values: list[str] | tuple[str, ...]) -> Non
             target.append(text)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def infer_changed_modules(changed_files: list[str]) -> list[str]:
     modules: list[str] = []
     lowered = [normalize_repo_path(path).lower() for path in changed_files]
@@ -403,8 +421,12 @@ def build_previous_discovery_feedback(manifest_path: Path | None) -> dict[str, A
     focus_modules = [str(item) for item in rotation.get("focus_modules") or [] if str(item).strip()]
     candidates = int(summary.get("candidate_count") or effectiveness.get("candidate_count") or 0)
     ready = int(summary.get("issue_payload_ready_count") or effectiveness.get("issue_payload_ready_count") or 0)
+    high_value = int(summary.get("high_value_candidate_count") or effectiveness.get("high_value_candidate_count") or 0)
     deduped = int(summary.get("deduped_count") or effectiveness.get("deduped_count") or 0)
     rejected = int(summary.get("rejected_count") or effectiveness.get("rejected_count") or 0)
+    accepted = int(summary.get("accepted_count") or effectiveness.get("accepted_count") or 0)
+    closed = int(summary.get("closed_count") or effectiveness.get("closed_count") or 0)
+    confirmed = int(summary.get("confirmed_real_bug_count") or effectiveness.get("confirmed_real_bug_count") or 0)
     artifact_only = int(summary.get("artifact_only_count") or effectiveness.get("artifact_only_count") or 0)
     no_candidate_reason = effectiveness.get("no_candidate_reason") or summary.get("no_candidate_reason")
 
@@ -435,12 +457,21 @@ def build_previous_discovery_feedback(manifest_path: Path | None) -> dict[str, A
         "focus_modules": focus_modules[:6],
         "previous_summary": {
             "candidate_count": candidates,
+            "high_value_candidate_count": high_value,
             "issue_payload_ready_count": ready,
             "deduped_count": deduped,
+            "accepted_count": accepted,
             "rejected_count": rejected,
+            "closed_count": closed,
+            "confirmed_real_bug_count": confirmed,
+            "confirmed_real_bug_rate": _safe_float(
+                summary.get("confirmed_real_bug_rate") or effectiveness.get("confirmed_real_bug_rate")
+            ),
+            "noise_rate": _safe_float(summary.get("noise_rate") or effectiveness.get("noise_rate")),
             "artifact_only_count": artifact_only,
             "no_candidate_reason": no_candidate_reason,
         },
+        "candidate_feedback_available": True,
         "feedback_gate": "ready",
     }
 
@@ -553,18 +584,26 @@ def build_rotation_focus(
 
 def build_discovery_statistics(rotation: dict[str, Any]) -> dict[str, Any]:
     selected = list(rotation.get("selected_plan_keys") or [])
+    feedback = rotation.get("feedback") if isinstance(rotation.get("feedback"), dict) else {}
+    previous = feedback.get("previous_summary") if isinstance(feedback.get("previous_summary"), dict) else {}
     return {
         "schema_version": DISCOVERY_STATS_SCHEMA_VERSION,
-        "candidate_count": 0,
-        "issue_payload_ready_count": 0,
+        "candidate_count": _safe_int(previous.get("candidate_count")),
+        "high_value_candidate_count": _safe_int(previous.get("high_value_candidate_count")),
+        "issue_payload_ready_count": _safe_int(previous.get("issue_payload_ready_count")),
         "draft_count": 0,
-        "deduped_count": 0,
-        "artifact_only_count": 0,
+        "deduped_count": _safe_int(previous.get("deduped_count")),
+        "artifact_only_count": _safe_int(previous.get("artifact_only_count")),
+        "accepted_count": _safe_int(previous.get("accepted_count")),
+        "rejected_count": _safe_int(previous.get("rejected_count")),
+        "closed_count": _safe_int(previous.get("closed_count")),
         "duplicate_rate": 0.0,
-        "confirmed_real_bug_rate": None,
-        "noise_rate": None,
+        "confirmed_real_bug_count": _safe_int(previous.get("confirmed_real_bug_count")),
+        "confirmed_real_bug_rate": previous.get("confirmed_real_bug_rate"),
+        "noise_rate": previous.get("noise_rate"),
         "executed_plan_count": 0,
         "planned_plan_count": len(selected),
+        "candidate_feedback_available": bool(feedback.get("candidate_feedback_available") or previous),
         "no_candidate_reason": rotation.get("no_candidate_reason"),
     }
 
@@ -648,6 +687,13 @@ def build_discovery_input_pack(
         "codegraph_refs": {
             "freshness_json": str(codegraph_freshness_json) if codegraph_freshness_json else None,
             "code_intelligence_json": str(code_intelligence_json) if code_intelligence_json else None,
+            "refs_used": len(
+                [
+                    item
+                    for item in (codegraph_freshness_json, code_intelligence_json)
+                    if item
+                ]
+            ),
         },
         "understand_anything_refs": {},
         "allowed_plan_keys": allowed_keys,
