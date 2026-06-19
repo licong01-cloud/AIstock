@@ -147,6 +147,7 @@ class OfficialFactorBatchComputeService:
 
         resource_at_start = _resource_snapshot()
         base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date)
+        base_cache_manifest = base_cache.manifest()
         resource_after_base = _resource_snapshot()
         self._emit(
             "base_cache_loaded",
@@ -157,7 +158,7 @@ class OfficialFactorBatchComputeService:
             swap_mb=resource_after_base.swap_mb,
             available_mb=resource_after_base.available_mb,
             resource_limits=asdict(self._resource_limits),
-            base_cache=base_cache.manifest(),
+            base_cache=base_cache_manifest,
         )
 
         universe_meta = self._universe_service.metadata(
@@ -197,7 +198,7 @@ class OfficialFactorBatchComputeService:
             "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
             "qlib_bin_path": str(qlib_bin_path) if qlib_bin_path else None,
             "universe_meta": universe_meta,
-            "base_cache_manifest": base_cache.manifest(),
+            "base_cache_manifest": base_cache_manifest,
         }
 
         factor_ids = self._load_factor_ids()
@@ -285,7 +286,7 @@ class OfficialFactorBatchComputeService:
                     factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
                     qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
                     universe_meta=universe_meta,
-                    base_cache_manifest=base_cache.manifest(),
+                    base_cache_manifest=base_cache_manifest,
                 )
                 pending_written_paths.clear()
                 success_count += self._drain_success_frames(
