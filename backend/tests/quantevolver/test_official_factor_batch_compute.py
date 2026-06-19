@@ -173,6 +173,43 @@ def test_batch_compute_uses_worker_threads_for_factor_values(monkeypatch, tmp_pa
     assert sorted(calls) == ["factor_a", "factor_b", "factor_c"]
 
 
+def test_batch_compute_streams_results_to_handler_without_returning_frames(monkeypatch):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    monkeypatch.setattr(svc.multiprocessing, "get_all_start_methods", lambda: [])
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    handled: list[str] = []
+
+    class _Executor:
+        def compute_batch(self, batch):
+            raise AssertionError("workers > 1 must not use sequential compute_batch")
+
+        def compute_factor(self, factor_name, code_text):
+            return FactorExecutionResult(factor_name=factor_name, success=True, dataframe=_base_df()[["close"]])
+
+    def _handle(name, result):
+        assert result.success is True
+        assert result.dataframe is not None
+        result.dataframe = None
+        handled.append(name)
+
+    batch = [
+        {"factor_name": "factor_a", "code_text": "a"},
+        {"factor_name": "factor_b", "code_text": "b"},
+    ]
+
+    result = service._compute_batch_frames(
+        _Executor(),
+        batch,
+        workers=2,
+        timeout_per_factor=1800,
+        result_handler=_handle,
+    )
+
+    assert result == {}
+    assert sorted(handled) == ["factor_a", "factor_b"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="fork based timeout is WSL/Linux only")
 def test_batch_compute_enforces_per_factor_timeout(tmp_path):
     data_dir = tmp_path / "factor_data"
