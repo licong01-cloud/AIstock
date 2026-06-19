@@ -32,8 +32,8 @@
   "expected": "A Nightly failure issue is automatically reviewed when newer scheduled runs for the same workflow pass; if recovery is confirmed, the workflow emits a compact close suggestion/evidence and avoids long-lived stale open validation issues.",
   "first_seen_at": "2026-06-19T13:39:45.653953Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2dd1f1e79624e183b7cf9d922b9c24ce24e254fb",
+  "fixed_at": "2026-06-19T14:51:09.399502Z",
   "github_issue_number": 1310,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1310",
   "last_seen_at": "2026-06-19T13:39:45.653953Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1314",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "8e392c0d314f2ab870221620",
     "source_event_id": "FE-20260619-8e392c0d314f"
   },
+  "validation_evidence": [
+    "PR #1314 CI green -> 17 success, 3 skipped, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
