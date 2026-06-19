@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 368
+    assert legacy_tool_count() == 370
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 374
-    assert len(TOOL_MANIFEST_BY_NAME) == 374
+    assert len(TOOL_MANIFEST) == 376
+    assert len(TOOL_MANIFEST_BY_NAME) == 376
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -203,3 +203,4 @@ def test_manifest_validation_rejects_invalid_migration_state() -> None:
     health_entry = next(entry for entry in TOOL_MANIFEST if entry.tool_name == "mcp_gateway_health")
     bad_entry = replace(health_entry, migration_state="unknown_state")
     assert validate_manifest([bad_entry]) == ["invalid migration_state for mcp_gateway_health: unknown_state"]
+

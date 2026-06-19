@@ -27,6 +27,8 @@ DELETE_STRATEGY_PACKAGE_CONFIRM = "DELETE_STRATEGY_PACKAGE"
 SPECS = (
     ToolSpec("strategy_packages_list", "GET", "", query_defaults={"status": None, "limit": 20}, limit_caps={"limit": 100}),
     ToolSpec("strategy_packages_get", "GET", "/{package_id}", path_params=("package_id",)),
+    ToolSpec("strategy_packages_list_components", "GET", "/{package_id}/components", path_params=("package_id",)),
+    ToolSpec("strategy_packages_get_prediction_ref", "GET", "/{package_id}/prediction-ref", path_params=("package_id",)),
     ToolSpec("strategy_packages_list_qe_sources", "GET", "/qe-sources", query_defaults={"source_kind": "all", "limit": 50}, limit_caps={"limit": 200}),
     ToolSpec("strategy_packages_list_candidates", "GET", "/candidates", query_defaults={"status": "ACTIVE", "limit": 20}, limit_caps={"limit": 100}),
     ToolSpec("strategy_packages_get_candidate", "GET", "/candidates/{candidate_id}", path_params=("candidate_id",)),

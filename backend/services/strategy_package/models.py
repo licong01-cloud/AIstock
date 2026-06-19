@@ -309,6 +309,52 @@ class StrategyPackageManifest(BaseModel):
                 )
         return self
 
+
+class StrategyPackageComponentRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int | None = None
+    parent_package_id: str
+    child_package_id: str
+    child_manifest_sha256: str
+    component_weight: float = Field(gt=0)
+    score_normalization: str = "rank"
+    position: int = Field(gt=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("parent_package_id", "child_package_id", "child_manifest_sha256", "score_normalization")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @field_validator("child_manifest_sha256")
+    @classmethod
+    def _sha256_format(cls, value: str) -> str:
+        value = value.lower()
+        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise ValueError("child_manifest_sha256 must be a lowercase 64-character sha256 digest")
+        return value
+
+
+class StrategyPackageComponentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    child_package_id: str
+    component_weight: float = Field(gt=0)
+    score_normalization: str = "rank"
+    position: int = Field(gt=0)
+
+    @field_validator("child_package_id", "score_normalization")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
 class LiveApprovalStatus(str, Enum):
     LIVE_CANDIDATE = "LIVE_CANDIDATE"
     LIVE_APPROVAL_PENDING = "LIVE_APPROVAL_PENDING"
@@ -419,3 +465,4 @@ class StrategyPackageLiveApproval(BaseModel):
             if not self.retired_by or self.retired_at is None or not self.retirement_reason:
                 raise ValueError("retired live approval requires reviewer, retired_at, and retirement_reason")
         return self
+

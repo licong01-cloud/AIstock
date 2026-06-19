@@ -400,6 +400,17 @@ class StrategyPackageService:
             record = self.repository.get(package_id)
             self.asset_eligibility.require_eligible(record)
             return record
+        if to_status == PackageStatus.RETIRED and hasattr(self.repository, "list_component_parents"):
+            active_parents: list[str] = []
+            for component in self.repository.list_component_parents(package_id):
+                parent = self.repository.get(component.parent_package_id)
+                if parent.package_status != PackageStatus.RETIRED:
+                    active_parents.append(parent.package_id)
+            if active_parents:
+                raise InvalidStateTransitionError(
+                    "referenced single-alpha child package cannot be retired",
+                    context={"package_id": package_id, "active_parent_package_ids": sorted(active_parents)},
+                )
         allowed = STATUS_TRANSITIONS.get(to_status)
         if not allowed:
             raise StrategyPackageValidationError(

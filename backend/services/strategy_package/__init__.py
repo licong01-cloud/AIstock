@@ -1,7 +1,8 @@
 """Strategy Package Center v1."""
 
+from .components import StrategyPackageComponentService
 from .manifest import compute_manifest_sha256, freeze_manifest
-from .models import StrategyPackageManifest
+from .models import StrategyPackageComponentInput, StrategyPackageComponentRecord, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
@@ -37,6 +38,9 @@ __all__ = [
     "PackageValidationStabilitySummary",
     "StrategyPackageAssetRecord",
     "StrategyPackageAssetType",
+    "StrategyPackageComponentInput",
+    "StrategyPackageComponentRecord",
+    "StrategyPackageComponentService",
     "StrategyPackageManifest",
     "StrategyPackageRuntimeVariant",
     "StrategyPackageValidationRun",
