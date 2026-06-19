@@ -34,8 +34,8 @@
   "expected": "MiniQMT unattended simulation should produce an executable SELL-first/cash-fit plan for a strategy slot. If slot equity or sell proceeds cannot support all target buys, the execution planner should scale, skip, or mark residual buy intents with explicit capacity state instead of leaving the whole daily run retrying forever with no broker call.",
   "first_seen_at": "2026-06-12T05:43:20.810848Z",
   "fix_branch": null,
-  "fix_commit": "b10cddd211b0d5c61b223386c39ea71de06ba6ae",
-  "fixed_at": "2026-06-19T15:45:48.199776Z",
+  "fix_commit": "e4798fa8f71d650e790f0ce0922e2c6265238b65",
+  "fixed_at": "2026-06-19T16:21:10.604593Z",
   "github_issue_number": 1004,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1004",
   "last_seen_at": "2026-06-12T05:43:20.810848Z",
@@ -43,7 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1026",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1321",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +65,7 @@
     "source_event_id": "FE-20260612-78ef3d8bed15"
   },
   "validation_evidence": [
-    "BUG-335 original broker_called=false/BATCH_INSUFFICIENT_CASH hard preflight failure is covered by BUG-338/#1009 fix PR #1026; current main includes b10cddd211b0d5c61b223386c39ea71de06ba6ae and later residual terminalization fixes",
+    "BUG-335 original broker_called=false/BATCH_INSUFFICIENT_CASH hard preflight failure is covered by BUG-338/#1009 fix PR #1026; close-sync PR #1321 persists restored BUG JSON",
     "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 79 passed",
     "python -m ruff check backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/decision.py backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/bridges.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed"
   ],
