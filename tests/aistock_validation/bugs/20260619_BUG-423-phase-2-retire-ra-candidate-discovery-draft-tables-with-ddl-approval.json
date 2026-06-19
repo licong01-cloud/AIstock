@@ -1,0 +1,77 @@
+{
+  "actual": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.",
+  "allowed_write_scope": [
+    "backend/db/init_research_assistant_schema_20260521.py",
+    "backend/services/research_assistant/repository.py",
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260619_BUG-423-phase-2-retire-ra-candidate-discovery-draft-tables-with-ddl-approval.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-423",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T06:47:48.222496Z",
+  "description": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-b5277f8cae3b",
+      "timestamp": "2026-06-19T06:47:48.222493Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md"
+  ],
+  "expected": "RA candidate/discovery draft storage is retired or renamed/migrated under an approved DDL plan; Validation Center/Nightly/issue workflow remain the only candidate/discovery/GitHub/BUG JSON fact sources.",
+  "first_seen_at": "2026-06-19T06:47:48.222496Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1289,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1289",
+  "last_seen_at": "2026-06-19T06:47:48.222496Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review BUG-418 design docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md Phase 2 follow-up items.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Phase 2 retire RA candidate/discovery draft tables with DDL approval",
+  "trigger_condition": {
+    "fingerprint": "b5277f8cae3b7a689213ed71",
+    "source_event_id": "FE-20260619-b5277f8cae3b"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
