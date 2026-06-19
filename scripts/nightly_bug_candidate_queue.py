@@ -33,6 +33,12 @@ DISCOVERY_VALIDATION_BY_PLAN = {
     ),
 }
 QUALITY_READY_THRESHOLD = 0.80
+QUALITY_DEBT_TYPES = {
+    "run_record_empty",
+    "run_record_missing_production_gates",
+    "run_record_missing_result_status",
+}
+QUALITY_DEBT_MODULES = {"tests.validation_history"}
 
 
 def utc_now() -> str:
@@ -87,6 +93,10 @@ def load_discovery_plan_results(manifest_path: Path, *, root: Path) -> list[dict
         if not isinstance(item, dict):
             continue
         artifact_path = resolve_artifact_path(item.get("artifact"), root=root)
+        if artifact_path and not artifact_path.exists():
+            local_artifact_path = manifest_path.parent / artifact_path.name
+            if local_artifact_path.exists():
+                artifact_path = local_artifact_path
         payload = read_json(artifact_path)
         if payload:
             results.append(payload)
@@ -110,6 +120,33 @@ def is_synthetic_anomaly(anomaly: dict[str, Any]) -> bool:
     return bool(anomaly.get("synthetic") or details.get("synthetic") or "synthetic" in text or "smoke fixture" in text)
 
 
+def is_quality_debt_anomaly(anomaly: dict[str, Any]) -> bool:
+    details = anomaly.get("details") if isinstance(anomaly.get("details"), dict) else {}
+    source = anomaly.get("source_anomaly") if isinstance(anomaly.get("source_anomaly"), dict) else {}
+    anomaly_type = str(anomaly.get("type") or source.get("type") or "").strip()
+    module = str(anomaly.get("suggested_module") or anomaly.get("module") or "").strip()
+    title = str(anomaly.get("title") or "").lower()
+    return bool(
+        details.get("quality_debt")
+        or details.get("historical_quality_debt")
+        or anomaly.get("quality_debt")
+        or anomaly_type in QUALITY_DEBT_TYPES
+        or module in QUALITY_DEBT_MODULES
+        or "validation history record lacks" in title
+    )
+
+
+def value_lane_for_candidate(candidate: dict[str, Any]) -> str:
+    if is_synthetic_anomaly(candidate.get("source_anomaly") or candidate):
+        return "artifact_only"
+    if is_quality_debt_anomaly(candidate):
+        return "quality_debt"
+    severity = normalize_severity(candidate.get("severity"))
+    if severity in {"P0", "P1"} or candidate.get("high_value"):
+        return "high_value"
+    return "standard"
+
+
 def ratio(numerator: int, denominator: int) -> float:
     return round(float(numerator) / float(denominator), 4) if denominator else 0.0
 
@@ -123,14 +160,20 @@ def discovery_effectiveness_summary(
     candidate_count = len(candidates)
     deduped_count = sum(1 for item in candidates if item.get("status") == "deduped")
     artifact_only_count = sum(1 for item in candidates if item.get("status") == "artifact_only")
+    quality_debt_count = sum(1 for item in candidates if item.get("status") == "quality_debt")
+    high_value_candidate_count = sum(1 for item in candidates if item.get("value_lane") == "high_value")
     rejected_count = sum(1 for item in candidates if item.get("status") == "rejected")
     no_candidate_reason = None
     if candidate_count == 0:
         summary = discovery_manifest.get("summary") if isinstance(discovery_manifest.get("summary"), dict) else {}
         no_candidate_reason = summary.get("no_candidate_reason") or "candidate_quality_gate_found_no_actionable_candidate"
+    elif quality_debt_count == candidate_count:
+        no_candidate_reason = "only_historical_quality_debt_candidates"
     return {
         "schema_version": "aistock_nightly_discovery_effectiveness_v1",
         "candidate_count": candidate_count,
+        "high_value_candidate_count": high_value_candidate_count,
+        "quality_debt_count": quality_debt_count,
         "issue_payload_ready_count": len(issue_payload_refs),
         "draft_count": sum(1 for item in candidates if item.get("status") == "draft"),
         "deduped_count": deduped_count,
@@ -138,7 +181,9 @@ def discovery_effectiveness_summary(
         "rejected_count": rejected_count,
         "duplicate_rate": ratio(deduped_count, candidate_count),
         "artifact_only_rate": ratio(artifact_only_count, candidate_count),
+        "quality_debt_rate": ratio(quality_debt_count, candidate_count),
         "issue_payload_ready_rate": ratio(len(issue_payload_refs), candidate_count),
+        "high_value_issue_payload_ready_rate": ratio(len(issue_payload_refs), high_value_candidate_count),
         "confirmed_real_bug_count": 0,
         "confirmed_real_bug_rate": None,
         "noise_rate": None,
@@ -322,6 +367,11 @@ def apply_quality_gate(
         reasons.append("production_write_required")
     if is_synthetic_anomaly(candidate.get("source_anomaly") or candidate):
         reasons.append("synthetic_anomaly")
+    value_lane = value_lane_for_candidate(candidate)
+    if value_lane == "quality_debt":
+        reasons.append("historical_quality_debt")
+    elif value_lane != "high_value":
+        reasons.append("not_high_value_candidate")
     ready = not reasons
     module = str(candidate.get("module") or "unknown")
     if ready and total_payload_count >= max_issue_payloads:
@@ -334,9 +384,12 @@ def apply_quality_gate(
         status = "deduped"
     elif "synthetic_anomaly" in reasons:
         status = "artifact_only"
+    elif "historical_quality_debt" in reasons:
+        status = "quality_debt"
     else:
         status = "draft"
     candidate["status"] = status
+    candidate["value_lane"] = value_lane
     candidate["quality_gate"] = {
         "schema_version": "aistock_bug_candidate_quality_gate_v1",
         "workflow_gate": "ready" if ready else "draft",
@@ -345,6 +398,7 @@ def apply_quality_gate(
         "reasons": reasons,
         "auto_submit_allowed": False,
         "phase": "phase4_draft_queue_only",
+        "value_lane": value_lane,
     }
     return candidate, ready
 
@@ -441,12 +495,16 @@ def render_summary_markdown(manifest: dict[str, Any]) -> str:
         f"- workflow_gate: `{manifest.get('workflow_gate')}`",
         f"- rotation_focus: `{rotation.get('focus_key') or 'n/a'}`",
         f"- candidates: `{summary.get('candidate_count', 0)}`",
+        f"- high_value_candidates: `{summary.get('high_value_candidate_count', 0)}`",
         f"- issue_payload_drafts: `{summary.get('issue_payload_ready_count', 0)}`",
         f"- drafts: `{summary.get('draft_count', 0)}`",
         f"- deduped: `{summary.get('deduped_count', 0)}`",
         f"- artifact_only: `{summary.get('artifact_only_count', 0)}`",
+        f"- quality_debt: `{summary.get('quality_debt_count', 0)}`",
         f"- duplicate_rate: `{effectiveness.get('duplicate_rate', 0.0)}`",
+        f"- quality_debt_rate: `{effectiveness.get('quality_debt_rate', 0.0)}`",
         f"- issue_payload_ready_rate: `{effectiveness.get('issue_payload_ready_rate', 0.0)}`",
+        f"- high_value_issue_payload_ready_rate: `{effectiveness.get('high_value_issue_payload_ready_rate', 0.0)}`",
         f"- no_candidate_reason: `{effectiveness.get('no_candidate_reason') or summary.get('no_candidate_reason') or 'n/a'}`",
         "- auto_submit_allowed: `false`",
         "",
@@ -559,6 +617,8 @@ def print_success(payload: dict[str, Any], *, as_json: bool) -> None:
         "check": "nightly-bug-candidate-queue",
         "workflow_gate": payload.get("workflow_gate"),
         "candidates": summary.get("candidate_count", 0),
+        "high_value": summary.get("high_value_candidate_count", 0),
+        "quality_debt": summary.get("quality_debt_count", 0),
         "issue_payloads": summary.get("issue_payload_ready_count", 0),
         "drafts": summary.get("draft_count", 0),
         "deduped": summary.get("deduped_count", 0),
