@@ -36,8 +36,8 @@
   "expected": "官方 WSL 全量因子计算必须执行 timeout_per_factor、进程 RSS/swap hard gate 和结构化失败分类；长耗时因子必须输出 factor_started/factor_done 或 timeout 事件，不允许 batch 长时间无新日志且继续占用 swap。",
   "first_seen_at": "2026-06-18T22:01:29.092912Z",
   "fix_branch": null,
-  "fix_commit": "dd9fea6bb0ef2db30461268e44d8bd2c98c6cdbf",
-  "fixed_at": "2026-06-19T08:13:14.123675Z",
+  "fix_commit": "1fc4b3db722c084f3c317ef8706c7bdd45c2a8f4",
+  "fixed_at": "2026-06-19T08:16:12.880321Z",
   "github_issue_number": 1285,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1285",
   "last_seen_at": "2026-06-18T22:01:29.092912Z",
@@ -45,7 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1295",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1299",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,7 +100,8 @@
     "git diff --check -> passed after merge",
     "nox -s l0 -> passed after merge",
     "nox -s validation_module_registry_l0 -> passed after merge",
-    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed after merge; qe_read_backend 14 passed"
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed after merge; qe_read_backend 14 passed",
+    "close-sync PR #1299 checks -> passed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
