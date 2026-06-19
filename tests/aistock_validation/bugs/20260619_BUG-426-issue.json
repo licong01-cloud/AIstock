@@ -30,8 +30,8 @@
   "expected": "WSL 64GB 环境下官方全量因子计算应安全完成 575 个因子缓存，或在资源门禁触发时明确 failed 终止任务并保留可审计错误；不得继续后续 batch 形成部分缓存。",
   "first_seen_at": "2026-06-19T10:19:50.919505Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4e31e950a22369e89c876ee1a8a6affca6614f7d",
+  "fixed_at": "2026-06-19T10:46:00.950906Z",
   "github_issue_number": 1305,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1305",
   "last_seen_at": "2026-06-19T10:19:50.919505Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1306",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -60,6 +61,10 @@
     "fingerprint": "a66c344853abc6d77b1ee82d",
     "source_event_id": "FE-20260619-a66c344853ab"
   },
+  "validation_evidence": [
+    "PR #1306 checks green: AIstock CI, PR Quality, Semgrep, CodeQL, Issue Auto Link -> passed",
+    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 18 passed, 1 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
