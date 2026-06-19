@@ -10,12 +10,13 @@
   "bug_id": "BUG-425",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "资源门禁触发后父进程不得再阻塞在 worker result queue drain/join 路径。",
+    "批次启动前必须根据可用内存动态降低并发，避免 64GB WSL 环境下无谓触发 hard gate。",
+    "资源门禁失败必须进入 runtime_validation.resource_failures 和 failed factor 分类。",
+    "Run required verification plans and keep BUG JSON/GitHub Issue synchronized."
   ],
   "created_at": "2026-06-19T08:59:26.210992Z",
-  "description": "日志出现 resource_gate_failed 后不再输出 batch_released/failed/runtime_validation；父进程约 23 分钟保持 sleeping pipe_read，RSS 约 28GB，无子进程，需手工 kill。",
+  "description": "在 WSL 全量官方因子独立指标/因子值缓存验收中，2018-08-01~2026-04-30、575 个因子、batch_size=16、workers=4。第 4 批触发 resource_gate_failed(available_memory_below_minimum) 后，子进程已退出但父进程长期停在 pipe_read，不输出 failed/success 结果，必须手工 kill 才释放内存。该问题会阻塞全量因子缓存、相关性和 QE cache-hit 链路验收。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -45,6 +46,7 @@
   "reproduce_command": "wsl.exe -e bash -lc 'cd /mnt/f/Dev/AIstock; ./debug_tools/qe/20260619_factor_cache_full_chain_validation/run_official_full_compute.sh'",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "qe_read_l3"
   ],
   "risk_area": "regression",

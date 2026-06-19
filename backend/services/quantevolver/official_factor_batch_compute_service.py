@@ -223,15 +223,32 @@ class OfficialFactorBatchComputeService:
                 fail_count += len(remaining)
                 break
             resource_before_batch = _resource_snapshot()
+            requested_workers = max(1, int(cfg.workers or 1))
+            effective_workers = self._select_batch_workers(cfg.workers, resource_before_batch)
+            limits = getattr(self, "_resource_limits", FactorResourceLimits())
             memory_samples.append({
                 "event": "batch_started",
                 "batch_id": batch_id,
                 "batch_index": batch_index,
                 "factor_count": len(batch),
+                "requested_workers": requested_workers,
+                "effective_workers": effective_workers,
                 "rss_mb": resource_before_batch.rss_mb,
                 "swap_mb": resource_before_batch.swap_mb,
                 "available_mb": resource_before_batch.available_mb,
             })
+            if effective_workers < requested_workers:
+                self._emit(
+                    "worker_throttled",
+                    task_id=task_id,
+                    batch_id=batch_id,
+                    batch_index=batch_index,
+                    requested_workers=requested_workers,
+                    effective_workers=effective_workers,
+                    available_mb=resource_before_batch.available_mb,
+                    min_available_mb=limits.min_available_mb,
+                    reason="available_memory_headroom",
+                )
             self._emit(
                 "batch_started",
                 task_id=task_id,
@@ -239,6 +256,8 @@ class OfficialFactorBatchComputeService:
                 batch_index=batch_index,
                 batch_count=len(batches),
                 factor_count=len(batch),
+                requested_workers=requested_workers,
+                effective_workers=effective_workers,
                 rss_mb=resource_before_batch.rss_mb,
                 swap_mb=resource_before_batch.swap_mb,
                 available_mb=resource_before_batch.available_mb,
@@ -246,7 +265,7 @@ class OfficialFactorBatchComputeService:
             batch_exec = self._compute_batch_frames(
                 executor,
                 batch,
-                workers=cfg.workers,
+                workers=effective_workers,
                 timeout_per_factor=cfg.timeout_per_factor,
                 task_id=task_id,
                 batch_id=batch_id,
@@ -256,12 +275,27 @@ class OfficialFactorBatchComputeService:
             batch_meta: dict[str, dict[str, Any]] = {}
             written_paths: list[Path] = []
             try:
+                batch_resource_failure_recorded = False
                 for row in batch:
                     name = row["factor_name"]
                     exec_result = batch_exec.get(name)
                     if exec_result is None or not exec_result.success or exec_result.dataframe is None:
                         fail_count += 1
                         err = (exec_result.error if exec_result else "missing_execution_result") or "unknown"
+                        if (
+                            exec_result is not None
+                            and exec_result.error_type == RESOURCE_GATE_FAILED
+                            and not batch_resource_failure_recorded
+                        ):
+                            resource_failures.append({
+                                "phase": "during_batch",
+                                "task_id": task_id,
+                                "batch_id": batch_id,
+                                "batch_index": batch_index,
+                                "reason": err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
+                                "error_type": RESOURCE_GATE_FAILED,
+                            })
+                            batch_resource_failure_recorded = True
                         results.append({
                             "name": name,
                             "success": False,
@@ -497,6 +531,19 @@ class OfficialFactorBatchComputeService:
             ),
         )
 
+    def _select_batch_workers(self, requested_workers: int, snapshot: ResourceSnapshot) -> int:
+        requested = max(1, int(requested_workers or 1))
+        available_mb = snapshot.available_mb
+        if available_mb is None:
+            return requested
+        limits = getattr(self, "_resource_limits", FactorResourceLimits())
+        min_available_mb = max(1, int(limits.min_available_mb or DEFAULT_MIN_AVAILABLE_MB))
+        if available_mb < min_available_mb * 2:
+            return 1
+        if available_mb < min_available_mb * 4:
+            return min(requested, 2)
+        return requested
+
     def _compute_batch_frames(
         self,
         executor: OfflineCodeTextFactorExecutor,
@@ -566,6 +613,7 @@ class OfficialFactorBatchComputeService:
         running: dict[str, dict[str, Any]] = {}
         results: dict[str, FactorExecutionResult] = {}
         last_resource_gate_check = 0.0
+        queue_safe_to_drain = True
 
         try:
             while pending or running:
@@ -655,6 +703,7 @@ class OfficialFactorBatchComputeService:
                         extra_pids=[state["pid"] for state in running.values() if state.get("pid")],
                     )
                     if not gate.ok:
+                        queue_safe_to_drain = False
                         self._terminate_running_factors(running)
                         now = time.monotonic()
                         for name, state in list(running.items()):
@@ -670,10 +719,13 @@ class OfficialFactorBatchComputeService:
                 if pending or running:
                     time.sleep(0.2)
 
-            self._drain_factor_results(result_queue, running, results)
+            if queue_safe_to_drain:
+                self._drain_factor_results(result_queue, running, results)
         finally:
             self._terminate_running_factors(running)
             try:
+                if not queue_safe_to_drain and hasattr(result_queue, "cancel_join_thread"):
+                    result_queue.cancel_join_thread()
                 result_queue.close()
                 result_queue.join_thread()
             except Exception:
