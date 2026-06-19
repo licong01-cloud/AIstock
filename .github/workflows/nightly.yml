@@ -879,6 +879,11 @@ jobs:
             }
             core.info(`Nightly failure issue: #${issueNumber}`);
 
+      - name: Close stale Nightly failure issues after recovery
+        if: success()
+        run: |
+          python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact
+
       - name: Upload summary
         if: always()
         uses: actions/upload-artifact@v4

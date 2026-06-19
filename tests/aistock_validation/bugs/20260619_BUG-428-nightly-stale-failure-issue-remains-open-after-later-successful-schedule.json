@@ -1,0 +1,80 @@
+{
+  "actual": "Issue #1194 still appears open even though subsequent scheduled Nightly runs succeeded, so the validation issue queue contains stale failure noise.",
+  "allowed_write_scope": [
+    "scripts/nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+    "tests/aistock_validation/bugs/20260619_BUG-428-nightly-stale-failure-issue-remains-open-after-later-successful-schedule.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/nightly.yml",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-428",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T13:39:45.653953Z",
+  "description": "Issue #1194 still appears open even though subsequent scheduled Nightly runs succeeded, so the validation issue queue contains stale failure noise.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-8e392c0d314f",
+      "timestamp": "2026-06-19T13:39:45.653949Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A Nightly failure issue is automatically reviewed when newer scheduled runs for the same workflow pass; if recovery is confirmed, the workflow emits a compact close suggestion/evidence and avoids long-lived stale open validation issues.",
+  "first_seen_at": "2026-06-19T13:39:45.653953Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1310,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1310",
+  "last_seen_at": "2026-06-19T13:39:45.653953Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run list --repo licong01-cloud/AIstock --workflow nightly.yml --limit 5 --json databaseId,event,status,conclusion,createdAt,updatedAt,url",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly stale failure issue remains open after later successful scheduled runs",
+  "trigger_condition": {
+    "fingerprint": "8e392c0d314f2ab870221620",
+    "source_event_id": "FE-20260619-8e392c0d314f"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
