@@ -1,0 +1,75 @@
+{
+  "actual": "日志显示 factor_done=116、resource_gate_failed=3、batch_started=9；batch 7/8/9 触发 available_memory_below_minimum 后仍继续推进，未满足 expected_factor_count=575 验收。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "tests/aistock_validation/bugs/20260619_BUG-426-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-426",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T10:19:50.919505Z",
+  "description": "BUG-425 修复后恢复执行 2018-08-01~2026-04-30 官方全量因子计算；任务不再 hang，但 batch 7/8/9 在 effective_workers=2 下仍触发 resource_gate_failed(available_memory_below_minimum)，并继续进入后续批次，导致部分因子失败且无法完成 575 个 single cache 全量验收。需要资源门禁触发后明确 fail-fast，或动态降至可安全执行的 1 worker 后重试当前批次；不得跳过整批因子继续假成功推进。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-a66c344853ab",
+      "timestamp": "2026-06-19T10:19:50.919502Z"
+    }
+  ],
+  "evidence_uris": [
+    "debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug425.log"
+  ],
+  "expected": "WSL 64GB 环境下官方全量因子计算应安全完成 575 个因子缓存，或在资源门禁触发时明确 failed 终止任务并保留可审计错误；不得继续后续 batch 形成部分缓存。",
+  "first_seen_at": "2026-06-19T10:19:50.919505Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1305,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1305",
+  "last_seen_at": "2026-06-19T10:19:50.919505Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "WSL run_official_factor_full_compute_wsl.py official_full_payload_after_bug425.json",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方全量因子计算资源门禁触发后仍继续后续批次导致全量缓存验收失败",
+  "trigger_condition": {
+    "fingerprint": "a66c344853abc6d77b1ee82d",
+    "source_event_id": "FE-20260619-a66c344853ab"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
