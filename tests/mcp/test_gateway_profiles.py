@@ -27,9 +27,9 @@ def test_lite_is_low_resource_default() -> None:
 
 def test_full_profile_contains_all_migrated_and_platform_tools() -> None:
     payload = list_tools_payload(profile="full")
-    assert payload["legacy_tool_count"] == legacy_tool_count() == 368
+    assert payload["legacy_tool_count"] == legacy_tool_count() == 370
     assert payload["platform_tool_count"] == 6
-    assert payload["tool_count"] == 374
+    assert payload["tool_count"] == 376
     assert "validation" in payload["modules"]
     assert "qe_experiment" in payload["modules"]
     assert "qe_archive" in payload["modules"]
@@ -54,7 +54,7 @@ def test_gateway_registration_counts() -> None:
     assert len(_tool_names_for_profile("qe")) == 77
     assert len(_tool_names_for_profile("qlib_data")) == 15
     assert len(_tool_names_for_profile("data_full")) == 62
-    assert len(_tool_names_for_profile("full")) == 374
+    assert len(_tool_names_for_profile("full")) == 376
 
 
 def test_qlib_data_profiles_are_task_scoped() -> None:
@@ -74,7 +74,7 @@ def test_paper_v2_profiles_are_task_scoped() -> None:
     assert monitor["modules"] == ["paper_v2_monitoring", "qmt_broker_monitoring"]
     assert monitor["tool_count"] == 42
     assert stable["modules"] == ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]
-    assert stable["tool_count"] == 128
+    assert stable["tool_count"] == 130
     assert resolve_modules(profile="paper_v2_ops") == resolve_modules(profile="paper_v2_stable")
 
 
@@ -84,4 +84,5 @@ def test_self_check_passes_without_backend_requirement() -> None:
     assert payload["profile"] == "lite"
     assert payload["tool_count"] == 6
     assert payload["backend"] == {"checked": False}
+
 

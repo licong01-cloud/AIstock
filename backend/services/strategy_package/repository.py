@@ -7,7 +7,7 @@ column. QE source tables are read-only from this layer.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -29,7 +29,14 @@ from .model_state import (
     StrategyPackageModelRetrainJob,
     StrategyPackageModelState,
 )
-from .models import LiveApprovalStatus, PackageStatus, StrategyPackageLiveApproval, StrategyPackageManifest
+from .models import (
+    AlphaMode,
+    LiveApprovalStatus,
+    PackageStatus,
+    StrategyPackageComponentRecord,
+    StrategyPackageLiveApproval,
+    StrategyPackageManifest,
+)
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
@@ -67,6 +74,26 @@ def _manifest_drift_repair_plan(*, stored_sha256: str | None, computed_sha256: s
     }
 
 
+def _infer_data_vintage(manifest: StrategyPackageManifest) -> date | None:
+    for value in (
+        manifest.backtest_summary.raw_metrics.get("data_vintage"),
+        manifest.backtest_summary.raw_metrics.get("sample_end"),
+        manifest.backtest_summary.raw_metrics.get("end_date"),
+        manifest.source_evidence.get("data_vintage"),
+        manifest.backtest_context.get("data_vintage"),
+    ):
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            continue
+    return None
+
+
 class StrategyPackageRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,6 +107,15 @@ class StrategyPackageRecord(BaseModel):
     package_status: PackageStatus
     manifest: StrategyPackageManifest
     manifest_sha256: str
+    alpha_mode: AlphaMode = AlphaMode.SINGLE_ALPHA
+    signal_domain: str | None = None
+    display_name: str | None = None
+    legacy_name: str | None = None
+    data_vintage: date | None = None
+    prediction_ref_uri: str | None = None
+    prediction_ref_sha256: str | None = None
+    model_artifact_uri: str | None = None
+    model_artifact_sha256: str | None = None
     paper_portfolio_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -125,7 +161,9 @@ class StrategyPackageRepository:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         """
-                        SELECT package_id, manifest_sha256, paper_portfolio_count
+                        SELECT package_id, manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count
                         FROM strategy_pkg.package
                         WHERE package_id = %s
                         """,
@@ -150,8 +188,10 @@ class StrategyPackageRepository:
                         INSERT INTO strategy_pkg.package (
                             package_id, package_name, package_version, source_type,
                             source_id, loop_id, run_id, package_status, manifest_json,
-                            manifest_sha256
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             frozen.package_id,
@@ -164,6 +204,15 @@ class StrategyPackageRepository:
                             frozen.package_status.value,
                             psycopg2.extras.Json(frozen.model_dump(mode="json")),
                             frozen.manifest_sha256,
+                            frozen.alpha_mode.value,
+                            None,
+                            frozen.package_name,
+                            frozen.package_name,
+                            _infer_data_vintage(frozen),
+                            None,
+                            None,
+                            None,
+                            None,
                         ),
                     )
                     cur.execute(
@@ -215,7 +264,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE source_type = %s
                       AND source_id = %s
@@ -238,7 +289,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE package_id = %s
                     """,
@@ -267,7 +320,9 @@ class StrategyPackageRepository:
                     f"""
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     {where}
                     ORDER BY created_at DESC
@@ -290,6 +345,8 @@ class StrategyPackageRepository:
             "simulation_release_bindings": [],
             "simulation_daily_runs": [],
             "execution_plans": [],
+            "component_child_edges": [],
+            "component_parent_edges": [],
             "daily_selection_evidence": 0,
             "selection_score_artifacts": 0,
         }
@@ -377,6 +434,27 @@ class StrategyPackageRepository:
                             (package_id,),
                         )
                         summary[key] = [dict(row) for row in cur.fetchall()]
+                if self._table_exists(cur, "strategy_pkg.strategy_package_components"):
+                    cur.execute(
+                        """
+                        SELECT parent_package_id, child_package_id, position
+                        FROM strategy_pkg.strategy_package_components
+                        WHERE child_package_id = %s
+                        ORDER BY parent_package_id ASC, position ASC
+                        """,
+                        (package_id,),
+                    )
+                    summary["component_child_edges"] = [dict(row) for row in cur.fetchall()]
+                    cur.execute(
+                        """
+                        SELECT parent_package_id, child_package_id, position
+                        FROM strategy_pkg.strategy_package_components
+                        WHERE parent_package_id = %s
+                        ORDER BY position ASC, child_package_id ASC
+                        """,
+                        (package_id,),
+                    )
+                    summary["component_parent_edges"] = [dict(row) for row in cur.fetchall()]
         return summary
 
     def delete_package(self, package_id: str) -> dict[str, Any]:
@@ -397,6 +475,7 @@ class StrategyPackageRepository:
             "validated_execution_policy": 0,
             "selection_score_artifact": 0,
             "package_asset": 0,
+            "strategy_package_components": 0,
             "package_status_event": 0,
             "package": 0,
         }
@@ -426,6 +505,12 @@ class StrategyPackageRepository:
                         if self._table_exists(cur, table):
                             cur.execute(f"DELETE FROM {table} WHERE package_id = %s", (package_id,))
                             counts[key] = cur.rowcount
+                    if self._table_exists(cur, "strategy_pkg.strategy_package_components"):
+                        cur.execute(
+                            "DELETE FROM strategy_pkg.strategy_package_components WHERE parent_package_id = %s",
+                            (package_id,),
+                        )
+                        counts["strategy_package_components"] = cur.rowcount
                     cur.execute("DELETE FROM strategy_pkg.package WHERE package_id = %s", (package_id,))
                     counts["package"] = cur.rowcount
                 if hasattr(conn, "commit"):
@@ -534,6 +619,7 @@ class StrategyPackageRepository:
             "simulation_release_bindings",
             "simulation_daily_runs",
             "execution_plans",
+            "component_child_edges",
         ):
             if dependencies.get(key):
                 blockers.append(key)
@@ -605,6 +691,135 @@ class StrategyPackageRepository:
             )
             for row in rows
         ]
+
+    def update_artifact_refs(
+        self,
+        package_id: str,
+        *,
+        prediction_ref_uri: str | None = None,
+        prediction_ref_sha256: str | None = None,
+        model_artifact_uri: str | None = None,
+        model_artifact_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
+        self.get(package_id)
+        if prediction_ref_uri is not None and not prediction_ref_sha256:
+            raise StrategyPackageValidationError(
+                "prediction_ref_sha256 is required when prediction_ref_uri is set",
+                context={"package_id": package_id, "prediction_ref_uri": prediction_ref_uri},
+            )
+        if model_artifact_uri is not None and not model_artifact_sha256:
+            raise StrategyPackageValidationError(
+                "model_artifact_sha256 is required when model_artifact_uri is set",
+                context={"package_id": package_id, "model_artifact_uri": model_artifact_uri},
+            )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package
+                    SET prediction_ref_uri = COALESCE(%s, prediction_ref_uri),
+                        prediction_ref_sha256 = COALESCE(%s, prediction_ref_sha256),
+                        model_artifact_uri = COALESCE(%s, model_artifact_uri),
+                        model_artifact_sha256 = COALESCE(%s, model_artifact_sha256),
+                        updated_at = NOW()
+                    WHERE package_id = %s
+                    """,
+                    (
+                        prediction_ref_uri,
+                        prediction_ref_sha256,
+                        model_artifact_uri,
+                        model_artifact_sha256,
+                        package_id,
+                    ),
+                )
+        return self.get(package_id)
+
+    def save_components(
+        self,
+        parent_package_id: str,
+        components: list[StrategyPackageComponentRecord],
+    ) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        if not components:
+            raise StrategyPackageValidationError(
+                "multi-alpha package requires at least one component edge",
+                context={"parent_package_id": parent_package_id},
+            )
+        with self._conn_factory() as conn:
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "DELETE FROM strategy_pkg.strategy_package_components WHERE parent_package_id = %s",
+                        (parent_package_id,),
+                    )
+                    saved: list[StrategyPackageComponentRecord] = []
+                    for component in components:
+                        cur.execute(
+                            """
+                            INSERT INTO strategy_pkg.strategy_package_components (
+                                parent_package_id, child_package_id, child_manifest_sha256,
+                                component_weight, score_normalization, position
+                            ) VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id, parent_package_id, child_package_id, child_manifest_sha256,
+                                      component_weight, score_normalization, position, created_at
+                            """,
+                            (
+                                parent_package_id,
+                                component.child_package_id,
+                                component.child_manifest_sha256,
+                                component.component_weight,
+                                component.score_normalization,
+                                component.position,
+                            ),
+                        )
+                        saved.append(self._component_from_row(dict(cur.fetchone())))
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
+        return saved
+
+    def list_components(self, parent_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, parent_package_id, child_package_id, child_manifest_sha256,
+                           component_weight, score_normalization, position, created_at
+                    FROM strategy_pkg.strategy_package_components
+                    WHERE parent_package_id = %s
+                    ORDER BY position ASC, id ASC
+                    """,
+                    (parent_package_id,),
+                )
+                rows = cur.fetchall()
+        return [self._component_from_row(dict(row)) for row in rows]
+
+    def list_component_parents(self, child_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(child_package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, parent_package_id, child_package_id, child_manifest_sha256,
+                           component_weight, score_normalization, position, created_at
+                    FROM strategy_pkg.strategy_package_components
+                    WHERE child_package_id = %s
+                    ORDER BY created_at DESC, id ASC
+                    """,
+                    (child_package_id,),
+                )
+                rows = cur.fetchall()
+        return [self._component_from_row(dict(row)) for row in rows]
 
     def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
         self.get(asset.package_id)
@@ -1303,7 +1518,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     ORDER BY created_at DESC
                     LIMIT %s
@@ -1340,6 +1557,15 @@ class StrategyPackageRepository:
                 package_status=PackageStatus(row_dict["package_status"]),
                 manifest=manifest,
                 manifest_sha256=stored,
+                alpha_mode=AlphaMode(row_dict.get("alpha_mode") or manifest.alpha_mode.value),
+                signal_domain=row_dict.get("signal_domain"),
+                display_name=row_dict.get("display_name") or row_dict["package_name"],
+                legacy_name=row_dict.get("legacy_name"),
+                data_vintage=row_dict.get("data_vintage"),
+                prediction_ref_uri=row_dict.get("prediction_ref_uri"),
+                prediction_ref_sha256=row_dict.get("prediction_ref_sha256"),
+                model_artifact_uri=row_dict.get("model_artifact_uri"),
+                model_artifact_sha256=row_dict.get("model_artifact_sha256"),
                 paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
                 created_at=row_dict["created_at"],
                 updated_at=row_dict["updated_at"],
@@ -1391,7 +1617,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE package_id = %s
                     """,
@@ -1416,6 +1644,15 @@ class StrategyPackageRepository:
             package_status=PackageStatus(row_dict["package_status"]),
             manifest=manifest,
             manifest_sha256=row_dict["manifest_sha256"],
+            alpha_mode=AlphaMode(row_dict.get("alpha_mode") or manifest.alpha_mode.value),
+            signal_domain=row_dict.get("signal_domain"),
+            display_name=row_dict.get("display_name") or row_dict["package_name"],
+            legacy_name=row_dict.get("legacy_name"),
+            data_vintage=row_dict.get("data_vintage"),
+            prediction_ref_uri=row_dict.get("prediction_ref_uri"),
+            prediction_ref_sha256=row_dict.get("prediction_ref_sha256"),
+            model_artifact_uri=row_dict.get("model_artifact_uri"),
+            model_artifact_sha256=row_dict.get("model_artifact_sha256"),
             paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
             created_at=row_dict["created_at"],
             updated_at=row_dict["updated_at"],
@@ -1486,6 +1723,15 @@ class StrategyPackageRepository:
             package_status=PackageStatus(row["package_status"]),
             manifest=manifest,
             manifest_sha256=row["manifest_sha256"],
+            alpha_mode=AlphaMode(row.get("alpha_mode") or manifest.alpha_mode.value),
+            signal_domain=row.get("signal_domain"),
+            display_name=row.get("display_name") or row["package_name"],
+            legacy_name=row.get("legacy_name"),
+            data_vintage=row.get("data_vintage"),
+            prediction_ref_uri=row.get("prediction_ref_uri"),
+            prediction_ref_sha256=row.get("prediction_ref_sha256"),
+            model_artifact_uri=row.get("model_artifact_uri"),
+            model_artifact_sha256=row.get("model_artifact_sha256"),
             paper_portfolio_count=int(row.get("paper_portfolio_count") or 0),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -1509,6 +1755,19 @@ class StrategyPackageRepository:
                 },
             )
         return record
+
+    @staticmethod
+    def _component_from_row(row: dict[str, Any]) -> StrategyPackageComponentRecord:
+        return StrategyPackageComponentRecord(
+            id=row.get("id"),
+            parent_package_id=row["parent_package_id"],
+            child_package_id=row["child_package_id"],
+            child_manifest_sha256=row["child_manifest_sha256"],
+            component_weight=float(row["component_weight"]),
+            score_normalization=row["score_normalization"],
+            position=int(row["position"]),
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _execution_policy_from_row(row: dict[str, Any]) -> ValidatedExecutionPolicy:
@@ -1685,6 +1944,8 @@ class InMemoryStrategyPackageRepository:
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
         self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
         self.validation_runs: dict[str, StrategyPackageValidationRun] = {}
+        self.components: dict[int, StrategyPackageComponentRecord] = {}
+        self._next_component_id = 1
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         frozen = freeze_manifest(manifest)
@@ -1708,6 +1969,10 @@ class InMemoryStrategyPackageRepository:
             package_status=frozen.package_status,
             manifest=frozen,
             manifest_sha256=frozen.manifest_sha256 or "",
+            alpha_mode=frozen.alpha_mode,
+            display_name=frozen.package_name,
+            legacy_name=frozen.package_name,
+            data_vintage=_infer_data_vintage(frozen),
             created_at=now,
             updated_at=now,
         )
@@ -1777,6 +2042,24 @@ class InMemoryStrategyPackageRepository:
             for approval in self.live_approvals.values()
             if approval.package_id == package_id
         ]
+        component_child_edges = [
+            {
+                "parent_package_id": component.parent_package_id,
+                "child_package_id": component.child_package_id,
+                "position": component.position,
+            }
+            for component in self.components.values()
+            if component.child_package_id == package_id
+        ]
+        component_parent_edges = [
+            {
+                "parent_package_id": component.parent_package_id,
+                "child_package_id": component.child_package_id,
+                "position": component.position,
+            }
+            for component in self.components.values()
+            if component.parent_package_id == package_id
+        ]
         return {
             "paper_portfolios": [],
             "active_paper_portfolios": [],
@@ -1787,6 +2070,8 @@ class InMemoryStrategyPackageRepository:
             "simulation_release_bindings": [],
             "simulation_daily_runs": [],
             "execution_plans": [],
+            "component_child_edges": component_child_edges,
+            "component_parent_edges": component_parent_edges,
             "daily_selection_evidence": 0,
             "selection_score_artifacts": 0,
         }
@@ -1807,8 +2092,18 @@ class InMemoryStrategyPackageRepository:
             "package_runtime_variant": len([variant for variant in self.runtime_variants.values() if variant.package_id == package_id]),
             "validated_execution_policy": len([policy for policy in self.execution_policies.values() if policy.package_id == package_id]),
             "package_asset": len([asset for asset in self.package_assets.values() if asset.package_id == package_id]),
+            "strategy_package_components": len([
+                component
+                for component in self.components.values()
+                if component.parent_package_id == package_id or component.child_package_id == package_id
+            ]),
             "package_status_event": len([event for event in self.events if event.package_id == package_id]),
             "package": 1,
+        }
+        self.components = {
+            component_id: component
+            for component_id, component in self.components.items()
+            if component.parent_package_id != package_id and component.child_package_id != package_id
         }
         self.validation_runs = {
             run_id: run for run_id, run in self.validation_runs.items() if run.package_id != package_id
@@ -1938,6 +2233,19 @@ class InMemoryStrategyPackageRepository:
         context: dict[str, Any] | None = None,
     ) -> StrategyPackageRecord:
         record = self.get(package_id)
+        if to_status == PackageStatus.RETIRED:
+            parents = [
+                component.parent_package_id
+                for component in self.components.values()
+                if component.child_package_id == package_id
+                and self.records.get(component.parent_package_id)
+                and self.records[component.parent_package_id].package_status != PackageStatus.RETIRED
+            ]
+            if parents:
+                raise InvalidStateTransitionError(
+                    "referenced single-alpha child package cannot be retired",
+                    context={"package_id": package_id, "active_parent_package_ids": sorted(parents)},
+                )
         if record.package_status not in allowed_from:
             raise InvalidStateTransitionError(
                 "invalid strategy package status transition",
@@ -1955,6 +2263,78 @@ class InMemoryStrategyPackageRepository:
             )
         )
         return updated
+
+    def update_artifact_refs(
+        self,
+        package_id: str,
+        *,
+        prediction_ref_uri: str | None = None,
+        prediction_ref_sha256: str | None = None,
+        model_artifact_uri: str | None = None,
+        model_artifact_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        if prediction_ref_uri is not None and not prediction_ref_sha256:
+            raise StrategyPackageValidationError(
+                "prediction_ref_sha256 is required when prediction_ref_uri is set",
+                context={"package_id": package_id, "prediction_ref_uri": prediction_ref_uri},
+            )
+        if model_artifact_uri is not None and not model_artifact_sha256:
+            raise StrategyPackageValidationError(
+                "model_artifact_sha256 is required when model_artifact_uri is set",
+                context={"package_id": package_id, "model_artifact_uri": model_artifact_uri},
+            )
+        updated = record.model_copy(
+            update={
+                "prediction_ref_uri": prediction_ref_uri if prediction_ref_uri is not None else record.prediction_ref_uri,
+                "prediction_ref_sha256": prediction_ref_sha256 if prediction_ref_sha256 is not None else record.prediction_ref_sha256,
+                "model_artifact_uri": model_artifact_uri if model_artifact_uri is not None else record.model_artifact_uri,
+                "model_artifact_sha256": model_artifact_sha256 if model_artifact_sha256 is not None else record.model_artifact_sha256,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.records[package_id] = updated
+        return updated
+
+    def save_components(
+        self,
+        parent_package_id: str,
+        components: list[StrategyPackageComponentRecord],
+    ) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        if not components:
+            raise StrategyPackageValidationError(
+                "multi-alpha package requires at least one component edge",
+                context={"parent_package_id": parent_package_id},
+            )
+        self.components = {
+            component_id: component
+            for component_id, component in self.components.items()
+            if component.parent_package_id != parent_package_id
+        }
+        saved: list[StrategyPackageComponentRecord] = []
+        for component in components:
+            component_id = self._next_component_id
+            self._next_component_id += 1
+            stored = component.model_copy(update={"id": component_id, "created_at": datetime.now(timezone.utc)})
+            self.components[component_id] = stored
+            saved.append(stored)
+        return saved
+
+    def list_components(self, parent_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        return sorted(
+            [component for component in self.components.values() if component.parent_package_id == parent_package_id],
+            key=lambda item: (item.position, item.id or 0),
+        )
+
+    def list_component_parents(self, child_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(child_package_id)
+        return sorted(
+            [component for component in self.components.values() if component.child_package_id == child_package_id],
+            key=lambda item: (item.created_at, item.id or 0),
+            reverse=True,
+        )
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         self.get(package_id)
@@ -2282,3 +2662,4 @@ def _validate_validation_run_matches_variant(run: StrategyPackageValidationRun, 
                 "expected_runtime_variant_hash": expected_variant_hash,
             },
         )
+

@@ -15,6 +15,7 @@ from backend.services.strategy_package.candidate import (
     CandidateStrategyPackageStatus,
 )
 from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
+from backend.services.strategy_package.components import StrategyPackageComponentService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
@@ -232,6 +233,15 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "run_id": record.run_id,
         "package_status": record.package_status.value,
         "manifest_sha256": record.manifest_sha256,
+        "alpha_mode": record.alpha_mode.value,
+        "signal_domain": record.signal_domain,
+        "display_name": record.display_name,
+        "legacy_name": record.legacy_name,
+        "data_vintage": record.data_vintage.isoformat() if record.data_vintage else None,
+        "prediction_ref_uri": record.prediction_ref_uri,
+        "prediction_ref_sha256": record.prediction_ref_sha256,
+        "model_artifact_uri": record.model_artifact_uri,
+        "model_artifact_sha256": record.model_artifact_sha256,
         "paper_portfolio_count": record.paper_portfolio_count,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
@@ -512,6 +522,24 @@ def get_strategy_package(package_id: str) -> dict[str, Any]:
     try:
         record = StrategyPackageService().get_package(package_id)
         return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/components")
+def get_strategy_package_components(package_id: str) -> dict[str, Any]:
+    try:
+        components = StrategyPackageComponentService().get_components(package_id)
+        return {"ok": True, **components}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/prediction-ref")
+def get_strategy_package_prediction_ref(package_id: str) -> dict[str, Any]:
+    try:
+        pointer = StrategyPackageComponentService().get_prediction_ref(package_id)
+        return {"ok": True, "prediction_ref": pointer}
     except TradingCoreError as exc:
         _raise_http(exc)
 
