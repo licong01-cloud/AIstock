@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import fnmatch
@@ -776,7 +776,7 @@ def _claude_understand_plugin_status(*, skip_external: bool = False) -> dict[str
     result = _run_command([command, "plugins", "list"], cwd=REPO_ROOT, timeout=30)
     stdout = str(result.get("stdout") or "")
     enabled = "understand-anything@understand-anything" in stdout and (
-        "Status: √ enabled" in stdout or "Status: ✓ enabled" in stdout or "Status: enabled" in stdout
+        "Status: 鈭?enabled" in stdout or "Status: 鉁?enabled" in stdout or "Status: enabled" in stdout
     )
     return {
         "available": bool(result.get("ok")),
@@ -1237,6 +1237,68 @@ def _artifact_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_metric_int(*sources: dict[str, Any], key: str) -> int:
+    for source in sources:
+        if key in source and source.get(key) is not None:
+            return _safe_int(source.get(key), 0)
+    return 0
+
+
+def _first_metric_float(*sources: dict[str, Any], key: str) -> float | None:
+    for source in sources:
+        if key in source and source.get(key) is not None:
+            return _safe_float(source.get(key))
+    return None
+
+
+def _unique_refs(*values: Any) -> list[str]:
+    refs: list[str] = []
+    for value in values:
+        if isinstance(value, list):
+            refs.extend(str(item) for item in value if item is not None and str(item).strip())
+        elif isinstance(value, dict):
+            refs.extend(str(item) for item in value.values() if item is not None and str(item).strip())
+        elif str(value or "").strip():
+            refs.append(str(value))
+    return list(dict.fromkeys(refs))
+
+
+def _plan_changed(advised: list[str], baseline: list[str]) -> bool:
+    if not advised:
+        return False
+    if not baseline:
+        return True
+    return advised != baseline
+
+
 def build_llm_value_summary(
     *,
     root: Path | None = None,
@@ -1273,6 +1335,61 @@ def build_llm_value_summary(
         else {}
     )
     prompt_metrics = prompt_eval.get("metrics") if isinstance(prompt_eval.get("metrics"), dict) else {}
+    bug_summary = _mapping(bug_candidate_manifest.get("summary"))
+    bug_effectiveness = _mapping(bug_candidate_manifest.get("discovery_effectiveness"))
+    discovery_summary = _mapping(discovery_manifest.get("summary"))
+    context = _mapping(code_summary.get("context"))
+    context_quality = _mapping(context.get("context_quality"))
+    hypothesis_rotation = _mapping(hypotheses.get("rotation"))
+    discovery_rotation = _mapping(discovery_manifest.get("rotation"))
+    adaptive_consumption = _mapping(adaptive.get("advice_consumption"))
+    scheduler_consumption = _mapping(scheduler.get("advice_consumption"))
+    hypothesis_selected = _string_list(hypotheses.get("selected_plan_keys"))
+    rotation_selected = _string_list(hypothesis_rotation.get("selected_plan_keys")) or _string_list(
+        discovery_rotation.get("selected_plan_keys")
+    )
+    scheduler_advised = _string_list(scheduler.get("advised_plan_keys"))
+    scheduler_baseline = _string_list(scheduler.get("deterministic_plan_keys")) or _string_list(
+        scheduler.get("executed_plan_keys")
+    )
+    adaptive_advised = _string_list(adaptive.get("advised_plan_keys"))
+    adaptive_baseline = _string_list(adaptive.get("deterministic_plan_keys")) or _string_list(
+        adaptive.get("executed_plan_keys")
+    )
+    llm_invoked = bool(
+        adaptive.get("llm_invoked")
+        or scheduler.get("llm_invoked")
+        or hypotheses.get("llm_invoked")
+        or adaptive_evidence.get("invoked")
+        or scheduler_evidence.get("invoked")
+        or hypothesis_evidence.get("invoked")
+    )
+    llm_advice_generated = bool(
+        llm_invoked
+        and (
+            scheduler_advised
+            or adaptive_advised
+            or hypothesis_selected
+            or hypotheses.get("hypotheses")
+            or scheduler.get("llm_advice")
+            or adaptive.get("llm_advice")
+        )
+    )
+    llm_advice_consumed = bool(
+        consumption.get("advice_consumed")
+        or adaptive_consumption.get("advice_consumed")
+        or scheduler_consumption.get("advice_consumed")
+        or adaptive.get("advice_consumed")
+        or hypotheses.get("selected_plan_keys")
+    )
+    changed_plan_source = None
+    if _plan_changed(hypothesis_selected, rotation_selected):
+        changed_plan_source = "nightly_discovery_hypothesis"
+    elif _plan_changed(adaptive_advised, adaptive_baseline):
+        changed_plan_source = "adaptive_scheduler"
+    elif _plan_changed(scheduler_advised, scheduler_baseline):
+        changed_plan_source = "scheduler_advice"
+    llm_advice_changed_plan = changed_plan_source is not None
     provider = (
         adaptive.get("effective_provider")
         or adaptive.get("provider")
@@ -1324,6 +1441,70 @@ def build_llm_value_summary(
         "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
         "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
     }
+    codegraph_refs = _unique_refs(
+        artifact_refs["codegraph_freshness_json"],
+        artifact_refs["codegraph_freshness_md"],
+        artifact_refs["code_intelligence_summary_json"],
+        artifact_refs["code_intelligence_summary_md"],
+        code_summary.get("context_ref"),
+        code_summary.get("affected_tests_ref"),
+        code_summary.get("latest_freshness_ref"),
+    )
+    ua_refs = _unique_refs(
+        artifact_refs["understand_anything_manifest_json"],
+        code_summary.get("understand_anything_summary_ref"),
+        [item.get("summary_ref") for item in (ua_manifest.get("summary_refs") or []) if isinstance(item, dict)],
+    )
+    codegraph_ready = (
+        codegraph.get("freshness") == "fresh"
+        or codegraph.get("status") == "ok"
+        or code_summary.get("status") == "ok"
+    )
+    broad_scan_avoided = bool(
+        codegraph_ready
+        and codegraph_refs
+        and not bool(context_quality.get("broad_scan_required"))
+        and not bool(code_summary.get("fallback_used"))
+    )
+    candidate_count = _first_metric_int(bug_summary, bug_effectiveness, key="candidate_count")
+    high_value_candidates = _first_metric_int(bug_summary, bug_effectiveness, key="high_value_candidate_count")
+    issue_payload_ready_count = _first_metric_int(bug_summary, bug_effectiveness, key="issue_payload_ready_count")
+    accepted_count = _first_metric_int(bug_summary, bug_effectiveness, key="accepted_count")
+    rejected_count = _first_metric_int(bug_summary, bug_effectiveness, key="rejected_count")
+    closed_count = _first_metric_int(bug_summary, bug_effectiveness, key="closed_count")
+    confirmed_real_bug_count = _first_metric_int(bug_summary, bug_effectiveness, key="confirmed_real_bug_count")
+    pending_count = max(candidate_count - accepted_count - rejected_count - closed_count, 0)
+    candidate_feedback_available = bool(bug_candidate_manifest)
+    value_metrics = {
+        "schema_version": "aistock_llm_code_intelligence_value_metrics_v1",
+        "llm_advice_generated": llm_advice_generated,
+        "llm_advice_consumed": llm_advice_consumed,
+        "llm_advice_changed_plan": llm_advice_changed_plan,
+        "changed_plan_source": changed_plan_source,
+        "codegraph_refs_used": len(codegraph_refs),
+        "ua_refs_used": len(ua_refs),
+        "broad_scan_avoided": broad_scan_avoided,
+        "high_value_candidates": high_value_candidates,
+        "issue_payload_ready_count": issue_payload_ready_count,
+        "candidate_feedback_available": candidate_feedback_available,
+        "candidate_feedback": {
+            "schema_version": "aistock_nightly_candidate_feedback_compact_v1",
+            "candidate_count": candidate_count,
+            "accepted_count": accepted_count,
+            "rejected_count": rejected_count,
+            "closed_count": closed_count,
+            "pending_count": pending_count,
+            "confirmed_real_bug_count": confirmed_real_bug_count,
+            "confirmed_real_bug_rate": _first_metric_float(
+                bug_summary,
+                bug_effectiveness,
+                key="confirmed_real_bug_rate",
+            ),
+            "noise_rate": _first_metric_float(bug_summary, bug_effectiveness, key="noise_rate"),
+            "placeholders_present": True,
+        },
+        "compact_only": True,
+    }
     return {
         "schema_version": "aistock_llm_code_intelligence_value_summary_v1",
         "generated_at": _utc_now(),
@@ -1351,24 +1532,16 @@ def build_llm_value_summary(
         "llm": {
             "provider": provider,
             "model": model,
-            "llm_invoked": bool(
-                adaptive.get("llm_invoked")
-                or scheduler.get("llm_invoked")
-                or hypotheses.get("llm_invoked")
-                or adaptive_evidence.get("invoked")
-                or scheduler_evidence.get("invoked")
-                or hypothesis_evidence.get("invoked")
-            ),
+            "llm_invoked": llm_invoked,
             "fallback_used": bool(
                 adaptive_evidence.get("fallback_used")
                 or scheduler_evidence.get("fallback_used")
                 or hypothesis_evidence.get("fallback_used")
             ),
-            "advice_consumed": bool(
-                consumption.get("advice_consumed")
-                or adaptive.get("advice_consumed")
-                or hypotheses.get("selected_plan_keys")
-            ),
+            "advice_generated": llm_advice_generated,
+            "advice_consumed": llm_advice_consumed,
+            "advice_changed_plan": llm_advice_changed_plan,
+            "changed_plan_source": changed_plan_source,
             "allowed_plan_keys": queue.get("allowed_plan_keys")
             or adaptive.get("allowed_plan_keys")
             or hypotheses.get("selected_plan_keys")
@@ -1381,10 +1554,11 @@ def build_llm_value_summary(
             "discovery_hypotheses": _artifact_summary(hypotheses),
             "discovery_hypothesis_count": len(hypotheses.get("hypotheses") or []) if isinstance(hypotheses.get("hypotheses"), list) else 0,
             "selected_plan_count": len(hypotheses.get("selected_plan_keys") or []) if isinstance(hypotheses.get("selected_plan_keys"), list) else 0,
-            "discovery_executed_plan_count": (discovery_manifest.get("summary") or {}).get("executed_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
-            "discovery_anomaly_count": (discovery_manifest.get("summary") or {}).get("anomaly_count") if isinstance(discovery_manifest.get("summary"), dict) else 0,
-            "bug_candidate_count": (bug_candidate_manifest.get("summary") or {}).get("candidate_count") if isinstance(bug_candidate_manifest.get("summary"), dict) else 0,
-            "bug_candidate_issue_payload_count": (bug_candidate_manifest.get("summary") or {}).get("issue_payload_ready_count") if isinstance(bug_candidate_manifest.get("summary"), dict) else 0,
+            "discovery_executed_plan_count": discovery_summary.get("executed_count", 0),
+            "discovery_anomaly_count": discovery_summary.get("anomaly_count", 0),
+            "bug_candidate_count": candidate_count,
+            "bug_candidate_issue_payload_count": issue_payload_ready_count,
+            "high_value_candidate_count": high_value_candidates,
         },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
@@ -1400,6 +1574,7 @@ def build_llm_value_summary(
             "llm_can_enhance_issue": rollout.get("llm_can_enhance_issue"),
             "llm_enhancement_allowed": rollout.get("llm_enhancement_allowed"),
         },
+        "value_metrics": value_metrics,
         "artifact_refs": artifact_refs,
         "warnings": warnings,
     }
@@ -1411,6 +1586,8 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
     llm = payload.get("llm") if isinstance(payload.get("llm"), dict) else {}
     prompt = payload.get("prompt_evaluation") if isinstance(payload.get("prompt_evaluation"), dict) else {}
     rollout = payload.get("guarded_rollout") if isinstance(payload.get("guarded_rollout"), dict) else {}
+    metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
+    feedback = metrics.get("candidate_feedback") if isinstance(metrics.get("candidate_feedback"), dict) else {}
     refs = payload.get("artifact_refs") if isinstance(payload.get("artifact_refs"), dict) else {}
     allowed_plan_keys = ",".join(llm.get("allowed_plan_keys") or []) or "none"
     prompt_cases = prompt.get("case_count") or "unknown"
@@ -1432,10 +1609,14 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- llm_model: `{llm.get('model') or 'unknown'}`",
         f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
         f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
+        f"- advice_generated: `{bool(metrics.get('llm_advice_generated'))}`",
         f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
+        f"- advice_changed_plan: `{bool(metrics.get('llm_advice_changed_plan'))}` source=`{metrics.get('changed_plan_source') or 'none'}`",
+        f"- graph_refs: `codegraph={metrics.get('codegraph_refs_used', 0)}, ua={metrics.get('ua_refs_used', 0)}, broad_scan_avoided={bool(metrics.get('broad_scan_avoided'))}`",
         f"- discovery_hypotheses: `hypotheses={llm.get('discovery_hypothesis_count') or 0}, selected_plans={llm.get('selected_plan_count') or 0}`",
         f"- discovery_plans: `executed={llm.get('discovery_executed_plan_count') or 0}, anomalies={llm.get('discovery_anomaly_count') or 0}`",
-        f"- bug_candidates: `candidates={llm.get('bug_candidate_count') or 0}, issue_payload_drafts={llm.get('bug_candidate_issue_payload_count') or 0}`",
+        f"- bug_candidates: `candidates={llm.get('bug_candidate_count') or 0}, high_value={metrics.get('high_value_candidates') or 0}, issue_payload_drafts={metrics.get('issue_payload_ready_count') or 0}`",
+        f"- candidate_feedback: `available={bool(metrics.get('candidate_feedback_available'))}, accepted={feedback.get('accepted_count', 0)}, rejected={feedback.get('rejected_count', 0)}, closed={feedback.get('closed_count', 0)}, pending={feedback.get('pending_count', 0)}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
@@ -2729,6 +2910,7 @@ def cmd_llm_value_summary(args: argparse.Namespace) -> int:
     )
     if args.output_md:
         _write_text(Path(args.output_md), render_llm_value_summary_markdown(payload))
+    metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
     _emit_compact_line(
         "llm-value-summary",
         {
@@ -2740,6 +2922,10 @@ def cmd_llm_value_summary(args: argparse.Namespace) -> int:
             "llm_invoked": str(bool((payload.get("llm") or {}).get("llm_invoked"))).lower(),
             "fallback_used": str(bool((payload.get("llm") or {}).get("fallback_used"))).lower(),
             "advice_consumed": str(bool((payload.get("llm") or {}).get("advice_consumed"))).lower(),
+            "advice_changed_plan": str(bool(metrics.get("llm_advice_changed_plan"))).lower(),
+            "broad_scan_avoided": str(bool(metrics.get("broad_scan_avoided"))).lower(),
+            "high_value": metrics.get("high_value_candidates"),
+            "issue_payloads": metrics.get("issue_payload_ready_count"),
             "summary_ref": args.output_md,
         },
         payload=payload,
