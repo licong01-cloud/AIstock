@@ -1,0 +1,91 @@
+{
+  "actual": "Any RA question returns reason_code=chat_turn_unexpected_error; stage=chat_turn; exception_type=ValueError; error_summary=capability skill_library.reuse mcp_tool_refs must be a list",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/runtime_config.py",
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260619_BUG-431-ra-chat-turn-crashes-after-restart-active-runtime-config-capability-mcp.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+    "backend/tests/research_assistant/test_evidence_guard.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-431",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T15:41:26.933111Z",
+  "description": "Any RA question returns reason_code=chat_turn_unexpected_error; stage=chat_turn; exception_type=ValueError; error_summary=capability skill_library.reuse mcp_tool_refs must be a list",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-dd5243325210",
+      "timestamp": "2026-06-19T15:41:26.933102Z"
+    },
+    {
+      "action": "tier2_passed",
+      "actor": "claude",
+      "note": "Claude Tier2 reviewed core fix: pass; prior RED suites traced to base before BUG-423 #1325 count updates; rebase required.",
+      "timestamp": "2026-06-20T02:00:00+08:00"
+    },
+    {
+      "action": "rebased_onto_bug423",
+      "actor": "codex",
+      "note": "Rebased BUG-431 branch onto origin/main f5fdd1eb, including BUG-423 #1325/#1327; resolved _workflow_capabilities conflict by combining object validation with retired draft capability filtering.",
+      "timestamp": "2026-06-20T02:10:00+08:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Invalid runtime config mcp_tool_refs is rejected at import/activation; historical dirty active config fails closed with a specific runtime_config_invalid_capability_mcp_tool_refs config error and operator reseed action, not a generic program crash.",
+  "first_seen_at": "2026-06-19T15:41:26.933111Z",
+  "fix_branch": "bug/BUG-431-ra-chat-turn-crashes-after-restart-active-runtim-20260619",
+  "fix_commit": "05972ce378c762d8a1f22f6d99802b97ce163386",
+  "fixed_at": "2026-06-20T02:46:00+08:00",
+  "github_issue_number": 1320,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1320",
+  "last_seen_at": "2026-06-20T02:46:00+08:00",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0",
+    "ra_phase0_baseline"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "validation_passed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA chat_turn crashes after restart: active runtime config capability mcp_tool_refs not a list",
+  "trigger_condition": {
+    "fingerprint": "dd5243325210acdf7b6643c7",
+    "source_event_id": "FE-20260619-dd5243325210"
+  },
+  "verification_run_id": "bug431_rebase_required_gates_20260620",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
