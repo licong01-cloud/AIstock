@@ -1,0 +1,22 @@
+{
+  "schema_version": "aistock_ui_smoke_v1",
+  "checked_at": "2026-06-19T23:12:56.744Z",
+  "url": "http://127.0.0.1:3000/quantevolver/factor-correlation",
+  "http_status": 200,
+  "visible_checks": {
+    "enabled_575": true,
+    "computed_574": true,
+    "window_start": true,
+    "window_end": true
+  },
+  "body_sample": "📈 多AI智能体股票分析基于 DeepSeek 的专业量化投资系统▶QuantEvolver▶RD-Agent管理▶自动化流水线▶系统与数据▶🔍 功能导航▶🎯 选股板块▶📊 策略分析▶💼 投资管理▶📈 QMT模拟盘交易▶🧪 Paper Trading v2因子相关性分析Spearman + EWMA 截面相关性引擎 · 252 天滚动窗口 · 半衰期 125 天官方窗口 2018-08-01 ~ 2026-04-30全量计算 — 使用 official offline single parquet cache 全量重算相关性矩阵含禁用因子计算相关性定时调度计算日志因子统计（官方离线缓存口径）独立指标 / 相关性 / QE 回测共用 2018-08-01 ~ 2026-04-30启用因子 (575)独立指标575/575 (100.0%)相关性缓存575/575 (100.0%)官方离线缓存缓存来源2018-08-01 ~ 2026-04-30共用时间段575 个因子缓存文件575 / 575磁盘/Meta25.6 GB缓存大小2018-08-01~2026-04-30缓存文件日期F:\\Dev\\AIstock\\rdagent_assets\\factor_values缓存目录164429DB 记录对数1待计算因子2026-04-30数据截止574矩阵因子数1978高相关对 (|r|>0.7)281.8s计算耗时2026/6/20最后计算计算模式说明：相关性计算只使用 rdagent_assets/factor_values/single official offline parquet cache， 与官方独立指标和 QE 回测共用同一份因子值缓存；默认展示全量数据集2018-08-01 ~ 2026-04-30，缺缓存的因子不会回退到非官方缓存或旧快照。 如需补齐因子值，请在因子库提交官方全量因子计算后再重新计算相关性。相关性热力图高相关预警因子对分析因子去重显示 575 × 575 因子矩阵BVPS20DayChangeChipWinnerRateEliteBuyIntensityChipsDispersionLargeFlowFactorCostRange_Price_PositionDividend_Rate_Cost_Weight_Ratio_FactorElgBuyAmount_IndustrySell_Ratio_FactorElite_5Day_Net_Inflow_MV_RatioGrossMargin_IndustryPE_RatioIndustryMomentum_VolumeWeightedIndustry_MomentumInverse_Price_to_Book_RatioLarge_Cap_Momentum_BiasL",
+  "failures": [],
+  "events": [
+    {
+      "type": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
+    }
+  ],
+  "screenshot": "F:\\Dev\\AIstock\\tests\\aistock_validation\\history\\qe\\evidence\\20260620_full_chain_validation\\factor_correlation_after_bug433.png"
+}
