@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,8 @@ from backend.services.research_assistant.proactive_reports import (
 )
 from backend.services.research_assistant.react_grounding import McpToolResult, ReactGroundingConfig, compose_with_evidence_guard
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import ResearchAssistantService
+from backend.services.research_assistant.service import IssueCandidateFactSource, ResearchAssistantService
+from backend.services.validation.pipeline_center import ValidationPipelineCenterService
 
 
 class FakeIssueFactSource:
@@ -29,11 +31,14 @@ class FakeIssueFactSource:
         page_size = int(kwargs.get("page_size") or 20)
         status = kwargs.get("status")
         module = kwargs.get("module")
+        search = str(kwargs.get("search") or "").lower()
         items = list(self.items)
         if status:
             items = [item for item in items if item.get("status") == status]
         if module:
             items = [item for item in items if item.get("module_id") == module]
+        if search:
+            items = [item for item in items if search in str(item).lower()]
         start = (page - 1) * page_size
         end = start + page_size
         return {"items": items[start:end], "total": len(items), "page": page, "page_size": page_size, "has_more": end < len(items), "data_state": "complete"}
@@ -72,20 +77,6 @@ def _service(fact_source: FakeIssueFactSource) -> ResearchAssistantService:
 def test_issue_candidates_read_validation_fact_source_not_ra_draft_table() -> None:
     fact_source = FakeIssueFactSource()
     service = _service(fact_source)
-    service.repository.create_record(
-        "issue_candidates",
-        {
-            "candidate_id": "RA-DRAFT-1",
-            "title": "RA draft must not leak",
-            "severity": "P1",
-            "module": "research_assistant",
-            "status": "needs_review",
-            "problem_statement": "draft table is not authoritative",
-            "dedupe_key": "ra-draft-1",
-            "evidence_refs": ["assistant_issue_candidates:RA-DRAFT-1"],
-        },
-    )
-
     page = service.list_pipeline_issue_candidates(limit=10)
 
     assert [item["candidate_id"] for item in page["items"]] == ["VC-1"]
@@ -99,20 +90,6 @@ def test_issue_candidates_read_validation_fact_source_not_ra_draft_table() -> No
 
 def test_issue_candidates_degrade_loudly_without_ra_draft_substitution() -> None:
     service = _service(FakeIssueFactSource(fail=True))
-    service.repository.create_record(
-        "issue_candidates",
-        {
-            "candidate_id": "RA-DRAFT-2",
-            "title": "RA draft must not substitute for facts",
-            "severity": "P1",
-            "module": "research_assistant",
-            "status": "needs_review",
-            "problem_statement": "draft table is not authoritative",
-            "dedupe_key": "ra-draft-2",
-            "evidence_refs": ["assistant_issue_candidates:RA-DRAFT-2"],
-        },
-    )
-
     page = service.list_pipeline_issue_candidates(limit=10)
 
     assert page["data_state"] == "degraded"
@@ -203,8 +180,61 @@ def test_github_sync_is_block_only_and_never_records_direct_create() -> None:
 
     assert sync["github_sync_status"] == "blocked"
     assert sync["github_sync_json"]["direct_github_create_performed"] is False
+    assert sync["github_sync_json"]["reason"] == "ra_github_sync_retired_use_standard_workflow"
+    assert sync["storage_performed"] is False
     assert "mcp_github_issue_sync_bug" in sync["github_sync_json"]["recommended_tools"]
     assert sync["draft_storage_authoritative"] is False
+
+
+def test_retired_draft_tables_are_not_repository_kinds_and_writes_are_no_storage() -> None:
+    service = _service(FakeIssueFactSource())
+
+    issue = service.create_issue_candidate({"title": "Draft only", "problem_statement": "must use workflow"})
+
+    assert issue["storage_performed"] is False
+    assert issue["standard_workflow_required"] is True
+    assert issue["retired_draft_tables"] == ["assistant_issue_candidates", "assistant_validation_discovery_reports"]
+    assert "issue_candidates" not in service.repository.data
+    assert "validation_discovery_reports" not in service.repository.data
+
+
+def test_issue_candidate_search_is_pushed_to_fact_source_before_pagination() -> None:
+    items = [_candidate(f"VC-{idx}") for idx in range(1, 12)]
+    items[-1]["title"] = "Needle candidate from later page"
+    fact_source = FakeIssueFactSource(items)
+    service = _service(fact_source)
+
+    page = service.list_pipeline_issue_candidates(search="Needle", limit=5)
+
+    assert [item["candidate_id"] for item in page["items"]] == ["VC-11"]
+    assert fact_source.calls[0] == ("issue_candidates", {"module": None, "status": None, "search": "Needle", "page": 1, "page_size": 5})
+
+
+def test_validation_candidate_fact_source_applies_search_before_pagination(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "bug-candidates"
+    queue_dir.mkdir(parents=True)
+    for idx in range(1, 5):
+        payload = {
+            "schema_version": "aistock_bug_candidate_v1",
+            "candidate_id": f"VC-{idx}",
+            "title": "Needle target candidate" if idx == 4 else f"Ordinary candidate {idx}",
+            "module": "research_assistant",
+            "severity": "P1",
+            "status": "draft",
+            "fingerprint": f"vc-{idx}",
+            "summary": "server side search before pagination",
+            "quality_gate": {"issue_payload_ready": True, "auto_submit_allowed": False, "reasons": []},
+        }
+        (queue_dir / f"candidate-{idx}.json").write_text(json.dumps(payload), encoding="utf-8")
+    fact_source = IssueCandidateFactSource(
+        pipeline_center_factory=lambda: ValidationPipelineCenterService(repo_root=tmp_path)
+    )
+    service = _service(fact_source)  # type: ignore[arg-type]
+
+    page = service.list_pipeline_issue_candidates(search="Needle", limit=1)
+
+    assert page["total"] == 1
+    assert [item["candidate_id"] for item in page["items"]] == ["VC-4"]
 
 
 def test_research_assistant_static_boundary_forbids_write_pipeline_imports_but_allows_read_sources() -> None:
@@ -247,6 +277,7 @@ def test_research_assistant_static_boundary_forbids_write_pipeline_imports_but_a
                 "aistock_issue_workflow.py",
                 "nightly_bug_candidate_queue.py",
                 "scripts.aistock_mcp_server",
+                "assistant_create_issue_candidate",
             )
             for marker in forbidden_text_markers:
                 if marker in text:

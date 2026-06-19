@@ -140,16 +140,19 @@ def test_research_assistant_api_phase1_smoke() -> None:
 
     preflight_resp = client.post(
         "/api/v1/research-assistant/mcp/preflight",
-        json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
+        json={"task_id": task_id, "server_key": "aistock-validation", "tool_name": "mcp_github_issue_sync_bug", "payload_json": {"bug_id": "BUG-423"}},
     ).json()
     assert preflight_resp["data"]["approval_required"] is True
     assert preflight_resp["data"]["passed"] is False
-    assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
-    assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
-    assert "standard_workflow_required" in preflight_resp["data"]["preflight_checks"]
-    assert preflight_resp["data"]["gateway_manifest"]["module"] == "research_assistant"
-    assert preflight_resp["data"]["manifest_risk_level"] == "production_adjacent"
+    assert preflight_resp["data"]["gateway_manifest"]["module"] == "validation"
+    assert preflight_resp["data"]["manifest_risk_level"] == "external_network"
     assert preflight_resp["data"]["assistant_usable"] == "preflight_required"
+
+    retired_preflight = client.post(
+        "/api/v1/research-assistant/mcp/preflight",
+        json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
+    )
+    assert retired_preflight.status_code == 404
 
     catalog_preflight = client.post(
         "/api/v1/research-assistant/mcp/preflight",
@@ -179,8 +182,9 @@ def test_research_assistant_api_phase1_smoke() -> None:
         "/api/v1/research-assistant/issue-candidates",
         json={"title": "Candidate", "severity": "P1", "problem_statement": "review first"},
     ).json()
-    assert issue_resp["data"]["status"] == "draft"
-    assert issue_resp["data"]["github_sync_status"] == "standard_workflow_required"
+    assert issue_resp["data"]["status"] == "retired"
+    assert issue_resp["data"]["standard_workflow_required"] is True
+    assert issue_resp["data"]["storage_performed"] is False
     assert issue_resp["data"]["draft_storage_authoritative"] is False
 
     assert client.get("/api/v1/research-assistant/skills").json()["data"]["total"] >= 5
@@ -259,6 +263,8 @@ def test_research_assistant_api_phase1_smoke() -> None:
     sync = client.post(f"/api/v1/research-assistant/issue-candidates/{issue_resp['data']['candidate_id']}/github-sync", json={"mode": "formal"}).json()["data"]
     assert sync["github_sync_status"] == "blocked"
     assert sync["github_sync_json"]["direct_github_create_performed"] is False
+    assert sync["github_sync_json"]["reason"] == "ra_github_sync_retired_use_standard_workflow"
+    assert sync["storage_performed"] is False
     assert "mcp_github_issue_sync_bug" in sync["github_sync_json"]["recommended_tools"]
 
     assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200

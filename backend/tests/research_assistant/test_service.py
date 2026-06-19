@@ -31,6 +31,7 @@ from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
     DialogueIntent,
     DialogueMode,
+    IssueCandidateFactSource,
     LlmCallResult,
     ModeDecision,
     ResearchAssistantCatalogNotReadyError,
@@ -262,6 +263,28 @@ def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake or FakeLlmClient())
     svc.seed_catalogs()
     return svc
+
+
+def test_issue_candidate_fact_source_initializes_pipeline_center_lazily() -> None:
+    calls: list[str] = []
+
+    class FakePipelineCenter:
+        def issue_candidates(self, **kwargs: object) -> dict[str, object]:
+            return {"items": [], "total": 0, "page": kwargs.get("page", 1), "page_size": kwargs.get("page_size", 20), "has_more": False}
+
+        def issue_candidate_summary(self, **_kwargs: object) -> dict[str, object]:
+            return {"candidate_count": 0, "by_status": {}, "data_state": "complete"}
+
+    def factory() -> FakePipelineCenter:
+        calls.append("created")
+        return FakePipelineCenter()
+
+    source = IssueCandidateFactSource(pipeline_center_factory=factory)
+    assert calls == []
+    source.issue_candidates(search="target", page=1, page_size=5)
+    assert calls == ["created"]
+    source.issue_candidate_summary()
+    assert calls == ["created"]
 
 
 class FakeQeExperimentService:
@@ -616,54 +639,28 @@ def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     assert approved["status"] == "approved"
 
     issue = svc.create_issue_candidate(
-        IssueCandidateCreate(title="候选缺陷", severity="P1", problem_statement="只进入候选队列，不直接创建正式 GitHub Issue。")
+        IssueCandidateCreate(title="Candidate defect", severity="P1", problem_statement="must use standard workflow")
     )
-    assert issue["status"] == "draft"
-    assert issue["github_sync_status"] == "standard_workflow_required"
-    assert issue["github_sync_json"]["formal_github_issue_requires_standard_workflow"] is True
-    assert issue["github_sync_json"]["direct_github_create_performed"] is False
+    assert issue["status"] == "retired"
+    assert issue["standard_workflow_required"] is True
+    assert issue["storage_performed"] is False
+    assert issue["direct_github_create_performed"] is False
     assert issue["draft_storage_authoritative"] is False
+    assert "mcp_github_issue_sync_bug" in issue["recommended_tools"]
 
 
-def test_preflight_high_risk_requires_approval_and_records_event() -> None:
+def test_retired_issue_candidate_tool_is_not_exposed_in_mcp_catalog() -> None:
     svc = _service()
-    task = svc.create_task(TaskCreate(title="候选 issue preflight"))
 
-    result = svc.preflight_mcp_tool(
-        McpPreflightRequest(
-            task_id=task["task_id"],
-            server_key="research-assistant",
-            tool_name="assistant_create_issue_candidate",
-            payload_json={"title": "P1"},
+    assert svc.repository.find_one("mcp_tools", {"server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate"}) is None
+    with pytest.raises(KeyError, match="MCP tool not registered in gateway manifest"):
+        svc.preflight_mcp_tool(
+            McpPreflightRequest(
+                server_key="research-assistant",
+                tool_name="assistant_create_issue_candidate",
+                payload_json={"title": "P1", "problem_statement": "problem"},
+            )
         )
-    )
-
-    assert result["passed"] is False
-    assert result["approval_required"] is True
-    assert result["failed_checks"][0]["check"] == "input_schema"
-    assert result["preflight_checks"] == ["dedupe_key", "evidence_refs", "draft_only", "standard_workflow_required", "github_formal_issue_blocked"]
-    assert result["assistant_usable"] == "preflight_required"
-    detail = svc.get_task(task["task_id"])
-    assert any(event["event_type"] == "mcp_preflight_failed" for event in detail["events"])
-
-    ok_result = svc.preflight_mcp_tool(
-        McpPreflightRequest(
-            task_id=task["task_id"],
-            server_key="research-assistant",
-            tool_name="assistant_create_issue_candidate",
-            payload_json={"title": "P1", "problem_statement": "problem"},
-        )
-    )
-    assert ok_result["passed"] is False
-    assert ok_result["approval_required"] is True
-
-    tool = svc.repository.find_one("mcp_tools", {"server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate"})
-    svc.repository.update_record("mcp_tools", tool["tool_id"], {"status": "disabled"})
-    disabled_result = svc.preflight_mcp_tool(
-        McpPreflightRequest(server_key="research-assistant", tool_name="assistant_create_issue_candidate", payload_json={"title": "P1", "problem_statement": "problem"})
-    )
-    assert disabled_result["passed"] is False
-    assert disabled_result["failed_checks"][0]["check"] == "tool_status"
 
 
 def test_model_route_and_temp_memory_are_explicit() -> None:
@@ -765,13 +762,15 @@ def test_graph_skill_external_trace_and_workbench_contracts_are_replayable() -> 
     assert svc.list_records("mcp_tool_events", filters={"task_id": task["task_id"]})["total"] >= 1
 
 
-def test_candidate_issue_duplicate_does_not_hide_canonical_candidate() -> None:
+def test_candidate_issue_no_storage_response_is_stable_without_repository_row() -> None:
     svc = _service()
-    first = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same"))
-    second = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same"))
-    assert second["candidate_id"] == first["candidate_id"]
-    assert second["deduplicated"] is True
-    assert svc.repository.get_record("issue_candidates", first["candidate_id"])["status"] == "draft"
+    first = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same", dedupe_key="dedupe-x"))
+    second = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same", dedupe_key="dedupe-x"))
+
+    assert second["candidate_id"] == first["candidate_id"] == "dedupe-x"
+    assert first["storage_performed"] is False
+    assert second["storage_performed"] is False
+    assert "issue_candidates" not in TABLES
 
 
 def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
@@ -780,31 +779,17 @@ def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
 
     dry_run = svc.github_sync_issue_candidate(issue["candidate_id"], IssueCandidateGithubSyncRequest(mode="dry_run", requested_by="pytest"))
     assert dry_run["github_sync_status"] == "blocked"
+    assert dry_run["github_sync_json"]["reason"] == "ra_github_sync_retired_use_standard_workflow"
     assert dry_run["github_sync_json"]["direct_github_create_performed"] is False
+    assert dry_run["storage_performed"] is False
     assert "mcp_github_issue_sync_bug" in dry_run["github_sync_json"]["recommended_tools"]
 
     formal_without_approval = svc.github_sync_issue_candidate(issue["candidate_id"], IssueCandidateGithubSyncRequest(mode="formal"))
     assert formal_without_approval["github_sync_status"] == "blocked"
     assert formal_without_approval["github_sync_json"]["direct_github_create_performed"] is False
-
-    approval = svc.create_approval(
-        ApprovalCreate(
-            approval_type="issue.github_sync",
-            plan_digest="digest-github-sync",
-            summary="GitHub gate formal sync",
-            required_confirmation_text=ASSISTANT_APPROVAL_CONFIRM,
-        )
-    )
-    formal_blocked = svc.github_sync_issue_candidate(
-        issue["candidate_id"],
-        IssueCandidateGithubSyncRequest(mode="formal", approval_id=approval["approval_id"], confirmation_text=ASSISTANT_APPROVAL_CONFIRM),
-    )
-    assert formal_blocked["github_sync_status"] == "blocked"
-    assert formal_blocked["github_sync_json"]["direct_github_create_performed"] is False
-    assert formal_blocked["draft_storage_authoritative"] is False
-    assert formal_blocked["github_issue_url"] is None
-    assert svc.repository.get_record("approvals", approval["approval_id"])["status"] == "pending"
-
+    assert formal_without_approval["storage_performed"] is False
+    assert formal_without_approval["draft_storage_authoritative"] is False
+    assert formal_without_approval["github_issue_url"] is None
 
 def test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow() -> None:
     svc = _chat_service()
@@ -1125,7 +1110,7 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert "mcp_github_issue_create" in catalog_context
 
     text = result["assistant_message"]["content_text"]
-    assert "assistant create issue candidate" in text
+    assert "assistant create task" in text
     assert "qe_template_create" in catalog_context
     assert "mcp_github_issue_create" in catalog_context
     assert "assistant_create_issue_candidate" not in text
@@ -2273,6 +2258,8 @@ def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None
     assert "Route decision" not in text
     assert "summary-first" not in text
     assert result["mode_decision"]["intent_type"] == "validation_issue_request"
+    assert result["cards"]["mcp_route_decision"]["server_key"] == "aistock-validation"
+    assert result["cards"]["mcp_route_decision"]["tool_name"] == "mcp_github_issue_sync_bug"
     assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
     assert result["cards"]["mcp_route_decision"]["auto_execute"]["eligible"] is False
     assert result["cards"]["mcp_route_decision"]["auto_execute"]["reason"] == "route_not_read_only"

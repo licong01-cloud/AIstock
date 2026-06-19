@@ -19,6 +19,7 @@ export type AssistantPage<T> = JsonObject & {
   warnings?: string[];
   draft_storage_authoritative?: boolean;
   assistant_draft_storage_notice?: string;
+  retired_draft_tables?: string[];
   official_submission_required?: string;
 };
 
@@ -491,6 +492,12 @@ export type AssistantIssueCandidate = JsonObject & {
   evidence_refs?: string[];
   draft_storage_authoritative?: boolean;
   assistant_draft_storage_notice?: string;
+  retired_draft_tables?: string[];
+  standard_workflow_required?: boolean;
+  storage_performed?: boolean;
+  direct_github_create_performed?: boolean;
+  recommended_tools?: string[];
+  reason?: string;
   official_submission_required?: string;
 };
 
@@ -687,6 +694,7 @@ export type AssistantValidationDiscoverySummary = JsonObject & {
   warnings?: string[];
   draft_storage_authoritative?: boolean;
   assistant_draft_storage_notice?: string;
+  retired_draft_tables?: string[];
   official_submission_required?: string;
 };
 
@@ -902,9 +910,11 @@ export const researchAssistantApi = {
     return unwrap<AssistantPage<AssistantIssueCandidate>>(appendQuery("/research-assistant/issue-candidates", { limit: 50, ...params }));
   },
   createIssueCandidate(payload: JsonObject): Promise<AssistantIssueCandidate> {
+    // Retired no-storage compatibility endpoint; standard workflow tools own formal submission.
     return post<AssistantIssueCandidate>("/research-assistant/issue-candidates", payload);
   },
   githubSyncIssueCandidate(candidateId: string, payload: JsonObject): Promise<AssistantIssueCandidate> {
+    // Retired block-only compatibility endpoint; RA never performs GitHub sync directly.
     return post<AssistantIssueCandidate>(`/research-assistant/issue-candidates/${encodeURIComponent(candidateId)}/github-sync`, payload);
   },
   modelProfiles(): Promise<AssistantPage<AssistantModelProfile>> {

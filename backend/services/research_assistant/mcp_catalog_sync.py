@@ -139,7 +139,6 @@ LEGACY_SERVER_ALIASES: dict[str, str] = {
 REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
     "assistant_create_task": ["title"],
     "assistant_create_memory_candidate": ["memory_type", "subject_key", "title"],
-    "assistant_create_issue_candidate": ["title", "problem_statement"],
     "qe_template_create": ["template_kind", "title", "config_json"],
     "qe_template_validate": ["template_id"],
     "qe_template_materialize_confirmed": ["template_id", "confirm_template"],
@@ -157,7 +156,6 @@ REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
 }
 
 PREFLIGHT_CHECKS_BY_TOOL: dict[str, list[str]] = {
-    "assistant_create_issue_candidate": ["dedupe_key", "evidence_refs", "draft_only", "standard_workflow_required", "github_formal_issue_blocked"],
     "qe_template_create": ["schema", "fixed_seed", "draft_only"],
     "qe_template_validate": ["template_exists", "schema", "diff_summary"],
     "qe_template_materialize_confirmed": ["stock_pool", "node_health", "cost", "approval"],

@@ -10,7 +10,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState } from "@/components/research-assistant/AssistantShared";
 import { researchAssistantApi, type AssistantIssueCandidate, type AssistantValidationDiscoverySummary, type JsonObject } from "@/lib/research-assistant/api";
 
-const DRAFT_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5f85 Phase 2 \u9000\u573a";
+const DRAFT_NOTICE = "\u8349\u7a3f\u8868\u5df2\u9000\u573a\uff0c\u6b63\u5f0f\u4e8b\u5b9e\u6e90=Validation/Nightly/issue workflow";
 
 function text(value: unknown, fallback = "-"): string {
   const raw = String(value ?? "").trim();
@@ -47,7 +47,7 @@ export default function ResearchAssistantStreamsPage() {
         <div className="ra-empty" style={{ marginBottom: 12 }}>
           <strong>{degraded ? "Validation fact source unavailable: explicit degraded state" : "Discovery stream is derived from Validation/Nightly candidates"}</strong>
           <p>{summary?.discovery_manifest_api_note || "No RA-owned discovery report fact source is presented here; this view consumes Validation candidate fields."}</p>
-          <p>{DRAFT_NOTICE}; assistant_validation_discovery_reports cannot substitute for Validation/Nightly facts.</p>
+          <p>{DRAFT_NOTICE}; RA retired assistant_validation_discovery_reports and cannot substitute drafts for Validation/Nightly facts.</p>
           {degraded ? <p>reason={text((summary?.reason_codes || []).join(", "))}; warning={text((summary?.warnings || []).join(" / "))}</p> : null}
         </div>
         <JsonPanel value={{ source_of_truth: summary?.source_of_truth, discovery_report_mode: summary?.discovery_report_mode, candidate_summary: summary?.candidate_summary || {}, data_state: summary?.data_state }} />
@@ -64,7 +64,7 @@ export default function ResearchAssistantStreamsPage() {
             { key: "detail", header: "Detail", render: (row) => <DetailDrawer title="derived discovery payload" data={row} /> },
           ]}
         />
-        {!reports.length && !degraded ? <EmptyState title="No derived discovery entries" hint="This is a real Validation candidate empty state; assistant_validation_discovery_reports remains a non-authoritative draft/cache only." /> : null}
+        {!reports.length && !degraded ? <EmptyState title="No derived discovery entries" hint="This is a real Validation candidate empty state; RA discovery draft storage is retired and cannot be used as a fallback." /> : null}
       </SectionCard>
       <SectionCard title="Validation Candidate Flow" eyebrow="strict workflow before GitHub / BUG JSON">
         <PaperTable

@@ -543,30 +543,6 @@ BASE_DDL: list[str] = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS assistant_issue_candidates (
-        candidate_id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        module TEXT NOT NULL,
-        problem_statement TEXT NOT NULL,
-        reproduce_command TEXT,
-        evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        dedupe_key TEXT,
-        status TEXT NOT NULL DEFAULT 'needs_review',
-        github_issue_number INTEGER,
-        github_issue_url TEXT,
-        github_sync_status TEXT NOT NULL DEFAULT 'not_requested',
-        github_sync_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-        proposed_by TEXT NOT NULL DEFAULT 'assistant',
-        reviewed_by TEXT,
-        reviewed_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT ck_aic_status CHECK (status IN ('draft','needs_review','approved_for_github','rejected','synced_to_github','duplicate')),
-        CONSTRAINT uq_aic_dedupe UNIQUE (dedupe_key)
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS assistant_external_agent_sessions (
         session_id TEXT PRIMARY KEY,
         agent_type TEXT NOT NULL,
@@ -950,20 +926,6 @@ BASE_DDL: list[str] = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS assistant_validation_discovery_reports (
-        discovery_report_id TEXT PRIMARY KEY,
-        run_date DATE NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'draft',
-        summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-        candidate_issue_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        validation_run_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS assistant_trace_events (
         trace_id TEXT PRIMARY KEY,
         task_id TEXT,
@@ -978,7 +940,6 @@ BASE_DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_aic_status_updated ON assistant_issue_candidates(status, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_an_user_status_created ON assistant_notifications(user_id, status, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_amt_server_tool ON assistant_mcp_tools(server_key, tool_name)",
 ]
@@ -1003,8 +964,6 @@ TABLE_COMMENTS = {
     "assistant_mcp_tool_events": "MCP/API execution event ledger including preflight, retry, approval and result-card audit data.",
     "assistant_mcp_tools": "MCP/API execution catalog including risk and preflight metadata.",
     "assistant_approval_requests": "Approval gate records for L2+ assistant operations.",
-    "assistant_validation_discovery_reports": "Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement. Discovery facts come from Validation/Nightly candidate sources.",
-    "assistant_issue_candidates": "Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement. Formal submission must use AIstock issue workflow / Validation MCP.",
     "assistant_prompt_nodes": "Tree-structured prompt nodes with version, checksum, trigger and phase metadata.",
     "assistant_prompt_sources": "Git-backed prompt pack import records; file content remains the review source and DB stores immutable imported versions.",
     "assistant_prompt_node_versions": "Immutable prompt node versions imported from prompt pack files with checksums and source references.",

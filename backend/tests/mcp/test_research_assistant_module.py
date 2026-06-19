@@ -54,11 +54,11 @@ def _registry_with_capture() -> tuple[ModuleRegistry, FakeMCP, list[dict[str, An
     return registry, mcp, calls
 
 
-def test_research_assistant_module_registers_exactly_13_tools() -> None:
+def test_research_assistant_module_registers_exactly_12_tools() -> None:
     registry, mcp, _calls = _registry_with_capture()
 
-    assert registry.tool_count("research_assistant") == 13
-    assert registry.total_tool_count() == 13
+    assert registry.tool_count("research_assistant") == 12
+    assert registry.total_tool_count() == 12
     assert set(mcp.tools) == {
         "assistant_health",
         "assistant_create_task",
@@ -70,7 +70,6 @@ def test_research_assistant_module_registers_exactly_13_tools() -> None:
         "assistant_build_context_pack",
         "assistant_list_mcp_tools",
         "assistant_preflight_mcp_tool",
-        "assistant_create_issue_candidate",
         "assistant_list_approvals",
         "assistant_create_temp_memory",
     }
@@ -121,12 +120,10 @@ def test_research_assistant_tools_call_expected_http_contracts() -> None:
         "body": {},
     }
 
-    tools["assistant_preflight_mcp_tool"]({"server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate"})
+    tools["assistant_preflight_mcp_tool"]({"server_key": "aistock-validation", "tool_name": "mcp_github_issue_sync_bug"})
     assert calls[-1]["method"] == "POST"
     assert calls[-1]["path"] == "/api/v1/research-assistant/mcp/preflight"
-
-    tools["assistant_create_issue_candidate"]({"title": "Bug", "problem_statement": "x"})
-    assert calls[-1]["path"] == "/api/v1/research-assistant/issue-candidates"
+    assert "assistant_create_issue_candidate" not in tools
 
     tools["assistant_list_approvals"](status="pending", risk_level="high", limit=3, offset=1)
     assert calls[-1] == {

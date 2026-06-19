@@ -9,9 +9,9 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState } from "@/components/research-assistant/AssistantShared";
 import { researchAssistantApi, type AssistantIssueCandidate, type AssistantPage } from "@/lib/research-assistant/api";
 
-const DRAFT_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5f85 Phase 2 \u9000\u573a";
+const DRAFT_NOTICE = "\u8349\u7a3f\u8868\u5df2\u9000\u573a\uff0c\u6b63\u5f0f\u4e8b\u5b9e\u6e90=Validation/Nightly/issue workflow";
 const OFFICIAL_WORKFLOW_REQUIRED = "\u6b63\u5f0f\u63d0\u4ea4\u5fc5\u987b\u8d70 AIstock issue workflow / Validation MCP";
-const STANDARD_WORKFLOW_HINT = `RA only displays the Validation candidate fact source. ${OFFICIAL_WORKFLOW_REQUIRED}.`;
+const STANDARD_WORKFLOW_HINT = `RA displays the Validation/Nightly/issue workflow fact source only. ${OFFICIAL_WORKFLOW_REQUIRED}.`;
 
 function text(value: unknown, fallback = "-"): string {
   const raw = String(value ?? "").trim();
@@ -26,6 +26,7 @@ function sourceRefs(row: AssistantIssueCandidate): string {
 export default function ResearchAssistantIssueCandidatesPage() {
   const [page, setPage] = useState<AssistantPage<AssistantIssueCandidate> | null>(null);
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string>(STANDARD_WORKFLOW_HINT);
 
@@ -35,11 +36,11 @@ export default function ResearchAssistantIssueCandidatesPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setPage(await researchAssistantApi.issueCandidates({ status: status || undefined, limit: 100 }));
+      setPage(await researchAssistantApi.issueCandidates({ status: status || undefined, search: search || undefined, limit: 100 }));
     } catch (exc) {
       setError(exc);
     }
-  }, [status]);
+  }, [search, status]);
 
   useEffect(() => {
     void load();
@@ -56,12 +57,16 @@ export default function ResearchAssistantIssueCandidatesPage() {
         <div className="ra-empty" style={{ marginBottom: 12 }}>
           <strong>{degraded ? "Fact source unavailable: explicit degraded state" : "Formal candidates come from Validation / Nightly / issue workflow"}</strong>
           <p>{degraded ? `${(page?.reason_codes || []).join(", ") || "validation_issue_fact_source_unavailable"}: ${(page?.warnings || []).join(" / ")}` : STANDARD_WORKFLOW_HINT}</p>
-          <p>{DRAFT_NOTICE}; assistant_issue_candidates cannot substitute for Validation facts.</p>
+          <p>{DRAFT_NOTICE}; RA retired assistant_issue_candidates and cannot substitute for Validation facts.</p>
         </div>
         <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
           <label className="pv2-field" htmlFor="ra-issue-status">
             <span>Validation status filter</span>
             <input className="pv2-input" id="ra-issue-status" value={status} onChange={(event) => setStatus(event.target.value)} placeholder="leave blank, or new/promoted/closed" />
+          </label>
+          <label className="pv2-field" htmlFor="ra-issue-search">
+            <span>Validation search</span>
+            <input className="pv2-input" id="ra-issue-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="server-side search before pagination" />
           </label>
           <button className="pv2-button-ghost" type="button" onClick={() => void load()}>Refresh fact source</button>
         </div>
@@ -80,7 +85,7 @@ export default function ResearchAssistantIssueCandidatesPage() {
             { key: "action", header: "Action", render: (row) => <button className="pv2-button-ghost" type="button" onClick={() => showWorkflowHint(row.candidate_id)}>Use standard workflow</button> },
           ]}
         />
-        {!issues.length && !degraded ? <EmptyState title="Validation candidate queue is empty" hint="This is the source-of-truth empty state; assistant_issue_candidates remains a non-authoritative draft/cache only." /> : null}
+        {!issues.length && !degraded ? <EmptyState title="Validation candidate queue is empty" hint="This is the source-of-truth empty state; RA candidate draft storage is retired and cannot be used as a fallback." /> : null}
       </SectionCard>
     </main>
   );

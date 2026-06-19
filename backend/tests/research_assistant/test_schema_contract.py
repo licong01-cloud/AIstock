@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from backend.db.init_research_assistant_schema_20260521 import DDL, RESEARCH_ASSISTANT_EVENT_TYPES, RESEARCH_ASSISTANT_SCHEMA_VERSION
 from backend.services.research_assistant.models import EVENT_TYPES, PROMPT_NODE_CATEGORIES
@@ -63,7 +64,6 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_mcp_tools",
         "assistant_mcp_tool_events",
         "assistant_approval_requests",
-        "assistant_issue_candidates",
         "assistant_external_agent_sessions",
         "assistant_external_agent_events",
         "assistant_model_profiles",
@@ -83,18 +83,18 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_notifications",
         "assistant_reports",
         "assistant_agenda_items",
-        "assistant_validation_discovery_reports",
         "assistant_trace_events",
     }:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
     assert "Memory Ledger" in sql
-    assert "Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement" in sql
-    assert "Formal submission must use AIstock issue workflow / Validation MCP" in sql
+    assert "assistant_issue_candidates" not in sql
+    assert "assistant_validation_discovery_reports" not in sql
+    assert "idx_aic_status_updated" not in sql
+    assert "ck_aic_status" not in sql
     assert "CONSTRAINT ck_rat_status" in sql
     assert "CONSTRAINT ck_rmi_approval" in sql
     assert "CONSTRAINT ck_aar_status" in sql
-    assert "CONSTRAINT ck_aic_status" in sql
     assert "requires_approval BOOLEAN NOT NULL DEFAULT FALSE" in sql
     assert "COMMENT ON TABLE assistant_capabilities" in sql
     assert "COMMENT ON TABLE assistant_action_proposals" in sql
@@ -351,11 +351,27 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
     )
     _assert_columns(
         table_columns,
-        "issue_candidates",
-        {"candidate_id": "issuecand_x", "status": "draft", "dedupe_key": "dedupe", "github_sync_status": "standard_workflow_required", "github_sync_json": {}, "title": "Bug", "severity": "P1", "module": "research_assistant", "problem_statement": "problem", "reproduce_command": None, "evidence_refs": [], "proposed_by": "assistant"},
-    )
-    _assert_columns(
-        table_columns,
         "temp_memories",
         {"temp_memory_id": "tmpmem_x", "task_id": "rat_x", "stream_id": None, "memory_type": "task_state", "content_json": {}, "content_text": "progress", "evidence_refs": [], "confidence": 0.5, "expires_at": "2099-12-31T00:00:00+00:00", "model_profile_id": "model", "created_by_model_profile_id": "model"},
     )
+
+
+def test_bug423_retire_candidate_discovery_migrations_are_explicit() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.rollback.sql").read_text(encoding="utf-8")
+
+    assert "DROP INDEX IF EXISTS idx_aic_status_updated" in forward
+    assert "DROP TABLE IF EXISTS assistant_validation_discovery_reports" in forward
+    assert "DROP TABLE IF EXISTS assistant_issue_candidates" in forward
+    assert "CASCADE" not in forward.upper()
+    assert "CREATE TABLE IF NOT EXISTS assistant_issue_candidates" in rollback
+    assert "CREATE TABLE IF NOT EXISTS assistant_validation_discovery_reports" in rollback
+    assert "CONSTRAINT ck_aic_status" in rollback
+    assert "CONSTRAINT uq_aic_dedupe" in rollback
+    assert "CREATE INDEX IF NOT EXISTS idx_aic_status_updated" in rollback
+    assert "retired by BUG-423 Phase 2" in rollback
+
+
+def test_bug423_removed_draft_tables_from_repository_contract() -> None:
+    assert "issue_candidates" not in TABLES
+    assert "validation_discovery_reports" not in TABLES
