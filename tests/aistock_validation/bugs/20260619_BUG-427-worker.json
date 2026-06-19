@@ -30,8 +30,8 @@
   "expected": "官方全量离线因子计算在 WSL 内使用统一回测基础数据缓存，按批生成 575 个因子 single cache；内存门禁应通过更小批次/更低峰值/及时释放保证完成，或者在预估不可满足时 fail-fast 且提供可执行调参，不应在默认全量任务第 7 批中断。",
   "first_seen_at": "2026-06-19T11:33:35.507855Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "167a7cc0569bc544b821c71ec3913c9d71756836",
+  "fixed_at": "2026-06-19T14:00:54.183317Z",
   "github_issue_number": 1309,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1309",
   "last_seen_at": "2026-06-19T11:33:35.507855Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1311",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -59,6 +60,15 @@
     "fingerprint": "cb86f944ef406ee672e5a11c",
     "source_event_id": "FE-20260619-cb86f944ef40"
   },
+  "validation_evidence": [
+    "py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 19 passed, 1 skipped",
+    "WSL py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
+    "WSL inline _drain_success_frames smoke -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
