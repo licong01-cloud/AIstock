@@ -31,8 +31,8 @@
   "expected": "资源门禁触发后应结构化终止当前批次/剩余因子或自动降并发重试，并在 timeout/resource gate 内返回 runtime_validation，不得挂死；全量链路应可在 64GB WSL 内存约束下继续完成或明确可恢复失败。",
   "first_seen_at": "2026-06-19T08:59:26.210992Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "20a4fac0310fbf9ba85d79a32ef50484332e538f",
+  "fixed_at": "2026-06-19T09:30:19.899490Z",
   "github_issue_number": 1302,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1302",
   "last_seen_at": "2026-06-19T08:59:26.210992Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1303",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -61,6 +62,17 @@
     "fingerprint": "9135078f772a00eafdd16213",
     "source_event_id": "FE-20260619-9135078f772a"
   },
+  "validation_evidence": [
+    "PR #1303 CI checks -> 17 passed, 0 failed",
+    "py_compile official_factor_batch_compute_service/test_official_factor_batch_compute -> passed",
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 17 passed, 1 skipped",
+    "WSL forced resource gate smoke -> returned memory_gate_failed for all running factors in 0.011s, no hang",
+    "ruff changed files -> passed",
+    "git diff --check -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
