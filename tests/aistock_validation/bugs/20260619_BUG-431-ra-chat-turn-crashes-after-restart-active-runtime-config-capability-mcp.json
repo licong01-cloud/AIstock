@@ -25,17 +25,29 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260619-dd5243325210",
       "timestamp": "2026-06-19T15:41:26.933102Z"
+    },
+    {
+      "action": "tier2_passed",
+      "actor": "claude",
+      "note": "Claude Tier2 reviewed core fix: pass; prior RED suites traced to base before BUG-423 #1325 count updates; rebase required.",
+      "timestamp": "2026-06-20T02:00:00+08:00"
+    },
+    {
+      "action": "rebased_onto_bug423",
+      "actor": "codex",
+      "note": "Rebased BUG-431 branch onto origin/main f5fdd1eb, including BUG-423 #1325/#1327; resolved _workflow_capabilities conflict by combining object validation with retired draft capability filtering.",
+      "timestamp": "2026-06-20T02:10:00+08:00"
     }
   ],
   "evidence_uris": [],
   "expected": "Invalid runtime config mcp_tool_refs is rejected at import/activation; historical dirty active config fails closed with a specific runtime_config_invalid_capability_mcp_tool_refs config error and operator reseed action, not a generic program crash.",
   "first_seen_at": "2026-06-19T15:41:26.933111Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-431-ra-chat-turn-crashes-after-restart-active-runtim-20260619",
+  "fix_commit": "05972ce378c762d8a1f22f6d99802b97ce163386",
+  "fixed_at": "2026-06-20T02:46:00+08:00",
   "github_issue_number": 1320,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1320",
-  "last_seen_at": "2026-06-19T15:41:26.933111Z",
+  "last_seen_at": "2026-06-20T02:46:00+08:00",
   "module": "research_assistant",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -55,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "validation_passed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -64,7 +76,7 @@
     "fingerprint": "dd5243325210acdf7b6643c7",
     "source_event_id": "FE-20260619-dd5243325210"
   },
-  "verification_run_id": null,
+  "verification_run_id": "bug431_rebase_required_gates_20260620",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
