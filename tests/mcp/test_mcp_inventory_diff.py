@@ -48,6 +48,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
     assert qe_archive < set(MODULE_TOOL_NAMES["qe_archive"])
     assert set(MODULE_TOOL_NAMES["qe_archive"]) - qe_archive == {
         "multi_alpha_orthogonality",
+        "multi_alpha_combine_preview",
         "prediction_store_get_pointer",
         "prediction_store_pull_pred",
         "prediction_store_pull_label",
