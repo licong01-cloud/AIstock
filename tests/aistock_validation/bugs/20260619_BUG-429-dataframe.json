@@ -30,8 +30,8 @@
   "expected": "官方全量离线因子计算在 WSL 中应把成功因子结果按小块或流式方式交给写缓存和指标计算，执行阶段也不得整批保留所有 DataFrame；默认 batch_size=16 时内存峰值应受 result drain chunk 控制。",
   "first_seen_at": "2026-06-19T14:06:02.328073Z",
   "fix_branch": null,
-  "fix_commit": "ba4866ade0d4d2eeed1f5a259acf2346224544cd",
-  "fixed_at": "2026-06-19T14:39:35.394981Z",
+  "fix_commit": "d57271a2a1fe3e69cc2c1e646bd4e615c6f93d1b",
+  "fixed_at": "2026-06-19T14:41:40.709868Z",
   "github_issue_number": 1313,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1313",
   "last_seen_at": "2026-06-19T14:06:02.328073Z",
@@ -39,7 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1315",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1316",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,14 +61,7 @@
     "source_event_id": "FE-20260619-d38b2ab849cf"
   },
   "validation_evidence": [
-    "GitHub PR #1315 checks -> all green",
-    "ruff check changed files -> passed",
-    "py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
-    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 21 passed, 1 skipped",
-    "WSL process streaming smoke -> passed",
-    "nox -s l0 -> passed",
-    "nox -s validation_module_registry_l0 -> passed",
-    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed"
+    "PR #1316 close-sync checks -> all green"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
