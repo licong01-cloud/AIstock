@@ -1,0 +1,108 @@
+{
+  "actual": "页面 500；console/pageerror 显示 Module not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'、'@babel/runtime/regenerator' 等，import trace 指向 react-syntax-highlighter 和 PairDetail.tsx。",
+  "allowed_write_scope": [
+    "frontend/package.json",
+    "frontend/src/app/quantevolver/factor-correlation/components/PairDetail.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/page.tsx",
+    "frontend/package-lock.json",
+    "tests/aistock_validation/bugs/20260620_BUG-433-babel-runtime-500.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-433",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T22:25:18.510076Z",
+  "description": "页面 500；console/pageerror 显示 Module not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'、'@babel/runtime/regenerator' 等，import trace 指向 react-syntax-highlighter 和 PairDetail.tsx。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260620-c3d72ea7935c",
+      "timestamp": "2026-06-19T22:25:18.510073Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/evidence/20260620_full_chain_validation/ui_smoke.json"
+  ],
+  "expected": "因子相关性页面应正常打开并展示 official cache window、575 缓存因子和 574 个相关性成功因子/1 个 no_valid_pairs 分类。",
+  "first_seen_at": "2026-06-19T22:25:18.510076Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1333,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1333",
+  "last_seen_at": "2026-06-19T22:25:18.510076Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 http://127.0.0.1:3000/quantevolver/factor-correlation 或运行 Playwright UI smoke；证据 tests/aistock_validation/history/qe/evidence/20260620_full_chain_validation/ui_smoke.json",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "因子相关性页面缺少 @babel/runtime 导致 500",
+  "trigger_condition": {
+    "fingerprint": "c3d72ea7935c49091d1cccd0",
+    "source_event_id": "FE-20260620-c3d72ea7935c"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/package.json",
+      "frontend/package-lock.json",
+      "frontend/src/app/quantevolver/factor-correlation/components/PairDetail.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/runtime",
+    "ui_routes": [
+      "/runtime"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
