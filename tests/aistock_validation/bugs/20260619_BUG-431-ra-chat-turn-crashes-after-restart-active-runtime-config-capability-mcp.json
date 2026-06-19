@@ -37,14 +37,20 @@
       "actor": "codex",
       "note": "Rebased BUG-431 branch onto origin/main f5fdd1eb, including BUG-423 #1325/#1327; resolved _workflow_capabilities conflict by combining object validation with retired draft capability filtering.",
       "timestamp": "2026-06-20T02:10:00+08:00"
+    },
+    {
+      "action": "merged",
+      "actor": "codex",
+      "note": "PR #1326 squash-merged into main at c9c1a049f6e27da5932f2d7ab7ebb8c4732a02a6 after rebase onto BUG-423 and green CI.",
+      "timestamp": "2026-06-19T19:00:44Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Invalid runtime config mcp_tool_refs is rejected at import/activation; historical dirty active config fails closed with a specific runtime_config_invalid_capability_mcp_tool_refs config error and operator reseed action, not a generic program crash.",
   "first_seen_at": "2026-06-19T15:41:26.933111Z",
   "fix_branch": "bug/BUG-431-ra-chat-turn-crashes-after-restart-active-runtim-20260619",
-  "fix_commit": "05972ce378c762d8a1f22f6d99802b97ce163386",
-  "fixed_at": "2026-06-20T02:46:00+08:00",
+  "fix_commit": "c9c1a049f6e27da5932f2d7ab7ebb8c4732a02a6",
+  "fixed_at": "2026-06-19T19:00:44Z",
   "github_issue_number": 1320,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1320",
   "last_seen_at": "2026-06-20T02:46:00+08:00",
@@ -56,6 +62,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1326",
   "required_verification": [
     "l0",
     "research_assistant_backend",
@@ -67,7 +74,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "validation_passed",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -77,6 +84,14 @@
     "source_event_id": "FE-20260619-dd5243325210"
   },
   "verification_run_id": "bug431_rebase_required_gates_20260620",
+  "validation_evidence": [
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (284 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s ra_phase7_full_accept -> passed",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk proxy python -m nox -s ra_phase0_baseline -> passed; no anchor update needed"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
