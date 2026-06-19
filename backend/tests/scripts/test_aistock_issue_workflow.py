@@ -6178,6 +6178,56 @@ def test_ci_issue_janitor_apply_only_closes_superseded_unlinked_issues(monkeypat
     assert label_synced == []
 
 
+def test_ci_issue_janitor_superseded_only_leaves_infra_for_manual_ops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        issue = int(issue_number)
+        if issue == 642:
+            return {
+                "classification_recommendation": "superseded_by_later_main_success",
+                "linked_bug": None,
+                "github_issue": {"number": issue, "state": "OPEN"},
+                "summary": {"workflow": "AIstock Nightly L3 + DR"},
+                "superseded_action": {
+                    "workflow_gate": "superseded_by_latest_main_success",
+                    "superseding_run": {"run_id": "26899001365", "run_url": "https://github.example/runs/26899001365"},
+                },
+            }
+        return {
+            "classification_recommendation": "infra_blocker",
+            "needs_bug_json": False,
+            "linked_bug": None,
+            "github_issue": {"number": issue, "state": "OPEN"},
+            "summary": {"workflow": "AIstock Nightly L3 + DR"},
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "reason": "Runner unavailable.",
+                "next_actions": ["restore runner"],
+            },
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(issue_numbers=[642, 683], apply=True, close_infra=False)
+
+    assert payload["workflow_gate"] == "closed"
+    assert payload["close_infra"] is False
+    assert payload["superseded_count"] == 1
+    assert payload["infra_count"] == 0
+    assert payload["closed_issues"] == [642]
+    assert payload["issues"][1]["action"] == "skip"
+    assert payload["issues"][1]["reason"] == "infra_closure_disabled"
+    assert closed == [642]
+
+
 def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
 

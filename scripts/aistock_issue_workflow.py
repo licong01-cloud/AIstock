@@ -6560,6 +6560,7 @@ def build_ci_issue_janitor_plan(
     apply: bool = False,
     limit: int = 50,
     skip_github_summary: bool = False,
+    close_infra: bool = True,
 ) -> dict[str, Any]:
     if issue_numbers:
         issues = [{"number": str(item)} for item in issue_numbers]
@@ -6617,6 +6618,10 @@ def build_ci_issue_janitor_plan(
             and triage.get("needs_bug_json") is False
             and isinstance(triage.get("infra_action"), dict)
         ):
+            if not close_infra:
+                entry["reason"] = "infra_closure_disabled"
+                evaluated.append(entry)
+                continue
             infra_count += 1
             entry["action"] = "close_infra"
             entry["infra_action"] = _pick(
@@ -6652,6 +6657,7 @@ def build_ci_issue_janitor_plan(
         "dry_run": not apply,
         "source": source,
         "limit": limit,
+        "close_infra": close_infra,
         "scanned_count": len(evaluated),
         "superseded_count": superseded_count,
         "infra_count": infra_count,
@@ -6670,10 +6676,11 @@ def build_ci_issue_janitor_plan(
     if not apply and actionable_count:
         issue_args = " ".join(f"--issue {item.get('issue')}" for item in evaluated if item.get("action") in {"close_superseded", "close_infra"})
         limit_arg = "" if issue_args else f" --limit {limit}"
+        infra_arg = "" if close_infra else " --superseded-only"
         payload["next_command"] = (
-            f"python scripts/aistock_issue_workflow.py ci-issue-janitor {issue_args} --apply"
+            f"python scripts/aistock_issue_workflow.py ci-issue-janitor {issue_args}{infra_arg} --apply"
             if issue_args
-            else f"python scripts/aistock_issue_workflow.py ci-issue-janitor{limit_arg} --apply"
+            else f"python scripts/aistock_issue_workflow.py ci-issue-janitor{limit_arg}{infra_arg} --apply"
         )
     output_dir = REPO_ROOT / WORKFLOW_ROOT / "ci-issue-janitor"
     _write_json(output_dir / "ci-issue-janitor.json", payload)
@@ -10226,6 +10233,7 @@ def cmd_ci_issue_janitor(args: argparse.Namespace) -> int:
         apply=args.apply,
         limit=args.limit,
         skip_github_summary=args.skip_github_summary,
+        close_infra=not args.superseded_only,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_actionable_ci_issues"} else 2
@@ -10516,6 +10524,11 @@ def build_parser() -> argparse.ArgumentParser:
     ci_janitor.add_argument("--issue", action="append", help="Limit janitor to a specific GitHub Issue number; repeatable.")
     ci_janitor.add_argument("--limit", type=int, default=50, help="Maximum open auto-filed CI issues to scan when --issue is omitted.")
     ci_janitor.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; useful for tests only.")
+    ci_janitor.add_argument(
+        "--superseded-only",
+        action="store_true",
+        help="Only close unlinked issues superseded by later successful runs; leave infra-only issues for manual ops review.",
+    )
     ci_janitor.add_argument(
         "--apply",
         action="store_true",

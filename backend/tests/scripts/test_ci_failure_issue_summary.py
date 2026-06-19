@@ -1028,6 +1028,17 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
 
 
+def test_nightly_workflow_closes_stale_failure_issues_after_recovery() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["full-summary"]["steps"]
+    step = next(step for step in steps if step.get("name") == "Close stale Nightly failure issues after recovery")
+
+    assert step["if"] == "success()"
+    assert "ci-issue-janitor --superseded-only --apply --stdout-format compact" in step["run"]
+
+
 def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     import yaml
 
