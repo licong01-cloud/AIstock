@@ -7,12 +7,19 @@ export type AssistantEnvelope<T> = {
   data: T;
 };
 
-export type AssistantPage<T> = {
+export type AssistantPage<T> = JsonObject & {
   items: T[];
   total: number;
   page: number;
   page_size: number;
   has_more: boolean;
+  data_state?: string;
+  source_of_truth?: string;
+  reason_codes?: string[];
+  warnings?: string[];
+  draft_storage_authoritative?: boolean;
+  assistant_draft_storage_notice?: string;
+  official_submission_required?: string;
 };
 
 export type AssistantMcpToolPage<T> = AssistantPage<T> & JsonObject & {
@@ -461,14 +468,30 @@ export type AssistantIssueCandidate = JsonObject & {
   title?: string;
   severity?: string;
   module?: string;
+  module_id?: string;
   status?: string;
   problem_statement?: string;
+  summary?: string | null;
+  actual?: string | null;
+  expected?: string | null;
   reproduce_command?: string | null;
-  github_sync_status?: string;
+  source_type?: string | null;
+  source_plan_key?: string | null;
+  active_discovery_reason?: string | null;
+  source_ref?: string | null;
+  source_refs?: string[];
+  source_path?: string | null;
+  source_paths?: string[];
+  quality_gate_state?: string | null;
+  issue_payload_ready?: boolean | null;
   github_issue_number?: number | null;
   github_issue_url?: string | null;
+  github_sync_status?: string;
   github_sync_json?: JsonObject;
   evidence_refs?: string[];
+  draft_storage_authoritative?: boolean;
+  assistant_draft_storage_notice?: string;
+  official_submission_required?: string;
 };
 
 export type AssistantWorkbenchDryRunResult = JsonObject & {
@@ -652,6 +675,19 @@ export type AssistantCatalogReadiness = JsonObject & {
 export type AssistantValidationDiscoverySummary = JsonObject & {
   latest_reports?: JsonObject[];
   candidate_issues_needing_review?: AssistantIssueCandidate[];
+  candidate_summary?: JsonObject;
+  data_state?: string;
+  status?: string;
+  source_of_truth?: string;
+  source_of_truth_endpoint?: string;
+  discovery_report_mode?: string;
+  discovery_manifest_api_available?: boolean;
+  discovery_manifest_api_note?: string;
+  reason_codes?: string[];
+  warnings?: string[];
+  draft_storage_authoritative?: boolean;
+  assistant_draft_storage_notice?: string;
+  official_submission_required?: string;
 };
 
 export class ResearchAssistantApiError extends Error {

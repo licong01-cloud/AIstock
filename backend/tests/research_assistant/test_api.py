@@ -146,6 +146,7 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert preflight_resp["data"]["passed"] is False
     assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
     assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
+    assert "standard_workflow_required" in preflight_resp["data"]["preflight_checks"]
     assert preflight_resp["data"]["gateway_manifest"]["module"] == "research_assistant"
     assert preflight_resp["data"]["manifest_risk_level"] == "production_adjacent"
     assert preflight_resp["data"]["assistant_usable"] == "preflight_required"
@@ -178,8 +179,9 @@ def test_research_assistant_api_phase1_smoke() -> None:
         "/api/v1/research-assistant/issue-candidates",
         json={"title": "Candidate", "severity": "P1", "problem_statement": "review first"},
     ).json()
-    assert issue_resp["data"]["status"] == "needs_review"
-    assert issue_resp["data"]["github_sync_status"] == "not_requested"
+    assert issue_resp["data"]["status"] == "draft"
+    assert issue_resp["data"]["github_sync_status"] == "standard_workflow_required"
+    assert issue_resp["data"]["draft_storage_authoritative"] is False
 
     assert client.get("/api/v1/research-assistant/skills").json()["data"]["total"] >= 5
     assert client.get("/api/v1/research-assistant/mcp/tools").json()["data"]["total"] >= 6
@@ -255,8 +257,9 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert action_events["trace_events"]
 
     sync = client.post(f"/api/v1/research-assistant/issue-candidates/{issue_resp['data']['candidate_id']}/github-sync", json={"mode": "formal"}).json()["data"]
-    assert sync["github_sync_status"] == "approval_required"
+    assert sync["github_sync_status"] == "blocked"
     assert sync["github_sync_json"]["direct_github_create_performed"] is False
+    assert "mcp_github_issue_sync_bug" in sync["github_sync_json"]["recommended_tools"]
 
     assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200
 

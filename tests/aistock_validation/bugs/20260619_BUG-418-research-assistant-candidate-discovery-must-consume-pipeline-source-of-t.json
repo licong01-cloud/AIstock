@@ -1,0 +1,145 @@
+{
+  "actual": "Research Assistant currently has independent assistant_issue_candidates and assistant_validation_discovery_reports tables plus RA-specific pages/APIs. Formal GitHub sync is blocked today, but the parallel structures can be misused as a second source of truth.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/routers/research_assistant.py",
+    "frontend/src/app/research-assistant/streams/page.tsx",
+    "frontend/src/app/research-assistant/issue-candidates/page.tsx",
+    "tests/aistock_validation/bugs/20260619_BUG-418-research-assistant-candidate-discovery-must-consume-pipeline-source-of-t.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md",
+    "backend/services/research_assistant/proactive_reports.py",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/src/lib/validation/api.ts",
+    "backend/services/research_assistant/repository.py",
+    "backend/db/init_research_assistant_schema_20260521.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/mcp/modules/validation.py",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_proactive_report_generation.py",
+    "backend/tests/research_assistant/test_schema_contract.py",
+    "backend/tests/research_assistant/test_tool_catalog_gate.py",
+    "backend/tests/research_assistant/test_pipeline_source_boundary.py",
+    "backend/tests/research_assistant/test_pipeline_source_ui_static.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-418",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T18:35:59.067778Z",
+  "description": "Research Assistant currently has independent assistant_issue_candidates and assistant_validation_discovery_reports tables plus RA-specific pages/APIs. Formal GitHub sync is blocked today, but the parallel structures can be misused as a second source of truth.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-a14736f5b740",
+      "timestamp": "2026-06-18T18:35:59.067775Z"
+    },
+    {
+      "timestamp": "2026-06-19T00:00:00+08:00",
+      "actor": "codex",
+      "action": "scope_expand_plan_doc",
+      "note": "Plan-first scope expanded to include RA pipeline source-of-truth design doc requested by BUG-418 Tier2 review gate."
+    },
+    {
+      "timestamp": "2026-06-19T00:00:00+08:00",
+      "actor": "codex",
+      "action": "scope_expand_implementation",
+      "note": "Implementation scope expanded after Tier2 approval to cover design §2 backend/frontend/test files, including pipeline source boundary tests."
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\backend\\db\\init_research_assistant_schema_20260521.py:546",
+    "F:\\Dev\\AIstock\\backend\\services\\research_assistant\\service.py:6361",
+    "F:\\Dev\\AIstock\\backend\\services\\research_assistant\\service.py:6441",
+    "F:\\Dev\\AIstock\\backend\\routers\\research_assistant.py:845",
+    "F:\\Dev\\AIstock\\backend\\routers\\validation.py:420"
+  ],
+  "expected": "Research Assistant is a consumer/reviewer for pipeline discovery and candidate issue data. Validation Center / Nightly / issue workflow remain the only source of truth and the only formal promotion path.",
+  "first_seen_at": "2026-06-18T18:35:59.067778Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1270,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1270",
+  "last_seen_at": "2026-06-18T18:35:59.067778Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect backend/db/init_research_assistant_schema_20260521.py, backend/services/research_assistant/service.py, backend/routers/research_assistant.py, frontend/src/app/research-assistant/streams/page.tsx, frontend/src/app/research-assistant/issue-candidates/page.tsx and compare with /validation/issues/candidates and Nightly BugCandidate queue.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant candidate/discovery must consume pipeline source of truth",
+  "trigger_condition": {
+    "fingerprint": "a14736f5b74012e9f5733594",
+    "source_event_id": "FE-20260619-a14736f5b740"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/research_assistant/service.py",
+      "backend/routers/research_assistant.py",
+      "frontend/src/app/research-assistant/streams/page.tsx",
+      "frontend/src/app/research-assistant/issue-candidates/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/discovery",
+    "ui_routes": [
+      "/discovery"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -13,6 +13,8 @@ PROACTIVE_ITEM_SCHEMA = "aistock_research_assistant_proactive_report_item_v1"
 PROACTIVE_REGISTRY_SCHEMA = "aistock_research_assistant_proactive_provider_registry_v1"
 
 PLACEHOLDER_TOKENS = ("XX", "X%", "约X")
+VALIDATION_ISSUE_FACT_SOURCE_UNAVAILABLE = "validation_issue_fact_source_unavailable"
+RA_DRAFT_STORAGE_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5f85 Phase 2 \u9000\u573a"
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class ProactiveReportContext:
     report_date: date
     report_type: str = "morning_brief"
     max_items_per_section: int = 5
+    issue_fact_source: Any | None = None
 
 
 class ProactiveReportProviderRegistry:
@@ -169,17 +172,43 @@ def collect_experiment_status_section(context: ProactiveReportContext) -> dict[s
 
 
 def collect_issue_validation_section(context: ProactiveReportContext) -> dict[str, Any]:
-    records, reason_codes, warnings = _try_list_records(context.repository, ("issue_candidates",), limit=context.max_items_per_section)
+    if context.issue_fact_source is None:
+        return _empty_section(
+            provider=ProactiveReportProvider("issues", "Validation/BUG/Issue", "issues", collect_issue_validation_section),
+            status="degraded",
+            reason_codes=[VALIDATION_ISSUE_FACT_SOURCE_UNAVAILABLE],
+            warnings=[f"Validation issue fact source is not injected; RA draft tables are {RA_DRAFT_STORAGE_NOTICE} and cannot substitute for facts."],
+        )
+    try:
+        page = context.issue_fact_source.issue_candidates(page=1, page_size=context.max_items_per_section)
+    except Exception as exc:  # noqa: BLE001 - degraded read is explicit and never falls back to RA drafts.
+        return _empty_section(
+            provider=ProactiveReportProvider("issues", "Validation/BUG/Issue", "issues", collect_issue_validation_section),
+            status="degraded",
+            reason_codes=[VALIDATION_ISSUE_FACT_SOURCE_UNAVAILABLE],
+            warnings=[f"Validation issue fact source unavailable: {type(exc).__name__}: {exc}"],
+        )
+    records = [item for item in page.get("items") or [] if isinstance(item, Mapping)]
     items = [
         _item(
             title=str(item.get("title") or item.get("candidate_id")),
-            body=f"状态={item.get('status') or 'unknown'}。",
-            source_refs=[f"assistant_issue_candidates:{item.get('candidate_id') or index}"],
+            body=f"status={item.get('status') or 'unknown'}; source_type={item.get('source_type') or 'unknown'}; source_of_truth=Validation issue candidates.",
+            source_refs=_issue_candidate_source_refs(item, fallback_index=index),
         )
-        for index, (_kind, item) in enumerate(records)
+        for index, item in enumerate(records)
     ]
-    return _section("issues", "Validation/BUG/Issue", items, empty_reason="issues_no_evidence", reason_codes=reason_codes, warnings=warnings)
+    return _section("issues", "Validation/BUG/Issue", items, empty_reason="issues_no_evidence", reason_codes=[], warnings=[])
 
+
+def _issue_candidate_source_refs(item: Mapping[str, Any], *, fallback_index: int) -> list[str]:
+    candidate_id = str(item.get("candidate_id") or "").strip()
+    refs: list[str] = [f"validation_issue_candidates:{candidate_id}"] if candidate_id else [f"validation_issue_candidates:missing_candidate_id:{fallback_index}"]
+    for key in ("source_ref", "github_issue_payload_ref", "source_path"):
+        if item.get(key):
+            refs.append(str(item[key]))
+    source_paths = item.get("source_paths") if isinstance(item.get("source_paths"), list) else []
+    refs.extend(str(path) for path in source_paths if str(path or "").strip())
+    return _dedupe(refs)
 
 def collect_local_data_health_section(context: ProactiveReportContext) -> dict[str, Any]:
     records, reason_codes, warnings = _try_list_records(context.repository, ("external_events", "task_events"), search="local_data", limit=context.max_items_per_section)

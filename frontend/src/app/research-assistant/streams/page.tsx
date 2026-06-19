@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -8,6 +9,13 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState } from "@/components/research-assistant/AssistantShared";
 import { researchAssistantApi, type AssistantIssueCandidate, type AssistantValidationDiscoverySummary, type JsonObject } from "@/lib/research-assistant/api";
+
+const DRAFT_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5f85 Phase 2 \u9000\u573a";
+
+function text(value: unknown, fallback = "-"): string {
+  const raw = String(value ?? "").trim();
+  return raw || fallback;
+}
 
 export default function ResearchAssistantStreamsPage() {
   const [summary, setSummary] = useState<AssistantValidationDiscoverySummary | null>(null);
@@ -30,34 +38,44 @@ export default function ResearchAssistantStreamsPage() {
   }, [load]);
 
   const reports = (summary?.latest_reports || []) as JsonObject[];
+  const degraded = summary?.data_state === "degraded";
 
   return (
     <main>
       <ApiErrorBox error={error} />
-      <SectionCard title="Validation / Pipeline Discovery Stream" eyebrow="nightly report / llm assisted">
-        <JsonPanel value={{ boundary: "阶段一展示真实 discovery report 与候选 Issue 队列；夜间 LLM 探测任务由后续调度写入。", summary: summary || {} }} />
+      <SectionCard title="Pipeline Discovery Assistant View" eyebrow="derived_from_validation_candidates">
+        <div className="ra-empty" style={{ marginBottom: 12 }}>
+          <strong>{degraded ? "Validation fact source unavailable: explicit degraded state" : "Discovery stream is derived from Validation/Nightly candidates"}</strong>
+          <p>{summary?.discovery_manifest_api_note || "No RA-owned discovery report fact source is presented here; this view consumes Validation candidate fields."}</p>
+          <p>{DRAFT_NOTICE}; assistant_validation_discovery_reports cannot substitute for Validation/Nightly facts.</p>
+          {degraded ? <p>reason={text((summary?.reason_codes || []).join(", "))}; warning={text((summary?.warnings || []).join(" / "))}</p> : null}
+        </div>
+        <JsonPanel value={{ source_of_truth: summary?.source_of_truth, discovery_report_mode: summary?.discovery_report_mode, candidate_summary: summary?.candidate_summary || {}, data_state: summary?.data_state }} />
       </SectionCard>
-      <SectionCard title="发现报告" eyebrow="assistant_validation_discovery_reports">
+      <SectionCard title="Derived Discovery Entries" eyebrow="Validation candidate fields: source_type / source_plan_key / active_discovery_reason">
         <PaperTable
           rows={reports}
-          empty="暂无发现报告。"
+          empty={degraded ? "Validation fact source unavailable; RA discovery drafts cannot substitute for facts." : "No derived discovery entries from Validation candidates."}
           columns={[
-            { key: "title", header: "报告", render: (row) => <><span className="ra-title">{String(row.title || "-")}</span><br /><span className="pv2-muted">{String(row.run_date || "-")}</span></> },
-            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-            { key: "detail", header: "详情", render: (row) => <DetailDrawer title="summary / evidence" data={row} /> },
+            { key: "title", header: "Title", render: (row) => <><span className="ra-title">{String(row.title || "-")}</span><br /><span className="pv2-muted">candidate={String(row.candidate_id || "-")}</span></> },
+            { key: "status", header: "Status", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "source", header: "Source", render: (row) => <><span>{String(row.source_type || "-")}</span><br /><span className="pv2-muted">{String(row.source_plan_key || "-")}</span></> },
+            { key: "reason", header: "Discovery Reason", render: (row) => String(row.active_discovery_reason || "-") },
+            { key: "detail", header: "Detail", render: (row) => <DetailDrawer title="derived discovery payload" data={row} /> },
           ]}
         />
-        {!reports.length ? <EmptyState title="暂无夜间测试汇报" hint="这是真实空状态，未使用 mock 报告冒充完成。" /> : null}
+        {!reports.length && !degraded ? <EmptyState title="No derived discovery entries" hint="This is a real Validation candidate empty state; assistant_validation_discovery_reports remains a non-authoritative draft/cache only." /> : null}
       </SectionCard>
-      <SectionCard title="发现流候选 Issue" eyebrow="strict review before GitHub">
+      <SectionCard title="Validation Candidate Flow" eyebrow="strict workflow before GitHub / BUG JSON">
         <PaperTable
           rows={issues}
-          empty="暂无发现流候选 Issue。"
+          empty={degraded ? "Validation candidate fact source unavailable; RA drafts cannot substitute for facts." : "No Validation candidates in this view."}
           columns={[
-            { key: "title", header: "标题", render: (row) => row.title || "-" },
-            { key: "severity", header: "级别", render: (row) => <StatusBadge status={row.severity} /> },
-            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-            { key: "detail", header: "详情", render: (row) => <DetailDrawer title="candidate evidence" data={row} /> },
+            { key: "title", header: "Candidate", render: (row) => <><span>{row.title || "-"}</span><br /><span className="pv2-muted">{text(row.source_refs?.[0] || row.source_ref)}</span></> },
+            { key: "severity", header: "Severity", render: (row) => <StatusBadge status={row.severity} /> },
+            { key: "status", header: "Status", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "source", header: "Fact Source", render: (row) => text(row.source_type) },
+            { key: "detail", header: "Detail", render: (row) => <DetailDrawer title="candidate evidence" data={row} /> },
           ]}
         />
       </SectionCard>

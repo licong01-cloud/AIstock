@@ -618,9 +618,11 @@ def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     issue = svc.create_issue_candidate(
         IssueCandidateCreate(title="候选缺陷", severity="P1", problem_statement="只进入候选队列，不直接创建正式 GitHub Issue。")
     )
-    assert issue["status"] == "needs_review"
-    assert issue["github_sync_status"] == "not_requested"
-    assert issue["github_sync_json"]["formal_github_issue_requires_approval"] is True
+    assert issue["status"] == "draft"
+    assert issue["github_sync_status"] == "standard_workflow_required"
+    assert issue["github_sync_json"]["formal_github_issue_requires_standard_workflow"] is True
+    assert issue["github_sync_json"]["direct_github_create_performed"] is False
+    assert issue["draft_storage_authoritative"] is False
 
 
 def test_preflight_high_risk_requires_approval_and_records_event() -> None:
@@ -639,7 +641,7 @@ def test_preflight_high_risk_requires_approval_and_records_event() -> None:
     assert result["passed"] is False
     assert result["approval_required"] is True
     assert result["failed_checks"][0]["check"] == "input_schema"
-    assert result["preflight_checks"] == ["dedupe_key", "evidence_refs", "draft_only", "github_formal_issue_blocked"]
+    assert result["preflight_checks"] == ["dedupe_key", "evidence_refs", "draft_only", "standard_workflow_required", "github_formal_issue_blocked"]
     assert result["assistant_usable"] == "preflight_required"
     detail = svc.get_task(task["task_id"])
     assert any(event["event_type"] == "mcp_preflight_failed" for event in detail["events"])
@@ -769,7 +771,7 @@ def test_candidate_issue_duplicate_does_not_hide_canonical_candidate() -> None:
     second = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same"))
     assert second["candidate_id"] == first["candidate_id"]
     assert second["deduplicated"] is True
-    assert svc.repository.get_record("issue_candidates", first["candidate_id"])["status"] == "needs_review"
+    assert svc.repository.get_record("issue_candidates", first["candidate_id"])["status"] == "draft"
 
 
 def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
@@ -777,11 +779,13 @@ def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
     issue = svc.create_issue_candidate(IssueCandidateCreate(title="GitHub gate", problem_statement="must not create directly"))
 
     dry_run = svc.github_sync_issue_candidate(issue["candidate_id"], IssueCandidateGithubSyncRequest(mode="dry_run", requested_by="pytest"))
-    assert dry_run["github_sync_status"] == "dry_run"
+    assert dry_run["github_sync_status"] == "blocked"
     assert dry_run["github_sync_json"]["direct_github_create_performed"] is False
+    assert "mcp_github_issue_sync_bug" in dry_run["github_sync_json"]["recommended_tools"]
 
     formal_without_approval = svc.github_sync_issue_candidate(issue["candidate_id"], IssueCandidateGithubSyncRequest(mode="formal"))
-    assert formal_without_approval["github_sync_status"] == "approval_required"
+    assert formal_without_approval["github_sync_status"] == "blocked"
+    assert formal_without_approval["github_sync_json"]["direct_github_create_performed"] is False
 
     approval = svc.create_approval(
         ApprovalCreate(
@@ -797,7 +801,9 @@ def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
     )
     assert formal_blocked["github_sync_status"] == "blocked"
     assert formal_blocked["github_sync_json"]["direct_github_create_performed"] is False
+    assert formal_blocked["draft_storage_authoritative"] is False
     assert formal_blocked["github_issue_url"] is None
+    assert svc.repository.get_record("approvals", approval["approval_id"])["status"] == "pending"
 
 
 def test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow() -> None:
