@@ -34,8 +34,8 @@
   "expected": "Workflow fixes should preserve code quality while reducing wall-clock and token overhead: source fix, validation, PR/CI, close-sync, and cleanup phases must be visible in postmortem; registry-only close-sync PRs should use the fastest safe gates; merge should avoid local branch deletion failures for worktree-owned branches; successful outputs should remain compact by default.",
   "first_seen_at": "2026-06-18T19:12:32.829710Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b4ca35447176a3cd9e25951f5760f36051834edc",
+  "fixed_at": "2026-06-19T04:31:42.052232Z",
   "github_issue_number": 1274,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1274",
   "last_seen_at": "2026-06-18T19:12:32.829710Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1276",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "7de29f14a45f7821ef0f3222",
     "source_event_id": "FE-20260619-7de29f14a45f"
   },
+  "validation_evidence": [
+    "PR #1276 CI all checks green after rebase; targeted tests 184 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
