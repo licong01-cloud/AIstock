@@ -681,7 +681,21 @@ class ResearchAssistantExecutionMixin:
             return {"status": "succeeded", "result_json": memory, "result_cards": [{"title": "候选记忆已创建", "summary": memory["title"], "memory_id": memory["memory_id"]}], "artifact_refs": [memory["memory_id"]], "error_json": {}, "retry_count": 0}
         if name == "assistant_create_issue_candidate":
             issue = self.create_issue_candidate(IssueCandidateCreate(**payload))
-            return {"status": "succeeded", "result_json": issue, "result_cards": [{"title": "候选 Issue 已创建", "summary": issue["title"], "candidate_id": issue["candidate_id"], "next_step": "GitHub 正式同步仍需单独审批。"}], "artifact_refs": [issue["candidate_id"]], "error_json": {}, "retry_count": 0}
+            return {
+                "status": "succeeded",
+                "result_json": issue,
+                "result_cards": [
+                    {
+                        "title": "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\u5df2\u8bb0\u5f55",
+                        "summary": issue["title"],
+                        "candidate_id": issue["candidate_id"],
+                        "next_step": "\u6b63\u5f0f\u63d0\u4ea4\u5fc5\u987b\u8d70 AIstock issue workflow / Validation MCP\uff08report_bug\u3001mcp_github_issue_create \u6216 mcp_github_issue_sync_bug\uff09\u3002",
+                    }
+                ],
+                "artifact_refs": [issue["candidate_id"]],
+                "error_json": {},
+                "retry_count": 0,
+            }
         if name == "qe_template_create":
             template = self._qe_template_create_draft(payload)
             return {"status": "succeeded", "result_json": template, "result_cards": [{"title": "QE template 草案已生成", "summary": template["title"], "template_id": template["template_id"], "next_step": "确认后进入 validate；尚未 materialize/run。"}], "artifact_refs": [template["template_id"]], "error_json": {}, "retry_count": 0}

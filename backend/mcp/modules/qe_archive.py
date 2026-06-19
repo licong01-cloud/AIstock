@@ -42,6 +42,8 @@ TOOL_NAMES = (
     "qe_archive_query_overfit_flags",
     "qe_archive_query_promotion_candidates",
     "qe_archive_query_evolution_lineage",
+    "multi_alpha_orthogonality",
+    "multi_alpha_combine_preview",
     "prediction_store_get_pointer",
     "prediction_store_pull_pred",
     "prediction_store_pull_label",
@@ -55,6 +57,7 @@ def register(registry: "ModuleRegistry") -> None:
 
     client = registry.client("qe-archive")
     prediction_store_client = registry.client("prediction-store")
+    multi_alpha_client = registry.client("multi-alpha")
 
     def _sanitize_ids(values: list[str] | None, field_name: str) -> list[str]:
         return [registry.sanitize(value, field_name) for value in (values or []) if str(value or "").strip()]
@@ -371,6 +374,32 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(
             "/analytics/evolution-lineage",
             params={"task_id": task_id, "experiment_id": experiment_id, "model_type": model_type, "limit": limit},
+        )
+
+    @registry.mcp.tool(name="multi_alpha_orthogonality")
+    def multi_alpha_orthogonality(run_ids: list[str], k: int = 25) -> Any:
+        safe_run_ids = _sanitize_ids(run_ids, "run_id")
+        bounded_k = max(1, min(int(k), 500))
+        return multi_alpha_client.get("/orthogonality", params={"run_ids": safe_run_ids, "k": bounded_k})
+
+    @registry.mcp.tool(name="multi_alpha_combine_preview")
+    def multi_alpha_combine_preview(
+        legs: list[dict[str, Any]],
+        weighting_scheme: str = "equal",
+        normalize_method: str = "zscore",
+        walk_forward: dict[str, Any] | None = None,
+        head: int = 20,
+    ) -> Any:
+        bounded_head = max(0, min(int(head), 1000))
+        return multi_alpha_client.post(
+            "/combine/preview",
+            {
+                "legs": legs,
+                "weighting_scheme": weighting_scheme,
+                "normalize_method": normalize_method,
+                "walk_forward": walk_forward,
+                "head": bounded_head,
+            },
         )
 
     @registry.mcp.tool(name="prediction_store_get_pointer")

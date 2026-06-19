@@ -151,6 +151,70 @@ def test_semantic_drift_candidate_generates_complete_issue_payload(tmp_path: Pat
     assert "Issue body includes expected" in issue_payload["body"]
 
 
+def test_historical_validation_quality_debt_is_separated_from_issue_payloads(tmp_path: Path) -> None:
+    result = tmp_path / "discovery" / "validation_center_discovery_run_record_integrity.json"
+    manifest = tmp_path / "discovery" / "manifest.json"
+    anomaly = {
+        **_high_confidence_anomaly(plan_key="validation_center_discovery_run_record_integrity"),
+        "type": "run_record_missing_production_gates",
+        "severity": "P2",
+        "title": "Validation history record lacks production gates: tests/aistock_validation/history/old.md",
+        "evidence_refs": ["tests/aistock_validation/history/old.md"],
+        "suggested_module": "tests.validation_history",
+        "details": {
+            "expected": "Historical validation records should include production gates.",
+            "actual": "A historical validation record is missing production gate lines.",
+            "confidence": 0.95,
+        },
+    }
+    _write_discovery_result(result, plan_key="validation_center_discovery_run_record_integrity", anomaly=anomaly)
+    _write_manifest(manifest, result, plan_key="validation_center_discovery_run_record_integrity")
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+    candidates = json.loads((tmp_path / payload["candidate_queue_ref"]).read_text(encoding="utf-8"))["candidates"]
+    summary_md = (tmp_path / "queue" / "candidate-summary.md").read_text(encoding="utf-8")
+
+    assert payload["summary"]["candidate_count"] == 1
+    assert payload["summary"]["quality_debt_count"] == 1
+    assert payload["summary"]["high_value_candidate_count"] == 0
+    assert payload["summary"]["issue_payload_ready_count"] == 0
+    assert payload["discovery_effectiveness"]["no_candidate_reason"] == "only_historical_quality_debt_candidates"
+    assert candidates[0]["status"] == "quality_debt"
+    assert candidates[0]["value_lane"] == "quality_debt"
+    assert "historical_quality_debt" in candidates[0]["quality_gate"]["reasons"]
+    assert "quality_debt: `1`" in summary_md
+    assert "issue_payload_drafts: `0`" in summary_md
+
+
+def test_p2_standard_candidates_do_not_compete_with_high_value_issue_drafts(tmp_path: Path) -> None:
+    result = tmp_path / "discovery" / "validation_semantic_drift_discovery_readonly.json"
+    manifest = tmp_path / "discovery" / "manifest.json"
+    anomaly = {
+        **_high_confidence_anomaly(plan_key="validation_semantic_drift_discovery_readonly"),
+        "type": "semantic_drift",
+        "severity": "P2",
+        "title": "Low-priority semantic drift advisory",
+        "evidence_refs": ["tmp/validation/code-intelligence/advisory.json"],
+        "suggested_module": "validation.runner",
+        "details": {
+            "expected": "Advisory drift should stay visible.",
+            "actual": "A low-priority advisory was reported.",
+            "confidence": 0.95,
+        },
+    }
+    _write_discovery_result(result, plan_key="validation_semantic_drift_discovery_readonly", anomaly=anomaly)
+    _write_manifest(manifest, result, plan_key="validation_semantic_drift_discovery_readonly")
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+    candidates = json.loads((tmp_path / payload["candidate_queue_ref"]).read_text(encoding="utf-8"))["candidates"]
+
+    assert payload["summary"]["candidate_count"] == 1
+    assert payload["summary"]["high_value_candidate_count"] == 0
+    assert payload["summary"]["issue_payload_ready_count"] == 0
+    assert candidates[0]["value_lane"] == "standard"
+    assert "not_high_value_candidate" in candidates[0]["quality_gate"]["reasons"]
+
+
 def test_duplicate_fingerprint_is_marked_deduped(tmp_path: Path) -> None:
     result = tmp_path / "discovery" / "workflow_discovery_root_clean_guard.json"
     manifest = tmp_path / "discovery" / "manifest.json"
@@ -204,8 +268,24 @@ def test_cli_prints_compact_success_and_writes_queue(tmp_path: Path, capsys) -> 
 
     assert exit_code == 0
     assert '"check": "nightly-bug-candidate-queue"' in stdout
+    assert '"high_value": 1' in stdout
     assert '"issue_payloads": 1' in stdout
     assert (tmp_path / "queue" / "candidate-summary.md").exists()
+
+
+def test_downloaded_artifact_manifest_resolves_sibling_result_files(tmp_path: Path) -> None:
+    result = tmp_path / "downloaded" / "workflow_discovery_root_clean_guard.json"
+    manifest = tmp_path / "downloaded" / "manifest.json"
+    _write_discovery_result(result)
+    _write_manifest(
+        manifest,
+        Path("tmp/validation/code-intelligence/999/discovery-plans/workflow_discovery_root_clean_guard.json"),
+    )
+
+    payload = queue.build_queue(discovery_manifest=manifest, output_dir=tmp_path / "queue", root=tmp_path)
+
+    assert payload["summary"]["candidate_count"] == 1
+    assert payload["summary"]["issue_payload_ready_count"] == 1
 
 
 def test_queue_carries_rotation_and_no_candidate_reason(tmp_path: Path) -> None:

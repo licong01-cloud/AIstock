@@ -295,6 +295,24 @@ targets:
   - Review Multi-Alpha Diagnostics state
   - Validate Multi-Alpha Diagnostics primary workflow
   coverage_status: planned
+- route_id: qe.multi_alpha_orthogonality
+  href: /quantevolver/multi-alpha/orthogonality
+  label: Multi-Alpha Orthogonality
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_archive_backend
+  business_operations:
+  - Open Multi-Alpha Orthogonality
+  - Review prediction correlation matrix
+  - Review Top-K Jaccard matrix
+  coverage_status: planned
 - route_id: qe.multi_alpha_evolve
   href: /quantevolver/multi-alpha/evolve-wizard
   label: Multi-Alpha Evolution

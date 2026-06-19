@@ -15,6 +15,32 @@ from backend.services.research_assistant.runtime_config import DEFAULT_RUNTIME_C
 from backend.services.research_assistant.service import ResearchAssistantService
 
 
+
+
+class FakeIssueFactSource:
+    def issue_candidates(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {
+            "items": [
+                {
+                    "candidate_id": "VC-PROACTIVE-1",
+                    "title": "Validation candidate evidence",
+                    "status": "new",
+                    "source_type": "nightly_bug_candidate",
+                    "source_path": "tmp/validation/nightly_failure_issue/VC-PROACTIVE-1.json",
+                    "source_paths": ["tmp/validation/nightly_failure_issue/VC-PROACTIVE-1.json"],
+                }
+            ],
+            "total": 1,
+            "page": 1,
+            "page_size": 5,
+            "has_more": False,
+        }
+
+    def issue_candidate_summary(self) -> dict[str, Any]:
+        return {"candidate_count": 1}
+
+
 class SpyRepository(InMemoryResearchAssistantRepository):
     def __init__(self) -> None:
         super().__init__()
@@ -128,21 +154,8 @@ def test_proactive_report_degrades_missing_provider_evidence_with_reason_and_war
     assert "proactive_report_no_evidence" in report["sections_json"]["reason_codes"]
 
 
-def test_default_registry_collects_real_repository_issue_and_data_health_sources() -> None:
+def test_default_registry_collects_validation_fact_source_issue_and_data_health_sources() -> None:
     repo = InMemoryResearchAssistantRepository()
-    repo.create_record(
-        "issue_candidates",
-        {
-            "candidate_id": "issue_phase9",
-            "title": "Phase 9 issue evidence",
-            "severity": "P1",
-            "module": "research_assistant",
-            "status": "needs_review",
-            "problem_statement": "issue_candidates should feed proactive reports",
-            "dedupe_key": "phase9-issue",
-            "evidence_refs": ["issue://phase9"],
-        },
-    )
     repo.create_record(
         "external_events",
         {
@@ -156,7 +169,7 @@ def test_default_registry_collects_real_repository_issue_and_data_health_sources
     )
 
     report = generate_proactive_report(
-        context=ProactiveReportContext(repository=repo, report_date=date(2026, 6, 16)),
+        context=ProactiveReportContext(repository=repo, report_date=date(2026, 6, 16), issue_fact_source=FakeIssueFactSource()),
         registry=build_default_proactive_report_registry(),
         report_id_factory=lambda prefix: f"{prefix}_real_registry",
     )
@@ -165,7 +178,8 @@ def test_default_registry_collects_real_repository_issue_and_data_health_sources
     data_health_section = _section_by_key(report, "data_health")
     assert issue_section["status"] == "ok"
     assert issue_section["source_refs"]
-    assert issue_section["items"][0]["source_refs"] == ["assistant_issue_candidates:issue_phase9"]
+    assert issue_section["items"][0]["source_refs"][0] == "validation_issue_candidates:VC-PROACTIVE-1"
+    assert all(not ref.startswith("assistant_issue_candidates:") for ref in issue_section["source_refs"])
     assert "issues_provider_failed" not in report["sections_json"]["reason_codes"]
     assert data_health_section["status"] == "ok"
     assert data_health_section["source_refs"]

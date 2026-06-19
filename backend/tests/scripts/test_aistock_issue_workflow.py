@@ -3185,7 +3185,7 @@ def test_parse_git_porcelain_path_handles_stripped_modified_line() -> None:
     )
 
 
-def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
+def test_merge_uses_cleanup_owned_branch_deletion(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3208,12 +3208,7 @@ def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
-            return {
-                "ok": False,
-                "returncode": 1,
-                "stdout": "",
-                "stderr": "fatal: 'main' is already used by worktree at 'F:/Dev/AIstock'",
-            }
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
@@ -3229,16 +3224,13 @@ def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
 
     payload = workflow._merge_pr_if_ready_for_bug("BUG-199", "https://github.example/pull/199")
 
-    assert payload["recovered_from_local_merge_error"] is True
+    assert payload["merge_result"]["ok"] is True
     assert payload["verified"]["merged"] is True
-    assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
-    events = (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "events.jsonl").read_text(
-        encoding="utf-8"
-    )
-    assert "merge_remote_verified_after_local_error" in events
+    merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
+    assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
 
 
-def test_generic_merge_helper_recovers_when_remote_merge_succeeds_after_local_error(
+def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[list[str]] = []
@@ -3260,12 +3252,7 @@ def test_generic_merge_helper_recovers_when_remote_merge_succeeds_after_local_er
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
-            return {
-                "ok": False,
-                "returncode": 1,
-                "stdout": "",
-                "stderr": "fatal: 'main' is already used by worktree at 'F:/Dev/AIstock'",
-            }
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
@@ -3281,9 +3268,10 @@ def test_generic_merge_helper_recovers_when_remote_merge_succeeds_after_local_er
 
     payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
 
-    assert payload["recovered_from_local_merge_error"] is True
+    assert payload["merge_result"]["ok"] is True
     assert payload["verified"]["merged"] is True
-    assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+    merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
+    assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
@@ -6865,6 +6853,46 @@ def test_postmortem_prefers_prior_phase_evidence_after_cleanup_state(
     assert payload["artifact_fallback"]["reason"] == "prior_postmortem_has_more_phase_evidence_than_cleanup_state"
     assert payload["timing_summary"]["event_count"] == 5
     assert payload["timing_summary"]["known_duration_seconds"] == 42.0
+
+
+def test_postmortem_uses_embedded_pre_cleanup_timing_after_cleanup_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_dir = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        workflow_dir / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "complete",
+            "worktree": str(isolated_workflow_root),
+            "pre_cleanup_postmortem": {
+                "artifact_policy": "compact_success_no_artifact",
+                "timing_summary": {
+                    "event_count": 6,
+                    "known_duration_seconds": 51.0,
+                    "phases": {"validation_passed": {"event_count": 1, "known_duration_seconds": 9.0}},
+                },
+                "h6_summary": {"token_usage_status": "unknown"},
+            },
+        },
+    )
+    events_path = workflow_dir / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps({"timestamp": "2026-06-04T18:00:00Z", "event": "state:complete", "state": "complete"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root), output_markdown=False)
+
+    assert payload["workflow_gate"] == "artifact_fallback"
+    assert payload["artifact_fallback"]["reason"] == "pre_cleanup_postmortem_embedded_in_cleanup_state"
+    assert payload["timing_summary"]["event_count"] == 6
+    assert payload["timing_summary"]["known_duration_seconds"] == 51.0
 
 
 def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(

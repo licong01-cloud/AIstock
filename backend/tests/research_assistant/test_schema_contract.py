@@ -89,7 +89,8 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
     assert "Memory Ledger" in sql
-    assert "formal GitHub issue creation requires explicit approval and sync" in sql
+    assert "Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement" in sql
+    assert "Formal submission must use AIstock issue workflow / Validation MCP" in sql
     assert "CONSTRAINT ck_rat_status" in sql
     assert "CONSTRAINT ck_rmi_approval" in sql
     assert "CONSTRAINT ck_aar_status" in sql
@@ -351,7 +352,7 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
     _assert_columns(
         table_columns,
         "issue_candidates",
-        {"candidate_id": "issuecand_x", "status": "needs_review", "dedupe_key": "dedupe", "github_sync_status": "not_requested", "github_sync_json": {}, "title": "Bug", "severity": "P1", "module": "research_assistant", "problem_statement": "problem", "reproduce_command": None, "evidence_refs": [], "proposed_by": "assistant"},
+        {"candidate_id": "issuecand_x", "status": "draft", "dedupe_key": "dedupe", "github_sync_status": "standard_workflow_required", "github_sync_json": {}, "title": "Bug", "severity": "P1", "module": "research_assistant", "problem_statement": "problem", "reproduce_command": None, "evidence_refs": [], "proposed_by": "assistant"},
     )
     _assert_columns(
         table_columns,
