@@ -433,6 +433,108 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
     assert any(event["type"] == "resource_gate_abort" for event in events)
 
 
+def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    factors = [
+        {"factor_name": "factor_a", "code_text": "result = 1"},
+        {"factor_name": "factor_b", "code_text": "result = 1"},
+        {"factor_name": "factor_c", "code_text": "result = 1"},
+    ]
+
+    class _Eligibility:
+        def list_eligible_factors(self, **kwargs):
+            return factors
+
+    class _Universe:
+        def metadata(self, **kwargs):
+            return {"universe_key": "official", "index_policy": "st_pit_buy_eligible_reindexed_v1"}
+
+        def build_eligible_index(self, **kwargs):
+            return _base_df().index
+
+    class _BaseCache:
+        def manifest(self):
+            return {"base_data_cache_policy": "load_once_readonly"}
+
+    service = OfficialFactorBatchComputeService()
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _Universe()
+    service._load_factor_ids = lambda: {}
+    service._resolve_qlib_bin_path = lambda qlib_bin_path: None
+    service._record_error_meta = lambda *args, **kwargs: None
+    service._write_single_atomic = lambda name, df: tmp_path / f"{name}.parquet"
+    service._update_meta_atomic = lambda *args, **kwargs: None
+    service._result_drain_chunk_size = lambda: 1
+
+    live_frames: list[str] = []
+    max_live_frames = 0
+    metric_calls: list[str] = []
+
+    def _compute_batch_frames(executor, batch, **kwargs):
+        return {
+            item["factor_name"]: FactorExecutionResult(
+                factor_name=item["factor_name"],
+                success=True,
+                dataframe=_base_df()[["close"]].rename(columns={"close": "value"}),
+            )
+            for item in batch
+        }
+
+    original_drain = service._drain_success_frames
+
+    def _tracked_drain(frames, *args, **kwargs):
+        nonlocal max_live_frames
+        live_frames.extend(name for name, _df in frames)
+        max_live_frames = max(max_live_frames, len(frames))
+        try:
+            return original_drain(frames, *args, **kwargs)
+        finally:
+            live_frames.clear()
+
+    def _metrics(name, df, ctx):
+        metric_calls.append(name)
+        assert len(live_frames) == 1
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    class _MetricWriter:
+        def _save_metrics(self, *args, **kwargs):
+            return {"inserted": 1, "skipped": 0, "errors": []}
+
+        def _save_monthly_ic(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc.BacktestBaseDataMemoryCache, "load_once", lambda *args, **kwargs: _BaseCache())
+    monkeypatch.setattr(
+        svc,
+        "_resource_snapshot",
+        lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
+    )
+    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    monkeypatch.setattr(engine, "compute_single_factor_metrics", _metrics)
+    service._compute_batch_frames = _compute_batch_frames
+    service._drain_success_frames = _tracked_drain
+    service._metric_writer = lambda: _MetricWriter()
+
+    result = service.compute({
+        "factor_names": [item["factor_name"] for item in factors],
+        "factor_data_dir": str(tmp_path),
+        "start_date": "2018-08-01",
+        "end_date": "2026-04-30",
+        "batch_size": 3,
+        "workers": 1,
+        "timeout_per_factor": 1800,
+        "expected_factor_count": 3,
+    })
+
+    assert result["success"] is True
+    assert result["success_count"] == 3
+    assert metric_calls == ["factor_a", "factor_b", "factor_c"]
+    assert max_live_frames == 1
+
+
 def _raise_empty_once_then_fail(fake_queue):
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
 
