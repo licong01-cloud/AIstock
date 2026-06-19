@@ -1,0 +1,623 @@
+[
+  {
+    "name": "factor_list_cache",
+    "url": "http://127.0.0.1:3000/quantevolver",
+    "status": 200,
+    "title": "复合多AI智能体股票团队分析系统",
+    "text_sample": "📈 多AI智能体股票分析\n\n基于 DeepSeek 的专业量化投资系统\n\n▶\nQuantEvolver\n▶\nRD-Agent管理\n▶\n自动化流水线\n▶\n系统与数据\n▶\n🔍 功能导航\n▶\n🎯 选股板块\n▶\n📊 策略分析\n▶\n💼 投资管理\n▶\n📈 QMT模拟盘交易\n▶\n🧪 Paper Trading v2\nQuantEvolver\n\n多Agent组合演进系统 — 因子分析 · 模型评估 · 策略组合 · 配置生成\n\n📊\n778\n因子总数\n🧠\n66\n模型总数\n🎯\n10\n策略总数\n🏷️\n780\n已分类因子\n🧪\n933\n实验总数\n快捷操作\n🔧 创建新组合\n📊 批量分析因子\n🔄 同步Alpha因子\n🧪 查看实验\n⚡ 因子代码改造\n🗑️ 因子删除候选\n工作流程\n1 浏览因子库\n→\n2 选择模型\n→\n3 选择策略\n→\n4 组合配置\n→\n5 生成QLib配置\n→\n6 WSL执行回测\n→\n7 查看结果",
+    "contains": {
+      "factor_values_path": false,
+      "window_2018_2026": false,
+      "offline_cache_text": false,
+      "realtime_text": false,
+      "full_575": false
+    }
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "requestfailed",
+    "url": "http://127.0.0.1:3000/quantevolver?_rsc=19u4z",
+    "failure": "net::ERR_ABORTED"
+  },
+  {
+    "type": "console_error",
+    "message": "Failed to fetch RSC payload for http://127.0.0.1:3000/quantevolver. Falling back to browser navigation. TypeError: Failed to fetch\n    at fetchServerResponse (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/router-reducer/fetch-server-response.js:57:27)\n    at fastRefreshReducerImpl (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/router-reducer/reducers/fast-refresh-reducer.js:33:67)\n    at clientReducer (webpack-internal:///"
+  },
+  {
+    "type": "console_error",
+    "message": "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  },
+  {
+    "type": "pageerror",
+    "message": "Module not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/c"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-languages/create-language-async-loader.js:2:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/async-languages/hljs.js\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/Pai"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/asyncToGenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/classCallCheck'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:4:1\nModule not found: Can't resolve '@babel/runtime/helpers/createClass'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:5:1\nModule not found: Can't resolve '@babel/runtime/helpers/possibleConstructorReturn'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:6:1\nModule not found: Can't resolve '@babel/runtime/helpers/getPrototypeOf'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:7:1\nModule not found: Can't resolve '@babel/runtime/helpers/inherits'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:8:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/async-syntax-highlighter.js:9:1\nModule not found: Can't resolve '@babel/runtime/regenerator'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/light-async.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/extends'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/create-element.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:1:1\nModule not found: Can't resolve '@babel/runtime/helpers/objectWithoutProperties'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:2:1\nModule not found: Can't resolve '@babel/runtime/helpers/toConsumableArray'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "type": "console_error",
+    "message": "./node_modules/react-syntax-highlighter/dist/esm/highlight.js:3:1\nModule not found: Can't resolve '@babel/runtime/helpers/defineProperty'\n\nhttps://nextjs.org/docs/messages/module-not-found\n\nImport trace for requested module:\n./node_modules/react-syntax-highlighter/dist/esm/default-highlight.js\n./node_modules/react-syntax-highlighter/dist/esm/index.js\n./src/app/quantevolver/factor-correlation/components/PairDetail.tsx\n./src/app/quantevolver/factor-correlation/page.tsx"
+  },
+  {
+    "name": "factor_correlation",
+    "url": "http://127.0.0.1:3000/quantevolver/factor-correlation",
+    "status": 500,
+    "title": "",
+    "text_sample": "",
+    "contains": {
+      "factor_values_path": false,
+      "window_2018_2026": false,
+      "offline_cache_text": false,
+      "realtime_text": false,
+      "full_575": false
+    }
+  }
+]
