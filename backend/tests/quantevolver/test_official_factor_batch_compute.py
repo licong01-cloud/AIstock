@@ -71,6 +71,42 @@ result = base[['close']].rename(columns={'close': 'value'})
     assert result.dataframe.index.names[:2] == ["datetime", "instrument"]
 
 
+def test_offline_code_text_executor_supports_static_factor_existence_checks(monkeypatch, tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    static_df = _base_df().rename(columns={"close": "bb_pe_dyn"})
+    (data_dir / "static_factors.parquet").write_bytes(b"fixture")
+
+    cache = BacktestBaseDataMemoryCache.load_once(
+        data_dir,
+        "2018-08-01",
+        "2018-08-02",
+        parquet_reader=lambda *args, **kwargs: static_df,
+    )
+
+    def _fail_runtime_parquet_read(*args, **kwargs):
+        raise AssertionError("runtime parquet reads must be redirected to BacktestBaseDataMemoryCache")
+
+    monkeypatch.setattr(pd, "read_parquet", _fail_runtime_parquet_read)
+    code_text = """
+import os
+from os.path import isfile
+import pandas as pd
+if not os.path.exists('static_factors.parquet'):
+    raise ValueError('static_factors.parquet not found')
+if not isfile('nested/static_factors.parquet'):
+    raise ValueError('static_factors.parquet should be visible as loaded base data')
+static_df = pd.read_parquet('static_factors.parquet', columns=['bb_pe_dyn'])
+result = static_df.rename(columns={'bb_pe_dyn': 'value'})
+"""
+
+    result = OfflineCodeTextFactorExecutor(cache).compute_factor("factor_static", code_text)
+
+    assert result.success is True
+    assert list(result.dataframe.columns) == ["value"]
+    assert result.dataframe["value"].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
 def test_offline_code_text_executor_captures_result_h5_without_pytables(monkeypatch, tmp_path):
     data_dir = tmp_path / "factor_data"
     data_dir.mkdir()

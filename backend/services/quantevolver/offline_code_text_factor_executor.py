@@ -48,6 +48,7 @@ class OfflineCodeTextFactorExecutor:
         with tempfile.TemporaryDirectory(prefix=f"official_factor_{factor_name}_") as tmpdir:
             factor_py = Path(tmpdir) / "factor.py"
             factor_py.write_text(code_text, encoding="utf-8")
+            self._materialize_base_data_existence_markers(Path(tmpdir))
             try:
                 with _factor_output_dir(tmpdir):
                     ns = self._run_factor_file(factor_py)
@@ -86,11 +87,16 @@ class OfflineCodeTextFactorExecutor:
 
     def _run_factor_file(self, factor_py: Path) -> dict[str, Any]:
         panda_proxy = self._build_pandas_proxy()
+        os_proxy = self._build_os_proxy()
         real_import = _builtins.__import__
 
         def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name == "pandas" or name.startswith("pandas."):
                 return panda_proxy
+            if name == "os":
+                return os_proxy
+            if name == "os.path":
+                return os_proxy.path if fromlist else os_proxy
             return real_import(name, globals, locals, fromlist, level)
 
         _ensure_hdf_redirect_patch()
@@ -106,6 +112,14 @@ class OfflineCodeTextFactorExecutor:
         code = factor_py.read_text(encoding="utf-8")
         exec(compile(code, str(factor_py), "exec"), namespace)
         return namespace
+
+    def _materialize_base_data_existence_markers(self, work_dir: Path) -> None:
+        """Expose loaded base-data names for legacy relative existence checks only."""
+        for name in self.base_cache.entries:
+            marker = work_dir / name
+            if marker.exists():
+                continue
+            marker.touch()
 
     def _build_pandas_proxy(self):
         original_read_hdf = pd.read_hdf
@@ -129,6 +143,37 @@ class OfflineCodeTextFactorExecutor:
         proxy.__dict__.update(pd.__dict__)
         proxy.read_hdf = read_hdf
         proxy.read_parquet = read_parquet
+        return proxy
+
+    def _build_os_proxy(self):
+        loaded_base_data_names = set(self.base_cache.entries)
+        original_exists = os.path.exists
+        original_isfile = os.path.isfile
+
+        def is_loaded_base_data_path(path: object) -> bool:
+            try:
+                return Path(os.fspath(path)).name in loaded_base_data_names
+            except TypeError:
+                return False
+
+        def exists(path):
+            if is_loaded_base_data_path(path):
+                return True
+            return original_exists(path)
+
+        def isfile(path):
+            if is_loaded_base_data_path(path):
+                return True
+            return original_isfile(path)
+
+        path_proxy = types.ModuleType(os.path.__name__)
+        path_proxy.__dict__.update(os.path.__dict__)
+        path_proxy.exists = exists
+        path_proxy.isfile = isfile
+
+        proxy = types.ModuleType("os")
+        proxy.__dict__.update(os.__dict__)
+        proxy.path = path_proxy
         return proxy
 
     def _collect_result(self, factor_name: str, ns: dict[str, Any], work_dir: Path) -> pd.DataFrame:
