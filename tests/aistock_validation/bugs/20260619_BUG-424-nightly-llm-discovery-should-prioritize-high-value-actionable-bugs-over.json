@@ -2,7 +2,11 @@
   "actual": "Nightly run 27790281005 invoked DeepSeek V4 Pro with CodeGraph/Understand Anything context, but active discovery produced 34 candidates dominated by historical validation history production-gate quality debt and zero issue payload drafts. Improve the nightly LLM/discovery pipeline so it suppresses or separates historical P2/P3 quality-debt noise, prioritizes recent actionable runtime/CI/workflow defects, and can emit high-quality issue payload drafts in warning-only mode without root pollution or BUG JSON writes.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260619_BUG-424-nightly-llm-discovery-should-prioritize-high-value-actionable-bugs-over.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/nightly_bug_candidate_queue.py",
+    "scripts/nightly_discovery_plans.py",
+    "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_nightly_discovery_plans.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-424",
@@ -41,7 +45,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_center_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -96,5 +101,16 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
+  "scope_expansion_rationale": [
+    {
+      "reason": "Initial submit-bug inferred only registry files; BUG-424 requires changing the workflow-owned nightly discovery candidate quality gate and tests.",
+      "paths": [
+        "scripts/nightly_bug_candidate_queue.py",
+        "scripts/nightly_discovery_plans.py",
+        "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+        "backend/tests/scripts/test_nightly_discovery_plans.py"
+      ]
+    }
+  ]
 }
