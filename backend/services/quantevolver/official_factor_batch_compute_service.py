@@ -44,6 +44,7 @@ DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 1024
 DEFAULT_RESOURCE_POLL_SEC = 5.0
 DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER = 5
 DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
+DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 1
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
 
@@ -273,10 +274,10 @@ class OfficialFactorBatchComputeService:
                 batch_id=batch_id,
                 swap_baseline_mb=resource_at_start.swap_mb,
             )
-            batch_frames: dict[str, pd.DataFrame] = {}
-            batch_meta: dict[str, dict[str, Any]] = {}
-            written_paths: list[Path] = []
+            pending_written_paths: list[Path] = []
             batch_resource_failure: ResourceGateDecision | None = None
+            pending_success_frames: list[tuple[str, pd.DataFrame]] = []
+            pending_success_meta: dict[str, dict[str, Any]] = {}
             try:
                 batch_resource_failure_recorded = False
                 for row in batch:
@@ -333,9 +334,8 @@ class OfficialFactorBatchComputeService:
                     }
                     meta_entry.update(universe_meta)
                     parquet_path = self._write_single_atomic(name, df)
-                    written_paths.append(parquet_path)
-                    batch_frames[name] = df
-                    batch_meta[name] = meta_entry
+                    pending_written_paths.append(parquet_path)
+                    pending_success_meta[name] = meta_entry
                     self._emit(
                         "factor_done",
                         task_id=task_id,
@@ -345,10 +345,39 @@ class OfficialFactorBatchComputeService:
                         nan_rate=round(nan_rate, 6),
                         elapsed_sec=exec_result.elapsed_sec,
                     )
+                    pending_success_frames.append((name, df))
+                    exec_result.dataframe = None
+                    if len(pending_success_frames) >= self._result_drain_chunk_size():
+                        self._update_meta_atomic(
+                            pending_success_meta,
+                            data_start=start_date,
+                            data_end=end_date,
+                            factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
+                            qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
+                            universe_meta=universe_meta,
+                            base_cache_manifest=base_cache.manifest(),
+                        )
+                        pending_written_paths.clear()
+                        success_delta = self._drain_success_frames(
+                            pending_success_frames,
+                            results,
+                            db_result=db_result,
+                            metrics_error=metrics_error,
+                            metrics_ctx=metrics_ctx,
+                            compute_single_factor_metrics=compute_single_factor_metrics,
+                            calc_batch_id=calc_batch_id,
+                            end_date=end_date,
+                            factor_ids=factor_ids,
+                            batch_id=batch_id,
+                        )
+                        success_count += success_delta
+                        pending_success_frames.clear()
+                        pending_success_meta.clear()
+                        gc.collect()
 
-                if batch_meta:
+                if pending_success_meta:
                     self._update_meta_atomic(
-                        batch_meta,
+                        pending_success_meta,
                         data_start=start_date,
                         data_end=end_date,
                         factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
@@ -356,8 +385,10 @@ class OfficialFactorBatchComputeService:
                         universe_meta=universe_meta,
                         base_cache_manifest=base_cache.manifest(),
                     )
+                    pending_written_paths.clear()
+                    pending_success_meta.clear()
             except Exception:
-                for path in written_paths:
+                for path in pending_written_paths:
                     try:
                         path.unlink(missing_ok=True)
                     except OSError as unlink_exc:
@@ -370,51 +401,20 @@ class OfficialFactorBatchComputeService:
                         )
                 raise
 
-            for name, df in batch_frames.items():
-                if metrics_error or metrics_ctx is None or compute_single_factor_metrics is None:
-                    db_result["errors"].append(f"{name}: {metrics_error or 'metrics context missing'}")
-                    db_result["save_failures"].append(name)
-                    continue
-                try:
-                    metric_result = compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
-                    metrics_by_window = metric_result.get("metrics", {}) if isinstance(metric_result, dict) else {}
-                    flat_metrics = []
-                    for window_name, window_metrics in metrics_by_window.items():
-                        rec = dict(window_metrics)
-                        rec["factor_name"] = name
-                        rec["eval_window"] = window_name
-                        flat_metrics.append(rec)
-                    if flat_metrics:
-                        save_result = self._metric_writer()._save_metrics(
-                            {"metrics": flat_metrics, "calc_batch_id": calc_batch_id},
-                            snapshot_date=end_date,
-                            factor_ids=factor_ids,
-                        )
-                        db_result["inserted"] += int(save_result.get("inserted") or 0)
-                        db_result["skipped"] += int(save_result.get("skipped") or 0)
-                        if save_result.get("errors"):
-                            db_result["errors"].extend(save_result["errors"])
-                        full_metrics = metrics_by_window.get("full", {})
-                        monthly_series = full_metrics.get("monthly_ic_series")
-                        if monthly_series:
-                            self._metric_writer()._save_monthly_ic(name, end_date, monthly_series)
-                    else:
-                        db_result["errors"].append(f"{name}: metrics_empty")
-                except Exception as exc:
-                    db_result["errors"].append(f"{name}: {type(exc).__name__}: {exc}")
-                    db_result["save_failures"].append(name)
-
-            for name, df in list(batch_frames.items()):
-                success_count += 1
-                results.append({
-                    "name": name,
-                    "success": True,
-                    "rows": int(len(df)),
-                    "nan_rate": round(float(df.iloc[:, 0].isna().mean()) if len(df) else 0.0, 6),
-                    "batch_id": batch_id,
-                    "error": None,
-                })
-            batch_frames.clear()
+            if pending_success_frames:
+                success_count += self._drain_success_frames(
+                    pending_success_frames,
+                    results,
+                    db_result=db_result,
+                    metrics_error=metrics_error,
+                    metrics_ctx=metrics_ctx,
+                    compute_single_factor_metrics=compute_single_factor_metrics,
+                    calc_batch_id=calc_batch_id,
+                    end_date=end_date,
+                    factor_ids=factor_ids,
+                    batch_id=batch_id,
+                )
+                pending_success_frames.clear()
             FactorValueLoader.invalidate_single_cache()
             gc.collect()
             resource_after_release = _resource_snapshot()
@@ -564,6 +564,69 @@ class OfficialFactorBatchComputeService:
         if available_mb < min_available_mb * DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER:
             return min(requested, 2)
         return requested
+
+    def _result_drain_chunk_size(self) -> int:
+        return max(1, _env_int("AISTOCK_OFFICIAL_FACTOR_RESULT_DRAIN_CHUNK_SIZE", DEFAULT_RESULT_DRAIN_CHUNK_SIZE))
+
+    def _drain_success_frames(
+        self,
+        frames: list[tuple[str, pd.DataFrame]],
+        results: list[dict[str, Any]],
+        *,
+        db_result: dict[str, Any],
+        metrics_error: str | None,
+        metrics_ctx: Any,
+        compute_single_factor_metrics: Any,
+        calc_batch_id: str,
+        end_date: str,
+        factor_ids: dict[str, int],
+        batch_id: str,
+    ) -> int:
+        success_delta = 0
+        for name, df in list(frames):
+            if metrics_error or metrics_ctx is None or compute_single_factor_metrics is None:
+                db_result["errors"].append(f"{name}: {metrics_error or 'metrics context missing'}")
+                db_result["save_failures"].append(name)
+            else:
+                try:
+                    metric_result = compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
+                    metrics_by_window = metric_result.get("metrics", {}) if isinstance(metric_result, dict) else {}
+                    flat_metrics = []
+                    for window_name, window_metrics in metrics_by_window.items():
+                        rec = dict(window_metrics)
+                        rec["factor_name"] = name
+                        rec["eval_window"] = window_name
+                        flat_metrics.append(rec)
+                    if flat_metrics:
+                        save_result = self._metric_writer()._save_metrics(
+                            {"metrics": flat_metrics, "calc_batch_id": calc_batch_id},
+                            snapshot_date=end_date,
+                            factor_ids=factor_ids,
+                        )
+                        db_result["inserted"] += int(save_result.get("inserted") or 0)
+                        db_result["skipped"] += int(save_result.get("skipped") or 0)
+                        if save_result.get("errors"):
+                            db_result["errors"].extend(save_result["errors"])
+                        full_metrics = metrics_by_window.get("full", {})
+                        monthly_series = full_metrics.get("monthly_ic_series")
+                        if monthly_series:
+                            self._metric_writer()._save_monthly_ic(name, end_date, monthly_series)
+                    else:
+                        db_result["errors"].append(f"{name}: metrics_empty")
+                except Exception as exc:
+                    db_result["errors"].append(f"{name}: {type(exc).__name__}: {exc}")
+                    db_result["save_failures"].append(name)
+
+            results.append({
+                "name": name,
+                "success": True,
+                "rows": int(len(df)),
+                "nan_rate": round(float(df.iloc[:, 0].isna().mean()) if len(df) else 0.0, 6),
+                "batch_id": batch_id,
+                "error": None,
+            })
+            success_delta += 1
+        return success_delta
 
     def _compute_batch_frames(
         self,
