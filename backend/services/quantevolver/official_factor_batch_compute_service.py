@@ -4,11 +4,13 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import multiprocessing
 import os
+import queue
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -21,6 +23,7 @@ from .backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_universe_mask_service import OFFICIAL_FACTOR_UNIVERSE_KEY, FactorUniverseMaskService
 from .factor_value_loader import FactorValueLoader
+from .offline_code_text_factor_executor import FactorExecutionResult
 from .offline_code_text_factor_executor import OfflineCodeTextFactorExecutor
 from .wsl_runtime_guard import assert_wsl_runtime
 
@@ -34,6 +37,51 @@ OFFICIAL_CACHE_SCHEMA_VERSION = "official_factor_cache_v2"
 OFFICIAL_CACHE_SOURCE_SYSTEM = "official_offline_backtest_factor_data"
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_METRIC_WORKERS = 2
+DEFAULT_SOFT_RSS_MB = 48 * 1024
+DEFAULT_HARD_RSS_MB = 55 * 1024
+DEFAULT_MIN_AVAILABLE_MB = 8 * 1024
+DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 1024
+DEFAULT_RESOURCE_POLL_SEC = 5.0
+RESOURCE_GATE_FAILED = "memory_gate_failed"
+FACTOR_TIMEOUT = "factor_timeout"
+
+
+@dataclass(frozen=True)
+class ResourceSnapshot:
+    rss_mb: float
+    uss_mb: float | None
+    swap_mb: float
+    available_mb: float | None
+    pss_mb: float | None = None
+    process_count: int = 1
+    rss_raw_mb: float | None = None
+
+
+@dataclass(frozen=True)
+class FactorResourceLimits:
+    soft_rss_mb: int = DEFAULT_SOFT_RSS_MB
+    hard_rss_mb: int = DEFAULT_HARD_RSS_MB
+    min_available_mb: int = DEFAULT_MIN_AVAILABLE_MB
+    swap_growth_hard_stop_mb: int = DEFAULT_SWAP_GROWTH_HARD_STOP_MB
+
+    @classmethod
+    def from_env(cls) -> "FactorResourceLimits":
+        return cls(
+            soft_rss_mb=_env_int("AISTOCK_OFFICIAL_FACTOR_SOFT_RSS_MB", DEFAULT_SOFT_RSS_MB),
+            hard_rss_mb=_env_int("AISTOCK_OFFICIAL_FACTOR_HARD_RSS_MB", DEFAULT_HARD_RSS_MB),
+            min_available_mb=_env_int("AISTOCK_OFFICIAL_FACTOR_MIN_AVAILABLE_MB", DEFAULT_MIN_AVAILABLE_MB),
+            swap_growth_hard_stop_mb=_env_int(
+                "AISTOCK_OFFICIAL_FACTOR_SWAP_GROWTH_HARD_STOP_MB",
+                DEFAULT_SWAP_GROWTH_HARD_STOP_MB,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ResourceGateDecision:
+    ok: bool
+    reason: str | None
+    detail: dict[str, Any]
 
 
 @dataclass
@@ -61,6 +109,7 @@ class OfficialFactorBatchComputeService:
         self._universe_service = FactorUniverseMaskService()
         self._event_emitter = event_emitter
         self._active_meta_context: dict[str, Any] | None = None
+        self._resource_limits = FactorResourceLimits.from_env()
 
     def compute(self, config: BatchComputeConfig | dict[str, Any]) -> dict[str, Any]:
         cfg = self._coerce_config(config)
@@ -92,11 +141,18 @@ class OfficialFactorBatchComputeService:
                 "skipped_factors": skipped,
             }
 
+        resource_at_start = _resource_snapshot()
         base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date)
+        resource_after_base = _resource_snapshot()
         self._emit(
             "base_cache_loaded",
             task_id=task_id,
-            rss_mb=_rss_mb(),
+            rss_mb=resource_after_base.rss_mb,
+            pss_mb=resource_after_base.pss_mb,
+            uss_mb=resource_after_base.uss_mb,
+            swap_mb=resource_after_base.swap_mb,
+            available_mb=resource_after_base.available_mb,
+            resource_limits=asdict(self._resource_limits),
             base_cache=base_cache.manifest(),
         )
 
@@ -149,16 +205,32 @@ class OfficialFactorBatchComputeService:
         fail_count = 0
         batches = list(_chunks(eligible, max(1, int(cfg.batch_size or DEFAULT_BATCH_SIZE))))
         memory_samples: list[dict[str, Any]] = []
+        resource_failures: list[dict[str, Any]] = []
 
         for batch_index, batch in enumerate(batches, start=1):
             batch_id = f"{task_id}_b{batch_index:04d}"
-            rss_before_batch = _rss_mb()
+            before_decision = self._check_resource_gate(
+                "before_batch",
+                swap_baseline_mb=resource_at_start.swap_mb,
+                task_id=task_id,
+                batch_id=batch_id,
+                batch_index=batch_index,
+            )
+            if not before_decision.ok:
+                resource_failures.append(before_decision.detail)
+                remaining = [item for group in batches[batch_index - 1:] for item in group]
+                self._append_resource_failure_results(remaining, results, before_decision)
+                fail_count += len(remaining)
+                break
+            resource_before_batch = _resource_snapshot()
             memory_samples.append({
                 "event": "batch_started",
                 "batch_id": batch_id,
                 "batch_index": batch_index,
                 "factor_count": len(batch),
-                "rss_mb": rss_before_batch,
+                "rss_mb": resource_before_batch.rss_mb,
+                "swap_mb": resource_before_batch.swap_mb,
+                "available_mb": resource_before_batch.available_mb,
             })
             self._emit(
                 "batch_started",
@@ -167,9 +239,19 @@ class OfficialFactorBatchComputeService:
                 batch_index=batch_index,
                 batch_count=len(batches),
                 factor_count=len(batch),
-                rss_mb=rss_before_batch,
+                rss_mb=resource_before_batch.rss_mb,
+                swap_mb=resource_before_batch.swap_mb,
+                available_mb=resource_before_batch.available_mb,
             )
-            batch_exec = self._compute_batch_frames(executor, batch, workers=cfg.workers)
+            batch_exec = self._compute_batch_frames(
+                executor,
+                batch,
+                workers=cfg.workers,
+                timeout_per_factor=cfg.timeout_per_factor,
+                task_id=task_id,
+                batch_id=batch_id,
+                swap_baseline_mb=resource_at_start.swap_mb,
+            )
             batch_frames: dict[str, pd.DataFrame] = {}
             batch_meta: dict[str, dict[str, Any]] = {}
             written_paths: list[Path] = []
@@ -293,22 +375,39 @@ class OfficialFactorBatchComputeService:
             batch_frames.clear()
             FactorValueLoader.invalidate_single_cache()
             gc.collect()
-            rss_after_release = _rss_mb()
+            resource_after_release = _resource_snapshot()
             single_cache_entries = len(getattr(FactorValueLoader, "_single_cache", {}))
             memory_samples.append({
                 "event": "batch_released",
                 "batch_id": batch_id,
                 "batch_index": batch_index,
-                "rss_mb": rss_after_release,
+                "rss_mb": resource_after_release.rss_mb,
+                "swap_mb": resource_after_release.swap_mb,
+                "available_mb": resource_after_release.available_mb,
                 "single_cache_entries": single_cache_entries,
             })
             self._emit(
                 "batch_released",
                 task_id=task_id,
                 batch_id=batch_id,
-                rss_mb=rss_after_release,
+                rss_mb=resource_after_release.rss_mb,
+                swap_mb=resource_after_release.swap_mb,
+                available_mb=resource_after_release.available_mb,
                 single_cache_entries=single_cache_entries,
             )
+            after_decision = self._check_resource_gate(
+                "after_batch",
+                swap_baseline_mb=resource_at_start.swap_mb,
+                task_id=task_id,
+                batch_id=batch_id,
+                batch_index=batch_index,
+            )
+            if not after_decision.ok:
+                resource_failures.append(after_decision.detail)
+                remaining = [item for group in batches[batch_index:] for item in group]
+                self._append_resource_failure_results(remaining, results, after_decision)
+                fail_count += len(remaining)
+                break
 
         if metrics_ctx is not None:
             del metrics_ctx
@@ -339,6 +438,7 @@ class OfficialFactorBatchComputeService:
             metrics_error=metrics_error,
             batch_count=len(batches),
             memory_samples=memory_samples,
+            resource_failures=resource_failures,
             universe_meta=universe_meta,
             start_date=start_date,
             end_date=end_date,
@@ -403,8 +503,24 @@ class OfficialFactorBatchComputeService:
         batch: list[dict[str, Any]],
         *,
         workers: int,
+        timeout_per_factor: int = 1800,
+        task_id: str | None = None,
+        batch_id: str | None = None,
+        swap_baseline_mb: float | None = None,
     ) -> dict[str, Any]:
         max_workers = max(1, min(int(workers or 1), len(batch) or 1))
+        timeout_sec = max(1, int(timeout_per_factor or 1800))
+        baseline_mb = _resource_snapshot().swap_mb if swap_baseline_mb is None else swap_baseline_mb
+        if os.name != "nt" and "fork" in multiprocessing.get_all_start_methods():
+            return self._compute_batch_frames_with_process_timeouts(
+                executor,
+                batch,
+                max_workers=max_workers,
+                timeout_sec=timeout_sec,
+                task_id=task_id,
+                batch_id=batch_id,
+                swap_baseline_mb=baseline_mb,
+            )
         if max_workers <= 1:
             return executor.compute_batch(batch)
 
@@ -432,6 +548,269 @@ class OfficialFactorBatchComputeService:
                         error_type=type(exc).__name__,
                     )
         return results
+
+    def _compute_batch_frames_with_process_timeouts(
+        self,
+        executor: OfflineCodeTextFactorExecutor,
+        batch: list[dict[str, Any]],
+        *,
+        max_workers: int,
+        timeout_sec: int,
+        task_id: str | None,
+        batch_id: str | None,
+        swap_baseline_mb: float,
+    ) -> dict[str, FactorExecutionResult]:
+        ctx = multiprocessing.get_context("fork")
+        result_queue = ctx.Queue()
+        pending = list(batch)
+        running: dict[str, dict[str, Any]] = {}
+        results: dict[str, FactorExecutionResult] = {}
+        last_resource_gate_check = 0.0
+
+        try:
+            while pending or running:
+                while pending and len(running) < max_workers:
+                    item = pending.pop(0)
+                    name = str(item.get("factor_name") or "").strip() or "<missing>"
+                    code_text = str(item.get("code_text") or "")
+                    if not code_text.strip():
+                        results[name] = FactorExecutionResult(
+                            factor_name=name,
+                            success=False,
+                            error="missing_code_text",
+                            error_type="missing_code_text",
+                        )
+                        continue
+                    proc = ctx.Process(
+                        target=_factor_process_worker,
+                        args=(result_queue, executor, name, code_text),
+                        name=f"official-factor-{name[:32]}",
+                    )
+                    proc.start()
+                    running[name] = {
+                        "process": proc,
+                        "started": time.monotonic(),
+                        "pid": proc.pid,
+                    }
+                    self._emit(
+                        "factor_started",
+                        task_id=task_id,
+                        batch_id=batch_id,
+                        factor_name=name,
+                        pid=proc.pid,
+                        timeout_sec=timeout_sec,
+                    )
+
+                self._drain_factor_results(result_queue, running, results)
+                now = time.monotonic()
+                for name, state in list(running.items()):
+                    proc = state["process"]
+                    elapsed = now - float(state["started"])
+                    if not proc.is_alive():
+                        proc.join(timeout=0.1)
+                        self._drain_factor_results(result_queue, running, results)
+                        if name not in results:
+                            results[name] = FactorExecutionResult(
+                                factor_name=name,
+                                success=False,
+                                elapsed_sec=round(elapsed, 3),
+                                error="factor process exited without returning a result",
+                                error_type="factor_process_no_result",
+                            )
+                        running.pop(name, None)
+                        continue
+                    if elapsed <= timeout_sec:
+                        continue
+                    self._terminate_factor_process(proc)
+                    if proc.is_alive():
+                        proc.join(timeout=5)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=5)
+                    results[name] = FactorExecutionResult(
+                        factor_name=name,
+                        success=False,
+                        elapsed_sec=round(elapsed, 3),
+                        error=f"factor execution exceeded timeout_per_factor={timeout_sec}s",
+                        error_type=FACTOR_TIMEOUT,
+                    )
+                    self._emit(
+                        "factor_timeout",
+                        task_id=task_id,
+                        batch_id=batch_id,
+                        factor_name=name,
+                        pid=state.get("pid"),
+                        elapsed_sec=round(elapsed, 3),
+                        timeout_sec=timeout_sec,
+                    )
+                    running.pop(name, None)
+
+                if running and now - last_resource_gate_check >= DEFAULT_RESOURCE_POLL_SEC:
+                    last_resource_gate_check = now
+                    gate = self._check_resource_gate(
+                        "during_batch",
+                        swap_baseline_mb=swap_baseline_mb,
+                        task_id=task_id or "official_factor_batch",
+                        batch_id=batch_id,
+                        extra_pids=[state["pid"] for state in running.values() if state.get("pid")],
+                    )
+                    if not gate.ok:
+                        self._terminate_running_factors(running)
+                        now = time.monotonic()
+                        for name, state in list(running.items()):
+                            elapsed = now - float(state.get("started") or now)
+                            results[name] = self._resource_failure_result(name, gate, elapsed_sec=elapsed)
+                        running.clear()
+                        for item in pending:
+                            name = str(item.get("factor_name") or "").strip() or "<missing>"
+                            results[name] = self._resource_failure_result(name, gate)
+                        pending.clear()
+                        break
+
+                if pending or running:
+                    time.sleep(0.2)
+
+            self._drain_factor_results(result_queue, running, results)
+        finally:
+            self._terminate_running_factors(running)
+            try:
+                result_queue.close()
+                result_queue.join_thread()
+            except Exception:
+                pass
+        return results
+
+    def _drain_factor_results(
+        self,
+        result_queue: multiprocessing.Queue,
+        running: dict[str, dict[str, Any]],
+        results: dict[str, FactorExecutionResult],
+    ) -> None:
+        while True:
+            try:
+                name, result = result_queue.get_nowait()
+            except (queue.Empty, EOFError, OSError, ValueError):
+                return
+            if name not in results:
+                if isinstance(result, FactorExecutionResult):
+                    results[name] = result
+                else:
+                    results[name] = FactorExecutionResult(
+                        factor_name=name,
+                        success=False,
+                        error=f"unexpected factor worker result type: {type(result).__name__}",
+                        error_type="factor_worker_result_invalid",
+                    )
+            state = running.pop(name, None)
+            if state is not None:
+                proc = state["process"]
+                proc.join(timeout=1)
+
+    def _terminate_running_factors(self, running: dict[str, dict[str, Any]]) -> None:
+        for state in list(running.values()):
+            proc = state.get("process")
+            if proc is None:
+                continue
+            try:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=5)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=5)
+            except Exception:
+                continue
+
+    def _terminate_factor_process(self, proc: multiprocessing.Process) -> None:
+        try:
+            import signal
+
+            os.kill(int(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def _resource_failure_result(
+        self,
+        factor_name: str,
+        decision: ResourceGateDecision,
+        *,
+        elapsed_sec: float = 0.0,
+    ) -> FactorExecutionResult:
+        reason = decision.reason or RESOURCE_GATE_FAILED
+        return FactorExecutionResult(
+            factor_name=factor_name,
+            success=False,
+            elapsed_sec=round(elapsed_sec, 3),
+            error=f"{RESOURCE_GATE_FAILED}: {reason}",
+            error_type=RESOURCE_GATE_FAILED,
+        )
+
+    def _check_resource_gate(
+        self,
+        phase: str,
+        *,
+        swap_baseline_mb: float,
+        task_id: str,
+        batch_id: str | None = None,
+        batch_index: int | None = None,
+        extra_pids: Iterable[int] | None = None,
+    ) -> ResourceGateDecision:
+        snapshot = _resource_snapshot(extra_pids=extra_pids)
+        limits = getattr(self, "_resource_limits", FactorResourceLimits())
+        swap_growth_mb = max(0.0, snapshot.swap_mb - swap_baseline_mb)
+        detail = {
+            "phase": phase,
+            "task_id": task_id,
+            "batch_id": batch_id,
+            "batch_index": batch_index,
+            "rss_mb": snapshot.rss_mb,
+            "uss_mb": snapshot.uss_mb,
+            "swap_mb": snapshot.swap_mb,
+            "swap_growth_mb": round(swap_growth_mb, 2),
+            "available_mb": snapshot.available_mb,
+            "pss_mb": snapshot.pss_mb,
+            "process_count": snapshot.process_count,
+            "rss_raw_mb": snapshot.rss_raw_mb,
+            "limits": asdict(limits),
+        }
+        memory_for_gate_mb = snapshot.pss_mb or snapshot.uss_mb or snapshot.rss_mb
+        reason: str | None = None
+        if memory_for_gate_mb >= limits.hard_rss_mb:
+            reason = "hard_rss_limit_exceeded"
+        elif snapshot.available_mb is not None and snapshot.available_mb < limits.min_available_mb:
+            reason = "available_memory_below_minimum"
+        elif swap_growth_mb >= limits.swap_growth_hard_stop_mb:
+            reason = "swap_growth_hard_stop_exceeded"
+
+        if reason:
+            detail["reason"] = reason
+            self._emit("resource_gate_failed", **detail)
+            return ResourceGateDecision(False, reason, detail)
+
+        if memory_for_gate_mb >= limits.soft_rss_mb:
+            warning = dict(detail)
+            warning["reason"] = "soft_rss_limit_exceeded"
+            self._emit("resource_gate_warning", **warning)
+        return ResourceGateDecision(True, None, detail)
+
+    def _append_resource_failure_results(
+        self,
+        factors: list[dict[str, Any]],
+        results: list[dict[str, Any]],
+        decision: ResourceGateDecision,
+    ) -> None:
+        reason = decision.reason or RESOURCE_GATE_FAILED
+        for item in factors:
+            results.append({
+                "name": str(item.get("factor_name") or "").strip() or "<missing>",
+                "success": False,
+                "error": f"{RESOURCE_GATE_FAILED}: {reason}",
+                "error_type": RESOURCE_GATE_FAILED,
+                "resource_gate": decision.detail,
+            })
 
     def _resolve_qlib_bin_path(self, qlib_bin_path: str | None) -> Path | None:
         candidates = [qlib_bin_path, os.getenv("QLIB_BIN_PATH"), str(REPO_ROOT / "qlib_bin" / "qlib_bin_20260311")]
@@ -535,6 +914,7 @@ class OfficialFactorBatchComputeService:
         metrics_error: str | None,
         batch_count: int,
         memory_samples: list[dict[str, Any]],
+        resource_failures: list[dict[str, Any]],
         universe_meta: dict[str, Any],
         start_date: str,
         end_date: str,
@@ -563,6 +943,9 @@ class OfficialFactorBatchComputeService:
             "metrics_context_ok": metrics_error is None,
             "metrics_write_ok": not db_result.get("save_failures"),
             "batch_release_observed": any(item.get("event") == "batch_released" for item in memory_samples),
+            "timeout_gate_available": cfg.timeout_per_factor > 0,
+            "resource_gate_available": True,
+            "resource_gate_ok": not resource_failures,
             "single_cache_released": all(
                 int(item.get("single_cache_entries", 0) or 0) == 0
                 for item in memory_samples
@@ -592,6 +975,9 @@ class OfficialFactorBatchComputeService:
             "failed_factor_count": fail_count,
             "skipped_factor_count": len(skipped),
             "batch_count": batch_count,
+            "timeout_per_factor_sec": cfg.timeout_per_factor,
+            "resource_limits": asdict(getattr(self, "_resource_limits", FactorResourceLimits())),
+            "resource_failures": resource_failures[-12:],
             "checks": checks,
             "failure_summary": failure_summary,
             "failed_factors": [
@@ -615,8 +1001,9 @@ class OfficialFactorBatchComputeService:
 
     def _emit(self, event_type: str, **payload: Any) -> None:
         event = {"type": event_type, "ts": datetime.now(timezone.utc).isoformat(), **payload}
-        if self._event_emitter is not None:
-            self._event_emitter(event)
+        emitter = getattr(self, "_event_emitter", None)
+        if emitter is not None:
+            emitter(event)
 
 
 def _normalize_date(value: str) -> str:
@@ -649,6 +1036,155 @@ def _resolve_validation_mode(
 
 def _code_hash(code_text: str) -> str:
     return hashlib.sha256(code_text.encode("utf-8")).hexdigest()[:16]
+
+
+def _factor_process_worker(
+    result_queue: multiprocessing.Queue,
+    executor: OfflineCodeTextFactorExecutor,
+    factor_name: str,
+    code_text: str,
+) -> None:
+    try:
+        result = executor.compute_factor(factor_name, code_text)
+    except Exception as exc:
+        result = FactorExecutionResult(
+            factor_name=factor_name,
+            success=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type=type(exc).__name__,
+        )
+    try:
+        result_queue.put((factor_name, result))
+    except Exception:
+        # The parent process will classify a missing queue result as no-result.
+        pass
+
+
+def _resource_snapshot(extra_pids: Iterable[int] | None = None, *, fast: bool = False) -> ResourceSnapshot:
+    pids = [os.getpid(), *[int(pid) for pid in (extra_pids or []) if int(pid) > 0]]
+    total_rss = 0.0
+    total_uss = 0.0
+    total_swap = 0.0
+    total_pss = 0.0
+    saw_uss = False
+    saw_pss = False
+    process_count = 0
+    for pid in dict.fromkeys(pids):
+        snap = _process_memory_snapshot(pid, fast=fast)
+        if snap is None:
+            continue
+        process_count += 1
+        total_rss += snap.rss_mb
+        total_swap += snap.swap_mb
+        if snap.uss_mb is not None:
+            saw_uss = True
+            total_uss += snap.uss_mb
+        if snap.pss_mb is not None:
+            saw_pss = True
+            total_pss += snap.pss_mb
+    available_mb = _available_memory_mb()
+    return ResourceSnapshot(
+        rss_mb=round(total_pss if saw_pss else total_rss, 2),
+        uss_mb=round(total_uss, 2) if saw_uss else None,
+        swap_mb=round(total_swap, 2),
+        available_mb=available_mb,
+        pss_mb=round(total_pss, 2) if saw_pss else None,
+        process_count=max(1, process_count),
+        rss_raw_mb=round(total_rss, 2),
+    )
+
+
+def _process_memory_snapshot(pid: int, *, fast: bool = False) -> ResourceSnapshot | None:
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        rss_mb = proc.memory_info().rss / 1024 / 1024
+        full = None
+        if not fast:
+            try:
+                full = proc.memory_full_info()
+            except Exception:
+                full = None
+        uss_mb = getattr(full, "uss", None)
+        swap_mb = getattr(full, "swap", None)
+        pss_mb = getattr(full, "pss", None)
+        return ResourceSnapshot(
+            rss_mb=round(rss_mb, 2),
+            uss_mb=round(uss_mb / 1024 / 1024, 2) if uss_mb is not None else None,
+            swap_mb=round(swap_mb / 1024 / 1024, 2) if swap_mb is not None else _proc_status_mb(pid, "VmSwap"),
+            available_mb=None,
+            pss_mb=round(pss_mb / 1024 / 1024, 2) if pss_mb is not None else None,
+            process_count=1,
+            rss_raw_mb=round(rss_mb, 2),
+        )
+    except Exception:
+        if pid != os.getpid() and not Path(f"/proc/{pid}/status").exists():
+            return None
+        rss_mb = _proc_status_mb(pid, "VmRSS")
+        if rss_mb <= 0 and pid != os.getpid():
+            return None
+        return ResourceSnapshot(
+            rss_mb=rss_mb,
+            uss_mb=None,
+            swap_mb=_proc_status_mb(pid, "VmSwap"),
+            available_mb=None,
+            pss_mb=_proc_smaps_rollup_mb(pid, "Pss"),
+            process_count=1,
+            rss_raw_mb=rss_mb,
+        )
+
+
+def _proc_status_mb(pid: int, field: str) -> float:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if not line.startswith(f"{field}:"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                return round(float(parts[1]) / 1024, 2)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _proc_smaps_rollup_mb(pid: int, field: str) -> float | None:
+    try:
+        for line in Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if not line.startswith(f"{field}:"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                return round(float(parts[1]) / 1024, 2)
+    except Exception:
+        return None
+    return None
+
+
+def _available_memory_mb() -> float | None:
+    try:
+        import psutil
+
+        return round(psutil.virtual_memory().available / 1024 / 1024, 2)
+    except Exception:
+        pass
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("MemAvailable:"):
+                return round(float(line.split()[1]) / 1024, 2)
+    except Exception:
+        return None
+    return None
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return int(default)
 
 
 def _rss_mb() -> float:

@@ -7,6 +7,7 @@ import pandas as pd
 
 from backend.services.quantevolver.factor_value_loader import FactorValueLoader
 from backend.services.quantevolver.official_factor_batch_compute_service import BatchComputeConfig
+from backend.services.quantevolver.official_factor_batch_compute_service import RESOURCE_GATE_FAILED
 from backend.services.quantevolver.official_factor_batch_compute_service import OfficialFactorBatchComputeService
 from backend.services.quantevolver.correlation_compute_service import _build_correlation_runtime_validation
 
@@ -32,7 +33,8 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
         db_result={"inserted": 4, "skipped": 0, "errors": [], "save_failures": []},
         metrics_error=None,
         batch_count=1,
-        memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0}],
+        memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0, "swap_mb": 0.0}],
+        resource_failures=[],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
         end_date="2026-04-30",
@@ -42,6 +44,9 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
     assert report["mode"] == "smoke_2"
     assert report["gate_status"] == "passed"
     assert report["checks"]["single_cache_released"] is True
+    assert report["checks"]["timeout_gate_available"] is True
+    assert report["checks"]["resource_gate_ok"] is True
+    assert report["timeout_per_factor_sec"] == 1800
     assert report["next_gates"]["correlation_full"] == "run_correlation_compute_wsl_against_same_official_cache"
 
 
@@ -70,6 +75,7 @@ def test_official_factor_runtime_validation_classifies_failures() -> None:
         metrics_error=None,
         batch_count=1,
         memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0}],
+        resource_failures=[],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
         end_date="2026-04-30",
@@ -78,6 +84,55 @@ def test_official_factor_runtime_validation_classifies_failures() -> None:
     assert report["gate_status"] == "failed"
     assert report["failure_summary"] == {"schema_invalid": 1}
     assert report["failed_factors"][0]["name"] == "factor_bad"
+
+
+def test_official_factor_runtime_validation_reports_resource_gate_failure() -> None:
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    cfg = BatchComputeConfig(
+        factor_names=["factor_a"],
+        factor_data_dir="/mnt/f/factor_data",
+        start_date="2018-08-01",
+        end_date="2026-04-30",
+        timeout_per_factor=60,
+    )
+    resource_failure = {
+        "phase": "during_batch",
+        "reason": "swap_growth_hard_stop_exceeded",
+        "rss_mb": 1024.0,
+        "swap_growth_mb": 1200.0,
+    }
+
+    report = service._build_runtime_validation_report(
+        cfg=cfg,
+        task_id="task-resource-failed",
+        requested=["factor_a"],
+        eligible_names=["factor_a"],
+        skipped=[],
+        results=[
+            {
+                "name": "factor_a",
+                "success": False,
+                "error_type": RESOURCE_GATE_FAILED,
+                "error": "memory_gate_failed: swap_growth_hard_stop_exceeded",
+            }
+        ],
+        success_count=0,
+        fail_count=1,
+        db_result={"inserted": 0, "skipped": 0, "errors": [], "save_failures": []},
+        metrics_error=None,
+        batch_count=1,
+        memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 1024.0, "swap_mb": 1200.0}],
+        resource_failures=[resource_failure],
+        universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
+        start_date="2018-08-01",
+        end_date="2026-04-30",
+    )
+
+    assert report["gate_status"] == "failed"
+    assert report["checks"]["resource_gate_ok"] is False
+    assert report["failure_summary"] == {RESOURCE_GATE_FAILED: 1}
+    assert report["resource_failures"] == [resource_failure]
+    assert report["timeout_per_factor_sec"] == 60
 
 
 def test_factor_value_loader_validates_qe_subwindow_official_cache_hit(tmp_path: Path) -> None:

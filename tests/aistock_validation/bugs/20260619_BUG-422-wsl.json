@@ -1,0 +1,108 @@
+{
+  "actual": "全量官方因子独立指标计算在 WSL batch b0010 停在 2026-06-19 05:31:23 后无新日志，进程运行超过 76 分钟仍未触发 payload timeout_per_factor=1800；同时 /proc 显示 VmSwap≈3.9GB，违反官方离线因子计算设计中的 timeout、RSS/swap hard gate 和失败分类要求。需要实现可审计的 per-factor/batch timeout、swap/memory 门禁和结构化失败返回，避免 UI/WSL 全量任务卡死或继续占用 swap。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
+    "tests/aistock_validation/bugs/20260619_BUG-422-wsl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/qe/20260619_bug422_official_factor_timeout_memory_gate.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-422",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T22:01:29.092912Z",
+  "description": "全量官方因子独立指标计算在 WSL batch b0010 停在 2026-06-19 05:31:23 后无新日志，进程运行超过 76 分钟仍未触发 payload timeout_per_factor=1800；同时 /proc 显示 VmSwap≈3.9GB，违反官方离线因子计算设计中的 timeout、RSS/swap hard gate 和失败分类要求。需要实现可审计的 per-factor/batch timeout、swap/memory 门禁和结构化失败返回，避免 UI/WSL 全量任务卡死或继续占用 swap。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-9d81cb371e52",
+      "timestamp": "2026-06-18T22:01:29.092912Z"
+    },
+    {
+      "action": "expand_allowed_scope",
+      "actor": "codex",
+      "note": "Runtime evidence shows the fix must touch the official WSL batch compute service and its tests: timeout_per_factor is parsed but not enforced, and memory/swap gates are not implemented in official_factor_batch_compute_service.py.",
+      "timestamp": "2026-06-18T22:03:30Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "官方 WSL 全量因子计算必须执行 timeout_per_factor、进程 RSS/swap hard gate 和结构化失败分类；长耗时因子必须输出 factor_started/factor_done 或 timeout 事件，不允许 batch 长时间无新日志且继续占用 swap。",
+  "first_seen_at": "2026-06-18T22:01:29.092912Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1285,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1285",
+  "last_seen_at": "2026-06-18T22:01:29.092912Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "wsl run_official_factor_full_compute_wsl.py full payload with timeout_per_factor=1800; observe batch b0010 stuck after 2026-06-19 05:31:23, no timeout event, /proc/<pid>/status VmSwap≈3.9GB",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方全量因子计算未执行超时和内存门禁导致 WSL 长时间卡死",
+  "trigger_condition": {
+    "fingerprint": "9d81cb371e5296dd69632642",
+    "source_event_id": "FE-20260619-9d81cb371e52"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/proc",
+    "ui_routes": [
+      "/proc"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

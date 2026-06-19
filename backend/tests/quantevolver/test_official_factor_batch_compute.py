@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
 import pandas as pd
+import pytest
 
 from backend.services.quantevolver.backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 from backend.services.quantevolver import offline_code_text_factor_executor as executor_mod
 from backend.services.quantevolver.offline_code_text_factor_executor import FactorExecutionResult
 from backend.services.quantevolver.offline_code_text_factor_executor import OfflineCodeTextFactorExecutor
+from backend.services.quantevolver.official_factor_batch_compute_service import FACTOR_TIMEOUT
+from backend.services.quantevolver.official_factor_batch_compute_service import RESOURCE_GATE_FAILED
+from backend.services.quantevolver.official_factor_batch_compute_service import FactorResourceLimits
 from backend.services.quantevolver.official_factor_batch_compute_service import OfficialFactorBatchComputeService
+from backend.services.quantevolver.official_factor_batch_compute_service import ResourceSnapshot
 
 
 def _base_df():
@@ -127,7 +133,7 @@ out.to_hdf('result.h5', key='data', mode='w')
         },
     ]
 
-    result = service._compute_batch_frames(executor, batch, workers=2)
+    result = service._compute_batch_frames(executor, batch, workers=2, timeout_per_factor=1800)
 
     assert result["factor_a"].success is True
     assert result["factor_b"].success is True
@@ -135,7 +141,10 @@ out.to_hdf('result.h5', key='data', mode='w')
     assert result["factor_b"].dataframe["value"].tolist() == [100.0, 200.0, 300.0, 400.0]
 
 
-def test_batch_compute_uses_worker_threads_for_factor_values(tmp_path):
+def test_batch_compute_uses_worker_threads_for_factor_values(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    monkeypatch.setattr(svc.multiprocessing, "get_all_start_methods", lambda: [])
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
     calls: list[str] = []
     started = threading.Event()
@@ -156,11 +165,104 @@ def test_batch_compute_uses_worker_threads_for_factor_values(tmp_path):
         {"factor_name": "factor_c", "code_text": "c"},
     ]
 
-    result = service._compute_batch_frames(_Executor(), batch, workers=3)
+    result = service._compute_batch_frames(_Executor(), batch, workers=3, timeout_per_factor=1800)
 
     assert started.is_set()
     assert sorted(result) == ["factor_a", "factor_b", "factor_c"]
     assert sorted(calls) == ["factor_a", "factor_b", "factor_c"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fork based timeout is WSL/Linux only")
+def test_batch_compute_enforces_per_factor_timeout(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    df = _base_df()
+    df.to_hdf(data_dir / "daily_pv.h5", key="data")
+    cache = BacktestBaseDataMemoryCache.load_once(data_dir, "2018-08-01", "2018-08-02")
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = None
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=10**9,
+        hard_rss_mb=10**9,
+        min_available_mb=0,
+        swap_growth_hard_stop_mb=10**9,
+    )
+    batch = [
+        {
+            "factor_name": "factor_slow",
+            "code_text": """
+import time
+time.sleep(5)
+result = None
+""",
+        }
+    ]
+
+    result = service._compute_batch_frames(
+        OfflineCodeTextFactorExecutor(cache),
+        batch,
+        workers=1,
+        timeout_per_factor=1,
+        task_id="task-timeout",
+        batch_id="batch-timeout",
+    )
+
+    assert result["factor_slow"].success is False
+    assert result["factor_slow"].error_type == FACTOR_TIMEOUT
+    assert result["factor_slow"].elapsed_sec < 4
+
+
+def test_resource_gate_fails_on_swap_growth_and_emits_event(monkeypatch):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    events: list[dict[str, object]] = []
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = events.append
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=1000,
+        hard_rss_mb=2000,
+        min_available_mb=100,
+        swap_growth_hard_stop_mb=10,
+    )
+    monkeypatch.setattr(
+        svc,
+        "_resource_snapshot",
+        lambda extra_pids=None, fast=False: ResourceSnapshot(
+            rss_mb=100.0,
+            uss_mb=80.0,
+            swap_mb=25.0,
+            available_mb=1000.0,
+            pss_mb=90.0,
+        ),
+    )
+
+    decision = service._check_resource_gate("during_batch", swap_baseline_mb=0.0, task_id="task", batch_id="batch")
+
+    assert decision.ok is False
+    assert decision.reason == "swap_growth_hard_stop_exceeded"
+    assert events[-1]["type"] == "resource_gate_failed"
+
+
+def test_resource_gate_failure_result_is_classified():
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    decision = type(
+        "_Decision",
+        (),
+        {"reason": "hard_rss_limit_exceeded", "detail": {"reason": "hard_rss_limit_exceeded"}},
+    )()
+    results: list[dict[str, object]] = []
+
+    service._append_resource_failure_results([{"factor_name": "factor_a"}], results, decision)
+
+    assert results == [
+        {
+            "name": "factor_a",
+            "success": False,
+            "error": f"{RESOURCE_GATE_FAILED}: hard_rss_limit_exceeded",
+            "error_type": RESOURCE_GATE_FAILED,
+            "resource_gate": {"reason": "hard_rss_limit_exceeded"},
+        }
+    ]
 
 
 def test_error_meta_update_does_not_blank_top_level_meta(monkeypatch, tmp_path):
