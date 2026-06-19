@@ -1,0 +1,76 @@
+{
+  "actual": "日志出现 resource_gate_failed 后不再输出 batch_released/failed/runtime_validation；父进程约 23 分钟保持 sleeping pipe_read，RSS 约 28GB，无子进程，需手工 kill。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "tests/aistock_validation/bugs/20260619_BUG-425-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-425",
+  "closed_at": null,
+  "closure_requirements": [
+    "资源门禁触发后父进程不得再阻塞在 worker result queue drain/join 路径。",
+    "批次启动前必须根据可用内存动态降低并发，避免 64GB WSL 环境下无谓触发 hard gate。",
+    "资源门禁失败必须进入 runtime_validation.resource_failures 和 failed factor 分类。",
+    "Run required verification plans and keep BUG JSON/GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T08:59:26.210992Z",
+  "description": "在 WSL 全量官方因子独立指标/因子值缓存验收中，2018-08-01~2026-04-30、575 个因子、batch_size=16、workers=4。第 4 批触发 resource_gate_failed(available_memory_below_minimum) 后，子进程已退出但父进程长期停在 pipe_read，不输出 failed/success 结果，必须手工 kill 才释放内存。该问题会阻塞全量因子缓存、相关性和 QE cache-hit 链路验收。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-9135078f772a",
+      "timestamp": "2026-06-19T08:59:26.210992Z"
+    }
+  ],
+  "evidence_uris": [
+    "debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug422.log"
+  ],
+  "expected": "资源门禁触发后应结构化终止当前批次/剩余因子或自动降并发重试，并在 timeout/resource gate 内返回 runtime_validation，不得挂死；全量链路应可在 64GB WSL 内存约束下继续完成或明确可恢复失败。",
+  "first_seen_at": "2026-06-19T08:59:26.210992Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1302,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1302",
+  "last_seen_at": "2026-06-19T08:59:26.210992Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "wsl.exe -e bash -lc 'cd /mnt/f/Dev/AIstock; ./debug_tools/qe/20260619_factor_cache_full_chain_validation/run_official_full_compute.sh'",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方因子全量计算触发资源门禁后主进程挂起且无法完成全量缓存",
+  "trigger_condition": {
+    "fingerprint": "9135078f772a00eafdd16213",
+    "source_event_id": "FE-20260619-9135078f772a"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -16,6 +16,7 @@ from backend.services.quantevolver.official_factor_batch_compute_service import 
 from backend.services.quantevolver.official_factor_batch_compute_service import RESOURCE_GATE_FAILED
 from backend.services.quantevolver.official_factor_batch_compute_service import FactorResourceLimits
 from backend.services.quantevolver.official_factor_batch_compute_service import OfficialFactorBatchComputeService
+from backend.services.quantevolver.official_factor_batch_compute_service import ResourceGateDecision
 from backend.services.quantevolver.official_factor_batch_compute_service import ResourceSnapshot
 
 
@@ -263,6 +264,101 @@ def test_resource_gate_failure_result_is_classified():
             "resource_gate": {"reason": "hard_rss_limit_exceeded"},
         }
     ]
+
+
+def test_resource_gate_failure_does_not_drain_killed_worker_queue(monkeypatch):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    fake_queue = type(
+        "_Queue",
+        (),
+        {
+            "get_count": 0,
+            "cancelled": False,
+            "closed": False,
+            "joined": False,
+            "get_nowait": lambda self: _raise_empty_once_then_fail(self),
+            "cancel_join_thread": lambda self: setattr(self, "cancelled", True),
+            "close": lambda self: setattr(self, "closed", True),
+            "join_thread": lambda self: setattr(self, "joined", True),
+        },
+    )()
+
+    class _Process:
+        pid = 12345
+
+        def __init__(self, *args, **kwargs):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+
+        def kill(self):
+            self.alive = False
+
+        def join(self, timeout=None):
+            return None
+
+    class _Context:
+        def Queue(self):
+            return fake_queue
+
+        Process = _Process
+
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = None
+    service._check_resource_gate = lambda *args, **kwargs: ResourceGateDecision(
+        False,
+        "available_memory_below_minimum",
+        {"reason": "available_memory_below_minimum"},
+    )
+    monkeypatch.setattr(svc.multiprocessing, "get_context", lambda method: _Context())
+
+    result = service._compute_batch_frames_with_process_timeouts(
+        object(),
+        [{"factor_name": "factor_a", "code_text": "result = 1"}],
+        max_workers=1,
+        timeout_sec=1800,
+        task_id="task-resource-gate",
+        batch_id="batch-resource-gate",
+        swap_baseline_mb=0.0,
+    )
+
+    assert result["factor_a"].success is False
+    assert result["factor_a"].error_type == RESOURCE_GATE_FAILED
+    assert fake_queue.get_count == 1
+    assert fake_queue.cancelled is True
+    assert fake_queue.closed is True
+    assert fake_queue.joined is True
+
+
+def test_select_batch_workers_throttles_when_available_memory_headroom_is_low():
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=10**9,
+        hard_rss_mb=10**9,
+        min_available_mb=8192,
+        swap_growth_hard_stop_mb=10**9,
+    )
+
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 40000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 27000, 90)) == 2
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 15000, 90)) == 1
+
+
+def _raise_empty_once_then_fail(fake_queue):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    fake_queue.get_count += 1
+    if fake_queue.get_count == 1:
+        raise svc.queue.Empty()
+    raise AssertionError("resource gate failures must not drain killed worker queues")
 
 
 def test_error_meta_update_does_not_blank_top_level_meta(monkeypatch, tmp_path):
