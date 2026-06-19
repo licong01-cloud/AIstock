@@ -50,8 +50,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-19T18:01:17.189183Z",
   "fix_branch": null,
-  "fix_commit": "3bd3c573bd59f04f4b6fe39191a2e1361723ff2e",
-  "fixed_at": "2026-06-19T18:40:45.804355Z",
+  "fix_commit": "272181a1a6b29b98594758c7b7831f32530d8d49",
+  "fixed_at": "2026-06-19T18:44:34.086412Z",
   "github_issue_number": 1328,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1328",
   "last_seen_at": "2026-06-19T18:01:17.189183Z",
@@ -59,7 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1329",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1330",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -107,14 +107,7 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "py_compile executor and regression test -> passed",
-    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q -p no:cacheprovider -> 15 passed, 1 skipped",
-    "aistock_guardrail_scan --changed-only --fail-on-severity P1 -> findings=0 blocking=0",
-    "nox -s l0 -> passed",
-    "nox -s validation_module_registry_l0 -> passed",
-    "nox -s qe_read_l3 with QE_READ_L3_SKIP_UI=1 -> qe_read_l3 passed and qe_read_backend 14 passed",
-    "WSL failed12 official factor smoke -> success_count=12 fail_count=0 runtime_validation.gate_status=passed",
-    "GitHub PR #1329 checks -> passed=20 pending=0 failed=0"
+    "close-sync PR #1330 checks -> passed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
