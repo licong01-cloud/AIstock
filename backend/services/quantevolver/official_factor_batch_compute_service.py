@@ -47,6 +47,7 @@ DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
 DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 1
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
+FactorResultHandler = Callable[[str, FactorExecutionResult], None]
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class OfficialFactorBatchComputeService:
 
         resource_at_start = _resource_snapshot()
         base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date)
+        base_cache_manifest = base_cache.manifest()
         resource_after_base = _resource_snapshot()
         self._emit(
             "base_cache_loaded",
@@ -156,7 +158,7 @@ class OfficialFactorBatchComputeService:
             swap_mb=resource_after_base.swap_mb,
             available_mb=resource_after_base.available_mb,
             resource_limits=asdict(self._resource_limits),
-            base_cache=base_cache.manifest(),
+            base_cache=base_cache_manifest,
         )
 
         universe_meta = self._universe_service.metadata(
@@ -196,7 +198,7 @@ class OfficialFactorBatchComputeService:
             "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
             "qlib_bin_path": str(qlib_bin_path) if qlib_bin_path else None,
             "universe_meta": universe_meta,
-            "base_cache_manifest": base_cache.manifest(),
+            "base_cache_manifest": base_cache_manifest,
         }
 
         factor_ids = self._load_factor_ids()
@@ -265,128 +267,146 @@ class OfficialFactorBatchComputeService:
                 swap_mb=resource_before_batch.swap_mb,
                 available_mb=resource_before_batch.available_mb,
             )
-            batch_exec = self._compute_batch_frames(
-                executor,
-                batch,
-                workers=effective_workers,
-                timeout_per_factor=cfg.timeout_per_factor,
-                task_id=task_id,
-                batch_id=batch_id,
-                swap_baseline_mb=resource_at_start.swap_mb,
-            )
             pending_written_paths: list[Path] = []
             batch_resource_failure: ResourceGateDecision | None = None
             pending_success_frames: list[tuple[str, pd.DataFrame]] = []
             pending_success_meta: dict[str, dict[str, Any]] = {}
-            try:
-                batch_resource_failure_recorded = False
-                for row in batch:
-                    name = row["factor_name"]
-                    exec_result = batch_exec.get(name)
-                    if exec_result is None or not exec_result.success or exec_result.dataframe is None:
-                        fail_count += 1
-                        err = (exec_result.error if exec_result else "missing_execution_result") or "unknown"
-                        if (
-                            exec_result is not None
-                            and exec_result.error_type == RESOURCE_GATE_FAILED
-                            and not batch_resource_failure_recorded
-                        ):
-                            resource_failures.append({
-                                "phase": "during_batch",
-                                "task_id": task_id,
-                                "batch_id": batch_id,
-                                "batch_index": batch_index,
-                                "reason": err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
-                                "error_type": RESOURCE_GATE_FAILED,
-                            })
-                            batch_resource_failure = ResourceGateDecision(
-                                False,
-                                err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
-                                resource_failures[-1],
-                            )
-                            batch_resource_failure_recorded = True
-                        results.append({
-                            "name": name,
-                            "success": False,
-                            "error": err,
-                            "error_type": exec_result.error_type if exec_result else "missing_execution_result",
-                        })
-                        self._record_error_meta(name, row.get("code_text"), err)
-                        continue
-                    df = exec_result.dataframe.reindex(eligible_index)
-                    nan_rate = float(df.iloc[:, 0].isna().mean()) if len(df) else 0.0
-                    source_hash = _code_hash(str(row.get("code_text") or ""))
-                    meta_entry = {
-                        "status": "ok",
-                        "computed_at": datetime.now(timezone.utc).isoformat(),
-                        "rows": int(len(df)),
-                        "nan_rate": nan_rate,
-                        "date_range": f"{start_date}~{end_date}",
-                        "as_of_date": end_date,
-                        "code_hash": source_hash,
-                        "source_hash_raw": source_hash,
-                        "code_source": "code_text",
-                        "data_source_mode": "official_offline_backtest_factor_data",
-                        "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
-                        "window_train_start": start_date,
-                        "window_backtest_end": end_date,
-                        "batch_id": batch_id,
-                    }
-                    meta_entry.update(universe_meta)
-                    parquet_path = self._write_single_atomic(name, df)
-                    pending_written_paths.append(parquet_path)
-                    pending_success_meta[name] = meta_entry
-                    self._emit(
-                        "factor_done",
-                        task_id=task_id,
-                        batch_id=batch_id,
-                        factor_name=name,
-                        rows=int(len(df)),
-                        nan_rate=round(nan_rate, 6),
-                        elapsed_sec=exec_result.elapsed_sec,
-                    )
-                    pending_success_frames.append((name, df))
-                    exec_result.dataframe = None
-                    if len(pending_success_frames) >= self._result_drain_chunk_size():
-                        self._update_meta_atomic(
-                            pending_success_meta,
-                            data_start=start_date,
-                            data_end=end_date,
-                            factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
-                            qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
-                            universe_meta=universe_meta,
-                            base_cache_manifest=base_cache.manifest(),
-                        )
-                        pending_written_paths.clear()
-                        success_delta = self._drain_success_frames(
-                            pending_success_frames,
-                            results,
-                            db_result=db_result,
-                            metrics_error=metrics_error,
-                            metrics_ctx=metrics_ctx,
-                            compute_single_factor_metrics=compute_single_factor_metrics,
-                            calc_batch_id=calc_batch_id,
-                            end_date=end_date,
-                            factor_ids=factor_ids,
-                            batch_id=batch_id,
-                        )
-                        success_count += success_delta
-                        pending_success_frames.clear()
-                        pending_success_meta.clear()
-                        gc.collect()
+            batch_resource_failure_recorded = False
+            row_by_name = {str(row.get("factor_name") or "").strip(): row for row in batch}
+            handled_names: set[str] = set()
 
-                if pending_success_meta:
-                    self._update_meta_atomic(
-                        pending_success_meta,
-                        data_start=start_date,
-                        data_end=end_date,
-                        factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
-                        qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
-                        universe_meta=universe_meta,
-                        base_cache_manifest=base_cache.manifest(),
+            def _flush_success_frames() -> None:
+                nonlocal success_count
+                if not pending_success_frames:
+                    return
+                self._update_meta_atomic(
+                    pending_success_meta,
+                    data_start=start_date,
+                    data_end=end_date,
+                    factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
+                    qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
+                    universe_meta=universe_meta,
+                    base_cache_manifest=base_cache_manifest,
+                )
+                pending_written_paths.clear()
+                success_count += self._drain_success_frames(
+                    pending_success_frames,
+                    results,
+                    db_result=db_result,
+                    metrics_error=metrics_error,
+                    metrics_ctx=metrics_ctx,
+                    compute_single_factor_metrics=compute_single_factor_metrics,
+                    calc_batch_id=calc_batch_id,
+                    end_date=end_date,
+                    factor_ids=factor_ids,
+                    batch_id=batch_id,
+                )
+                pending_success_frames.clear()
+                pending_success_meta.clear()
+                gc.collect()
+
+            def _handle_exec_result(name: str, exec_result: FactorExecutionResult) -> None:
+                nonlocal fail_count, batch_resource_failure, batch_resource_failure_recorded
+                row = row_by_name.get(name)
+                handled_names.add(name)
+                if row is None:
+                    fail_count += 1
+                    results.append({
+                        "name": name,
+                        "success": False,
+                        "error": "unexpected_execution_result",
+                        "error_type": "unexpected_execution_result",
+                    })
+                    return
+                if not exec_result.success or exec_result.dataframe is None:
+                    fail_count += 1
+                    err = exec_result.error or "unknown"
+                    if exec_result.error_type == RESOURCE_GATE_FAILED and not batch_resource_failure_recorded:
+                        resource_failures.append({
+                            "phase": "during_batch",
+                            "task_id": task_id,
+                            "batch_id": batch_id,
+                            "batch_index": batch_index,
+                            "reason": err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
+                            "error_type": RESOURCE_GATE_FAILED,
+                        })
+                        batch_resource_failure = ResourceGateDecision(
+                            False,
+                            err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
+                            resource_failures[-1],
+                        )
+                        batch_resource_failure_recorded = True
+                    results.append({
+                        "name": name,
+                        "success": False,
+                        "error": err,
+                        "error_type": exec_result.error_type or "unknown",
+                    })
+                    self._record_error_meta(name, row.get("code_text"), err)
+                    return
+                df = exec_result.dataframe.reindex(eligible_index)
+                exec_result.dataframe = None
+                nan_rate = float(df.iloc[:, 0].isna().mean()) if len(df) else 0.0
+                source_hash = _code_hash(str(row.get("code_text") or ""))
+                meta_entry = {
+                    "status": "ok",
+                    "computed_at": datetime.now(timezone.utc).isoformat(),
+                    "rows": int(len(df)),
+                    "nan_rate": nan_rate,
+                    "date_range": f"{start_date}~{end_date}",
+                    "as_of_date": end_date,
+                    "code_hash": source_hash,
+                    "source_hash_raw": source_hash,
+                    "code_source": "code_text",
+                    "data_source_mode": "official_offline_backtest_factor_data",
+                    "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
+                    "window_train_start": start_date,
+                    "window_backtest_end": end_date,
+                    "batch_id": batch_id,
+                }
+                meta_entry.update(universe_meta)
+                parquet_path = self._write_single_atomic(name, df)
+                pending_written_paths.append(parquet_path)
+                pending_success_meta[name] = meta_entry
+                self._emit(
+                    "factor_done",
+                    task_id=task_id,
+                    batch_id=batch_id,
+                    factor_name=name,
+                    rows=int(len(df)),
+                    nan_rate=round(nan_rate, 6),
+                    elapsed_sec=exec_result.elapsed_sec,
+                )
+                pending_success_frames.append((name, df))
+                if len(pending_success_frames) >= self._result_drain_chunk_size():
+                    _flush_success_frames()
+
+            try:
+                batch_exec = self._compute_batch_frames(
+                    executor,
+                    batch,
+                    workers=effective_workers,
+                    timeout_per_factor=cfg.timeout_per_factor,
+                    task_id=task_id,
+                    batch_id=batch_id,
+                    swap_baseline_mb=resource_at_start.swap_mb,
+                    result_handler=_handle_exec_result,
+                )
+                for row in batch:
+                    name = str(row.get("factor_name") or "").strip()
+                    if name in handled_names:
+                        continue
+                    _handle_exec_result(
+                        name,
+                        batch_exec.get(name)
+                        or FactorExecutionResult(
+                            factor_name=name,
+                            success=False,
+                            error="missing_execution_result",
+                            error_type="missing_execution_result",
+                        ),
                     )
-                    pending_written_paths.clear()
-                    pending_success_meta.clear()
+                _flush_success_frames()
             except Exception:
                 for path in pending_written_paths:
                     try:
@@ -401,20 +421,6 @@ class OfficialFactorBatchComputeService:
                         )
                 raise
 
-            if pending_success_frames:
-                success_count += self._drain_success_frames(
-                    pending_success_frames,
-                    results,
-                    db_result=db_result,
-                    metrics_error=metrics_error,
-                    metrics_ctx=metrics_ctx,
-                    compute_single_factor_metrics=compute_single_factor_metrics,
-                    calc_batch_id=calc_batch_id,
-                    end_date=end_date,
-                    factor_ids=factor_ids,
-                    batch_id=batch_id,
-                )
-                pending_success_frames.clear()
             FactorValueLoader.invalidate_single_cache()
             gc.collect()
             resource_after_release = _resource_snapshot()
@@ -638,6 +644,7 @@ class OfficialFactorBatchComputeService:
         task_id: str | None = None,
         batch_id: str | None = None,
         swap_baseline_mb: float | None = None,
+        result_handler: FactorResultHandler | None = None,
     ) -> dict[str, Any]:
         max_workers = max(1, min(int(workers or 1), len(batch) or 1))
         timeout_sec = max(1, int(timeout_per_factor or 1800))
@@ -651,9 +658,15 @@ class OfficialFactorBatchComputeService:
                 task_id=task_id,
                 batch_id=batch_id,
                 swap_baseline_mb=baseline_mb,
+                result_handler=result_handler,
             )
         if max_workers <= 1:
-            return executor.compute_batch(batch)
+            results = executor.compute_batch(batch)
+            if result_handler is not None:
+                for name, result in list(results.items()):
+                    result_handler(name, result)
+                return {}
+            return results
 
         results: dict[str, Any] = {}
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="official-factor") as pool:
@@ -668,16 +681,20 @@ class OfficialFactorBatchComputeService:
             for future in as_completed(futures):
                 name = futures[future]
                 try:
-                    results[name] = future.result()
+                    result = future.result()
                 except Exception as exc:  # defensive; compute_factor normally captures errors
                     from .offline_code_text_factor_executor import FactorExecutionResult
 
-                    results[name] = FactorExecutionResult(
+                    result = FactorExecutionResult(
                         factor_name=name,
                         success=False,
                         error=f"{type(exc).__name__}: {exc}",
                         error_type=type(exc).__name__,
                     )
+                if result_handler is not None:
+                    result_handler(name, result)
+                else:
+                    results[name] = result
         return results
 
     def _compute_batch_frames_with_process_timeouts(
@@ -690,14 +707,25 @@ class OfficialFactorBatchComputeService:
         task_id: str | None,
         batch_id: str | None,
         swap_baseline_mb: float,
+        result_handler: FactorResultHandler | None = None,
     ) -> dict[str, FactorExecutionResult]:
         ctx = multiprocessing.get_context("fork")
         result_queue = ctx.Queue()
         pending = list(batch)
         running: dict[str, dict[str, Any]] = {}
         results: dict[str, FactorExecutionResult] = {}
+        completed_names: set[str] = set()
         last_resource_gate_check = 0.0
         queue_safe_to_drain = True
+
+        def _store_or_handle_result(name: str, result: FactorExecutionResult) -> None:
+            if name in completed_names:
+                return
+            if result_handler is not None:
+                result_handler(name, result)
+            else:
+                results[name] = result
+            completed_names.add(name)
 
         try:
             while pending or running:
@@ -706,12 +734,13 @@ class OfficialFactorBatchComputeService:
                     name = str(item.get("factor_name") or "").strip() or "<missing>"
                     code_text = str(item.get("code_text") or "")
                     if not code_text.strip():
-                        results[name] = FactorExecutionResult(
+                        result = FactorExecutionResult(
                             factor_name=name,
                             success=False,
                             error="missing_code_text",
                             error_type="missing_code_text",
                         )
+                        _store_or_handle_result(name, result)
                         continue
                     proc = ctx.Process(
                         target=_factor_process_worker,
@@ -733,22 +762,35 @@ class OfficialFactorBatchComputeService:
                         timeout_sec=timeout_sec,
                     )
 
-                self._drain_factor_results(result_queue, running, results)
+                self._drain_factor_results(
+                    result_queue,
+                    running,
+                    results,
+                    completed_names=completed_names,
+                    result_handler=result_handler,
+                )
                 now = time.monotonic()
                 for name, state in list(running.items()):
                     proc = state["process"]
                     elapsed = now - float(state["started"])
                     if not proc.is_alive():
                         proc.join(timeout=0.1)
-                        self._drain_factor_results(result_queue, running, results)
-                        if name not in results:
-                            results[name] = FactorExecutionResult(
+                        self._drain_factor_results(
+                            result_queue,
+                            running,
+                            results,
+                            completed_names=completed_names,
+                            result_handler=result_handler,
+                        )
+                        if name not in completed_names:
+                            result = FactorExecutionResult(
                                 factor_name=name,
                                 success=False,
                                 elapsed_sec=round(elapsed, 3),
                                 error="factor process exited without returning a result",
                                 error_type="factor_process_no_result",
                             )
+                            _store_or_handle_result(name, result)
                         running.pop(name, None)
                         continue
                     if elapsed <= timeout_sec:
@@ -759,13 +801,14 @@ class OfficialFactorBatchComputeService:
                     if proc.is_alive():
                         proc.kill()
                         proc.join(timeout=5)
-                    results[name] = FactorExecutionResult(
+                    result = FactorExecutionResult(
                         factor_name=name,
                         success=False,
                         elapsed_sec=round(elapsed, 3),
                         error=f"factor execution exceeded timeout_per_factor={timeout_sec}s",
                         error_type=FACTOR_TIMEOUT,
                     )
+                    _store_or_handle_result(name, result)
                     self._emit(
                         "factor_timeout",
                         task_id=task_id,
@@ -792,11 +835,13 @@ class OfficialFactorBatchComputeService:
                         now = time.monotonic()
                         for name, state in list(running.items()):
                             elapsed = now - float(state.get("started") or now)
-                            results[name] = self._resource_failure_result(name, gate, elapsed_sec=elapsed)
+                            result = self._resource_failure_result(name, gate, elapsed_sec=elapsed)
+                            _store_or_handle_result(name, result)
                         running.clear()
                         for item in pending:
                             name = str(item.get("factor_name") or "").strip() or "<missing>"
-                            results[name] = self._resource_failure_result(name, gate)
+                            result = self._resource_failure_result(name, gate)
+                            _store_or_handle_result(name, result)
                         pending.clear()
                         break
 
@@ -804,7 +849,13 @@ class OfficialFactorBatchComputeService:
                     time.sleep(0.2)
 
             if queue_safe_to_drain:
-                self._drain_factor_results(result_queue, running, results)
+                self._drain_factor_results(
+                    result_queue,
+                    running,
+                    results,
+                    completed_names=completed_names,
+                    result_handler=result_handler,
+                )
         finally:
             self._terminate_running_factors(running)
             try:
@@ -821,22 +872,28 @@ class OfficialFactorBatchComputeService:
         result_queue: multiprocessing.Queue,
         running: dict[str, dict[str, Any]],
         results: dict[str, FactorExecutionResult],
+        *,
+        completed_names: set[str],
+        result_handler: FactorResultHandler | None = None,
     ) -> None:
         while True:
             try:
                 name, result = result_queue.get_nowait()
             except (queue.Empty, EOFError, OSError, ValueError):
                 return
-            if name not in results:
-                if isinstance(result, FactorExecutionResult):
-                    results[name] = result
-                else:
-                    results[name] = FactorExecutionResult(
+            if name not in completed_names:
+                if not isinstance(result, FactorExecutionResult):
+                    result = FactorExecutionResult(
                         factor_name=name,
                         success=False,
                         error=f"unexpected factor worker result type: {type(result).__name__}",
                         error_type="factor_worker_result_invalid",
                     )
+                if result_handler is not None:
+                    result_handler(name, result)
+                else:
+                    results[name] = result
+                completed_names.add(name)
             state = running.pop(name, None)
             if state is not None:
                 proc = state["process"]
