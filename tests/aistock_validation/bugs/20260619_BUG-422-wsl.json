@@ -93,6 +93,15 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
+    "py_compile official factor compute service/tests -> passed after origin/main merge",
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -p no:cacheprovider -> 15 passed, 1 skipped after merge",
+    "WSL rdagent-gpu inline timeout smoke -> factor_timeout in ~1.1s with factor_started/factor_timeout events",
+    "ruff changed files -> passed after merge",
+    "git diff --check -> passed after merge",
+    "nox -s l0 -> passed after merge",
+    "nox -s validation_module_registry_l0 -> passed after merge",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed after merge; qe_read_backend 14 passed",
+    "close-sync PR #1299 checks -> passed",
     "close-sync PR #1300 checks -> passed"
   ],
   "verification_run_id": null,
