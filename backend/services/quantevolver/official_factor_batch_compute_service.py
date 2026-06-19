@@ -42,6 +42,8 @@ DEFAULT_HARD_RSS_MB = 55 * 1024
 DEFAULT_MIN_AVAILABLE_MB = 8 * 1024
 DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 1024
 DEFAULT_RESOURCE_POLL_SEC = 5.0
+DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER = 5
+DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
 
@@ -274,6 +276,7 @@ class OfficialFactorBatchComputeService:
             batch_frames: dict[str, pd.DataFrame] = {}
             batch_meta: dict[str, dict[str, Any]] = {}
             written_paths: list[Path] = []
+            batch_resource_failure: ResourceGateDecision | None = None
             try:
                 batch_resource_failure_recorded = False
                 for row in batch:
@@ -295,6 +298,11 @@ class OfficialFactorBatchComputeService:
                                 "reason": err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
                                 "error_type": RESOURCE_GATE_FAILED,
                             })
+                            batch_resource_failure = ResourceGateDecision(
+                                False,
+                                err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
+                                resource_failures[-1],
+                            )
                             batch_resource_failure_recorded = True
                         results.append({
                             "name": name,
@@ -429,6 +437,19 @@ class OfficialFactorBatchComputeService:
                 available_mb=resource_after_release.available_mb,
                 single_cache_entries=single_cache_entries,
             )
+            if batch_resource_failure is not None:
+                remaining = [item for group in batches[batch_index:] for item in group]
+                self._append_resource_failure_results(remaining, results, batch_resource_failure)
+                fail_count += len(remaining)
+                self._emit(
+                    "resource_gate_abort",
+                    task_id=task_id,
+                    batch_id=batch_id,
+                    batch_index=batch_index,
+                    remaining_factor_count=len(remaining),
+                    reason=batch_resource_failure.reason,
+                )
+                break
             after_decision = self._check_resource_gate(
                 "after_batch",
                 swap_baseline_mb=resource_at_start.swap_mb,
@@ -538,9 +559,9 @@ class OfficialFactorBatchComputeService:
             return requested
         limits = getattr(self, "_resource_limits", FactorResourceLimits())
         min_available_mb = max(1, int(limits.min_available_mb or DEFAULT_MIN_AVAILABLE_MB))
-        if available_mb < min_available_mb * 2:
+        if available_mb < min_available_mb * DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER:
             return 1
-        if available_mb < min_available_mb * 4:
+        if available_mb < min_available_mb * DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER:
             return min(requested, 2)
         return requested
 

@@ -347,9 +347,90 @@ def test_select_batch_workers_throttles_when_available_memory_headroom_is_low():
         swap_growth_hard_stop_mb=10**9,
     )
 
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 40000, 90)) == 4
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 27000, 90)) == 2
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 15000, 90)) == 1
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 70000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 50000, 90)) == 2
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 39000, 90)) == 1
+
+
+def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    factors = [
+        {"factor_name": "factor_a", "code_text": "result = 1"},
+        {"factor_name": "factor_b", "code_text": "result = 1"},
+        {"factor_name": "factor_c", "code_text": "result = 1"},
+        {"factor_name": "factor_d", "code_text": "result = 1"},
+    ]
+
+    class _Eligibility:
+        def list_eligible_factors(self, **kwargs):
+            return factors
+
+    class _Universe:
+        def metadata(self, **kwargs):
+            return {"universe_key": "official", "index_policy": "st_pit_buy_eligible_reindexed_v1"}
+
+        def build_eligible_index(self, **kwargs):
+            return _base_df().index
+
+    class _BaseCache:
+        def manifest(self):
+            return {"base_data_cache_policy": "load_once_readonly"}
+
+    events: list[dict[str, object]] = []
+    service = OfficialFactorBatchComputeService(event_emitter=events.append)
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _Universe()
+    service._load_factor_ids = lambda: {}
+    service._resolve_qlib_bin_path = lambda qlib_bin_path: None
+    service._record_error_meta = lambda *args, **kwargs: None
+
+    compute_calls: list[list[str]] = []
+
+    def _compute_batch_frames(executor, batch, **kwargs):
+        names = [item["factor_name"] for item in batch]
+        compute_calls.append(names)
+        if names != ["factor_a", "factor_b"]:
+            raise AssertionError("resource gate failure must abort before later batches")
+        return {
+            name: FactorExecutionResult(
+                factor_name=name,
+                success=False,
+                error=f"{RESOURCE_GATE_FAILED}: available_memory_below_minimum",
+                error_type=RESOURCE_GATE_FAILED,
+            )
+            for name in names
+        }
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc.BacktestBaseDataMemoryCache, "load_once", lambda *args, **kwargs: _BaseCache())
+    monkeypatch.setattr(
+        svc,
+        "_resource_snapshot",
+        lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
+    )
+    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    monkeypatch.setattr(engine, "compute_single_factor_metrics", lambda *args, **kwargs: {"metrics": {}})
+    service._compute_batch_frames = _compute_batch_frames
+
+    result = service.compute({
+        "factor_names": [item["factor_name"] for item in factors],
+        "factor_data_dir": str(tmp_path),
+        "start_date": "2018-08-01",
+        "end_date": "2026-04-30",
+        "batch_size": 2,
+        "workers": 2,
+        "timeout_per_factor": 1800,
+        "expected_factor_count": 4,
+    })
+
+    assert compute_calls == [["factor_a", "factor_b"]]
+    assert result["success"] is False
+    assert result["fail_count"] == 4
+    assert result["runtime_validation"]["checks"]["resource_gate_ok"] is False
+    assert result["runtime_validation"]["failure_summary"][RESOURCE_GATE_FAILED] == 4
+    assert any(event["type"] == "resource_gate_abort" for event in events)
 
 
 def _raise_empty_once_then_fail(fake_queue):
