@@ -32,8 +32,8 @@
   "expected": "Nightly code-intelligence artifacts expose compact metrics for llm advice generated/consumed/changed_plan, CodeGraph/UA refs used, broad_scan_avoided, high-value candidate counts, and candidate acceptance feedback placeholders without dumping large JSON into chat or summaries.",
   "first_seen_at": "2026-06-19T15:31:29.820509Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6c70a9e2918cb8f1d608259c655d3b5df342b7ae",
+  "fixed_at": "2026-06-19T16:05:49.447130Z",
   "github_issue_number": 1319,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1319",
   "last_seen_at": "2026-06-19T15:31:29.820509Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1322",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,6 +63,15 @@
     "fingerprint": "19df81f213f4747c30173fd1",
     "source_event_id": "FE-20260619-19df81f213f4"
   },
+  "validation_evidence": [
+    "GitHub PR #1322 checks -> 17 passed, 0 failed; mergeStateStatus=CLEAN",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_nightly_active_discovery_summary.py backend/tests/scripts/test_nightly_discovery_input_pack.py -q -> 65 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_center_backend -> 454 passed, coverage passed",
+    "python -m nox -s l0 -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/code_intelligence_adapter.py --changed-file scripts/nightly_active_discovery_summary.py --changed-file scripts/nightly_discovery_input_pack.py --module validation --output-format summary -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
