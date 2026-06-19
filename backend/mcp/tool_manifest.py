@@ -242,6 +242,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_overfit_flags',
                 'qe_archive_query_promotion_candidates',
                 'qe_archive_query_evolution_lineage',
+                'multi_alpha_orthogonality',
                 'prediction_store_get_pointer',
                 'prediction_store_pull_pred',
                 'prediction_store_pull_label',
@@ -713,6 +714,12 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         requires_confirmation=False,
         reason="read-only GET evidence: backend/mcp/modules/qe_archive.py uses GET /analytics/topk-quality and repository only queries v_topk_quality rows",
     ),
+    "multi_alpha_orthogonality": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py uses GET /multi-alpha/orthogonality and service only reads prediction-store pred.pkl artifacts",
+    ),
     "list_validation_runs": ToolMetadataOverride(
         risk_level="read_only",
         assistant_usable="direct_or_catalog",
@@ -817,6 +824,8 @@ def _backend_endpoint_for(tool_name: str, module: str) -> str:
     if module == "qe_experiment":
         return "quantevolver/*"
     if module == "qe_archive":
+        if tool_name == "multi_alpha_orthogonality":
+            return "multi-alpha/orthogonality"
         if tool_name.startswith("prediction_store_") or tool_name == "model_store_health":
             return "prediction-store/*"
         return "qe-archive/*"
