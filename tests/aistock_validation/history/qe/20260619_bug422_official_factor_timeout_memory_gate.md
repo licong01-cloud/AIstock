@@ -26,6 +26,9 @@ C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m py_compile backend/services
 C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -p no:cacheprovider
 C:/Users/lc999/miniconda3/Scripts/ruff.exe check backend/services/quantevolver/official_factor_batch_compute_service.py backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py
 git diff --check
+$env:QE_READ_L3_SKIP_UI='1'; C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s l0
+$env:QE_READ_L3_SKIP_UI='1'; C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_module_registry_l0
+$env:QE_READ_L3_SKIP_UI='1'; C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_read_l3
 ```
 
 ## WSL timeout smoke
@@ -39,6 +42,17 @@ wsl.exe -e bash -lc "set -eo pipefail; cd /mnt/f/Dev/AIstock_worktrees/BUG-422-w
 ```json
 {"wall": 1.095, "error_type": "factor_timeout", "elapsed_sec": 1.079, "events": ["factor_started", "factor_timeout"]}
 ```
+
+## 正式门禁结果
+
+- `py_compile`：通过。
+- `pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -p no:cacheprovider`：`15 passed, 1 skipped`。
+- WSL `rdagent-gpu` inline timeout smoke：`factor_timeout` 在约 1.1 秒返回，事件包含 `factor_started` / `factor_timeout`。
+- `ruff` changed files：通过。
+- `git diff --check`：通过。
+- `nox -s l0`：通过。
+- `nox -s validation_module_registry_l0`：通过。
+- `QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3`：通过；`qe_read_backend` 为 `14 passed`。
 
 ## 当前结论
 
