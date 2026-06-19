@@ -45,16 +45,16 @@
       "timestamp": "2026-06-18T18:35:59.067775Z"
     },
     {
-      "timestamp": "2026-06-19T00:00:00+08:00",
-      "actor": "codex",
       "action": "scope_expand_plan_doc",
-      "note": "Plan-first scope expanded to include RA pipeline source-of-truth design doc requested by BUG-418 Tier2 review gate."
+      "actor": "codex",
+      "note": "Plan-first scope expanded to include RA pipeline source-of-truth design doc requested by BUG-418 Tier2 review gate.",
+      "timestamp": "2026-06-19T00:00:00+08:00"
     },
     {
-      "timestamp": "2026-06-19T00:00:00+08:00",
-      "actor": "codex",
       "action": "scope_expand_implementation",
-      "note": "Implementation scope expanded after Tier2 approval to cover design §2 backend/frontend/test files, including pipeline source boundary tests."
+      "actor": "codex",
+      "note": "Implementation scope expanded after Tier2 approval to cover design §2 backend/frontend/test files, including pipeline source boundary tests.",
+      "timestamp": "2026-06-19T00:00:00+08:00"
     }
   ],
   "evidence_uris": [
@@ -67,8 +67,8 @@
   "expected": "Research Assistant is a consumer/reviewer for pipeline discovery and candidate issue data. Validation Center / Nightly / issue workflow remain the only source of truth and the only formal promotion path.",
   "first_seen_at": "2026-06-18T18:35:59.067778Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0bad262dd852dad5e1c8bd99462cdfa3693bb1bd",
+  "fixed_at": "2026-06-19T07:19:51.262523Z",
   "github_issue_number": 1270,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1270",
   "last_seen_at": "2026-06-18T18:35:59.067778Z",
@@ -76,6 +76,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1290",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -89,7 +90,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -129,6 +130,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "Tier2 approval recorded by user; PR #1290 CI statusCheckRollup all required checks success before merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
