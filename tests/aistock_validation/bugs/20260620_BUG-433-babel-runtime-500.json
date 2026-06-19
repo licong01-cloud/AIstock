@@ -32,8 +32,8 @@
   "expected": "因子相关性页面应正常打开并展示 official cache window、575 缓存因子和 574 个相关性成功因子/1 个 no_valid_pairs 分类。",
   "first_seen_at": "2026-06-19T22:25:18.510076Z",
   "fix_branch": null,
-  "fix_commit": "d393546ed9ab6a5b5f2a13e378926f16b86d96b5",
-  "fixed_at": "2026-06-19T23:03:30.807791Z",
+  "fix_commit": "ade07cf8d18328360f5cfa9e1350684dfb8dbc27",
+  "fixed_at": "2026-06-19T23:06:03.517077Z",
   "github_issue_number": 1333,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1333",
   "last_seen_at": "2026-06-19T22:25:18.510076Z",
@@ -41,7 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1334",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1335",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -94,13 +94,7 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "PR #1334 checks -> passed (18 pass, 0 fail; mergeState CLEAN)",
-    "npm ls @babel/runtime --depth=0 -> passed (@babel/runtime@7.29.7 installed)",
-    "npm run build -> passed; /quantevolver/factor-correlation compiled successfully; existing hook warnings only",
-    "npm run lint -> passed with existing react-hooks warnings only",
-    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s l0 -> passed",
-    "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_module_registry_l0 -> passed (8 passed)",
-    "QE_READ_L3_SKIP_UI=1 C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_read_l3 -> passed for backend/static slice; full qe_read_ui remains blocked by unrelated existing frontend/tests/research-assistant/phase5-mcp-gateway-ui.spec.ts:226 TS2322"
+    "close-sync PR #1335 checks -> passed (9 pass, 0 fail; mergeState CLEAN)"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
