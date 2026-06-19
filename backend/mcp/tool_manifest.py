@@ -317,7 +317,6 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                         'assistant_build_context_pack',
                         'assistant_list_mcp_tools',
                         'assistant_preflight_mcp_tool',
-                        'assistant_create_issue_candidate',
                         'assistant_list_approvals',
                         'assistant_create_temp_memory'),
  'selection_center': ('selection_center_list_selectable_packages',

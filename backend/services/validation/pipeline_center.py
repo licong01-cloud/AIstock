@@ -375,8 +375,8 @@ class ValidationPipelineCenterService:
         }
         return item
 
-    def issue_candidate_summary(self) -> dict[str, Any]:
-        items = self.issue_candidates(page=1, page_size=10000)["items"]
+    def issue_candidate_summary(self, *, search: str | None = None) -> dict[str, Any]:
+        items = self.issue_candidates(search=search, page=1, page_size=10000)["items"]
         outcome = self._candidate_outcome_metrics(items)
         by_status = Counter(str(item.get("status") or "unknown") for item in items)
         by_module = Counter(str(item.get("module_id") or "unknown") for item in items)
@@ -430,6 +430,7 @@ class ValidationPipelineCenterService:
         module: str | None = None,
         severity: str | None = None,
         status: str | None = None,
+        search: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
@@ -443,6 +444,27 @@ class ValidationPipelineCenterService:
         if status:
             wanted = status.lower()
             items = [item for item in items if str(item.get("status") or "").lower() == wanted]
+        if search:
+            needle = search.strip().lower()
+            fields = (
+                "candidate_id",
+                "title",
+                "module_id",
+                "module",
+                "severity",
+                "status",
+                "summary",
+                "actual",
+                "expected",
+                "fingerprint",
+                "source_path",
+            )
+            items = [
+                item
+                for item in items
+                if any(needle in str(item.get(field) or "").lower() for field in fields)
+                or any(needle in str(ref or "").lower() for ref in self._candidate_string_list(item.get("source_paths")))
+            ]
         items.sort(
             key=lambda item: (
                 _severity_rank(item.get("severity")),

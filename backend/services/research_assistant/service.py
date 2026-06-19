@@ -15,8 +15,8 @@ import hashlib
 import subprocess
 import threading
 from dataclasses import dataclass
-from enum import Enum
 from datetime import date
+from enum import Enum
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -523,7 +523,7 @@ logger = logging.getLogger("aistock.research_assistant.service")
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PIPELINE_ISSUE_FACT_SOURCE_UNAVAILABLE = "validation_issue_fact_source_unavailable"
 PIPELINE_ISSUE_SOURCE_OF_TRUTH = "validation_pipeline_issue_candidates"
-RA_DRAFT_STORAGE_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5f85 Phase 2 \u9000\u573a"
+RA_DRAFT_STORAGE_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5df2\u9000\u573a\uff1b\u6b63\u5f0f\u4e8b\u5b9e\u6e90=Validation/Nightly/issue workflow"
 RA_OFFICIAL_WORKFLOW_NOTICE = "\u6b63\u5f0f\u63d0\u4ea4\u5fc5\u987b\u8d70 AIstock issue workflow / Validation MCP"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
@@ -562,10 +562,17 @@ MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS = (
 
 
 class IssueCandidateFactSource:
-    """Injected read-only adapter for the Validation candidate fact source."""
+    """Lazy read-only adapter for the Validation candidate fact source."""
 
-    def __init__(self, pipeline_center: Any | None = None) -> None:
-        self.pipeline_center = pipeline_center or ValidationPipelineCenterService()
+    def __init__(self, pipeline_center: Any | None = None, pipeline_center_factory: Any | None = None) -> None:
+        self._pipeline_center = pipeline_center
+        self._pipeline_center_factory = pipeline_center_factory or ValidationPipelineCenterService
+
+    @property
+    def pipeline_center(self) -> Any:
+        if self._pipeline_center is None:
+            self._pipeline_center = self._pipeline_center_factory()
+        return self._pipeline_center
 
     def issue_candidates(
         self,
@@ -573,6 +580,7 @@ class IssueCandidateFactSource:
         module: str | None = None,
         severity: str | None = None,
         status: str | None = None,
+        search: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
@@ -580,12 +588,13 @@ class IssueCandidateFactSource:
             module=module,
             severity=severity,
             status=status,
+            search=search,
             page=page,
             page_size=page_size,
         )
 
-    def issue_candidate_summary(self) -> dict[str, Any]:
-        return self.pipeline_center.issue_candidate_summary()
+    def issue_candidate_summary(self, *, search: str | None = None) -> dict[str, Any]:
+        return self.pipeline_center.issue_candidate_summary(search=search)
 
 BUSINESS_SYNTHESIS_RESPONSE_MODES = {
     "local_data_daily_sync_status",
@@ -836,9 +845,17 @@ MCP_TOOL_DB_COLUMNS = {
 }
 
 
+def _retired_draft_storage_capability(item: dict[str, Any]) -> bool:
+    return str(item.get("capability_key") or "") == "issue.create_candidate"
+
+
 DEFAULT_WORKFLOW_CAPABILITIES: list[dict[str, Any]] = [
-    *[dict(item) for item in load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"].get("workflow_capabilities", [])],
-    *catalog_workflow_capabilities(),
+    dict(item)
+    for item in [
+        *load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"].get("workflow_capabilities", []),
+        *catalog_workflow_capabilities(),
+    ]
+    if not _retired_draft_storage_capability(dict(item))
 ]
 
 
@@ -1630,7 +1647,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         else:
             if not isinstance(configured, list):
                 raise ValueError("planner.workflow_capabilities must be a list when configured")
-            source = [dict(item) for item in configured]
+            source = [dict(item) for item in configured if not _retired_draft_storage_capability(dict(item))]
         merged: dict[str, dict[str, Any]] = {
             str(item.get("capability_key")): self._canonicalize_capability_mcp_refs(dict(item))
             for item in source
@@ -1801,18 +1818,32 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def overview(self) -> dict[str, Any]:
         task_status = self.repository.counts("tasks", "status")
         approval_status = self.repository.counts("approvals", "status")
-        issue_status = self.repository.counts("issue_candidates", "status")
+        try:
+            issue_summary = self.issue_fact_source.issue_candidate_summary()
+            issue_status = dict(issue_summary.get("by_status") or {})
+            candidate_issues = int(issue_summary.get("open_count") or issue_summary.get("candidate_count") or 0)
+            issue_data_state = str(issue_summary.get("data_state") or "complete")
+            issue_reason_codes = list(issue_summary.get("reason_codes") or [])
+        except Exception as exc:  # noqa: BLE001 - overview must expose fact-source failures, not hide them.
+            reason = f"{PIPELINE_ISSUE_FACT_SOURCE_UNAVAILABLE}: {type(exc).__name__}: {exc}"
+            logger.warning("Validation issue fact source unavailable for RA overview: %s", reason)
+            issue_status = {}
+            candidate_issues = 0
+            issue_data_state = "degraded"
+            issue_reason_codes = [PIPELINE_ISSUE_FACT_SOURCE_UNAVAILABLE]
         memory_status = self.repository.counts("memory_items", "approval_status")
         trace_status = self.repository.counts("trace_events", "status")
         return {
             "task_status": task_status,
             "approval_status": approval_status,
             "issue_candidate_status": issue_status,
+            "issue_candidate_data_state": issue_data_state,
+            "issue_candidate_reason_codes": issue_reason_codes,
             "memory_approval_status": memory_status,
             "trace_status": trace_status,
             "running_tasks": task_status.get("running", 0),
             "pending_approvals": approval_status.get("pending", 0),
-            "candidate_issues": issue_status.get("needs_review", 0) + issue_status.get("draft", 0),
+            "candidate_issues": candidate_issues,
             "approved_memories": memory_status.get("approved", 0),
             "generated_at": utc_now().isoformat(),
         }
@@ -2230,24 +2261,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             payload = self.issue_fact_source.issue_candidates(
                 module=module,
                 status=status,
+                search=search,
                 page=page,
                 page_size=resolved_limit,
             )
         except Exception as exc:  # noqa: BLE001 - degraded read is explicit and user-visible.
             return self._degraded_pipeline_issue_candidate_page(exc, page=page, page_size=resolved_limit)
         items = [self._assistant_issue_candidate_view(item) for item in payload.get("items") or [] if isinstance(item, dict)]
-        if search:
-            needle = search.lower()
-            search_fields = ("candidate_id", "title", "module_id", "severity", "status", "summary", "actual", "expected", "fingerprint")
-            items = [item for item in items if any(needle in str(item.get(field) or "").lower() for field in search_fields)]
         result = dict(payload)
         result.update(
             {
                 "items": items,
-                "total": len(items) if search else int(payload.get("total") or len(items)),
+                "total": int(payload.get("total") or len(items)),
                 "page": page,
                 "page_size": resolved_limit,
-                "has_more": False if search else bool(payload.get("has_more")),
+                "has_more": bool(payload.get("has_more")),
             }
         )
         return self._with_pipeline_issue_metadata(result)
@@ -2259,7 +2287,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         result["source_of_truth"] = PIPELINE_ISSUE_SOURCE_OF_TRUTH
         result["source_of_truth_endpoint"] = "/api/v1/validation/issues/candidates"
         result["draft_storage_authoritative"] = False
-        result["assistant_draft_tables"] = ["assistant_issue_candidates", "assistant_validation_discovery_reports"]
+        result["retired_draft_tables"] = ["assistant_issue_candidates", "assistant_validation_discovery_reports"]
         result["assistant_draft_storage_notice"] = RA_DRAFT_STORAGE_NOTICE
         result["official_submission_required"] = RA_OFFICIAL_WORKFLOW_NOTICE
         result["assistant_draft_substitution_blocked"] = True
@@ -6552,44 +6580,36 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def create_issue_candidate(self, request: IssueCandidateCreate | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, IssueCandidateCreate) else IssueCandidateCreate(**request)
-        dedupe_key = data.dedupe_key or sha256_json({"title": data.title, "module": data.module, "reproduce_command": data.reproduce_command})
-        existing = self.repository.find_one("issue_candidates", {"dedupe_key": dedupe_key})
-        if existing:
-            existing["deduplicated"] = True
-            existing["duplicate_candidate_requested"] = True
-            return existing
-        if data.approval_id or data.confirmation_text:
-            self._consume_approval_gate(
-                approval_id=data.approval_id,
-                confirmation_text=data.confirmation_text,
-                approval_type="issue.candidate",
-                required_summary_fragment=data.title,
-            )
-        created = self.repository.create_record(
-            "issue_candidates",
-            {
-                "candidate_id": new_id("issuecand"),
-                "status": "draft",
-                "dedupe_key": dedupe_key,
-                "github_sync_status": "standard_workflow_required",
-                "github_sync_json": {
-                    "non_authoritative_conversation_draft": True,
-                    "phase2_retirement_pending": True,
-                    "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
-                    "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
-                    "formal_github_issue_requires_standard_workflow": True,
-                    "direct_github_create_performed": False,
-                    "recommended_tools": ["report_bug", "mcp_github_issue_create", "mcp_github_issue_sync_bug"],
-                },
-                **data.model_dump(exclude={"dedupe_key", "approval_id", "confirmation_text"}),
+        candidate_id = data.dedupe_key or "retired_issue_candidate_no_storage"
+        recommended_tools = ["report_bug", "mcp_github_issue_create", "mcp_github_issue_sync_bug"]
+        return {
+            "candidate_id": candidate_id,
+            "title": data.title,
+            "severity": data.severity,
+            "module": data.module,
+            "problem_statement": data.problem_statement,
+            "reproduce_command": data.reproduce_command,
+            "evidence_refs": list(data.evidence_refs),
+            "status": "retired",
+            "github_sync_status": "retired",
+            "github_sync_json": {
+                "reason": "ra_candidate_draft_storage_retired_use_standard_workflow",
+                "standard_workflow_required": True,
+                "storage_performed": False,
+                "direct_github_create_performed": False,
+                "recommended_tools": recommended_tools,
             },
-        )
-        created["draft_storage_authoritative"] = False
-        created["assistant_draft_storage_notice"] = RA_DRAFT_STORAGE_NOTICE
-        created["official_submission_required"] = RA_OFFICIAL_WORKFLOW_NOTICE
-        created.setdefault("github_issue_number", None)
-        created.setdefault("github_issue_url", None)
-        return created
+            "standard_workflow_required": True,
+            "storage_performed": False,
+            "direct_github_create_performed": False,
+            "recommended_tools": recommended_tools,
+            "draft_storage_authoritative": False,
+            "retired_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
+            "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
+            "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
+            "github_issue_number": None,
+            "github_issue_url": None,
+        }
 
 
     def set_skill_enabled(self, skill_key: str, *, enabled: bool) -> dict[str, Any]:
@@ -6643,30 +6663,38 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def github_sync_issue_candidate(self, candidate_id: str, request: IssueCandidateGithubSyncRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, IssueCandidateGithubSyncRequest) else IssueCandidateGithubSyncRequest(**request)
-        candidate = self.repository.get_record("issue_candidates", candidate_id)
-        if not candidate:
-            raise KeyError(f"issue candidate not found: {candidate_id}")
+        recommended_tools = ["report_bug", "mcp_github_issue_create", "mcp_github_issue_sync_bug"]
         gate = {
             "mode": data.mode,
             "github_sync_status": "blocked",
-            "non_authoritative_conversation_draft": True,
-            "phase2_retirement_pending": True,
-            "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
-            "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
+            "reason": "ra_github_sync_retired_use_standard_workflow",
+            "blocked_reason": "RA GitHub sync is retired; use AIstock issue workflow / Validation MCP.",
+            "standard_workflow_required": True,
+            "storage_performed": False,
             "direct_github_create_performed": False,
             "approval_id": data.approval_id,
             "requested_by": data.requested_by,
-            "blocked_reason": "Research Assistant does not own GitHub sync; use AIstock issue workflow / Validation MCP.",
-            "recommended_tools": ["report_bug", "mcp_github_issue_create", "mcp_github_issue_sync_bug"],
+            "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
+            "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
+            "recommended_tools": recommended_tools,
         }
-        status = "blocked"
-        updated = self.repository.update_record("issue_candidates", candidate_id, {"github_sync_status": status, "github_sync_json": gate})
-        updated["draft_storage_authoritative"] = False
-        updated["assistant_draft_storage_notice"] = RA_DRAFT_STORAGE_NOTICE
-        updated["official_submission_required"] = RA_OFFICIAL_WORKFLOW_NOTICE
-        updated.setdefault("github_issue_number", None)
-        updated.setdefault("github_issue_url", None)
-        return updated
+        return {
+            "candidate_id": candidate_id,
+            "status": "retired",
+            "github_sync_status": "blocked",
+            "github_sync_json": gate,
+            "reason": gate["reason"],
+            "standard_workflow_required": True,
+            "storage_performed": False,
+            "direct_github_create_performed": False,
+            "recommended_tools": recommended_tools,
+            "draft_storage_authoritative": False,
+            "retired_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
+            "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
+            "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
+            "github_issue_number": None,
+            "github_issue_url": None,
+        }
 
     def dry_run_execute_tool(self, request: WorkbenchDryRunExecuteRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, WorkbenchDryRunExecuteRequest) else WorkbenchDryRunExecuteRequest(**request)
@@ -6826,7 +6854,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "reason_codes": [PIPELINE_ISSUE_FACT_SOURCE_UNAVAILABLE],
                 "warnings": degraded.get("warnings") or [],
                 "draft_storage_authoritative": False,
-                "assistant_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
+                "retired_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
                 "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
                 "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
                 "assistant_draft_substitution_blocked": True,
@@ -6849,7 +6877,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "reason_codes": ["candidate_queue_empty"] if not candidates else [],
             "warnings": [],
             "draft_storage_authoritative": False,
-            "assistant_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
+            "retired_draft_tables": ["assistant_issue_candidates", "assistant_validation_discovery_reports"],
             "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE,
             "official_submission_required": RA_OFFICIAL_WORKFLOW_NOTICE,
             "assistant_draft_substitution_blocked": True,
@@ -7221,18 +7249,3 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 },
             )
             seeded["notifications"] += 1
-        if not self.repository.list_records("validation_discovery_reports", limit=1)["items"]:
-            self.repository.create_record(
-                "validation_discovery_reports",
-                {
-                    "discovery_report_id": "vdr_research_assistant_phase1_seed",
-                    "run_date": date.today().isoformat(),
-                    "title": "阶段一流水线发现流种子记录",
-                    "status": "draft",
-                    "summary_json": {"llm_discovery": "not_started", "issue_gate": "draft_cache_only", "assistant_draft_storage_notice": RA_DRAFT_STORAGE_NOTICE, "phase2_retirement_pending": True},
-                    "candidate_issue_refs": [],
-                    "validation_run_refs": [],
-                    "evidence_refs": [],
-                },
-            )
-            seeded["validation_discovery_reports"] = seeded.get("validation_discovery_reports", 0) + 1

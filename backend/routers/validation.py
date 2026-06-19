@@ -429,6 +429,7 @@ def list_validation_issue_candidates(
     module: str | None = Query(None),
     severity: str | None = Query(None),
     status: str | None = Query(None),
+    search: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
@@ -438,6 +439,7 @@ def list_validation_issue_candidates(
             module=module,
             severity=severity,
             status=status,
+            search=search,
             page=page,
             page_size=page_size,
         )

@@ -422,15 +422,15 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
     if (path.endsWith("/mcp/tools")) {
       return respond(page([
         {
-          tool_id: "mcp_tool_research_assistant_issue",
-          server_key: "research-assistant",
-          tool_name: "assistant_create_issue_candidate",
-          title: "创建候选 Issue",
+          tool_id: "mcp_tool_validation_issue_sync",
+          server_key: "aistock-validation",
+          tool_name: "mcp_github_issue_sync_bug",
+          title: "\u6807\u51c6 workflow \u540c\u6b65 Issue",
           risk_level: "high",
           requires_approval: true,
           status: "enabled",
           input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["dedupe_key"] },
+          preflight_schema_json: { checks: ["catalog", "approval"] },
           required_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
         },
       ]));

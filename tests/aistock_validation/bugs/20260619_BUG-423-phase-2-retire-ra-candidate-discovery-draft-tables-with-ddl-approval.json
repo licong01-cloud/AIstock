@@ -28,7 +28,9 @@
     "backend/tests/research_assistant/test_pipeline_source_ui_static.py",
     "backend/tests/research_assistant/test_proactive_report_generation.py",
     "backend/tests/mcp/test_research_assistant_module.py",
-    "frontend/tests/research-assistant/research-assistant.spec.ts"
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-423",
@@ -67,6 +69,18 @@
       "actor": "codex",
       "action": "scope_expansion_plan_design",
       "note": "Expanded allowed_write_scope for plan-first design doc and anticipated Phase 2 implementation files after complete reference scan; implementation and DDL remain blocked pending Tier2 approval."
+    },
+    {
+      "timestamp": "2026-06-19T15:59:06.5173475Z",
+      "actor": "codex",
+      "action": "scope_expansion_for_catalog_contract_tests",
+      "note": "Expanded scope to catalog contract expectation tests because required research_assistant_backend/research_assistant_mcp_contract nox sessions exercise manifest/profile counts after retiring assistant_create_issue_candidate; product behavior unchanged."
+    },
+    {
+      "timestamp": "2026-06-19T17:28:26Z",
+      "actor": "codex",
+      "action": "implementation_validation_complete",
+      "note": "Implemented BUG-423 Phase 2: added 009 forward/rollback migration files (not applied), removed RA draft tables from bootstrap/repository, retired create/github-sync write surfaces as no-storage/block-only, removed assistant_create_issue_candidate from MCP manifest/module/catalog/loopback exposure, added Validation candidate search pushdown and lazy IssueCandidateFactSource, and added boundary/schema/API/service/MCP/UI tests. Validation passed: l0; research_assistant_backend (276 passed); research_assistant_mcp_contract (38 passed); ra_phase7_full_accept (276 backend tests + frontend lint/build + Playwright 4+8 passed + crosscheck/catalog/ownership); validation_module_registry_l0 (8 passed); validation_center_backend (454 passed); ra_phase0_baseline (276 passed); ra_phase1_memory_tree (14 passed); git diff --check; ruff changed Python files. No DDL executed, no production DB connected, no 8001/3000/19080 services started or restarted."
     }
   ],
   "evidence_uris": [

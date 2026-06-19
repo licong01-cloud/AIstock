@@ -171,13 +171,6 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"approval_context_json", "execution_result_json"},
         "search": {"approval_id", "task_id", "approval_type", "risk_level", "summary", "status"},
     },
-    # Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement.
-    "issue_candidates": {
-        "table": "assistant_issue_candidates",
-        "id": "candidate_id",
-        "json": {"evidence_refs", "github_sync_json"},
-        "search": {"candidate_id", "title", "severity", "module", "status", "problem_statement", "dedupe_key"},
-    },
     "external_sessions": {
         "table": "assistant_external_agent_sessions",
         "id": "session_id",
@@ -303,13 +296,6 @@ TABLES: dict[str, dict[str, Any]] = {
         "id": "agenda_item_id",
         "json": {"metadata_json", "evidence_refs"},
         "search": {"agenda_item_id", "namespace", "title", "status", "priority"},
-    },
-    # Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement.
-    "validation_discovery_reports": {
-        "table": "assistant_validation_discovery_reports",
-        "id": "discovery_report_id",
-        "json": {"summary_json", "candidate_issue_refs", "validation_run_refs", "evidence_refs"},
-        "search": {"discovery_report_id", "run_date", "status", "title"},
     },
     "trace_events": {
         "table": "assistant_trace_events",
