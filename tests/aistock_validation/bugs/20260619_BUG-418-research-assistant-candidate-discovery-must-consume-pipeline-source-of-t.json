@@ -7,7 +7,25 @@
     "frontend/src/app/research-assistant/issue-candidates/page.tsx",
     "tests/aistock_validation/bugs/20260619_BUG-418-research-assistant-candidate-discovery-must-consume-pipeline-source-of-t.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md"
+    "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md",
+    "backend/services/research_assistant/proactive_reports.py",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/src/lib/validation/api.ts",
+    "backend/services/research_assistant/repository.py",
+    "backend/db/init_research_assistant_schema_20260521.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/mcp/modules/validation.py",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_proactive_report_generation.py",
+    "backend/tests/research_assistant/test_schema_contract.py",
+    "backend/tests/research_assistant/test_tool_catalog_gate.py",
+    "backend/tests/research_assistant/test_pipeline_source_boundary.py",
+    "backend/tests/research_assistant/test_pipeline_source_ui_static.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-418",
@@ -31,6 +49,12 @@
       "actor": "codex",
       "action": "scope_expand_plan_doc",
       "note": "Plan-first scope expanded to include RA pipeline source-of-truth design doc requested by BUG-418 Tier2 review gate."
+    },
+    {
+      "timestamp": "2026-06-19T00:00:00+08:00",
+      "actor": "codex",
+      "action": "scope_expand_implementation",
+      "note": "Implementation scope expanded after Tier2 approval to cover design §2 backend/frontend/test files, including pipeline source boundary tests."
     }
   ],
   "evidence_uris": [
