@@ -13,22 +13,31 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Phase 2 must add a positive VALIDATION_ISSUE confirmed-action proxy check or document existing code references proving confirmed writes are constrained to report_bug/mcp_github_issue_create/mcp_github_issue_sync_bug.",
+    "Phase 2 must push candidate-page search down into the Validation issue-candidate API so search does not miss candidates across pages.",
+    "Phase 2 must evaluate lazy initialization for IssueCandidateFactSource while preserving Validation/Nightly/issue workflow as the only authoritative fact source."
   ],
   "created_at": "2026-06-19T06:47:48.222496Z",
-  "description": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.",
+  "description": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.\n\nAdditional non-blocking BUG-418 follow-ups now in Phase 2 scope: VALIDATION_ISSUE confirmed proxy evidence/test; Validation candidate API search pushdown; IssueCandidateFactSource lazy initialization evaluation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260619-b5277f8cae3b",
       "timestamp": "2026-06-19T06:47:48.222493Z"
+    },
+    {
+      "action": "phase2_scope_update",
+      "actor": "codex",
+      "note": "Added BUG-418 non-blocking Phase 2 follow-ups: VALIDATION_ISSUE confirmed proxy evidence/test, Validation candidate API search pushdown, IssueCandidateFactSource lazy init evaluation.",
+      "timestamp": "2026-06-19T07:30:45.309287Z"
     }
   ],
   "evidence_uris": [
     "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md"
   ],
-  "expected": "RA candidate/discovery draft storage is retired or renamed/migrated under an approved DDL plan; Validation Center/Nightly/issue workflow remain the only candidate/discovery/GitHub/BUG JSON fact sources.",
+  "expected": "RA candidate/discovery draft storage is retired or renamed/migrated under an approved DDL plan; Validation Center/Nightly/issue workflow remain the only candidate/discovery/GitHub/BUG JSON fact sources. Phase 2 also resolves the BUG-418 non-blocking follow-ups captured in closure_requirements.",
   "first_seen_at": "2026-06-19T06:47:48.222496Z",
   "fix_branch": null,
   "fix_commit": null,
