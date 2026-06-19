@@ -75,7 +75,7 @@
 - `assistant_issue_candidates`：
   - 新语义：对话草稿、人工备注、候选解释缓存。
   - 不再命名为正式候选队列；UI/卡片文案写明“正式提交必须走 AIstock issue workflow”。
-  - `github_sync_status/github_sync_json` 仅保留历史兼容/解释缓存，不代表正式 GitHub sync 状态。
+  - `github_sync_status/github_sync_json` 仅保留为非权威对话草稿/解释缓存，待 Phase 2 退场，不代表正式 GitHub sync 状态。
 - `assistant_validation_discovery_reports`：
   - 新语义：助手对 discovery 事实的备注/解释缓存。
   - `summary_json.llm_discovery` 继续固定为 `not_started`，不得接 DeepSeek/Nightly 调度。

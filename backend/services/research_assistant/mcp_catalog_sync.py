@@ -157,7 +157,7 @@ REQUIRED_INPUTS_BY_TOOL: dict[str, list[str]] = {
 }
 
 PREFLIGHT_CHECKS_BY_TOOL: dict[str, list[str]] = {
-    "assistant_create_issue_candidate": ["dedupe_key", "evidence_refs", "draft_only", "github_formal_issue_blocked"],
+    "assistant_create_issue_candidate": ["dedupe_key", "evidence_refs", "draft_only", "standard_workflow_required", "github_formal_issue_blocked"],
     "qe_template_create": ["schema", "fixed_seed", "draft_only"],
     "qe_template_validate": ["template_exists", "schema", "diff_summary"],
     "qe_template_materialize_confirmed": ["stock_pool", "node_health", "cost", "approval"],

@@ -171,6 +171,7 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"approval_context_json", "execution_result_json"},
         "search": {"approval_id", "task_id", "approval_type", "risk_level", "summary", "status"},
     },
+    # Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement.
     "issue_candidates": {
         "table": "assistant_issue_candidates",
         "id": "candidate_id",
@@ -303,6 +304,7 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"metadata_json", "evidence_refs"},
         "search": {"agenda_item_id", "namespace", "title", "status", "priority"},
     },
+    # Non-authoritative conversation draft / explanation cache; pending Phase 2 retirement.
     "validation_discovery_reports": {
         "table": "assistant_validation_discovery_reports",
         "id": "discovery_report_id",

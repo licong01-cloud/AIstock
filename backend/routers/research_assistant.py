@@ -860,7 +860,7 @@ def list_issue_candidates(
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("issue_candidates", filters={"status": status, "module": module}, search=search, limit=limit, offset=offset))
+        return _success(service.list_pipeline_issue_candidates(status=status, module=module, search=search, limit=limit, offset=offset))
     except Exception as exc:
         raise _map_error(exc) from exc
 
