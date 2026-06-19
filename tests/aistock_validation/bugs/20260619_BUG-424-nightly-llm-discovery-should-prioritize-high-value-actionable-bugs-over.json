@@ -30,8 +30,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-19T07:19:46.293072Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d3f78a13f1ca5d31fd316438e5083ce58d5ee2af",
+  "fixed_at": "2026-06-19T07:43:08.466451Z",
   "github_issue_number": 1292,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1292",
   "last_seen_at": "2026-06-19T07:19:46.293072Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1294",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,8 +51,19 @@
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_rationale": [
+    {
+      "paths": [
+        "scripts/nightly_bug_candidate_queue.py",
+        "scripts/nightly_discovery_plans.py",
+        "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+        "backend/tests/scripts/test_nightly_discovery_plans.py"
+      ],
+      "reason": "Initial submit-bug inferred only registry files; BUG-424 requires changing the workflow-owned nightly discovery candidate quality gate and tests."
+    }
+  ],
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -86,6 +98,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1294 CI all checks green; local py_compile, targeted pytest 75 passed, nightly artifact replay, workflow-smoke, l0, validation_module_registry_l0, validation_center_backend 452 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
@@ -101,16 +116,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "scope_expansion_rationale": [
-    {
-      "reason": "Initial submit-bug inferred only registry files; BUG-424 requires changing the workflow-owned nightly discovery candidate quality gate and tests.",
-      "paths": [
-        "scripts/nightly_bug_candidate_queue.py",
-        "scripts/nightly_discovery_plans.py",
-        "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
-        "backend/tests/scripts/test_nightly_discovery_plans.py"
-      ]
-    }
-  ]
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
