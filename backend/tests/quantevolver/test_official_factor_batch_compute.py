@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
 import time
 
@@ -178,7 +179,7 @@ def test_batch_compute_streams_results_to_handler_without_returning_frames(monke
 
     monkeypatch.setattr(svc.multiprocessing, "get_all_start_methods", lambda: [])
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
-    handled: list[str] = []
+    handled: list[tuple[str, bool]] = []
 
     class _Executor:
         def compute_batch(self, batch):
@@ -208,6 +209,77 @@ def test_batch_compute_streams_results_to_handler_without_returning_frames(monke
 
     assert result == {}
     assert sorted(handled) == ["factor_a", "factor_b"]
+
+
+def test_process_result_streaming_does_not_report_false_missing_result(monkeypatch):
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=10**9,
+        hard_rss_mb=10**9,
+        min_available_mb=0,
+        swap_growth_hard_stop_mb=10**9,
+    )
+    service._emit = lambda *args, **kwargs: None
+    handled: list[str] = []
+
+    class _FinishedProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+    class _Context:
+        def Queue(self):
+            result = FactorExecutionResult(
+                factor_name="factor_a",
+                success=True,
+                dataframe=_base_df()[["close"]],
+            )
+
+            class _Queue:
+                def __init__(self):
+                    self._items = [("factor_a", result)]
+
+                def get_nowait(self):
+                    if self._items:
+                        return self._items.pop(0)
+                    raise queue.Empty
+
+                def close(self):
+                    pass
+
+                def join_thread(self):
+                    pass
+
+            return _Queue()
+
+        def Process(self, **kwargs):
+            return _FinishedProcess()
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.official_factor_batch_compute_service.multiprocessing.get_context",
+        lambda method: _Context(),
+    )
+
+    result = service._compute_batch_frames_with_process_timeouts(
+        executor=object(),
+        batch=[{"factor_name": "factor_a", "code_text": "result = 1"}],
+        max_workers=1,
+        timeout_sec=10,
+        task_id="task-streaming",
+        batch_id="batch-streaming",
+        swap_baseline_mb=0,
+        result_handler=lambda name, value: handled.append((name, value.success)),
+    )
+
+    assert result == {}
+    assert handled == [("factor_a", True)]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="fork based timeout is WSL/Linux only")

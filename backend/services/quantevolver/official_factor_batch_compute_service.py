@@ -714,8 +714,18 @@ class OfficialFactorBatchComputeService:
         pending = list(batch)
         running: dict[str, dict[str, Any]] = {}
         results: dict[str, FactorExecutionResult] = {}
+        completed_names: set[str] = set()
         last_resource_gate_check = 0.0
         queue_safe_to_drain = True
+
+        def _store_or_handle_result(name: str, result: FactorExecutionResult) -> None:
+            if name in completed_names:
+                return
+            if result_handler is not None:
+                result_handler(name, result)
+            else:
+                results[name] = result
+            completed_names.add(name)
 
         try:
             while pending or running:
@@ -730,10 +740,7 @@ class OfficialFactorBatchComputeService:
                             error="missing_code_text",
                             error_type="missing_code_text",
                         )
-                        if result_handler is not None:
-                            result_handler(name, result)
-                        else:
-                            results[name] = result
+                        _store_or_handle_result(name, result)
                         continue
                     proc = ctx.Process(
                         target=_factor_process_worker,
@@ -755,15 +762,27 @@ class OfficialFactorBatchComputeService:
                         timeout_sec=timeout_sec,
                     )
 
-                self._drain_factor_results(result_queue, running, results, result_handler=result_handler)
+                self._drain_factor_results(
+                    result_queue,
+                    running,
+                    results,
+                    completed_names=completed_names,
+                    result_handler=result_handler,
+                )
                 now = time.monotonic()
                 for name, state in list(running.items()):
                     proc = state["process"]
                     elapsed = now - float(state["started"])
                     if not proc.is_alive():
                         proc.join(timeout=0.1)
-                        self._drain_factor_results(result_queue, running, results, result_handler=result_handler)
-                        if name not in results:
+                        self._drain_factor_results(
+                            result_queue,
+                            running,
+                            results,
+                            completed_names=completed_names,
+                            result_handler=result_handler,
+                        )
+                        if name not in completed_names:
                             result = FactorExecutionResult(
                                 factor_name=name,
                                 success=False,
@@ -771,10 +790,7 @@ class OfficialFactorBatchComputeService:
                                 error="factor process exited without returning a result",
                                 error_type="factor_process_no_result",
                             )
-                            if result_handler is not None:
-                                result_handler(name, result)
-                            else:
-                                results[name] = result
+                            _store_or_handle_result(name, result)
                         running.pop(name, None)
                         continue
                     if elapsed <= timeout_sec:
@@ -792,10 +808,7 @@ class OfficialFactorBatchComputeService:
                         error=f"factor execution exceeded timeout_per_factor={timeout_sec}s",
                         error_type=FACTOR_TIMEOUT,
                     )
-                    if result_handler is not None:
-                        result_handler(name, result)
-                    else:
-                        results[name] = result
+                    _store_or_handle_result(name, result)
                     self._emit(
                         "factor_timeout",
                         task_id=task_id,
@@ -823,18 +836,12 @@ class OfficialFactorBatchComputeService:
                         for name, state in list(running.items()):
                             elapsed = now - float(state.get("started") or now)
                             result = self._resource_failure_result(name, gate, elapsed_sec=elapsed)
-                            if result_handler is not None:
-                                result_handler(name, result)
-                            else:
-                                results[name] = result
+                            _store_or_handle_result(name, result)
                         running.clear()
                         for item in pending:
                             name = str(item.get("factor_name") or "").strip() or "<missing>"
                             result = self._resource_failure_result(name, gate)
-                            if result_handler is not None:
-                                result_handler(name, result)
-                            else:
-                                results[name] = result
+                            _store_or_handle_result(name, result)
                         pending.clear()
                         break
 
@@ -842,7 +849,13 @@ class OfficialFactorBatchComputeService:
                     time.sleep(0.2)
 
             if queue_safe_to_drain:
-                self._drain_factor_results(result_queue, running, results, result_handler=result_handler)
+                self._drain_factor_results(
+                    result_queue,
+                    running,
+                    results,
+                    completed_names=completed_names,
+                    result_handler=result_handler,
+                )
         finally:
             self._terminate_running_factors(running)
             try:
@@ -860,6 +873,7 @@ class OfficialFactorBatchComputeService:
         running: dict[str, dict[str, Any]],
         results: dict[str, FactorExecutionResult],
         *,
+        completed_names: set[str],
         result_handler: FactorResultHandler | None = None,
     ) -> None:
         while True:
@@ -867,7 +881,7 @@ class OfficialFactorBatchComputeService:
                 name, result = result_queue.get_nowait()
             except (queue.Empty, EOFError, OSError, ValueError):
                 return
-            if name not in results:
+            if name not in completed_names:
                 if not isinstance(result, FactorExecutionResult):
                     result = FactorExecutionResult(
                         factor_name=name,
@@ -879,6 +893,7 @@ class OfficialFactorBatchComputeService:
                     result_handler(name, result)
                 else:
                     results[name] = result
+                completed_names.add(name)
             state = running.pop(name, None)
             if state is not None:
                 proc = state["process"]
