@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -36,6 +37,11 @@ from backend.services.research_assistant.service import (
     ModeDecision,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
+)
+from backend.services.research_assistant.runtime_config import (
+    RuntimeConfigCapabilityValidationError,
+    load_runtime_config,
+    validate_runtime_config_payload,
 )
 from backend.services.research_assistant.react_grounding import McpToolCall
 
@@ -285,6 +291,53 @@ def test_issue_candidate_fact_source_initializes_pipeline_center_lazily() -> Non
     assert calls == ["created"]
     source.issue_candidate_summary()
     assert calls == ["created"]
+
+
+def _runtime_config_payload_with_mutated_capability(capability_key: str, field: str, value: object) -> dict[str, object]:
+    payload: dict[str, object] = copy.deepcopy(load_runtime_config().config)
+    planner = payload["planner"]
+    assert isinstance(planner, dict)
+    capabilities = planner["workflow_capabilities"]
+    assert isinstance(capabilities, list)
+    for capability in capabilities:
+        if isinstance(capability, dict) and capability.get("capability_key") == capability_key:
+            capability[field] = value
+            return payload
+    raise AssertionError(f"capability not found in runtime config fixture: {capability_key}")
+
+
+@pytest.mark.parametrize(
+    ("bad_value", "expected_actual_type"),
+    [
+        ("[]", "str"),
+        ({"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}, "dict"),
+    ],
+)
+def test_runtime_config_rejects_capability_mcp_tool_refs_non_list(bad_value: object, expected_actual_type: str) -> None:
+    payload = _runtime_config_payload_with_mutated_capability("skill_library.reuse", "mcp_tool_refs", bad_value)
+
+    with pytest.raises(RuntimeConfigCapabilityValidationError) as exc_info:
+        validate_runtime_config_payload(payload, "unit-test-runtime-config")
+
+    message = str(exc_info.value)
+    assert "planner.workflow_capabilities" in message
+    assert "capability_key=skill_library.reuse" in message
+    assert "field=mcp_tool_refs" in message
+    assert f"actual_type={expected_actual_type}" in message
+
+
+def test_runtime_config_rejects_capability_mcp_tool_refs_non_object_entry() -> None:
+    payload = _runtime_config_payload_with_mutated_capability("skill_library.reuse", "mcp_tool_refs", ["not-an-object"])
+
+    with pytest.raises(RuntimeConfigCapabilityValidationError) as exc_info:
+        validate_runtime_config_payload(payload, "unit-test-runtime-config")
+
+    message = str(exc_info.value)
+    assert "planner.workflow_capabilities" in message
+    assert "capability_key=skill_library.reuse" in message
+    assert "field=mcp_tool_refs" in message
+    assert "mcp_tool_refs[0]" in message
+    assert "actual_type=str" in message
 
 
 class FakeQeExperimentService:
@@ -1010,6 +1063,47 @@ def test_runtime_config_declares_api_list_limit_for_each_catalog() -> None:
     missing = sorted(f"api_list_{kind}" for kind in TABLES if f"api_list_{kind}" not in limits)
 
     assert missing == []
+
+
+def test_bad_active_runtime_config_mcp_tool_refs_returns_specific_config_error() -> None:
+    svc = _chat_service()
+    activation = svc.active_runtime_config_activation()
+    config = copy.deepcopy(activation["config_json"])
+    for capability in config["planner"]["workflow_capabilities"]:
+        if capability["capability_key"] == "skill_library.reuse":
+            capability["mcp_tool_refs"] = "[]"
+            break
+    else:
+        raise AssertionError("skill_library.reuse capability missing from seeded runtime config")
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本情况、近期走势、未来趋势怎样", dialogue_mode_override="analysis"))
+
+    text = result["assistant_message"]["content_text"]
+    error = result["cards"]["error_card"]["error"]
+    assert "reason_code=runtime_config_invalid_capability_mcp_tool_refs" in text
+    assert "chat_turn_unexpected_error" not in text
+    assert "activation_id=" in text
+    assert "config_key=research_assistant.runtime_context" in text
+    assert "capability_key=skill_library.reuse" in text
+    assert "field=mcp_tool_refs" in text
+    assert "actual_type=str" in text
+    assert "从 YAML 重新 seed/导入 RA runtime config 后重启后端" in text
+    assert error["reason_code"] == "runtime_config_invalid_capability_mcp_tool_refs"
+    assert error["capability_key"] == "skill_library.reuse"
+    assert error["field"] == "mcp_tool_refs"
+    assert error["actual_type"] == "str"
+    assert result["cards"]["safety"]["fail_closed"] is True
+    assert result["task_events_ref"]["default_limit"] == 100
+
+
+def test_active_runtime_config_accepts_empty_mcp_tool_refs_list() -> None:
+    svc = _chat_service()
+    capabilities = svc._workflow_capabilities()
+
+    reuse = next(item for item in capabilities if item["capability_key"] == "skill_library.reuse")
+
+    assert reuse["mcp_tool_refs"] == []
 
 
 def test_runtime_config_controls_api_page_defaults_and_max() -> None:
@@ -1877,9 +1971,61 @@ def test_bug_404_data_source_unavailable_is_explicit_not_insufficient() -> None:
     assert "local data facade offline: 127.0.0.1:8001 refused" in text
     assert "aistock-local-data/local_data_get_preset_daily_status" in text
     assert "Insufficient evidence" not in text
+    assert "没有对应数据源 / 无法获取该数据" not in text
     assert result["cards"]["mcp_execution_result"]["error"]["reason_code"] == "data_source_unavailable"
     assert result["cards"]["react_grounding"]["tool_errors"][0]["reason_code"] == "data_source_unavailable"
     assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
+
+
+def test_a1_stock_evidence_card_explicitly_reports_missing_data_sources() -> None:
+    summary = {
+        "response_mode": "stock_analysis_evidence_card",
+        "symbol": "000688",
+        "status": "blocked",
+        "as_of": "2026-06-19T10:00:00+08:00",
+        "sections": [
+            {
+                "dataset": "quote",
+                "status": "degraded",
+                "as_of": "2026-06-19T10:00:00+08:00",
+                "summary": "个股只读 facade 缺少 get_stock_quote_evidence，该数据集已降级。",
+                "source_refs": [],
+                "items": [],
+                "reason_codes": ["stock_quote_facade_missing"],
+                "warnings": [
+                    {
+                        "reason_code": "stock_quote_facade_missing",
+                        "warning": "个股只读 facade 缺少 get_stock_quote_evidence，该数据集已降级。",
+                    }
+                ],
+            },
+            {
+                "dataset": "fundamentals",
+                "status": "degraded",
+                "as_of": "2026-06-19T10:00:00+08:00",
+                "summary": "联网基本面检索未返回可用网页证据。",
+                "source_refs": [],
+                "items": [],
+                "reason_codes": ["stock_external_research_empty"],
+                "warnings": [
+                    {
+                        "reason_code": "stock_external_research_empty",
+                        "warning": "联网基本面检索未返回可用网页证据。",
+                    }
+                ],
+            },
+        ],
+        "reason_codes": ["stock_quote_facade_missing", "stock_external_research_empty"],
+        "warnings": [],
+    }
+
+    text = ResearchAssistantService._render_stock_analysis_evidence_card_reply({"auto_executed": True}, summary)
+
+    assert "没有对应数据源 / 无法获取该数据" in text
+    assert "缺少 行情 的 stock_analysis 只读 facade 数据源" in text
+    assert "external_research 未返回 联网基本面 网页证据" in text
+    assert "reason_code=stock_quote_facade_missing" in text
+    assert "reason_code=stock_external_research_empty" in text
 
 
 def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> None:

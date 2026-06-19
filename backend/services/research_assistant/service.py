@@ -107,7 +107,15 @@ from .prompt_pack import (
     load_prompt_pack,
 )
 from .repository import DatabaseResearchAssistantRepository
-from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
+from .runtime_config import (
+    DEFAULT_ENVIRONMENT,
+    REPO_ROOT,
+    RUNTIME_CONFIG_KEY,
+    RuntimeConfigCapabilityValidationError,
+    RuntimeConfigSnapshot,
+    load_runtime_config,
+    validate_runtime_config_payload,
+)
 from .domain_ontology import DOMAIN_SPECS, domain_prompt_key
 from .mcp_catalog_sync import (
     canonicalize_server_key,
@@ -737,6 +745,14 @@ class ResearchAssistantCatalogNotReadyError(RuntimeError):
         super().__init__(message)
 
 
+class ResearchAssistantRuntimeConfigInvalidError(RuntimeError):
+    """Raised when the active DB runtime config is invalid and must be reseeded."""
+
+    def __init__(self, error_payload: dict[str, Any]) -> None:
+        self.error_payload = error_payload
+        super().__init__(str(error_payload.get("message") or error_payload.get("reason_code") or "runtime_config_invalid"))
+
+
 DEFAULT_SKILLS: list[dict[str, Any]] = [
     {
         "skill_key": "qe-evolution-diagnostics",
@@ -1304,6 +1320,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         "tool_result_compaction_error",
         "chat_turn_unexpected_error",
     }
+    CONFIG_ERROR_REASON_CODES = {
+        "runtime_config_invalid_capability_mcp_tool_refs",
+        "runtime_config_invalid_workflow_capability",
+        "runtime_config_invalid_active_config",
+    }
 
     @staticmethod
     def default_workflow_capabilities() -> list[dict[str, Any]]:
@@ -1410,6 +1431,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             f"error_summary={error.get('message') or error.get('human_reason') or ''}"
         ).strip()
 
+    @staticmethod
+    def _render_runtime_config_error_reply(error: dict[str, Any]) -> str:
+        return (
+            "Research Assistant runtime config 校验失败，已 fail-closed 停止本轮对话："
+            f"reason_code={error.get('reason_code') or error.get('code')}; "
+            f"stage={error.get('stage') or 'runtime_config_validation'}; "
+            f"activation_id={error.get('activation_id')}; "
+            f"config_key={error.get('config_key')}; "
+            f"capability_key={error.get('capability_key')}; "
+            f"field={error.get('field')}; "
+            f"actual_type={error.get('actual_type')}; "
+            f"operator_action={error.get('operator_action') or ResearchAssistantService._runtime_config_operator_action()}"
+        ).strip()
+
     def _mcp_tool_failure_result(
         self,
         call: McpToolCall,
@@ -1499,6 +1534,80 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "exception_type": type(exc).__name__,
             "message": str(exc),
         }
+
+    @staticmethod
+    def _runtime_config_operator_action() -> str:
+        return "从 YAML 重新 seed/导入 RA runtime config 后重启后端"
+
+    @staticmethod
+    def _runtime_config_activation_metadata(activation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "activation_id": str(activation.get("activation_id") or ""),
+            "config_key": str(activation.get("config_key") or RUNTIME_CONFIG_KEY),
+            "config_version": activation.get("config_version"),
+            "source_id": activation.get("source_id"),
+        }
+
+    @staticmethod
+    def _payload_for_runtime_config_error(exc: RuntimeConfigCapabilityValidationError, activation: dict[str, Any]) -> dict[str, Any]:
+        reason_code = (
+            "runtime_config_invalid_capability_mcp_tool_refs"
+            if exc.field == "mcp_tool_refs"
+            else "runtime_config_invalid_workflow_capability"
+        )
+        metadata = ResearchAssistantService._runtime_config_activation_metadata(activation)
+        activation_id = str(metadata["activation_id"])
+        config_key = str(metadata["config_key"])
+        message = (
+            f"active RA runtime config is invalid: activation_id={activation_id}; "
+            f"config_key={config_key}; capability_index={exc.index}; "
+            f"capability_key={exc.capability_key}; field={exc.field}; "
+            f"actual_type={exc.actual_type}; operator_action={ResearchAssistantService._runtime_config_operator_action()}"
+        )
+        if exc.entry_index is not None:
+            message = (
+                f"active RA runtime config is invalid: activation_id={activation_id}; "
+                f"config_key={config_key}; capability_index={exc.index}; "
+                f"capability_key={exc.capability_key}; field={exc.field}; "
+                f"entry_index={exc.entry_index}; actual_type={exc.actual_type}; "
+                f"operator_action={ResearchAssistantService._runtime_config_operator_action()}"
+            )
+        return {
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": "runtime_config_validation",
+            **metadata,
+            "capability_index": exc.index,
+            "capability_key": exc.capability_key,
+            "field": exc.field,
+            "entry_index": exc.entry_index,
+            "actual_type": exc.actual_type,
+            "exception_type": type(exc).__name__,
+            "message": message,
+            "operator_action": ResearchAssistantService._runtime_config_operator_action(),
+        }
+
+    @classmethod
+    def _chat_turn_config_error_payload(cls, exc: ResearchAssistantRuntimeConfigInvalidError) -> dict[str, Any]:
+        error = dict(exc.error_payload)
+        reason_code = str(error.get("reason_code") or "runtime_config_invalid_active_config")
+        error.update(
+            {
+                "reason_code": reason_code,
+                "code": reason_code,
+                "stage": error.get("stage") or "runtime_config_validation",
+                "server_key": None,
+                "tool_name": None,
+                "exception_type": error.get("exception_type") or type(exc).__name__,
+                "message": error.get("message") or str(exc),
+                "operator_action": error.get("operator_action") or cls._runtime_config_operator_action(),
+            }
+        )
+        return error
+
+    @staticmethod
+    def _fallback_task_events_detail_limit_for_config_error() -> int:
+        return 100
 
 
     def run_agent_team(
@@ -1647,7 +1756,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         else:
             if not isinstance(configured, list):
                 raise ValueError("planner.workflow_capabilities must be a list when configured")
-            source = [dict(item) for item in configured if not _retired_draft_storage_capability(dict(item))]
+            source = []
+            for index, item in enumerate(configured):
+                if not isinstance(item, dict):
+                    raise ValueError(f"planner.workflow_capabilities[{index}] must be an object when configured")
+                item = dict(item)
+                if _retired_draft_storage_capability(item):
+                    continue
+                source.append(item)
         merged: dict[str, dict[str, Any]] = {
             str(item.get("capability_key")): self._canonicalize_capability_mcp_refs(dict(item))
             for item in source
@@ -1779,13 +1895,80 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return readiness
 
     def active_runtime_config(self) -> dict[str, Any]:
-        activation = self.repository.find_one(
-            "runtime_config_activations",
-            {"config_key": RUNTIME_CONFIG_KEY, "environment": self.environment, "status": "active"},
-        )
-        if not activation:
-            raise RuntimeError("Research Assistant runtime config activation is missing; run catalog seed/import first")
-        return dict(activation["config_json"])
+        activation = self.active_runtime_config_activation()
+        raw_config = activation.get("config_json")
+        if not isinstance(raw_config, dict):
+            metadata = self._runtime_config_activation_metadata(activation)
+            reason_code = "runtime_config_invalid_active_config"
+            error = {
+                "reason_code": reason_code,
+                "code": reason_code,
+                "stage": "runtime_config_validation",
+                **metadata,
+                "field": "config_json",
+                "actual_type": type(raw_config).__name__,
+                "exception_type": "TypeError",
+                "message": (
+                    f"active RA runtime config is invalid: activation_id={metadata['activation_id']}; "
+                    f"config_key={metadata['config_key']}; field=config_json; actual_type={type(raw_config).__name__}; "
+                    f"operator_action={self._runtime_config_operator_action()}"
+                ),
+                "operator_action": self._runtime_config_operator_action(),
+            }
+            logger.error(
+                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s field=config_json actual_type=%s",
+                reason_code,
+                metadata["activation_id"],
+                metadata["config_key"],
+                type(raw_config).__name__,
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
+        config = dict(raw_config)
+        try:
+            validate_runtime_config_payload(config, f"active runtime_config_activation {activation.get('activation_id')}")
+        except RuntimeConfigCapabilityValidationError as exc:
+            error = self._payload_for_runtime_config_error(exc, activation)
+            logger.error(
+                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s capability_key=%s field=%s actual_type=%s",
+                error["reason_code"],
+                error["activation_id"],
+                error["config_key"],
+                error["capability_key"],
+                error["field"],
+                error["actual_type"],
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error) from exc
+        except ValueError as exc:
+            activation_id = str(activation.get("activation_id") or "")
+            config_key = str(activation.get("config_key") or RUNTIME_CONFIG_KEY)
+            reason_code = "runtime_config_invalid_active_config"
+            error = {
+                "reason_code": reason_code,
+                "code": reason_code,
+                "stage": "runtime_config_validation",
+                "activation_id": activation_id,
+                "config_key": config_key,
+                "config_version": activation.get("config_version"),
+                "source_id": activation.get("source_id"),
+                "field": "runtime_config",
+                "actual_type": type(config).__name__,
+                "exception_type": type(exc).__name__,
+                "message": (
+                    f"active RA runtime config is invalid: activation_id={activation_id}; "
+                    f"config_key={config_key}; error={exc}; "
+                    f"operator_action={self._runtime_config_operator_action()}"
+                ),
+                "operator_action": self._runtime_config_operator_action(),
+            }
+            logger.error(
+                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s error=%s",
+                reason_code,
+                activation_id,
+                config_key,
+                exc,
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error) from exc
+        return config
 
     def active_runtime_config_activation(self) -> dict[str, Any]:
         activation = self.repository.find_one(
@@ -2752,6 +2935,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self._chat_turn_impl(request)
         except ResearchAssistantCatalogNotReadyError:
             raise
+        except ResearchAssistantRuntimeConfigInvalidError as exc:
+            logger.error(
+                "research assistant chat_turn stopped by invalid runtime config: reason_code=%s activation_id=%s config_key=%s",
+                exc.error_payload.get("reason_code"),
+                exc.error_payload.get("activation_id"),
+                exc.error_payload.get("config_key"),
+            )
+            return self._chat_turn_error_response(request, exc)
         except RuntimeError as exc:
             if str(exc).startswith("High-risk Research Assistant task stopped"):
                 raise
@@ -2764,6 +2955,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _chat_turn_impl(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
         self.ensure_catalog_ready()
+        runtime_activation = self.active_runtime_config_activation()
+        runtime_config = self.active_runtime_config()
         conversation = (
             self.repository.get_record("conversations", data.conversation_id)
             if data.conversation_id
@@ -2816,8 +3009,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             ),
         )
 
-        runtime_activation = self.active_runtime_config_activation()
-        runtime_config = dict(runtime_activation["config_json"])
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -3058,15 +3249,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _chat_turn_error_response(self, request: ChatTurnRequest | dict[str, Any], exc: BaseException) -> dict[str, Any]:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
-        error = self._chat_turn_unexpected_error_payload(exc)
-        assistant_text = self._render_chat_turn_error_reply(error)
+        is_config_error = isinstance(exc, ResearchAssistantRuntimeConfigInvalidError)
+        if is_config_error:
+            error = self._chat_turn_config_error_payload(exc)
+            assistant_text = self._render_runtime_config_error_reply(error)
+            error_title = "Research Assistant runtime config invalid"
+            task_events_detail_limit = self._fallback_task_events_detail_limit_for_config_error()
+        else:
+            error = self._chat_turn_unexpected_error_payload(exc)
+            assistant_text = self._render_chat_turn_error_reply(error)
+            error_title = "Research Assistant chat_turn failed"
+            task_events_detail_limit = self.configured_limit("task_events_detail")
         cards = {
             "intent_type": "error",
             "dialogue_mode": "recovery",
             "status_rail": [{"label": "error", "status": "failed"}],
-            "safety": {"no_silent_error": True},
+            "safety": {"no_silent_error": True, "fail_closed": is_config_error},
             "error_card": {
-                "title": "Research Assistant chat_turn failed",
+                "title": error_title,
                 "summary": assistant_text,
                 "reason_code": error["reason_code"],
                 "error": error,
@@ -3172,8 +3372,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         task_events = []
         if task:
             try:
-                task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
+                task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=task_events_detail_limit)["items"]
             except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to list fallback task events for chat_turn error: task_id=%s reason_code=%s",
+                    task.get("task_id"),
+                    error.get("reason_code"),
+                )
                 task_events = []
         return {
             "conversation": self._public_conversation(conversation) if conversation else {"conversation_id": conversation_id, "user_id": data.user_id, "title": self._conversation_title(data.message), "status": "error"},
@@ -3181,7 +3386,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "assistant_message": self._public_conversation_message(fallback_assistant),
             "task": self._public_task(task),
             "task_events": self._public_task_events(task_events),
-            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{(task or {}).get('task_id', 'unpersisted')}/events", "default_limit": self.configured_limit("task_events_detail")},
+            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{(task or {}).get('task_id', 'unpersisted')}/events", "default_limit": task_events_detail_limit},
             "prompt_bundle": None,
             "context_pack": None,
             "trace": {"trace_id": (trace or {}).get("trace_id"), "status": "failed", "duration_ms": None, "model_profile_id": None},
@@ -5202,6 +5407,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return ResearchAssistantService._humanize_business_identifier(route)
 
     @staticmethod
+    def _stock_missing_data_source_notice(dataset: str, label: str, reason_code: str, warning: str) -> str | None:
+        if reason_code == "stock_symbol_missing":
+            return "没有对应数据源 / 无法获取该数据：缺少明确股票代码或 symbol，无法读取行情、财务、资金流、技术指标和联网基本面数据。"
+        if reason_code.endswith("_facade_missing"):
+            return f"没有对应数据源 / 无法获取该数据：缺少 {label} 的 stock_analysis 只读 facade 数据源；reason_code={reason_code}。"
+        if reason_code == "stock_external_research_empty":
+            return f"没有对应数据源 / 无法获取该数据：external_research 未返回 {label} 网页证据；reason_code={reason_code}。"
+        if reason_code.endswith("_empty"):
+            return f"没有对应数据源 / 无法获取该数据：{label} 当前没有可用记录；reason_code={reason_code}。"
+        if warning and "未返回可用" in warning:
+            return f"没有对应数据源 / 无法获取该数据：{label} {warning}；reason_code={reason_code or 'unknown'}。"
+        del dataset
+        return None
+
+    @staticmethod
     def _friendly_field_label(key: str) -> str:
         labels = {
             "title": "\u540d\u79f0",
@@ -5380,10 +5600,26 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 section_warnings = [item for item in (section.get("warnings") or []) if isinstance(item, dict)]
                 for warning in section_warnings[:2]:
                     lines.append(f"  降级说明：reason_code={warning.get('reason_code')}；warning={warning.get('warning')}")
+                    notice = ResearchAssistantService._stock_missing_data_source_notice(
+                        dataset,
+                        label,
+                        str(warning.get("reason_code") or ""),
+                        str(warning.get("warning") or ""),
+                    )
+                    if notice:
+                        lines.append(f"  {notice}")
         if warnings and not any("降级说明" in line for line in lines):
             lines.append("降级说明：")
             for warning in warnings[:5]:
                 lines.append(f"- reason_code={warning.get('reason_code')}；warning={warning.get('warning')}")
+                notice = ResearchAssistantService._stock_missing_data_source_notice(
+                    str(warning.get("dataset") or ""),
+                    ResearchAssistantService._humanize_business_identifier(str(warning.get("dataset") or "数据")),
+                    str(warning.get("reason_code") or ""),
+                    str(warning.get("warning") or ""),
+                )
+                if notice:
+                    lines.append(f"- {notice}")
         elif reason_codes:
             lines.append("降级 reason_code：" + "；".join(reason_codes[:8]))
         lines.append("结论边界：以上是证据卡，不是买卖建议；无来源的主营、行业、竞争或趋势判断不会写入结论。")

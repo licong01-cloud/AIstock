@@ -185,6 +185,74 @@ class _NativeStockEvidenceCardLlm(_StockEvidenceCardLlm):
         return result
 
 
+class _ExternalResearchNativeToolLlm(_StockEvidenceCardLlm):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_registry: dict[str, dict[str, str]] = {}
+
+    def complete(self, **kwargs: Any) -> LlmCallResult:
+        messages = kwargs.get("messages") if isinstance(kwargs.get("messages"), list) else []
+        for message in reversed(messages):
+            if not isinstance(message, dict):
+                continue
+            try:
+                directive = json.loads(str(message.get("content") or ""))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(directive, dict) and directive.get("type") == "REACT_EVIDENCE_GUARD_REPAIR_DIRECTIVE":
+                options = directive.get("citation_options") if isinstance(directive.get("citation_options"), list) else []
+                citation = options[0] if options and isinstance(options[0], dict) else {}
+                source = str(citation.get("source") or "external_research_summary_adapter")
+                as_of = str(citation.get("as_of") or "2026-06-16")
+                return LlmCallResult(
+                    content=f"国城矿业外部研究检索可用：已取得联网资料线索。来源 {source}，截至 {as_of}。",
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
+        has_tool_result = any("TOOL_RESULT" in str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        if not has_tool_result:
+            self.complete_calls.append(kwargs)
+            registry = kwargs.get("tool_registry") if isinstance(kwargs.get("tool_registry"), dict) else {}
+            self.first_registry = {str(key): dict(value) for key, value in registry.items() if isinstance(value, dict)}
+            return LlmCallResult(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-external-research",
+                        tool_name="external_research_search_web",
+                        payload_json={"query": "国城矿业 000688 基本情况 近期走势 未来趋势", "limit": 2},
+                        stable_call_id="native_external_research_000688",
+                        reason="native_function_call:external_research_search_web",
+                    )
+                ],
+            )
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            try:
+                payload = json.loads(str(message.get("content") or ""))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("type") == "TOOL_RESULT":
+                tool_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                items = tool_payload.get("items") if isinstance(tool_payload.get("items"), list) else []
+                first = items[0] if items and isinstance(items[0], dict) else {}
+                return LlmCallResult(
+                    content=f"国城矿业外部研究检索可用：{first.get('title')}；来源 {first.get('source')}，截至 {tool_payload.get('as_of') or '2026-06-16'}。",
+                    provider="fake",
+                    model="fake-primary",
+                    duration_ms=1,
+                    usage={},
+                )
+        return super().complete(**kwargs)
+
+
 class _Bug413RealStyleStockEvidenceCardLlm(_NativeStockEvidenceCardLlm):
     def __init__(self) -> None:
         super().__init__()
@@ -253,6 +321,47 @@ def test_stock_analysis_tools_are_read_only_and_assistant_direct() -> None:
     assert ("aistock-stock-analysis", "stock_analysis_get_quote") in refs
     assert ("aistock-external-research", "external_research_search_web") in refs
     assert ("aistock-external-research", "external_research_fetch_extract") in refs
+
+
+def test_a2_stock_research_tool_sets_are_provided_and_executable() -> None:
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=_StockEvidenceCardLlm())
+    svc.seed_catalogs()
+    mode_decision = svc._decide_dialogue_mode(
+        "国城矿业基本情况/近期走势/未来趋势",
+        dialogue_intent=svc._classify_dialogue_intent("国城矿业基本情况/近期走势/未来趋势"),
+        phase="analysis",
+        allow_execute=False,
+        risk_level="medium",
+        override="analysis",
+    )
+
+    _specs, registry = svc._agentic_function_tools(mode_decision)
+    available = {
+        (str(ref["server_key"]), str(ref["tool_name"]))
+        for capability in svc._workflow_capabilities()
+        for ref in capability.get("mcp_tool_refs", [])
+        if isinstance(ref, dict)
+    }
+    executable_entries = svc._react_tool_catalog_entries(capability_backed_only=True)
+    executable = {(tool.server_key, tool.tool_name) for tool in executable_entries}
+    read_only_executable = {
+        (tool.server_key, tool.tool_name)
+        for tool in executable_entries
+        if tool.side_effect_level == "read_only"
+    }
+    function_registry = {(item["server_key"], item["tool_name"]) for item in registry.values()}
+
+    required = {
+        ("aistock-external-research", "external_research_search_web"),
+        ("aistock-external-research", "external_research_fetch_extract"),
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-stock-analysis", "stock_analysis_get_financials"),
+    }
+    assert required <= available
+    assert required <= executable
+    assert required <= function_registry
+    assert executable <= available
+    assert function_registry == read_only_executable
 
 
 def test_stock_analysis_evidence_facade_endpoints_are_read_only_summary_envelopes() -> None:
@@ -344,6 +453,28 @@ def test_bug_403_guocheng_mining_agentic_stock_analysis_uses_native_tool_call() 
     datasets = {section["dataset"] for section in result["cards"]["mcp_summary_result"]["sections"]}
     assert {"quote", "financials", "fund_flow", "technicals", "fundamentals"} <= datasets
     assert result["cards"]["react_grounding"]["tool_call_count"] >= 1
+
+
+def test_a2_stock_question_can_execute_external_research_native_tool_call() -> None:
+    fake_llm = _ExternalResearchNativeToolLlm()
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake_llm)
+    svc.seed_catalogs()
+    svc.stock_analysis_facade_factory = _FakeStockEvidenceService
+    svc.external_research_provider_factory = _FakeExternalResearchProvider
+
+    result = svc.chat_turn(ChatTurnRequest(message="国城矿业 基本情况/近期走势/未来趋势，需要联网资料和行情一起看", dialogue_mode_override="analysis"))
+    text = result["assistant_message"]["content_text"]
+    registry_pairs = {(item["server_key"], item["tool_name"]) for item in fake_llm.first_registry.values()}
+
+    assert ("aistock-external-research", "external_research_search_web") in registry_pairs
+    assert ("aistock-external-research", "external_research_fetch_extract") in registry_pairs
+    assert ("aistock-stock-analysis", "stock_analysis_get_quote") in registry_pairs
+    assert "example.org/external-research" in text
+    assert "capability_not_found" not in text
+    assert "KeyError" not in text
+    assert result["cards"]["mcp_execution_result"]["status"] == "succeeded"
+    assert result["cards"]["mcp_execution_result"]["tool_name"] == "external_research_search_web"
+    assert result["cards"]["mcp_summary_result"]["domain"] == "external_research"
 
 
 def test_bug_413_guocheng_real_style_multisource_answer_regenerates_instead_of_fail_closed() -> None:

@@ -4,7 +4,10 @@
     "backend/services/research_assistant/runtime_config.py",
     "backend/services/research_assistant/service.py",
     "tests/aistock_validation/bugs/20260619_BUG-431-ra-chat-turn-crashes-after-restart-active-runtime-config-capability-mcp.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+    "backend/tests/research_assistant/test_evidence_guard.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-431",
@@ -45,7 +48,9 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0",
+    "ra_phase0_baseline"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
