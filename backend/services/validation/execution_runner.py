@@ -34,10 +34,7 @@ MAX_LOG_TAIL_LINES = 2000
 ARTIFACT_KIND_SUFFIXES = {
     "guardrail_md": ".txt",
 }
-_WORKSPACE_PATH_ALLOWLIST: tuple[str, ...] = (
-    "F:/Dev/AIstock_worktrees/",
-    "F:\\Dev\\AIstock_worktrees\\",
-)
+_WORKTREE_ROOT_ENV = "AISTOCK_WORKTREE_ROOT"
 
 
 @dataclass(frozen=True)
@@ -77,9 +74,38 @@ def _is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def _is_allowlisted_workspace_path(path: Path) -> bool:
+def _workspace_allowlist_roots(repo_root: Path = REPO_ROOT) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    override = os.environ.get(_WORKTREE_ROOT_ENV)
+    if override:
+        roots.append(Path(override))
+    repo_root = repo_root.resolve()
+    if repo_root.parent.name == "AIstock_worktrees":
+        roots.append(repo_root.parent)
+    roots.append(repo_root.parent / "AIstock_worktrees")
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        resolved = str(root.resolve()).replace("\\", "/").rstrip("/")
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(Path(resolved))
+    return tuple(unique)
+
+
+def _is_allowlisted_workspace_path(path: Path, repo_root: Path = REPO_ROOT) -> bool:
     resolved = str(path.resolve()).replace("\\", "/")
-    return any(resolved.startswith(prefix.replace("\\", "/")) for prefix in _WORKSPACE_PATH_ALLOWLIST)
+    return any(
+        resolved == root_resolved or resolved.startswith(f"{root_resolved}/")
+        for root in _workspace_allowlist_roots(repo_root)
+        for root_resolved in [str(root.resolve()).replace("\\", "/").rstrip("/")]
+    )
+
+
+def _workspace_allowlist_error(repo_root: Path) -> str:
+    roots = ", ".join(str(root) for root in _workspace_allowlist_roots(repo_root))
+    return f"Must be under configured {_WORKTREE_ROOT_ENV}, inferred AIstock_worktrees root, or the configured repo root: {roots}."
 
 
 def _registered_git_worktree_paths(repo_root: Path) -> set[Path]:
@@ -315,16 +341,11 @@ class ValidationExecutionRunner:
             raise ValidationRunnerError(f"workspace_path is not a directory: {workspace_path}")
         registered_worktrees = _registered_git_worktree_paths(repo_root_resolved)
         if registered_worktrees:
-            if resolved in registered_worktrees:
-                return resolved
-            raise ValidationRunnerError(
-                f"workspace_path is not a registered git worktree for this repository: {workspace_path}"
-            )
-        resolved_str = str(resolved).replace("\\", "/")
-        allowed = any(
-            resolved_str.startswith(prefix.replace("\\", "/"))
-            for prefix in _WORKSPACE_PATH_ALLOWLIST
-        )
+            if resolved not in registered_worktrees:
+                raise ValidationRunnerError(
+                    f"workspace_path is not a registered git worktree for this repository: {workspace_path}"
+                )
+        allowed = _is_allowlisted_workspace_path(resolved, repo_root_resolved)
         try:
             resolved.relative_to(repo_root_resolved)
             allowed = True
@@ -333,7 +354,7 @@ class ValidationExecutionRunner:
         if not allowed:
             raise ValidationRunnerError(
                 f"workspace_path is not in the allowlist: {workspace_path}. "
-                f"Must be under F:/Dev/AIstock_worktrees/ or the configured repo root."
+                f"{_workspace_allowlist_error(repo_root_resolved)}"
             )
         return resolved
 
@@ -1064,7 +1085,11 @@ class ValidationExecutionRunner:
         path = Path(raw_path)
         if not path.is_absolute():
             path = self.repo_root / path
-        if _is_inside(path, self.repo_root) or _is_inside(path, self.execution_root) or _is_allowlisted_workspace_path(path):
+        if (
+            _is_inside(path, self.repo_root)
+            or _is_inside(path, self.execution_root)
+            or _is_allowlisted_workspace_path(path, self.repo_root)
+        ):
             return path
         return None
 

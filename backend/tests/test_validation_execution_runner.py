@@ -474,7 +474,7 @@ def _init_registered_worktree(repo_root: Path, worktree: Path, *, branch: str = 
 
 
 def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree = tmp_path / "AIstock_worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
     _init_git_repo(worktree)
 
@@ -504,7 +504,7 @@ def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> Non
 
 def test_workspace_path_uses_worktree_catalog_and_allowlist(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    worktree = tmp_path / "worktrees" / "ra-baseline"
+    worktree = tmp_path / "AIstock_worktrees" / "ra-baseline"
     _init_registered_worktree(repo_root, worktree)
     root_catalog = tmp_path / "root-plans.yaml"
     _write_catalog(root_catalog, runner_enabled=True)
@@ -539,6 +539,59 @@ def test_workspace_path_uses_worktree_catalog_and_allowlist(tmp_path: Path) -> N
     assert job["nox_session"] == "ra_phase0_baseline"
     assert calls[0][0][-2:] == ["-s", "ra_phase0_baseline"]
     assert calls[0][1].resolve() == worktree.resolve()
+
+
+def test_workspace_archive_paths_use_configured_worktree_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = tmp_path / "repo"
+    configured_root = tmp_path / "custom_worktrees"
+    worktree = configured_root / "bug-438"
+    _init_registered_worktree(repo_root, worktree)
+    monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(configured_root))
+    worktree_catalog = worktree / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
+    worktree_catalog.parent.mkdir(parents=True, exist_ok=True)
+    _write_catalog(worktree_catalog, runner_enabled=True)
+    _write_workspace_plan_allowlist(
+        worktree / "backend" / "services" / "validation" / "plan_catalog.py",
+        {"nox_l0": "l0"},
+    )
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        repo_root=repo_root,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    job = runner.start_job(plan_key="l0", workspace_path=str(worktree))
+    evidence = runner.get_job_evidence(job["job_id"])
+
+    assert job["status"] == "passed"
+    assert evidence["standard_evidence"]["schema_version"] == EVIDENCE_SCHEMA
+    assert worktree / "tests" / "aistock_validation" / "history" in Path(
+        job["archive"]["run_record_path"]
+    ).parents
+
+
+def test_workspace_path_error_mentions_configured_worktree_root(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+    )
+    outside_dir = Path(os.environ.get("TEMP", "C:/Windows/Temp")) / "aistock_test_reject_message"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with pytest.raises(ValidationRunnerError, match="AISTOCK_WORKTREE_ROOT"):
+            runner.start_job(plan_key="l0", workspace_path=str(outside_dir))
+    finally:
+        shutil.rmtree(outside_dir, ignore_errors=True)
 
 
 def test_plan_lookup_without_workspace_path_uses_root_catalog(tmp_path: Path) -> None:
@@ -579,7 +632,7 @@ def test_workspace_path_rejects_unregistered_git_worktree(tmp_path: Path) -> Non
 
 def test_workspace_catalog_rejects_missing_command_key_allowlist(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    worktree = tmp_path / "worktrees" / "ra-baseline"
+    worktree = tmp_path / "AIstock_worktrees" / "ra-baseline"
     _init_registered_worktree(repo_root, worktree)
     root_catalog = tmp_path / "root-plans.yaml"
     _write_catalog(root_catalog, runner_enabled=True)
@@ -604,7 +657,7 @@ def test_workspace_catalog_rejects_missing_command_key_allowlist(tmp_path: Path)
 
 def test_workspace_catalog_keeps_forbidden_backend_port_gate(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    worktree = tmp_path / "worktrees" / "ra-baseline"
+    worktree = tmp_path / "AIstock_worktrees" / "ra-baseline"
     _init_registered_worktree(repo_root, worktree)
     root_catalog = tmp_path / "root-plans.yaml"
     _write_catalog(root_catalog, runner_enabled=True)
@@ -632,7 +685,7 @@ def test_workspace_catalog_keeps_forbidden_backend_port_gate(tmp_path: Path) -> 
 
 
 def test_default_archive_root_follows_workspace_path(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree = tmp_path / "AIstock_worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
     _init_git_repo(worktree)
 
@@ -786,7 +839,7 @@ def test_canonical_root_main_rejects_in_repo_explicit_history_root(tmp_path: Pat
 
 
 def test_expected_branch_mismatch_rejected(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree = tmp_path / "AIstock_worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
     _init_git_repo(worktree)
 
@@ -804,7 +857,7 @@ def test_expected_branch_mismatch_rejected(tmp_path: Path) -> None:
 
 
 def test_expected_commit_accepts_full_or_short_commit(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree = tmp_path / "AIstock_worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
     _init_git_repo(worktree)
     full_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(worktree), text=True).strip()
@@ -830,7 +883,7 @@ def test_expected_commit_accepts_full_or_short_commit(tmp_path: Path) -> None:
 
 
 def test_workspace_artifacts_are_copied_from_target_worktree(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree = tmp_path / "AIstock_worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
     _init_git_repo(worktree)
     artifact_dir = worktree / "tmp" / "validation" / "guardrails"
@@ -859,3 +912,4 @@ def test_workspace_artifacts_are_copied_from_target_worktree(tmp_path: Path) -> 
     assert guardrail_paths
     copied_payload = json.loads(guardrail_paths[0].read_text(encoding="utf-8"))
     assert copied_payload["files"] == ["branch_only.py"]
+
