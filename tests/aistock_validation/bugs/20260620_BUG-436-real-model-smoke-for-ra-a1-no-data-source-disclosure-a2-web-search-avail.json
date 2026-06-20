@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-436",
-  "closed_at": null,
+  "closed_at": "2026-06-20T06:56:36Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -23,13 +23,25 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260620-9d3999d1356b",
       "timestamp": "2026-06-20T04:56:38.093602Z"
+    },
+    {
+      "timestamp": "2026-06-20T06:56:36Z",
+      "actor": "codex",
+      "action": "merged",
+      "note": "Merged PR #1342 after CI green (17 passed, 0 failed). Source head 2b16f5b004733527483aa0e864a3c3106bf0814b; merge commit 235371c612c645cdd1634f05ee0e198b11899b07. No services started, no production DB, no DDL."
+    },
+    {
+      "timestamp": "2026-06-20T07:00:09Z",
+      "actor": "codex",
+      "action": "close_sync_merged",
+      "note": "Merged close-sync PR #1345 after CI green (18 passed, 0 failed); Issue #1340 is closed with status:fixed. Real-model A1/A2 smoke remains user-run in a keyed environment per docs/operations/research_assistant_real_model_smoke_runbook_20260620.md."
     }
   ],
   "evidence_uris": [],
   "expected": "A repeatable real-model RA smoke exists: missing DeepSeek credentials loud-skip with a distinct skip exit code, A2 verifies external_research + stock_analysis are provided/executable and search_web can run without capability errors, and A1 verifies genuine no-data-source answers explicitly say no corresponding data source / unable to fetch data without masking real tool errors.",
   "first_seen_at": "2026-06-20T04:56:38.093607Z",
-  "fix_branch": null,
-  "fix_commit": "235371c612c645cdd1634f05ee0e198b11899b07",
+  "fix_branch": "bug/BUG-436-real-model-smoke-for-ra-a1-no-data-source-disclo-20260620",
+  "fix_commit": "2b16f5b004733527483aa0e864a3c3106bf0814b",
   "fixed_at": "2026-06-20T06:57:46.251955Z",
   "github_issue_number": 1340,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1340",
@@ -59,7 +71,8 @@
     "source_event_id": "FE-20260620-9d3999d1356b"
   },
   "validation_evidence": [
-    "rtk gh pr checks 1342 -> passed (17 passed, 0 failed)"
+    "rtk gh pr checks 1342 -> passed (17 passed, 0 failed)",
+    "rtk gh pr checks 1345 -> passed (18 passed, 0 failed)"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -73,5 +86,6 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "fix_ready"
+  "workflow_gate": "fix_ready",
+  "merge_commit": "235371c612c645cdd1634f05ee0e198b11899b07"
 }
