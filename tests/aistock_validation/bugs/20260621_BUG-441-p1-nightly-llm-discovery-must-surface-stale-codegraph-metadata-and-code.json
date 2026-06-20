@@ -29,16 +29,16 @@
       "timestamp": "2026-06-20T18:55:00.997126Z"
     },
     {
-      "timestamp": "2026-06-20T18:56:17.745763Z",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Regression tests are required to lock compact code intelligence refs and selected-plan artifact propagation."
+      "actor": "codex",
+      "note": "Regression tests are required to lock compact code intelligence refs and selected-plan artifact propagation.",
+      "timestamp": "2026-06-20T18:56:17.745763Z"
     },
     {
-      "timestamp": "2026-06-20T18:58:06.537385Z",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Nightly workflow must pass generated CodeGraph freshness artifact into the discovery input pack to close the LLM/code-intelligence loop."
+      "actor": "codex",
+      "note": "Nightly workflow must pass generated CodeGraph freshness artifact into the discovery input pack to close the LLM/code-intelligence loop.",
+      "timestamp": "2026-06-20T18:58:06.537385Z"
     }
   ],
   "evidence_uris": [
@@ -47,8 +47,8 @@
   "expected": "Nightly/LLM discovery artifacts should carry compact CodeGraph/Understand Anything refs and stale metadata warnings end-to-end, so Codex/Claude/GitHub CI can make freshness-aware decisions without broad code scans.",
   "first_seen_at": "2026-06-20T18:55:00.997130Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6bfa8362fe5d841d047ebf69bc99349d10e94ca4",
+  "fixed_at": "2026-06-20T19:10:54.291624Z",
   "github_issue_number": 1361,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1361",
   "last_seen_at": "2026-06-20T18:55:00.997130Z",
@@ -56,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1362",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,7 +68,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_center"
   ],
@@ -76,6 +77,13 @@
     "fingerprint": "6ed6f1ef807980f32a64a967",
     "source_event_id": "FE-20260621-6ed6f1ef8079"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_llm_provider_adapter.py backend/tests/scripts/test_nightly_discovery_input_pack.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -q -p no:cacheprovider -> 70 passed",
+    "AISTOCK_LLM_ENV_FILE=F:\\Dev\\AIstock\\.env python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis --provider deepseek_api --invoke-llm ... -> llm_invoked=true usage=1862",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "GitHub PR #1362 checks -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
