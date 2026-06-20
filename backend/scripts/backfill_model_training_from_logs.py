@@ -20,7 +20,51 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-LOG_ROOT = Path("/mnt/f/Dev/RD-Agent-main/log")
+LOG_ROOT_ENV_KEYS = ("RDAGENT_LOG_ROOT", "QLIB_RDAGENT_LOG_ROOT")
+
+
+def _load_project_env() -> None:
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = []
+    if os.environ.get("AISTOCK_ENV_FILE"):
+        candidates.append(Path(os.environ["AISTOCK_ENV_FILE"]))
+    candidates.append(repo_root / ".env")
+    dotgit = repo_root / ".git"
+    if dotgit.is_file():
+        text = dotgit.read_text(encoding="utf-8", errors="ignore").strip()
+        if text.lower().startswith("gitdir:"):
+            gitdir = Path(text.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (repo_root / gitdir).resolve()
+            parts = list(gitdir.parts)
+            if ".git" in parts:
+                candidates.append(Path(*parts[: parts.index(".git") + 1]).parent / ".env")
+    for env_file in candidates:
+        if env_file.exists():
+            override = env_file == candidates[0] and os.environ.get("AISTOCK_ENV_FILE")
+            load_dotenv(env_file, override=bool(override))
+            return
+
+
+def resolve_log_root(explicit: str | None = None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    _load_project_env()
+    for name in LOG_ROOT_ENV_KEYS:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return Path(value).expanduser()
+    root = (os.environ.get("QLIB_RDAGENT_ROOT_WSL") or "").strip()
+    if root:
+        return Path(root.rstrip("/")) / "log"
+    raise RuntimeError(
+        "RD-Agent log root is not configured; set RDAGENT_LOG_ROOT, "
+        "QLIB_RDAGENT_LOG_ROOT, or QLIB_RDAGENT_ROOT_WSL."
+    )
 
 # PyTorch 模型: Epoch{N}: train {loss}, valid {loss}
 RE_EPOCH_PT = re.compile(
@@ -44,15 +88,15 @@ def parse_training_log(log_text: str) -> dict:
 
     epochs = []
     best_epoch = None
-    best_score = None
-    n_epochs_config = None
+    _best_score = None
+    _n_epochs_config = None
     is_lgb = False
 
     for line in lines:
         # Check n_epochs config
         m = RE_N_EPOCHS.search(line)
         if m:
-            n_epochs_config = int(m.group(1))
+            _n_epochs_config = int(m.group(1))
 
         # PyTorch epoch
         m = RE_EPOCH_PT.search(line)
@@ -78,7 +122,7 @@ def parse_training_log(log_text: str) -> dict:
         # best score (PyTorch)
         m = RE_BEST_PT.search(line)
         if m:
-            best_score = float(m.group(1))
+            _best_score = float(m.group(1))
             best_epoch = int(m.group(2))
 
     if not epochs:
@@ -90,7 +134,7 @@ def parse_training_log(log_text: str) -> dict:
     if is_lgb and best_epoch is None and epochs:
         min_val = min(epochs, key=lambda e: e["val_loss"])
         best_epoch = min_val["epoch"]
-        best_score = min_val["val_loss"]
+        _best_score = min_val["val_loss"]
 
     # For PyTorch, if best_epoch not found from log, find min val_loss
     if best_epoch is None and epochs:
@@ -132,9 +176,10 @@ def parse_training_log(log_text: str) -> dict:
     }
 
 
-def find_training_log(task_id: str, loop_id: int) -> str:
+def find_training_log(task_id: str, loop_id: int, log_root: Path | None = None) -> str:
     """在 RDAgent log 目录中查找训练日志 pkl。"""
-    loop_dir = LOG_ROOT / task_id / f"Loop_{loop_id}" / "running" / "Qlib_execute_log"
+    root = log_root or resolve_log_root()
+    loop_dir = root / task_id / f"Loop_{loop_id}" / "running" / "Qlib_execute_log"
     if not loop_dir.exists():
         return ""
 
@@ -155,7 +200,13 @@ def main():
     parser = argparse.ArgumentParser(description="从 RDAgent 训练日志提取诊断数据")
     parser.add_argument("--dry-run", action="store_true", help="仅显示结果，不写入 DB")
     parser.add_argument("--db-url", default=None, help="PostgreSQL URL")
+    parser.add_argument(
+        "--log-root",
+        default=None,
+        help="RD-Agent log root; defaults to env or QLIB_RDAGENT_ROOT_WSL/log",
+    )
     args = parser.parse_args()
+    log_root = resolve_log_root(args.log_root)
 
     # 从 JSON 文件读取需要回填的模型列表（由 Windows 侧生成）
     models_file = Path(__file__).parent / "models_needing_backfill.json"
@@ -175,15 +226,15 @@ def main():
         loop_id = m["loop_id"]
 
         logger.info(f"  处理 {model_id} (task={task_id}, loop={loop_id})")
-        log_text = find_training_log(task_id, loop_id)
+        log_text = find_training_log(task_id, loop_id, log_root)
         if not log_text:
-            logger.warning(f"    无训练日志")
+            logger.warning("    无训练日志")
             results.append({"model_id": model_id, "status": "no_log"})
             continue
 
         diag = parse_training_log(log_text)
         if not diag:
-            logger.warning(f"    训练日志无 epoch 数据")
+            logger.warning("    训练日志无 epoch 数据")
             results.append({"model_id": model_id, "status": "no_epochs"})
             continue
 

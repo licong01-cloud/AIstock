@@ -72,14 +72,68 @@ class ConfigManager:
                 "type": "text",
             },
             "QLIB_RDAGENT_ROOT_WIN": {
-                "value": "F:/Dev/RD-Agent-main",
+                "value": "",
                 "description": "Windows 下 RD-Agent 项目根目录（绝对路径）",
                 "required": False,
                 "type": "text",
             },
             "QLIB_RDAGENT_ROOT_WSL": {
-                "value": "/mnt/f/Dev/RD-Agent-main",
+                "value": "",
                 "description": "WSL 中 RD-Agent 项目根目录（绝对路径）",
+                "required": False,
+                "type": "text",
+            },
+            "QE_WORKSPACE_WIN": {
+                "value": "",
+                "description": "Windows RD-Agent QE workspace root; leave blank unless this workstation uses it.",
+                "required": False,
+                "type": "text",
+            },
+            "QE_WORKSPACE_WSL": {
+                "value": "",
+                "description": "WSL RD-Agent QE workspace root used by dispatch compute-node seed data.",
+                "required": False,
+                "type": "text",
+            },
+            "RDAGENT_FACTOR_DATA_WSL": {
+                "value": "",
+                "description": "WSL factor implementation source-data directory for RD-Agent/QE tasks.",
+                "required": False,
+                "type": "text",
+            },
+            "QLIB_DATA_PATH_WSL": {
+                "value": "",
+                "description": "WSL Qlib day-frequency bin data path.",
+                "required": False,
+                "type": "text",
+            },
+            "QLIB_DAY_DATA": {
+                "value": "",
+                "description": "Alias for WSL Qlib day-frequency bin data path.",
+                "required": False,
+                "type": "text",
+            },
+            "QLIB_MINUTE_PATH_WSL": {
+                "value": "",
+                "description": "WSL Qlib minute-frequency bin data path.",
+                "required": False,
+                "type": "text",
+            },
+            "QLIB_MINUTE_DATA": {
+                "value": "",
+                "description": "Alias for WSL Qlib minute-frequency bin data path.",
+                "required": False,
+                "type": "text",
+            },
+            "RDAGENT_LOG_ROOT": {
+                "value": "",
+                "description": "WSL RD-Agent log root for backend helper scripts.",
+                "required": False,
+                "type": "text",
+            },
+            "QLIB_RDAGENT_LOG_ROOT": {
+                "value": "",
+                "description": "Alias for WSL RD-Agent log root.",
                 "required": False,
                 "type": "text",
             },
@@ -394,6 +448,33 @@ class ConfigManager:
             )
             lines.append(
                 f'QLIB_RDAGENT_ROOT_WSL="{config.get("QLIB_RDAGENT_ROOT_WSL", "")}"'
+            )
+            lines.append(
+                f'QE_WORKSPACE_WIN="{config.get("QE_WORKSPACE_WIN", "")}"'
+            )
+            lines.append(
+                f'QE_WORKSPACE_WSL="{config.get("QE_WORKSPACE_WSL", "")}"'
+            )
+            lines.append(
+                f'RDAGENT_FACTOR_DATA_WSL="{config.get("RDAGENT_FACTOR_DATA_WSL", "")}"'
+            )
+            lines.append(
+                f'QLIB_DATA_PATH_WSL="{config.get("QLIB_DATA_PATH_WSL", "")}"'
+            )
+            lines.append(
+                f'QLIB_DAY_DATA="{config.get("QLIB_DAY_DATA", "")}"'
+            )
+            lines.append(
+                f'QLIB_MINUTE_PATH_WSL="{config.get("QLIB_MINUTE_PATH_WSL", "")}"'
+            )
+            lines.append(
+                f'QLIB_MINUTE_DATA="{config.get("QLIB_MINUTE_DATA", "")}"'
+            )
+            lines.append(
+                f'RDAGENT_LOG_ROOT="{config.get("RDAGENT_LOG_ROOT", "")}"'
+            )
+            lines.append(
+                f'QLIB_RDAGENT_LOG_ROOT="{config.get("QLIB_RDAGENT_LOG_ROOT", "")}"'
             )
             lines.append(
                 f'QLIB_SCRIPTS_SUBDIR="{config.get("QLIB_SCRIPTS_SUBDIR", "scripts")}"'

@@ -1,9 +1,60 @@
 """
 Step 1: 在 WSL 中从 pkl 提取因子指标 (输出 JSON)
 """
-import pickle, glob, os, re, json, sys
+import argparse
+import glob
+import json
+import os
+import pickle
+import re
+import sys
+from pathlib import Path
 
-LOG_ROOT = "/mnt/f/Dev/RD-Agent-main/log"
+LOG_ROOT_ENV_KEYS = ("RDAGENT_LOG_ROOT", "QLIB_RDAGENT_LOG_ROOT")
+
+
+def _load_project_env():
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = []
+    if os.environ.get("AISTOCK_ENV_FILE"):
+        candidates.append(Path(os.environ["AISTOCK_ENV_FILE"]))
+    candidates.append(repo_root / ".env")
+    dotgit = repo_root / ".git"
+    if dotgit.is_file():
+        text = dotgit.read_text(encoding="utf-8", errors="ignore").strip()
+        if text.lower().startswith("gitdir:"):
+            gitdir = Path(text.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (repo_root / gitdir).resolve()
+            parts = list(gitdir.parts)
+            if ".git" in parts:
+                candidates.append(Path(*parts[: parts.index(".git") + 1]).parent / ".env")
+    for env_file in candidates:
+        if env_file.exists():
+            override = env_file == candidates[0] and os.environ.get("AISTOCK_ENV_FILE")
+            load_dotenv(env_file, override=bool(override))
+            return
+
+
+def resolve_log_root(explicit=None):
+    if explicit:
+        return explicit
+    _load_project_env()
+    for name in LOG_ROOT_ENV_KEYS:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    root = (os.environ.get("QLIB_RDAGENT_ROOT_WSL") or "").strip()
+    if root:
+        return os.path.join(root.rstrip("/"), "log")
+    raise RuntimeError(
+        "RD-Agent log root is not configured; set RDAGENT_LOG_ROOT, "
+        "QLIB_RDAGENT_LOG_ROOT, or QLIB_RDAGENT_ROOT_WSL."
+    )
 
 FACTORS = {
     "LogCircMV": "2026-01-10_07-31-04-239738",
@@ -16,8 +67,8 @@ def normalize_factor_name(name):
     m = re.search(r'[（(]([A-Za-z_][A-Za-z0-9_]*)[）)]', name)
     return m.group(1) if m else name
 
-def extract_metrics(task_id, target_factors):
-    task_dir = os.path.join(LOG_ROOT, task_id)
+def extract_metrics(task_id, target_factors, log_root=None):
+    task_dir = os.path.join(log_root or resolve_log_root(), task_id)
     session_files = sorted(glob.glob(os.path.join(task_dir, "__session__/*/*")))
     if not session_files:
         return {}
@@ -72,15 +123,24 @@ def extract_metrics(task_id, target_factors):
 
     return results
 
-all_metrics = {}
-task_factors = {}
-for fname, tid in FACTORS.items():
-    task_factors.setdefault(tid, []).append(fname)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Extract RD-Agent factor metrics from WSL pickle logs")
+    parser.add_argument("--log-root", default=None, help="RD-Agent log root; defaults to env or QLIB_RDAGENT_ROOT_WSL/log")
+    args = parser.parse_args(argv)
 
-for task_id, factors in task_factors.items():
-    print(f"--- Task: {task_id} ---", file=sys.stderr)
-    m = extract_metrics(task_id, factors)
-    all_metrics.update(m)
+    log_root = resolve_log_root(args.log_root)
+    all_metrics = {}
+    task_factors = {}
+    for fname, tid in FACTORS.items():
+        task_factors.setdefault(tid, []).append(fname)
 
-# Output JSON to stdout
-print(json.dumps(all_metrics, ensure_ascii=False))
+    for task_id, factors in task_factors.items():
+        print(f"--- Task: {task_id} ---", file=sys.stderr)
+        m = extract_metrics(task_id, factors, log_root)
+        all_metrics.update(m)
+
+    print(json.dumps(all_metrics, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
