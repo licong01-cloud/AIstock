@@ -364,6 +364,7 @@ jobs:
             --run-id "${{ github.run_id }}" `
             --base-ref HEAD~1 `
             --run-date $runDate `
+            --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
             --allowed-plan-key l0 `
             --allowed-plan-key validation_module_registry_l0 `
             --allowed-plan-key validation_catalog_integrity `

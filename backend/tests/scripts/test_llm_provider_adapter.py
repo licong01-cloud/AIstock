@@ -582,6 +582,39 @@ def test_test_plan_advice_includes_compact_code_intelligence_refs(tmp_path):
     assert payload["llm_invocation_evidence"]["input_policy"] == "plan_key_intent_catalog_plus_code_intelligence_refs_only"
 
 
+def test_compact_code_intelligence_refs_extracts_nested_verify_client_artifact() -> None:
+    compact = adapter._compact_code_intelligence_refs(  # noqa: SLF001 - regression covers public artifact contract.
+        {
+            "artifacts": {
+                "context_ref": "tmp/issue_workflow/BUG/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/BUG/affected-tests.json",
+                "ua_summary_ref": "tmp/validation/code-intelligence/BUG/ua-validation-summary.md",
+            },
+            "freshness": {
+                "effective_freshness": "fresh",
+                "effective_source": "live_status_current_head",
+                "latest_artifact_ref": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+                "stale_metadata_warning": True,
+            },
+            "affected_tests": {
+                "suggested_tests_count": 3,
+                "quality": "partial_codegraph_plus_repo_fallback",
+            },
+            "understand_anything": {"status": "available", "freshness": "base_current"},
+            "context": {"large_raw_payload": "must_not_leak"},
+        }
+    )
+
+    assert compact["context_ref"].endswith("codegraph-context.md")
+    assert compact["affected_tests_ref"].endswith("affected-tests.json")
+    assert compact["affected_tests_count"] == 3
+    assert compact["latest_freshness"] == "fresh"
+    assert compact["latest_freshness_source"] == "live_status_current_head"
+    assert compact["stale_metadata_warning"] is True
+    assert compact["understand_anything_freshness"] == "base_current"
+    assert "context" not in compact
+
+
 
 
 def _discovery_pack(**overrides):
@@ -824,6 +857,58 @@ def test_nightly_discovery_hypothesis_cli_uses_compact_success_output(capsys, tm
     assert artifact["public_artifact"] is True
     assert selected_payload["selected_plan_keys"] == ["validation_catalog_integrity"]
     assert "rotation" in selected_payload
+    assert "code_intelligence_refs" in selected_payload
+
+
+def test_nightly_discovery_selected_plans_artifact_keeps_code_intelligence_refs(capsys, tmp_path):
+    input_pack = tmp_path / "discovery-input-pack.json"
+    refs = tmp_path / "code-intelligence-summary.json"
+    selected = tmp_path / "selected-plans.json"
+    input_pack.write_text(json.dumps(_discovery_pack()), encoding="utf-8")
+    refs.write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "context_ref": "tmp/issue_workflow/NIGHTLY/codegraph-context.md",
+                    "affected_tests_ref": "tmp/issue_workflow/NIGHTLY/affected-tests.json",
+                    "ua_summary_ref": "tmp/validation/code-intelligence/NIGHTLY/ua-validation-summary.md",
+                },
+                "freshness": {
+                    "effective_freshness": "fresh",
+                    "latest_artifact_ref": "tmp/validation/code-intelligence/latest/codegraph-freshness.json",
+                    "stale_metadata_warning": True,
+                },
+                "understand_anything": {"status": "available", "freshness": "base_current"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-discovery-hypothesis",
+            "--provider",
+            "deterministic",
+            "--input-pack",
+            str(input_pack),
+            "--codegraph-freshness",
+            "fresh",
+            "--code-intelligence-json",
+            str(refs),
+            "--selected-plans-output",
+            str(selected),
+        ]
+    )
+    capsys.readouterr()
+    selected_payload = json.loads(selected.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    compact_refs = selected_payload["code_intelligence_refs"]
+    assert compact_refs["context_ref"].endswith("codegraph-context.md")
+    assert compact_refs["latest_freshness"] == "fresh"
+    assert compact_refs["stale_metadata_warning"] is True
+    assert selected_payload["codegraph"]["warning_only"] is False
 
 def test_nightly_scheduler_advice_uses_fixed_baseline_without_changes_or_failures():
     payload = adapter.build_nightly_scheduler_advice("deterministic", adapter.load_config(), codegraph_freshness="fresh")
