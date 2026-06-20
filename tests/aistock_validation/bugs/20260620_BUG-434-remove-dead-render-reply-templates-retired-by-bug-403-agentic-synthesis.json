@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-434",
-  "closed_at": null,
+  "closed_at": "2026-06-20T14:29:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -65,13 +65,29 @@
       "production_db_touched": false,
       "production_runtime_touched": false,
       "timestamp": "2026-06-20T07:59:56.434649Z"
+    },
+    {
+      "action": "close_sync_metadata_finalized",
+      "actor": "codex",
+      "timestamp": "2026-06-20T14:40:15.655996Z",
+      "note": "Finalized BUG-434 close-sync metadata after PR #1348 and close-sync PR #1350 were merged. PR #1348 Tier2-reviewed commit 181f70fb was rebased to head 035982d49 before merge; source merge commit is 933a4a24. GitHub Issue #1338 is closed with status:fixed. No services started, no production DB touched, no DDL executed.",
+      "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1348",
+      "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1350",
+      "tier2_commit": "181f70fb",
+      "post_rebase_fix_commit": "035982d49f352283eeb839e01d435447df37a255",
+      "merge_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9",
+      "close_sync_merge_commit": "a578eb17a6939c87a23d283cefeb692a8595be15",
+      "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
+      "production_runtime_touched": false,
+      "production_db_touched": false,
+      "ddl_touched": false
     }
   ],
   "evidence_uris": [],
   "expected": "四个业务模式继续走 agentic/LLM synthesis；静态不可达的旧业务模板被删除且无悬挂引用；错误/运行时兜底模板保留。",
   "first_seen_at": "2026-06-20T04:55:48.460160Z",
-  "fix_branch": null,
-  "fix_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9",
+  "fix_branch": "bug/BUG-434-remove-dead-render-reply-templates-retired-by-bu-20260620",
+  "fix_commit": "035982d49f352283eeb839e01d435447df37a255",
   "fixed_at": "2026-06-20T14:29:44.879810Z",
   "github_issue_number": 1338,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
@@ -118,5 +134,6 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "merge_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9"
 }
