@@ -30,10 +30,21 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
         results=[{"name": "factor_a", "success": True}, {"name": "factor_b", "success": True}],
         success_count=2,
         fail_count=0,
-        db_result={"inserted": 4, "skipped": 0, "errors": [], "save_failures": []},
+        db_result={
+            "inserted": 4,
+            "skipped": 0,
+            "errors": [],
+            "save_failures": [],
+            "metric_precomputed": 2,
+            "metric_parent_computed": 0,
+            "metric_precompute_failures": [],
+        },
         metrics_error=None,
         batch_count=1,
-        memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0, "swap_mb": 0.0}],
+        memory_samples=[
+            {"event": "batch_started", "requested_workers": 4, "effective_workers": 2, "rss_mb": 100.0},
+            {"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0, "swap_mb": 0.0},
+        ],
         resource_failures=[],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
@@ -47,6 +58,10 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
     assert report["checks"]["timeout_gate_available"] is True
     assert report["checks"]["resource_gate_ok"] is True
     assert report["timeout_per_factor_sec"] == 1800
+    assert report["optimization_profile"]["requested_worker_values"] == [4]
+    assert report["optimization_profile"]["effective_worker_values"] == [2]
+    assert report["optimization_profile"]["metric_precomputed"] == 2
+    assert report["optimization_profile"]["metric_parent_computed"] == 0
     assert report["next_gates"]["correlation_full"] == "run_correlation_compute_wsl_against_same_official_cache"
 
 
