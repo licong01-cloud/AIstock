@@ -1,0 +1,73 @@
+{
+  "actual": "Claude Tier2 复审记录旧业务模板已 dead，代码中仍残留待清理。",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260620_BUG-434-remove-dead-render-reply-templates-retired-by-bug-403-agentic-synthesis.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-434",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T04:55:48.460160Z",
+  "description": "Claude Tier2 复审记录旧业务模板已 dead，代码中仍残留待清理。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260620-68c943c96587",
+      "timestamp": "2026-06-20T04:55:48.460156Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "四个业务模式继续走 agentic/LLM synthesis；静态不可达的旧业务模板被删除且无悬挂引用；错误/运行时兜底模板保留。",
+  "first_seen_at": "2026-06-20T04:55:48.460160Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1338,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
+  "last_seen_at": "2026-06-20T04:55:48.460160Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Remove dead _render_*reply templates retired by BUG-403 agentic synthesis",
+  "trigger_condition": {
+    "fingerprint": "68c943c96587821727ab3fbb",
+    "source_event_id": "FE-20260620-68c943c96587"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
