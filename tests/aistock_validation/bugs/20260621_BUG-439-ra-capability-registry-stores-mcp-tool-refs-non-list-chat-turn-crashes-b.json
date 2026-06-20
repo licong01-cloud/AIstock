@@ -1,0 +1,73 @@
+{
+  "actual": "Any RA chat question can fail with reason_code=chat_turn_unexpected_error, stage=chat_turn, exception_type=ValueError, error_summary=capability skill_library.reuse mcp_tool_refs must be a list.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260621_BUG-439-ra-capability-registry-stores-mcp-tool-refs-non-list-chat-turn-crashes-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-439",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T17:33:59.111728Z",
+  "description": "Any RA chat question can fail with reason_code=chat_turn_unexpected_error, stage=chat_turn, exception_type=ValueError, error_summary=capability skill_library.reuse mcp_tool_refs must be a list.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-ce36e22f9db2",
+      "timestamp": "2026-06-20T17:33:59.111724Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Registry-origin mcp_tool_refs are normalized or fail-closed with a specific capability_registry_invalid_mcp_tool_refs config error; empty dict/None/empty string normalize to []; non-empty non-list stays loud and specific; sync/migration repair legacy empty dict rows; chat_turn does not crash as unexpected error.",
+  "first_seen_at": "2026-06-20T17:33:59.111728Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1355,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1355",
+  "last_seen_at": "2026-06-20T17:33:59.111728Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask RA any question such as 国城矿业未来走势/基本面/行业地位 against a registry containing {} mcp_tool_refs for approved skill capabilities.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA capability registry stores {} mcp_tool_refs (non-list) -> chat_turn crashes; BUG-431 validation gap on registry read path",
+  "trigger_condition": {
+    "fingerprint": "ce36e22f9db23a292d970e5b",
+    "source_event_id": "FE-20260621-ce36e22f9db2"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
