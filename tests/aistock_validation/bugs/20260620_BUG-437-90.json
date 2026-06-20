@@ -33,15 +33,28 @@
   "expected": "官方因子独立指标全量计算保持official offline backtest数据源、2018-08-01~2026-04-30窗口、575因子×5指标窗口完整入库、无静默降级、swap=0、资源门禁有效，同时全量耗时目标接近或低于90分钟；完成前不得自动触发全量重算，需等待用户确认。",
   "first_seen_at": "2026-06-20T06:42:21.489017Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b9a1e0fbf37ceed9c17618eb2db0d47e3ee52164",
+  "fixed_at": "2026-06-20T14:23:08.918177Z",
   "github_issue_number": 1344,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1344",
+  "implementation_notes": [
+    {
+      "note": "BUG-437 optimization design: keep official offline data source, 2018-08-01~2026-04-30 window, single cache semantics, fail-fast resource gates, and no full 575-factor recompute before user approval. Primary optimization path is bounded in-batch metric buffering plus adaptive effective workers, with runtime validation recording requested/effective workers, metric-buffer peak, and resource gates. Tests added to allowed scope for regression coverage.",
+      "timestamp": "2026-06-20T00:00:00Z",
+      "type": "design_gate"
+    },
+    {
+      "note": "Implemented design target: official full compute keeps existing data source/window/cache semantics, but moves independent metric calculation into the factor worker when metrics context is available. Parent process persists parquet/meta/DB metrics and records metric_precomputed, metric_parent_computed, metric_precompute_failures, requested/effective workers in runtime_validation.optimization_profile. Worker metric errors emit metric_precompute_fallback and are recomputed by parent, so performance fallback is explicit and auditable rather than silent.",
+      "timestamp": "2026-06-20T07:15:00Z",
+      "type": "implementation_design"
+    }
+  ],
   "last_seen_at": "2026-06-20T06:42:21.489017Z",
   "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1347",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +67,7 @@
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -63,6 +76,9 @@
     "fingerprint": "6c516f230e9999619341ea8f",
     "source_event_id": "FE-20260620-6c516f230e99"
   },
+  "validation_evidence": [
+    "GitHub PR #1347 checks all green: 17 passed / 0 failed -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -74,17 +90,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "implementation_notes": [
-    {
-      "timestamp": "2026-06-20T00:00:00Z",
-      "type": "design_gate",
-      "note": "BUG-437 optimization design: keep official offline data source, 2018-08-01~2026-04-30 window, single cache semantics, fail-fast resource gates, and no full 575-factor recompute before user approval. Primary optimization path is bounded in-batch metric buffering plus adaptive effective workers, with runtime validation recording requested/effective workers, metric-buffer peak, and resource gates. Tests added to allowed scope for regression coverage."
-    },
-    {
-      "timestamp": "2026-06-20T07:15:00Z",
-      "type": "implementation_design",
-      "note": "Implemented design target: official full compute keeps existing data source/window/cache semantics, but moves independent metric calculation into the factor worker when metrics context is available. Parent process persists parquet/meta/DB metrics and records metric_precomputed, metric_parent_computed, metric_precompute_failures, requested/effective workers in runtime_validation.optimization_profile. Worker metric errors emit metric_precompute_fallback and are recomputed by parent, so performance fallback is explicit and auditable rather than silent."
-    }
-  ]
+  }
 }
