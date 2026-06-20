@@ -5,7 +5,9 @@
     "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
     "backend/services/quantevolver/backtest_base_data_memory_cache.py",
     "tests/aistock_validation/bugs/20260620_BUG-437-90.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-437",
@@ -46,7 +48,8 @@
   "reproduce_command": "只读解析 debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug432.log；禁止在本优化完成前自动执行全量因子独立指标计算。",
   "required_verification": [
     "l0",
-    "qe_read_l3"
+    "qe_read_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
@@ -71,5 +74,17 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "implementation_notes": [
+    {
+      "timestamp": "2026-06-20T00:00:00Z",
+      "type": "design_gate",
+      "note": "BUG-437 optimization design: keep official offline data source, 2018-08-01~2026-04-30 window, single cache semantics, fail-fast resource gates, and no full 575-factor recompute before user approval. Primary optimization path is bounded in-batch metric buffering plus adaptive effective workers, with runtime validation recording requested/effective workers, metric-buffer peak, and resource gates. Tests added to allowed scope for regression coverage."
+    },
+    {
+      "timestamp": "2026-06-20T07:15:00Z",
+      "type": "implementation_design",
+      "note": "Implemented design target: official full compute keeps existing data source/window/cache semantics, but moves independent metric calculation into the factor worker when metrics context is available. Parent process persists parquet/meta/DB metrics and records metric_precomputed, metric_parent_computed, metric_precompute_failures, requested/effective workers in runtime_validation.optimization_profile. Worker metric errors emit metric_precompute_fallback and are recomputed by parent, so performance fallback is explicit and auditable rather than silent."
+    }
+  ]
 }

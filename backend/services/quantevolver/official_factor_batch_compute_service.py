@@ -45,6 +45,8 @@ DEFAULT_RESOURCE_POLL_SEC = 5.0
 DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER = 5
 DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
 DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 1
+DEFAULT_FACTOR_WORKER_ESTIMATED_MB = 8 * 1024
+DEFAULT_MAX_EFFECTIVE_WORKERS = 4
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
 FactorResultHandler = Callable[[str, FactorExecutionResult], None]
@@ -205,7 +207,15 @@ class OfficialFactorBatchComputeService:
         executor = OfflineCodeTextFactorExecutor(base_cache)
         OFFICIAL_FACTOR_CACHE_SINGLE_DIR.mkdir(parents=True, exist_ok=True)
         results: list[dict[str, Any]] = []
-        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": []}
+        db_result = {
+            "inserted": 0,
+            "skipped": 0,
+            "errors": [],
+            "save_failures": [],
+            "metric_precomputed": 0,
+            "metric_parent_computed": 0,
+            "metric_precompute_failures": [],
+        }
         success_count = 0
         fail_count = 0
         batches = list(_chunks(eligible, max(1, int(cfg.batch_size or DEFAULT_BATCH_SIZE))))
@@ -269,7 +279,7 @@ class OfficialFactorBatchComputeService:
             )
             pending_written_paths: list[Path] = []
             batch_resource_failure: ResourceGateDecision | None = None
-            pending_success_frames: list[tuple[str, pd.DataFrame]] = []
+            pending_success_frames: list[tuple[str, pd.DataFrame, dict[str, Any] | None, str | None]] = []
             pending_success_meta: dict[str, dict[str, Any]] = {}
             batch_resource_failure_recorded = False
             row_by_name = {str(row.get("factor_name") or "").strip(): row for row in batch}
@@ -376,8 +386,15 @@ class OfficialFactorBatchComputeService:
                     rows=int(len(df)),
                     nan_rate=round(nan_rate, 6),
                     elapsed_sec=exec_result.elapsed_sec,
+                    metric_precomputed=bool(getattr(exec_result, "official_metric_result", None) is not None),
+                    metric_elapsed_sec=getattr(exec_result, "official_metric_elapsed_sec", None),
                 )
-                pending_success_frames.append((name, df))
+                pending_success_frames.append((
+                    name,
+                    df,
+                    getattr(exec_result, "official_metric_result", None),
+                    getattr(exec_result, "official_metric_error", None),
+                ))
                 if len(pending_success_frames) >= self._result_drain_chunk_size():
                     _flush_success_frames()
 
@@ -391,6 +408,9 @@ class OfficialFactorBatchComputeService:
                     batch_id=batch_id,
                     swap_baseline_mb=resource_at_start.swap_mb,
                     result_handler=_handle_exec_result,
+                    metrics_ctx=metrics_ctx,
+                    compute_single_factor_metrics=compute_single_factor_metrics,
+                    eligible_index=eligible_index,
                 )
                 for row in batch:
                     name = str(row.get("factor_name") or "").strip()
@@ -562,21 +582,29 @@ class OfficialFactorBatchComputeService:
         requested = max(1, int(requested_workers or 1))
         available_mb = snapshot.available_mb
         if available_mb is None:
-            return requested
+            return min(requested, _env_int("AISTOCK_OFFICIAL_FACTOR_MAX_EFFECTIVE_WORKERS", DEFAULT_MAX_EFFECTIVE_WORKERS))
         limits = getattr(self, "_resource_limits", FactorResourceLimits())
         min_available_mb = max(1, int(limits.min_available_mb or DEFAULT_MIN_AVAILABLE_MB))
-        if available_mb < min_available_mb * DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER:
+        if available_mb < min_available_mb:
             return 1
-        if available_mb < min_available_mb * DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER:
-            return min(requested, 2)
-        return requested
+        max_effective = min(
+            requested,
+            _env_int("AISTOCK_OFFICIAL_FACTOR_MAX_EFFECTIVE_WORKERS", DEFAULT_MAX_EFFECTIVE_WORKERS),
+        )
+        estimated_per_worker_mb = max(
+            1,
+            _env_int("AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB", DEFAULT_FACTOR_WORKER_ESTIMATED_MB),
+        )
+        headroom_mb = max(0.0, float(available_mb) - float(min_available_mb))
+        by_headroom = max(1, int(headroom_mb // estimated_per_worker_mb))
+        return max(1, min(max_effective, by_headroom))
 
     def _result_drain_chunk_size(self) -> int:
         return max(1, _env_int("AISTOCK_OFFICIAL_FACTOR_RESULT_DRAIN_CHUNK_SIZE", DEFAULT_RESULT_DRAIN_CHUNK_SIZE))
 
     def _drain_success_frames(
         self,
-        frames: list[tuple[str, pd.DataFrame]],
+        frames: list[tuple[str, pd.DataFrame, dict[str, Any] | None, str | None]],
         results: list[dict[str, Any]],
         *,
         db_result: dict[str, Any],
@@ -589,13 +617,31 @@ class OfficialFactorBatchComputeService:
         batch_id: str,
     ) -> int:
         success_delta = 0
-        for name, df in list(frames):
-            if metrics_error or metrics_ctx is None or compute_single_factor_metrics is None:
+        for frame in list(frames):
+            if len(frame) == 2:
+                name, df = frame  # type: ignore[misc]
+                metric_result = None
+                metric_precompute_error = None
+            else:
+                name, df, metric_result, metric_precompute_error = frame
+            if metric_precompute_error:
+                db_result["metric_precompute_failures"].append(f"{name}: {metric_precompute_error}")
+                self._emit(
+                    "metric_precompute_fallback",
+                    factor_name=name,
+                    batch_id=batch_id,
+                    error=metric_precompute_error,
+                )
+            if metric_result is not None:
+                db_result["metric_precomputed"] += 1
+            if metric_result is None and (metrics_error or metrics_ctx is None or compute_single_factor_metrics is None):
                 db_result["errors"].append(f"{name}: {metrics_error or 'metrics context missing'}")
                 db_result["save_failures"].append(name)
             else:
                 try:
-                    metric_result = compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
+                    if metric_result is None:
+                        db_result["metric_parent_computed"] += 1
+                        metric_result = compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
                     metrics_by_window = metric_result.get("metrics", {}) if isinstance(metric_result, dict) else {}
                     flat_metrics = []
                     for window_name, window_metrics in metrics_by_window.items():
@@ -645,6 +691,9 @@ class OfficialFactorBatchComputeService:
         batch_id: str | None = None,
         swap_baseline_mb: float | None = None,
         result_handler: FactorResultHandler | None = None,
+        metrics_ctx: Any | None = None,
+        compute_single_factor_metrics: Any | None = None,
+        eligible_index: pd.Index | pd.MultiIndex | None = None,
     ) -> dict[str, Any]:
         max_workers = max(1, min(int(workers or 1), len(batch) or 1))
         timeout_sec = max(1, int(timeout_per_factor or 1800))
@@ -659,6 +708,9 @@ class OfficialFactorBatchComputeService:
                 batch_id=batch_id,
                 swap_baseline_mb=baseline_mb,
                 result_handler=result_handler,
+                metrics_ctx=metrics_ctx,
+                compute_single_factor_metrics=compute_single_factor_metrics,
+                eligible_index=eligible_index,
             )
         if max_workers <= 1:
             results = executor.compute_batch(batch)
@@ -672,9 +724,13 @@ class OfficialFactorBatchComputeService:
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="official-factor") as pool:
             futures = {
                 pool.submit(
-                    executor.compute_factor,
+                    _compute_factor_with_optional_metrics,
+                    executor,
                     str(item.get("factor_name") or "").strip(),
                     str(item.get("code_text") or ""),
+                    metrics_ctx,
+                    compute_single_factor_metrics,
+                    eligible_index,
                 ): str(item.get("factor_name") or "").strip() or "<missing>"
                 for item in batch
             }
@@ -708,6 +764,9 @@ class OfficialFactorBatchComputeService:
         batch_id: str | None,
         swap_baseline_mb: float,
         result_handler: FactorResultHandler | None = None,
+        metrics_ctx: Any | None = None,
+        compute_single_factor_metrics: Any | None = None,
+        eligible_index: pd.Index | pd.MultiIndex | None = None,
     ) -> dict[str, FactorExecutionResult]:
         ctx = multiprocessing.get_context("fork")
         result_queue = ctx.Queue()
@@ -744,7 +803,15 @@ class OfficialFactorBatchComputeService:
                         continue
                     proc = ctx.Process(
                         target=_factor_process_worker,
-                        args=(result_queue, executor, name, code_text),
+                        args=(
+                            result_queue,
+                            executor,
+                            name,
+                            code_text,
+                            metrics_ctx,
+                            compute_single_factor_metrics,
+                            eligible_index,
+                        ),
                         name=f"official-factor-{name[:32]}",
                     )
                     proc.start()
@@ -1149,6 +1216,16 @@ class OfficialFactorBatchComputeService:
             "failures_classified": fail_count == 0 or bool(failure_summary),
         }
         gate_status = "passed" if all(checks.values()) and fail_count == 0 else "failed"
+        effective_worker_values = sorted({
+            int(item.get("effective_workers", 0) or 0)
+            for item in memory_samples
+            if item.get("event") == "batch_started"
+        })
+        requested_worker_values = sorted({
+            int(item.get("requested_workers", 0) or 0)
+            for item in memory_samples
+            if item.get("event") == "batch_started"
+        })
 
         return {
             "schema_version": "official_factor_runtime_validation_v1",
@@ -1169,6 +1246,19 @@ class OfficialFactorBatchComputeService:
             "skipped_factor_count": len(skipped),
             "batch_count": batch_count,
             "timeout_per_factor_sec": cfg.timeout_per_factor,
+            "optimization_profile": {
+                "schema_version": "official_factor_performance_profile_v1",
+                "requested_worker_values": requested_worker_values,
+                "effective_worker_values": effective_worker_values,
+                "max_effective_workers": max(effective_worker_values) if effective_worker_values else 0,
+                "metric_precomputed": int(db_result.get("metric_precomputed") or 0),
+                "metric_parent_computed": int(db_result.get("metric_parent_computed") or 0),
+                "metric_precompute_failures": list(db_result.get("metric_precompute_failures") or [])[-12:],
+                "worker_estimated_mb": _env_int(
+                    "AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB",
+                    DEFAULT_FACTOR_WORKER_ESTIMATED_MB,
+                ),
+            },
             "resource_limits": asdict(getattr(self, "_resource_limits", FactorResourceLimits())),
             "resource_failures": resource_failures[-12:],
             "checks": checks,
@@ -1236,9 +1326,19 @@ def _factor_process_worker(
     executor: OfflineCodeTextFactorExecutor,
     factor_name: str,
     code_text: str,
+    metrics_ctx: Any | None = None,
+    compute_single_factor_metrics: Any | None = None,
+    eligible_index: pd.Index | pd.MultiIndex | None = None,
 ) -> None:
     try:
-        result = executor.compute_factor(factor_name, code_text)
+        result = _compute_factor_with_optional_metrics(
+            executor,
+            factor_name,
+            code_text,
+            metrics_ctx,
+            compute_single_factor_metrics,
+            eligible_index,
+        )
     except Exception as exc:
         result = FactorExecutionResult(
             factor_name=factor_name,
@@ -1251,6 +1351,33 @@ def _factor_process_worker(
     except Exception:
         # The parent process will classify a missing queue result as no-result.
         pass
+
+
+def _compute_factor_with_optional_metrics(
+    executor: OfflineCodeTextFactorExecutor,
+    factor_name: str,
+    code_text: str,
+    metrics_ctx: Any | None = None,
+    compute_single_factor_metrics: Any | None = None,
+    eligible_index: pd.Index | pd.MultiIndex | None = None,
+) -> FactorExecutionResult:
+    result = executor.compute_factor(factor_name, code_text)
+    if not result.success or result.dataframe is None:
+        return result
+    if metrics_ctx is None or compute_single_factor_metrics is None:
+        return result
+    try:
+        metric_t0 = time.time()
+        df = result.dataframe
+        if eligible_index is not None:
+            df = df.reindex(eligible_index)
+        metric_df = df.rename(columns={df.columns[0]: factor_name})
+        metric_result = compute_single_factor_metrics(factor_name, metric_df, metrics_ctx)
+        setattr(result, "official_metric_result", metric_result)
+        setattr(result, "official_metric_elapsed_sec", round(time.time() - metric_t0, 3))
+    except Exception as exc:  # noqa: BLE001 - parent records an explicit fallback event.
+        setattr(result, "official_metric_error", f"{type(exc).__name__}: {exc}")
+    return result
 
 
 def _resource_snapshot(extra_pids: Iterable[int] | None = None, *, fast: bool = False) -> ResourceSnapshot:

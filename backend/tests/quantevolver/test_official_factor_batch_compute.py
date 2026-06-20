@@ -493,8 +493,52 @@ def test_select_batch_workers_throttles_when_available_memory_headroom_is_low():
     )
 
     assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 70000, 90)) == 4
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 50000, 90)) == 2
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 39000, 90)) == 1
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 50000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 39000, 90)) == 3
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 1
+
+
+def test_batch_compute_precomputes_metrics_in_worker_when_context_available(monkeypatch):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    monkeypatch.setattr(svc.multiprocessing, "get_all_start_methods", lambda: [])
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    metric_calls: list[str] = []
+
+    class _Executor:
+        def compute_batch(self, batch):
+            raise AssertionError("workers > 1 must not use sequential compute_batch")
+
+        def compute_factor(self, factor_name, code_text):
+            return FactorExecutionResult(
+                factor_name=factor_name,
+                success=True,
+                dataframe=_base_df()[["close"]].rename(columns={"close": "value"}),
+            )
+
+    def _metrics(name, df, ctx):
+        metric_calls.append(name)
+        assert list(df.columns) == [name]
+        assert ctx == {"ctx": True}
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    result = service._compute_batch_frames(
+        _Executor(),
+        [
+            {"factor_name": "factor_a", "code_text": "a"},
+            {"factor_name": "factor_b", "code_text": "b"},
+        ],
+        workers=2,
+        timeout_per_factor=1800,
+        metrics_ctx={"ctx": True},
+        compute_single_factor_metrics=_metrics,
+        eligible_index=_base_df().index,
+    )
+
+    assert sorted(metric_calls) == ["factor_a", "factor_b"]
+    assert result["factor_a"].success is True
+    assert result["factor_a"].official_metric_result == {"metrics": {"full": {"monthly_ic_series": []}}}
+    assert result["factor_a"].official_metric_elapsed_sec >= 0
 
 
 def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatch, tmp_path):
@@ -631,7 +675,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
 
     def _tracked_drain(frames, *args, **kwargs):
         nonlocal max_live_frames
-        live_frames.extend(name for name, _df in frames)
+        live_frames.extend(frame[0] for frame in frames)
         max_live_frames = max(max_live_frames, len(frames))
         try:
             return original_drain(frames, *args, **kwargs)
@@ -678,6 +722,183 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     assert result["success_count"] == 3
     assert metric_calls == ["factor_a", "factor_b", "factor_c"]
     assert max_live_frames == 1
+
+
+def test_compute_reuses_worker_precomputed_metrics(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    factors = [
+        {"factor_name": "factor_a", "code_text": "result = 1"},
+        {"factor_name": "factor_b", "code_text": "result = 1"},
+    ]
+
+    class _Eligibility:
+        def list_eligible_factors(self, **kwargs):
+            return factors
+
+    class _Universe:
+        def metadata(self, **kwargs):
+            return {"universe_key": "official", "index_policy": "st_pit_buy_eligible_reindexed_v1"}
+
+        def build_eligible_index(self, **kwargs):
+            return _base_df().index
+
+    class _BaseCache:
+        def manifest(self):
+            return {"base_data_cache_policy": "load_once_readonly"}
+
+    events: list[dict[str, object]] = []
+    service = OfficialFactorBatchComputeService(event_emitter=events.append)
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _Universe()
+    service._load_factor_ids = lambda: {}
+    service._resolve_qlib_bin_path = lambda qlib_bin_path: None
+    service._record_error_meta = lambda *args, **kwargs: None
+    service._write_single_atomic = lambda name, df: tmp_path / f"{name}.parquet"
+    service._update_meta_atomic = lambda *args, **kwargs: None
+
+    def _compute_batch_frames(executor, batch, **kwargs):
+        result = {}
+        for item in batch:
+            name = item["factor_name"]
+            frame = _base_df()[["close"]].rename(columns={"close": "value"})
+            exec_result = FactorExecutionResult(factor_name=name, success=True, dataframe=frame)
+            exec_result.official_metric_result = {
+                "metrics": {"full": {"factor_name": name, "monthly_ic_series": []}}
+            }
+            kwargs["result_handler"](name, exec_result)
+        return result
+
+    parent_metric_calls: list[str] = []
+
+    def _parent_metrics(name, df, ctx):
+        parent_metric_calls.append(name)
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    class _MetricWriter:
+        def _save_metrics(self, *args, **kwargs):
+            return {"inserted": 1, "skipped": 0, "errors": []}
+
+        def _save_monthly_ic(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc.BacktestBaseDataMemoryCache, "load_once", lambda *args, **kwargs: _BaseCache())
+    monkeypatch.setattr(
+        svc,
+        "_resource_snapshot",
+        lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
+    )
+    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    monkeypatch.setattr(engine, "compute_single_factor_metrics", _parent_metrics)
+    service._compute_batch_frames = _compute_batch_frames
+    service._metric_writer = lambda: _MetricWriter()
+
+    result = service.compute({
+        "factor_names": [item["factor_name"] for item in factors],
+        "factor_data_dir": str(tmp_path),
+        "start_date": "2018-08-01",
+        "end_date": "2026-04-30",
+        "batch_size": 2,
+        "workers": 2,
+        "timeout_per_factor": 1800,
+        "expected_factor_count": 2,
+    })
+
+    assert result["success"] is True
+    assert parent_metric_calls == []
+    assert result["db_result"]["metric_precomputed"] == 2
+    assert result["db_result"]["metric_parent_computed"] == 0
+    assert result["runtime_validation"]["optimization_profile"]["metric_precomputed"] == 2
+    assert result["runtime_validation"]["optimization_profile"]["metric_parent_computed"] == 0
+
+
+def test_compute_records_explicit_metric_precompute_fallback(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    factors = [{"factor_name": "factor_a", "code_text": "result = 1"}]
+
+    class _Eligibility:
+        def list_eligible_factors(self, **kwargs):
+            return factors
+
+    class _Universe:
+        def metadata(self, **kwargs):
+            return {"universe_key": "official", "index_policy": "st_pit_buy_eligible_reindexed_v1"}
+
+        def build_eligible_index(self, **kwargs):
+            return _base_df().index
+
+    class _BaseCache:
+        def manifest(self):
+            return {"base_data_cache_policy": "load_once_readonly"}
+
+    events: list[dict[str, object]] = []
+    service = OfficialFactorBatchComputeService(event_emitter=events.append)
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _Universe()
+    service._load_factor_ids = lambda: {}
+    service._resolve_qlib_bin_path = lambda qlib_bin_path: None
+    service._record_error_meta = lambda *args, **kwargs: None
+    service._write_single_atomic = lambda name, df: tmp_path / f"{name}.parquet"
+    service._update_meta_atomic = lambda *args, **kwargs: None
+
+    def _compute_batch_frames(executor, batch, **kwargs):
+        name = batch[0]["factor_name"]
+        exec_result = FactorExecutionResult(
+            factor_name=name,
+            success=True,
+            dataframe=_base_df()[["close"]].rename(columns={"close": "value"}),
+        )
+        exec_result.official_metric_error = "RuntimeError: worker metric failed"
+        kwargs["result_handler"](name, exec_result)
+        return {}
+
+    parent_metric_calls: list[str] = []
+
+    def _parent_metrics(name, df, ctx):
+        parent_metric_calls.append(name)
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    class _MetricWriter:
+        def _save_metrics(self, *args, **kwargs):
+            return {"inserted": 1, "skipped": 0, "errors": []}
+
+        def _save_monthly_ic(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc.BacktestBaseDataMemoryCache, "load_once", lambda *args, **kwargs: _BaseCache())
+    monkeypatch.setattr(
+        svc,
+        "_resource_snapshot",
+        lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
+    )
+    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    monkeypatch.setattr(engine, "compute_single_factor_metrics", _parent_metrics)
+    service._compute_batch_frames = _compute_batch_frames
+    service._metric_writer = lambda: _MetricWriter()
+
+    result = service.compute({
+        "factor_names": ["factor_a"],
+        "factor_data_dir": str(tmp_path),
+        "start_date": "2018-08-01",
+        "end_date": "2026-04-30",
+        "batch_size": 1,
+        "workers": 1,
+        "timeout_per_factor": 1800,
+        "expected_factor_count": 1,
+    })
+
+    assert result["success"] is True
+    assert parent_metric_calls == ["factor_a"]
+    assert result["db_result"]["metric_parent_computed"] == 1
+    assert result["db_result"]["metric_precompute_failures"] == [
+        "factor_a: RuntimeError: worker metric failed"
+    ]
+    assert any(event["type"] == "metric_precompute_fallback" for event in events)
 
 
 def _raise_empty_once_then_fail(fake_queue):
