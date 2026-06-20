@@ -375,3 +375,16 @@ def test_bug423_retire_candidate_discovery_migrations_are_explicit() -> None:
 def test_bug423_removed_draft_tables_from_repository_contract() -> None:
     assert "issue_candidates" not in TABLES
     assert "validation_discovery_reports" not in TABLES
+
+
+def test_bug439_repair_capability_registry_migration_is_narrow_and_reversible() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.rollback.sql").read_text(encoding="utf-8")
+
+    assert "UPDATE assistant_capabilities" in forward
+    assert "mcp_tool_refs IS NULL OR jsonb_typeof(mcp_tool_refs) <> 'array'" in forward
+    assert "mcp_tool_refs IS NULL OR mcp_tool_refs IN ('{}'::jsonb, 'null'::jsonb, '\"\"'::jsonb)" in forward
+    assert "mcp_tool_refs = '[]'::jsonb" in forward
+    assert "DROP" not in forward.upper()
+    assert "Capability Registry" in rollback
+    assert "UPDATE assistant_capabilities" not in rollback

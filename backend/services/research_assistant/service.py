@@ -1320,6 +1320,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         "chat_turn_unexpected_error",
     }
     CONFIG_ERROR_REASON_CODES = {
+        "capability_registry_invalid_mcp_tool_refs",
+        "capability_registry_invalid_skill_refs",
+        "capability_registry_repair_failed",
         "runtime_config_invalid_capability_mcp_tool_refs",
         "runtime_config_invalid_workflow_capability",
         "runtime_config_invalid_active_config",
@@ -1539,6 +1542,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "从 YAML 重新 seed/导入 RA runtime config 后重启后端"
 
     @staticmethod
+    def _capability_registry_operator_action() -> str:
+        return "run RA capability sync or apply backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.sql, then restart Research Assistant"
+
+    @staticmethod
     def _runtime_config_activation_metadata(activation: dict[str, Any]) -> dict[str, Any]:
         return {
             "activation_id": str(activation.get("activation_id") or ""),
@@ -1584,6 +1591,76 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "exception_type": type(exc).__name__,
             "message": message,
             "operator_action": ResearchAssistantService._runtime_config_operator_action(),
+        }
+
+    @classmethod
+    def _payload_for_capability_registry_mcp_refs_error(
+        cls,
+        *,
+        capability_key: str,
+        field: str = "mcp_tool_refs",
+        actual_type: str,
+        detail: str,
+        source: str,
+        entry_index: int | None = None,
+        exception_type: str = "TypeError",
+    ) -> dict[str, Any]:
+        reason_code = f"capability_registry_invalid_{field}"
+        message = (
+            f"capability registry is invalid: source={source}; capability_key={capability_key}; "
+            f"field={field}; actual_type={actual_type}; detail={detail}; "
+            f"operator_action={cls._capability_registry_operator_action()}"
+        )
+        if entry_index is not None:
+            message = (
+                f"capability registry is invalid: source={source}; capability_key={capability_key}; "
+                f"field={field}; entry_index={entry_index}; actual_type={actual_type}; detail={detail}; "
+                f"operator_action={cls._capability_registry_operator_action()}"
+            )
+        return {
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": "capability_registry_validation",
+            "activation_id": None,
+            "config_key": "assistant_capabilities",
+            "config_version": None,
+            "source_id": source,
+            "capability_key": capability_key,
+            "field": field,
+            "entry_index": entry_index,
+            "actual_type": actual_type,
+            "exception_type": exception_type,
+            "message": message,
+            "operator_action": cls._capability_registry_operator_action(),
+        }
+
+    @classmethod
+    def _payload_for_capability_registry_repair_error(
+        cls,
+        *,
+        capability_key: str,
+        capability_id: str,
+        exc: BaseException,
+    ) -> dict[str, Any]:
+        reason_code = "capability_registry_repair_failed"
+        return {
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": "capability_registry_validation",
+            "activation_id": None,
+            "config_key": "assistant_capabilities",
+            "config_version": None,
+            "source_id": "assistant_capabilities",
+            "capability_key": capability_key,
+            "capability_id": capability_id,
+            "field": "mcp_tool_refs",
+            "actual_type": type(exc).__name__,
+            "exception_type": type(exc).__name__,
+            "message": (
+                f"capability registry empty mcp_tool_refs repair failed: capability_key={capability_key}; "
+                f"capability_id={capability_id}; error={exc}; operator_action={cls._capability_registry_operator_action()}"
+            ),
+            "operator_action": cls._capability_registry_operator_action(),
         }
 
     @classmethod
@@ -1764,30 +1841,124 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     continue
                 source.append(item)
         merged: dict[str, dict[str, Any]] = {
-            str(item.get("capability_key")): self._canonicalize_capability_mcp_refs(dict(item))
+            str(item.get("capability_key")): self._canonicalize_capability_refs(dict(item), source="workflow_capabilities")
             for item in source
         }
         for item in catalog_workflow_capabilities():
-            merged[str(item["capability_key"])] = self._canonicalize_capability_mcp_refs(dict(item))
+            merged[str(item["capability_key"])] = self._canonicalize_capability_refs(dict(item), source="manifest_derived_workflow_capabilities")
         return list(merged.values())
 
-    @staticmethod
-    def _canonicalize_capability_mcp_refs(capability: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _canonicalize_capability_mcp_refs(cls, capability: dict[str, Any], *, source: str = "capability_catalog") -> dict[str, Any]:
         refs = capability.get("mcp_tool_refs")
-        if refs is None:
+        capability_key = str(capability.get("capability_key") or "")
+        if refs is None or refs == "" or refs == {}:
+            logger.warning(
+                "research assistant capability mcp_tool_refs empty non-list normalized: capability_key=%s source=%s actual_type=%s",
+                capability_key,
+                source,
+                type(refs).__name__,
+            )
+            capability["mcp_tool_refs"] = []
             return capability
         if not isinstance(refs, list):
-            raise ValueError(f"capability {capability.get('capability_key')} mcp_tool_refs must be a list")
+            error = cls._payload_for_capability_registry_mcp_refs_error(
+                capability_key=capability_key,
+                actual_type=type(refs).__name__,
+                detail="must be a list; only empty null/{} or empty string can be normalized to []",
+                source=source,
+            )
+            logger.error(
+                "research assistant capability registry invalid: reason_code=%s capability_key=%s source=%s field=mcp_tool_refs actual_type=%s",
+                error["reason_code"],
+                capability_key,
+                source,
+                error["actual_type"],
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
         canonical_refs: list[dict[str, Any]] = []
-        for ref in refs:
+        for entry_index, ref in enumerate(refs):
             if not isinstance(ref, dict):
-                raise ValueError(f"capability {capability.get('capability_key')} mcp_tool_refs entries must be objects")
+                error = cls._payload_for_capability_registry_mcp_refs_error(
+                    capability_key=capability_key,
+                    actual_type=type(ref).__name__,
+                    detail="entries must be objects",
+                    source=source,
+                    entry_index=entry_index,
+                )
+                logger.error(
+                    "research assistant capability registry invalid: reason_code=%s capability_key=%s source=%s field=mcp_tool_refs entry_index=%s actual_type=%s",
+                    error["reason_code"],
+                    capability_key,
+                    source,
+                    entry_index,
+                    error["actual_type"],
+                )
+                raise ResearchAssistantRuntimeConfigInvalidError(error)
             item = dict(ref)
             if item.get("server_key"):
                 item["server_key"] = canonicalize_server_key(str(item["server_key"]))
             canonical_refs.append(item)
         capability["mcp_tool_refs"] = canonical_refs
         return capability
+
+    @classmethod
+    def _canonicalize_capability_skill_refs(cls, capability: dict[str, Any], *, source: str = "capability_catalog") -> dict[str, Any]:
+        refs = capability.get("skill_refs")
+        capability_key = str(capability.get("capability_key") or "")
+        if refs is None or refs == "" or refs == {}:
+            logger.warning(
+                "research assistant capability skill_refs empty non-list normalized: capability_key=%s source=%s actual_type=%s",
+                capability_key,
+                source,
+                type(refs).__name__,
+            )
+            capability["skill_refs"] = []
+            return capability
+        if not isinstance(refs, list):
+            error = cls._payload_for_capability_registry_mcp_refs_error(
+                capability_key=capability_key,
+                field="skill_refs",
+                actual_type=type(refs).__name__,
+                detail="must be a list; only empty null/{} or empty string can be normalized to []",
+                source=source,
+            )
+            logger.error(
+                "research assistant capability registry invalid: reason_code=%s capability_key=%s source=%s field=skill_refs actual_type=%s",
+                error["reason_code"],
+                capability_key,
+                source,
+                error["actual_type"],
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
+        canonical_refs: list[str] = []
+        for entry_index, ref in enumerate(refs):
+            if not isinstance(ref, str) or not ref:
+                error = cls._payload_for_capability_registry_mcp_refs_error(
+                    capability_key=capability_key,
+                    field="skill_refs",
+                    actual_type=type(ref).__name__,
+                    detail="entries must be non-empty strings",
+                    source=source,
+                    entry_index=entry_index,
+                )
+                logger.error(
+                    "research assistant capability registry invalid: reason_code=%s capability_key=%s source=%s field=skill_refs entry_index=%s actual_type=%s",
+                    error["reason_code"],
+                    capability_key,
+                    source,
+                    entry_index,
+                    error["actual_type"],
+                )
+                raise ResearchAssistantRuntimeConfigInvalidError(error)
+            canonical_refs.append(ref)
+        capability["skill_refs"] = canonical_refs
+        return capability
+
+    @classmethod
+    def _canonicalize_capability_refs(cls, capability: dict[str, Any], *, source: str = "capability_catalog") -> dict[str, Any]:
+        capability = cls._canonicalize_capability_mcp_refs(capability, source=source)
+        return cls._canonicalize_capability_skill_refs(capability, source=source)
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -1891,6 +2062,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         readiness = self.catalog_readiness()
         if not readiness["ready"]:
             raise ResearchAssistantCatalogNotReadyError(readiness)
+        self._align_capability_registry_ref_shapes_for_catalog_ready()
         return readiness
 
     def active_runtime_config(self) -> dict[str, Any]:
@@ -2207,6 +2379,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         }
         now = utc_now().isoformat()
         for item in self._workflow_capabilities():
+            item = self._canonicalize_capability_refs(dict(item), source="capability_sync_source")
             mcp_refs = list(item.get("mcp_tool_refs") or [])
             skill_refs = [str(ref) for ref in item.get("skill_refs") or []]
             missing_refs = [ref for ref in mcp_refs if (str(ref.get("server_key")), str(ref.get("tool_name"))) not in approved_tools]
@@ -2245,7 +2418,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         applied_count = 0
         for capability in capabilities:
             current = existing_by_key.get(str(capability["capability_key"]))
-            change = "create" if not current else "unchanged" if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"] else "update"
+            change_reason = None
+            if not current:
+                change = "create"
+            else:
+                self._assert_existing_capability_ref_shapes_repairable_for_sync(current)
+                refs_match = (
+                    current.get("mcp_tool_refs") == capability.get("mcp_tool_refs")
+                    and current.get("skill_refs") == capability.get("skill_refs")
+                )
+                if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"] and refs_match:
+                    change = "unchanged"
+                else:
+                    change = "update"
+                    if not refs_match:
+                        change_reason = "capability_ref_shape_or_value_changed"
             diff.append(
                 {
                     "capability_key": capability["capability_key"],
@@ -2254,6 +2441,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "risk_level": capability["risk_level"],
                     "side_effect_level": capability["side_effect_level"],
                     "checksum": capability["checksum"],
+                    "reason": change_reason,
                 }
             )
             if data.apply and change in {"create", "update"}:
@@ -4016,12 +4204,106 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return None
         return server, tool
 
+    @staticmethod
+    def _empty_capability_ref_shape(value: Any) -> bool:
+        return value is None or value == "" or value == {}
+
+    def _assert_existing_capability_ref_shapes_repairable_for_sync(self, capability: dict[str, Any]) -> None:
+        capability_key = str(capability.get("capability_key") or "")
+        for field in ("mcp_tool_refs", "skill_refs"):
+            value = capability.get(field)
+            if isinstance(value, list) or self._empty_capability_ref_shape(value):
+                continue
+            error = self._payload_for_capability_registry_mcp_refs_error(
+                capability_key=capability_key,
+                field=field,
+                actual_type=type(value).__name__,
+                detail="existing registry value is non-empty and non-list; sync will not guess a replacement",
+                source="assistant_capabilities_sync",
+            )
+            logger.error(
+                "research assistant capability sync refused invalid registry refs: reason_code=%s capability_key=%s field=%s actual_type=%s",
+                error["reason_code"],
+                capability_key,
+                field,
+                error["actual_type"],
+            )
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
+
+    def _repair_empty_capability_ref_shapes(self, capabilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        repaired: list[dict[str, Any]] = []
+        for capability in capabilities:
+            updates: dict[str, Any] = {}
+            for field in ("mcp_tool_refs", "skill_refs"):
+                if self._empty_capability_ref_shape(capability.get(field)):
+                    updates[field] = []
+            if not updates:
+                continue
+            capability_key = str(capability.get("capability_key") or "")
+            capability_id = str(capability.get("capability_id") or "")
+            logger.warning(
+                "research assistant capability registry empty ref shape repaired: capability_key=%s capability_id=%s fields=%s",
+                capability_key,
+                capability_id,
+                sorted(updates),
+            )
+            try:
+                if not capability_id:
+                    raise ValueError("capability_id is required for registry repair")
+                row = self.repository.update_record("capabilities", capability_id, updates)
+            except Exception as exc:
+                logger.exception(
+                    "research assistant capability registry repair failed: capability_key=%s capability_id=%s fields=%s",
+                    capability_key,
+                    capability_id,
+                    sorted(updates),
+                )
+                raise ResearchAssistantRuntimeConfigInvalidError(
+                    self._payload_for_capability_registry_repair_error(
+                        capability_key=capability_key,
+                        capability_id=capability_id,
+                        exc=exc,
+                    )
+                ) from exc
+            repaired.append({"capability_key": capability_key, "capability_id": capability_id, "fields": sorted(updates)})
+            capability.update(row)
+        if repaired:
+            try:
+                self.create_trace_event(
+                    TraceEventCreate(
+                        event_type="capability_registry_repaired",
+                        component="research_assistant.capability_registry",
+                        status="repaired",
+                        payload_json={"repaired": repaired[:50], "repaired_count": len(repaired)},
+                    )
+                )
+            except Exception:  # noqa: BLE001 - repair succeeded; trace persistence must not mask it.
+                logger.exception("failed to persist capability registry repair trace")
+        return repaired
+
+    def _align_capability_registry_ref_shapes_for_catalog_ready(self) -> list[dict[str, Any]]:
+        capabilities = [
+            dict(item)
+            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+            if str(item.get("status") or "") == "approved"
+        ]
+        for capability in capabilities:
+            self._assert_existing_capability_ref_shapes_repairable_for_sync(capability)
+        return self._repair_empty_capability_ref_shapes(capabilities)
+
     def _approved_capability_mcp_tool_refs(self) -> set[tuple[str, str]]:
         capabilities = [
             dict(item)
             for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
             if str(item.get("status") or "") == "approved"
         ]
+        repaired = self._repair_empty_capability_ref_shapes(capabilities)
+        if repaired:
+            capabilities = [
+                dict(item)
+                for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+                if str(item.get("status") or "") == "approved"
+            ]
         capabilities.extend(
             dict(item)
             for item in self._workflow_capabilities()
@@ -4029,7 +4311,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         refs: set[tuple[str, str]] = set()
         for capability in capabilities:
-            canonical = self._canonicalize_capability_mcp_refs(capability)
+            canonical = self._canonicalize_capability_mcp_refs(capability, source="assistant_capabilities")
             for ref in canonical.get("mcp_tool_refs") if isinstance(canonical.get("mcp_tool_refs"), list) else []:
                 if not isinstance(ref, dict):
                     continue
@@ -5060,7 +5342,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     ) -> dict[str, Any] | None:
         candidate_keys: list[str] = []
         for item in self._workflow_capabilities():
-            candidate = self._canonicalize_capability_mcp_refs(dict(item))
+            candidate = self._canonicalize_capability_mcp_refs(dict(item), source="capability_tool_lookup_self_heal")
             key = str(candidate.get("capability_key") or "")
             if capability_key and key != capability_key:
                 continue

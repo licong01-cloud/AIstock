@@ -311,7 +311,11 @@ def _now_iso() -> str:
 
 
 def _adapt_json(value: Any) -> Json:
-    return Json(normalize_json(value or {}), dumps=canonical_json_dumps)
+    if value is None:
+        normalized: Any = {}
+    else:
+        normalized = normalize_json(value)
+    return Json(normalized, dumps=canonical_json_dumps)
 
 
 def _clean_row(row: Mapping[str, Any]) -> dict[str, Any]:
