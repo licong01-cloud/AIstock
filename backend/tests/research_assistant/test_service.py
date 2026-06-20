@@ -1977,55 +1977,77 @@ def test_bug_404_data_source_unavailable_is_explicit_not_insufficient() -> None:
     assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
 
 
-def test_a1_stock_evidence_card_explicitly_reports_missing_data_sources() -> None:
-    summary = {
-        "response_mode": "stock_analysis_evidence_card",
-        "symbol": "000688",
-        "status": "blocked",
-        "as_of": "2026-06-19T10:00:00+08:00",
-        "sections": [
-            {
-                "dataset": "quote",
-                "status": "degraded",
-                "as_of": "2026-06-19T10:00:00+08:00",
-                "summary": "个股只读 facade 缺少 get_stock_quote_evidence，该数据集已降级。",
-                "source_refs": [],
-                "items": [],
-                "reason_codes": ["stock_quote_facade_missing"],
-                "warnings": [
-                    {
-                        "reason_code": "stock_quote_facade_missing",
-                        "warning": "个股只读 facade 缺少 get_stock_quote_evidence，该数据集已降级。",
-                    }
-                ],
-            },
-            {
-                "dataset": "fundamentals",
-                "status": "degraded",
-                "as_of": "2026-06-19T10:00:00+08:00",
-                "summary": "联网基本面检索未返回可用网页证据。",
-                "source_refs": [],
-                "items": [],
-                "reason_codes": ["stock_external_research_empty"],
-                "warnings": [
-                    {
-                        "reason_code": "stock_external_research_empty",
-                        "warning": "联网基本面检索未返回可用网页证据。",
-                    }
-                ],
-            },
-        ],
-        "reason_codes": ["stock_quote_facade_missing", "stock_external_research_empty"],
-        "warnings": [],
-    }
+def test_bug_434_business_modes_keep_agentic_synthesis_and_dead_renderers_removed() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = ModeDecision(
+        mode=DialogueMode.PLANNING,
+        intent_type=DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST,
+        confidence=0.96,
+        mode_reason="explicit_task_request",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    removed_renderers = (
+        "_render_local_data_daily_status_reply",
+        "_render_qe_experiment_status_reply",
+        "_render_qe_warehouse_business_reply",
+        "_render_stock_analysis_evidence_card_reply",
+        "_render_qe_run_leaderboard_reply",
+    )
+    for name in removed_renderers:
+        assert not hasattr(ResearchAssistantService, name)
 
-    text = ResearchAssistantService._render_stock_analysis_evidence_card_reply({"auto_executed": True}, summary)
+    cases = [
+        (
+            "local_data",
+            {"local_data_daily_status": True, "response_mode": "local_data_daily_sync_status"},
+            "model synthesized local data answer; source local_data_facade_read_adapter as_of 2026-06-19.",
+        ),
+        (
+            "qe_experiment",
+            {"response_mode": "qe_experiment_status_summary"},
+            "model synthesized QE experiment answer; running=0 created=2 completed=18; source qe_experiment_read_adapter as_of 2026-06-19.",
+        ),
+        (
+            "qe_warehouse",
+            {"response_mode": "qe_warehouse_business_summary"},
+            "model synthesized QE warehouse answer; run_count=7 pending_outbox=1; source qe_archive_read_adapter as_of 2026-06-19.",
+        ),
+        (
+            "stock",
+            {"response_mode": "stock_analysis_evidence_card"},
+            "model synthesized stock answer for 000688 using quote fund-flow fundamentals; source stock_analysis_read_adapter as_of 2026-06-19.",
+        ),
+    ]
+    forbidden_template_markers = (
+        "已完成",
+        "汇总：共",
+        "本轮只进行查询",
+        "mcp_execution_result",
+        "response_mode",
+    )
 
-    assert "没有对应数据源 / 无法获取该数据" in text
-    assert "缺少 行情 的 stock_analysis 只读 facade 数据源" in text
-    assert "external_research 未返回 联网基本面 网页证据" in text
-    assert "reason_code=stock_quote_facade_missing" in text
-    assert "reason_code=stock_external_research_empty" in text
+    for domain, summary, model_answer in cases:
+        cards = {
+            "mcp_execution_result": {
+                "auto_executed": True,
+                "status": "succeeded",
+                "server_key": "aistock-test",
+                "tool_name": f"{domain}_read_tool",
+                "route": f"aistock-test/{domain}_read_tool",
+            },
+            "mcp_summary_result": summary,
+            "react_grounding": {"stopped_reason": "final_answer"},
+        }
+
+        text = svc._compose_assistant_reply("business question", model_answer, cards, mode_decision)
+
+        assert text == model_answer
+        for marker in forbidden_template_markers:
+            assert marker not in text
 
 
 def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> None:
