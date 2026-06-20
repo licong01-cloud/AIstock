@@ -1,0 +1,73 @@
+{
+  "actual": "Add a repeatable real-model smoke for Research Assistant A1 no-data-source disclosure and A2 external_research/stock_analysis availability. DeepSeek key absence must loud-skip with distinct exit code; no product-code changes, no service start, no production DB/seed/DDL.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260620_BUG-436-real-model-smoke-for-ra-a1-no-data-source-disclosure-a2-web-search-avail.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-436",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T04:56:38.093607Z",
+  "description": "Add a repeatable real-model smoke for Research Assistant A1 no-data-source disclosure and A2 external_research/stock_analysis availability. DeepSeek key absence must loud-skip with distinct exit code; no product-code changes, no service start, no production DB/seed/DDL.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260620-9d3999d1356b",
+      "timestamp": "2026-06-20T04:56:38.093602Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-20T04:56:38.093607Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1340,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1340",
+  "last_seen_at": "2026-06-20T04:56:38.093607Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Real-model smoke for RA A1 no-data-source disclosure & A2 web-search availability",
+  "trigger_condition": {
+    "fingerprint": "9d3999d1356b6b0dcf5d76d2",
+    "source_event_id": "FE-20260620-9d3999d1356b"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
