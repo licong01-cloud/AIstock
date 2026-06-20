@@ -2,7 +2,10 @@
   "actual": "Add a repeatable real-model smoke for Research Assistant A1 no-data-source disclosure and A2 external_research/stock_analysis availability. DeepSeek key absence must loud-skip with distinct exit code; no product-code changes, no service start, no production DB/seed/DDL.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260620_BUG-436-real-model-smoke-for-ra-a1-no-data-source-disclosure-a2-web-search-avail.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/research_assistant_real_model_smoke.py",
+    "backend/tests/scripts/test_research_assistant_real_model_smoke.py",
+    "docs/operations/research_assistant_real_model_smoke_runbook_20260620.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-436",
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A repeatable real-model RA smoke exists: missing DeepSeek credentials loud-skip with a distinct skip exit code, A2 verifies external_research + stock_analysis are provided/executable and search_web can run without capability errors, and A1 verifies genuine no-data-source answers explicitly say no corresponding data source / unable to fetch data without masking real tool errors.",
   "first_seen_at": "2026-06-20T04:56:38.093607Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -40,10 +43,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "research_assistant_backend",
-    "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -69,5 +69,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }
