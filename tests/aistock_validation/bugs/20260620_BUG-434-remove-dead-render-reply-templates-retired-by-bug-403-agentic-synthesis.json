@@ -24,19 +24,25 @@
       "timestamp": "2026-06-20T04:55:48.460156Z"
     },
     {
-      "timestamp": "2026-06-20T05:04:17.673331Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Add backend/tests/research_assistant/test_service.py for BUG-434 regression updates proving the four BUG-403 business modes still use agentic/LLM synthesis after deleting statically unreachable render templates; product scope remains service.py only.",
+      "actor": "codex",
       "added_scope": [
         "backend/tests/research_assistant/test_service.py"
-      ]
+      ],
+      "note": "Add backend/tests/research_assistant/test_service.py for BUG-434 regression updates proving the four BUG-403 business modes still use agentic/LLM synthesis after deleting statically unreachable render templates; product scope remains service.py only.",
+      "timestamp": "2026-06-20T05:04:17.673331Z"
     },
     {
-      "timestamp": "2026-06-20T07:34:27.898168Z",
-      "actor": "codex",
       "action": "implementation_validation",
-      "note": "Implementation complete: removed statically unreachable BUG-403 retired business reply templates and helpers from service.py; preserved error/safe-preflight/generic renderers; added regression test that local_data/qe_experiment/qe_warehouse/stock business modes keep model-synthesized replies and removed renderers are absent. Validation: targeted pytest 5 passed, test_service.py 75 passed, nox l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed + Playwright 4+8 passed + crosscheck/catalog/ownership passed, git diff --check passed, ruff passed. No production services, production DB, or DDL touched.",
+      "actor": "codex",
+      "ddl_touched": false,
+      "deleted_helpers": [
+        "_stock_missing_data_source_notice",
+        "_format_metric_bits",
+        "_format_numeric_metric",
+        "_qe_leaderboard_display_name",
+        "QE_BUSINESS_RESPONSE_MODES"
+      ],
       "deleted_renderers": [
         "_render_stock_analysis_evidence_card_reply",
         "_render_local_data_daily_status_reply",
@@ -45,34 +51,28 @@
         "_render_compact_business_item",
         "_render_qe_warehouse_business_reply"
       ],
-      "deleted_helpers": [
-        "_stock_missing_data_source_notice",
-        "_format_metric_bits",
-        "_format_numeric_metric",
-        "_qe_leaderboard_display_name",
-        "QE_BUSINESS_RESPONSE_MODES"
-      ],
-      "production_runtime_touched": false,
+      "note": "Implementation complete: removed statically unreachable BUG-403 retired business reply templates and helpers from service.py; preserved error/safe-preflight/generic renderers; added regression test that local_data/qe_experiment/qe_warehouse/stock business modes keep model-synthesized replies and removed renderers are absent. Validation: targeted pytest 5 passed, test_service.py 75 passed, nox l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed + Playwright 4+8 passed + crosscheck/catalog/ownership passed, git diff --check passed, ruff passed. No production services, production DB, or DDL touched.",
       "production_db_touched": false,
-      "ddl_touched": false
+      "production_runtime_touched": false,
+      "timestamp": "2026-06-20T07:34:27.898168Z"
     },
     {
-      "timestamp": "2026-06-20T07:59:56.434649Z",
-      "actor": "codex",
       "action": "post_rebase_validation",
-      "note": "Rebased BUG-434 branch onto latest origin/main 27c089d4; reran required validations successfully: l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed plus Playwright 4+8 passed plus crosscheck/catalog/ownership passed; git diff --check and ruff passed. Test port 3011 was used only by nox Playwright and left with no listener; no production services, production DB, or DDL touched.",
+      "actor": "codex",
       "base_commit": "27c089d4",
-      "production_runtime_touched": false,
+      "ddl_touched": false,
+      "note": "Rebased BUG-434 branch onto latest origin/main 27c089d4; reran required validations successfully: l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed plus Playwright 4+8 passed plus crosscheck/catalog/ownership passed; git diff --check and ruff passed. Test port 3011 was used only by nox Playwright and left with no listener; no production services, production DB, or DDL touched.",
       "production_db_touched": false,
-      "ddl_touched": false
+      "production_runtime_touched": false,
+      "timestamp": "2026-06-20T07:59:56.434649Z"
     }
   ],
   "evidence_uris": [],
   "expected": "四个业务模式继续走 agentic/LLM synthesis；静态不可达的旧业务模板被删除且无悬挂引用；错误/运行时兜底模板保留。",
   "first_seen_at": "2026-06-20T04:55:48.460160Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9",
+  "fixed_at": "2026-06-20T14:29:44.879810Z",
   "github_issue_number": 1338,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
   "last_seen_at": "2026-06-20T04:55:48.460160Z",
@@ -80,6 +80,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1348",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -94,7 +95,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -103,6 +104,9 @@
     "fingerprint": "68c943c96587821727ab3fbb",
     "source_event_id": "FE-20260620-68c943c96587"
   },
+  "validation_evidence": [
+    "PR #1348 CI after rebase to origin/main b9a1e0fb: all required checks success; only docs-lite/workflow/validation LLM jobs skipped by CI design"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
