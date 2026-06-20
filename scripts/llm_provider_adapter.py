@@ -155,6 +155,23 @@ def _compact_code_intelligence_refs(refs: dict[str, Any] | None) -> dict[str, An
         for field in CODE_INTELLIGENCE_REF_FIELDS
         if source.get(field) not in (None, "", [])
     }
+    artifacts = source.get("artifacts")
+    if isinstance(artifacts, dict):
+        result.setdefault("context_ref", artifacts.get("context_ref"))
+        result.setdefault("affected_tests_ref", artifacts.get("affected_tests_ref"))
+        result.setdefault("understand_anything_summary_ref", artifacts.get("ua_summary_ref"))
+    freshness = source.get("freshness")
+    if isinstance(freshness, dict):
+        result.setdefault("latest_freshness", freshness.get("effective_freshness"))
+        result.setdefault("latest_freshness_ref", freshness.get("latest_artifact_ref"))
+        result.setdefault("latest_freshness_source", freshness.get("effective_source"))
+        if freshness.get("stale_metadata_warning") is not None:
+            result.setdefault("stale_metadata_warning", bool(freshness.get("stale_metadata_warning")))
+    affected = source.get("affected_tests")
+    if isinstance(affected, dict):
+        result.setdefault("affected_tests_ref", affected.get("affected_tests_ref"))
+        result.setdefault("affected_tests_count", affected.get("suggested_tests_count"))
+        result.setdefault("affected_quality", affected.get("quality"))
     ua = source.get("understand_anything")
     if isinstance(ua, dict):
         result.setdefault("understand_anything_status", ua.get("status"))
@@ -2919,6 +2936,11 @@ def cmd_nightly_discovery_hypothesis(args: argparse.Namespace) -> int:
                 "warning_only": True,
                 "rotation": advice.get("rotation") or {},
                 "discovery_statistics": advice.get("discovery_statistics") or {},
+                "commit": advice.get("commit"),
+                "module": advice.get("module"),
+                "changed_files": advice.get("changed_files") or [],
+                "codegraph": advice.get("codegraph") or {},
+                "code_intelligence_refs": advice.get("code_intelligence_refs") or {},
                 "selected_plan_keys": advice.get("selected_plan_keys") or [],
                 "selected_plans": advice.get("selected_plans") or [],
                 "rejected_plan_keys": advice.get("rejected_plan_keys") or [],

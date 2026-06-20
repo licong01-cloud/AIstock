@@ -5,7 +5,11 @@
     "scripts/llm_provider_adapter.py",
     "scripts/nightly_discovery_input_pack.py",
     "tests/aistock_validation/bugs/20260621_BUG-441-p1-nightly-llm-discovery-must-surface-stale-codegraph-metadata-and-code.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_discovery_input_pack.py",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-441",
@@ -23,6 +27,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260621-6ed6f1ef8079",
       "timestamp": "2026-06-20T18:55:00.997126Z"
+    },
+    {
+      "timestamp": "2026-06-20T18:56:17.745763Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Regression tests are required to lock compact code intelligence refs and selected-plan artifact propagation."
+    },
+    {
+      "timestamp": "2026-06-20T18:58:06.537385Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Nightly workflow must pass generated CodeGraph freshness artifact into the discovery input pack to close the LLM/code-intelligence loop."
     }
   ],
   "evidence_uris": [
