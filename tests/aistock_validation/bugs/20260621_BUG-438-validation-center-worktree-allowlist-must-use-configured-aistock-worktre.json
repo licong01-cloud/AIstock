@@ -26,20 +26,20 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "timestamp": "2026-06-20T17:36:21.297007+00:00",
-      "note": "BUG-438 root cause is in Validation Center execution_runner workspace allowlist; added runner and regression test files after fast-path T2 validation scope check.",
       "added_paths": [
         "backend/services/validation/execution_runner.py",
         "backend/tests/test_validation_execution_runner.py"
-      ]
+      ],
+      "note": "BUG-438 root cause is in Validation Center execution_runner workspace allowlist; added runner and regression test files after fast-path T2 validation scope check.",
+      "timestamp": "2026-06-20T17:36:21.297007+00:00"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-20T17:32:07.178172Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a94d322c1a716fc20c0b6b9a17c6896ebc3fd6d4",
+  "fixed_at": "2026-06-20T18:05:42.339727Z",
   "github_issue_number": 1354,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1354",
   "last_seen_at": "2026-06-20T17:32:07.178172Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1356",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -68,6 +69,9 @@
     "fingerprint": "3981998f5ffd00b1b159ea02",
     "source_event_id": "FE-20260621-3981998f5ffd"
   },
+  "validation_evidence": [
+    "PR #1356 CI green -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
