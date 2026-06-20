@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     "backend/routers/validation.py",
     "tests/aistock_validation/bugs/20260621_BUG-440-p1-validation-center-lacks-permanent-validation-only-runtime-entrypoint.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/validation_app.py",
+    "backend/tests/test_validation_only_app.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-440",
@@ -21,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260621-79633df31e55",
       "timestamp": "2026-06-20T18:30:07.085975Z"
+    },
+    {
+      "timestamp": "2026-06-20T18:33:13.644663Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Permanent VC-only entrypoint requires a supported backend module and focused tests; still excludes business routers/runtime."
     }
   ],
   "evidence_uris": [
@@ -44,7 +52,8 @@
   "reproduce_command": "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8012",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_center_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
