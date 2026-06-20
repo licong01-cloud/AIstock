@@ -2,7 +2,14 @@
   "actual": "BUG-036 child task: backend runtime-ish WSL/RDAgent paths still hardcode workstation /mnt/f paths in config defaults, dispatch seed data, WSL runner examples, and backend helper scripts. Fix must preserve local workstation stability: backend restart must not fail, current local .env must be complete after repair, existing QE/RDAgent paths must continue to work via env or safe derived values, and incomplete new environments should fail only when the affected feature is invoked with clear errors.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260620_BUG-435-bug-036-a-backend-runtime-wsl-rdagent-paths-must-use-env-driven-local-sa.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/config_manager_compat.py",
+    "backend/db/migrations/create_dispatch_tables.py",
+    "backend/infra/wsl_qlib_runner.py",
+    "backend/scripts/backfill_model_training_from_logs.py",
+    "backend/scripts/extract_factor_metrics_wsl.py",
+    ".env.example",
+    "backend/tests/test_bug435_runtime_paths.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-435",
@@ -20,6 +27,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260620-4d52b33e2e64",
       "timestamp": "2026-06-20T04:56:24.610242Z"
+    },
+    {
+      "timestamp": "2026-06-20T05:05:00Z",
+      "actor": "codex_app",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded for BUG-036-A backend runtime env-driven path repair after user authorized implementation; no production DDL expected."
     }
   ],
   "evidence_uris": [],
@@ -40,7 +53,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -66,5 +80,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_allowed_scope_expanded"
 }

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """WSL + conda 下执行 Qlib 脚本的通用工具函数.
 
 本模块只依赖环境变量, 不改动 RD-Agent 或 Qlib 脚本本身:
@@ -10,13 +8,15 @@ from __future__ import annotations
     QLIB_WSL_CONDA_SH=~/miniconda3/etc/profile.d/conda.sh
     QLIB_WSL_CONDA_ENV=rdagent-gpu
 
-    QLIB_RDAGENT_ROOT_WSL=/mnt/f/Dev/RD-Agent-main
+    QLIB_RDAGENT_ROOT_WSL=/path/to/RD-Agent-main
     QLIB_SCRIPTS_SUBDIR=scripts
 
     # 以下两个主要给上层逻辑使用, 本模块只做透传(可选)
-    QLIB_BIN_ROOT_WIN=C:/Users/lc999/NewAIstock/AIstock/qlib_bin
-    QLIB_CSV_ROOT_WIN=C:/Users/lc999/NewAIstock/AIstock/qlib_csv
+    QLIB_BIN_ROOT_WIN=/path/to/qlib_bin
+    QLIB_CSV_ROOT_WIN=/path/to/qlib_csv
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import os
@@ -88,13 +88,13 @@ def build_wsl_qlib_command(
     返回的字符串将传给 ``bash -lc"<cmd>"``.
     """
 
-    distro = _get_env("QLIB_WSL_DISTRO")
+    _get_env("QLIB_WSL_DISTRO")
     conda_sh = _get_env("QLIB_WSL_CONDA_SH")
     conda_env = _get_env("QLIB_WSL_CONDA_ENV")
     rdagent_root_wsl = _get_env("QLIB_RDAGENT_ROOT_WSL")
     scripts_subdir = _get_env("QLIB_SCRIPTS_SUBDIR") or "scripts"
 
-    # 目标脚本所在目录, 例如 /mnt/f/Dev/RD-Agent-main/scripts
+    # 目标脚本所在目录, for example <QLIB_RDAGENT_ROOT_WSL>/scripts
     scripts_dir = f"{rdagent_root_wsl.rstrip('/')}/{scripts_subdir}"
 
     arg_list: List[str] = list(args or [])

@@ -13,17 +13,145 @@
 
 import os
 import psycopg2
+from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+
+def _git_common_env_candidate(repo_root: Path) -> Path | None:
+    dotgit = repo_root / ".git"
+    if dotgit.is_dir():
+        return repo_root / ".env"
+    if not dotgit.is_file():
+        return None
+    text = dotgit.read_text(encoding="utf-8", errors="ignore").strip()
+    prefix = "gitdir:"
+    if not text.lower().startswith(prefix):
+        return None
+    gitdir = Path(text[len(prefix):].strip())
+    if not gitdir.is_absolute():
+        gitdir = (repo_root / gitdir).resolve()
+    parts = list(gitdir.parts)
+    if ".git" not in parts:
+        return None
+    common_git = Path(*parts[: parts.index(".git") + 1])
+    return common_git.parent / ".env"
+
+
+def _load_project_dotenv() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    candidates = []
+    if os.environ.get("AISTOCK_ENV_FILE"):
+        candidates.append(Path(os.environ["AISTOCK_ENV_FILE"]))
+    candidates.append(repo_root / ".env")
+    common_env = _git_common_env_candidate(repo_root)
+    if common_env is not None:
+        candidates.append(common_env)
+    for env_file in candidates:
+        if env_file.exists():
+            load_dotenv(env_file, override=True)
+            return
+    load_dotenv(override=True)
+
+
+_load_project_dotenv()
 
 os.environ.setdefault("TDX_DB_HOST", "127.0.0.1")
 os.environ.setdefault("TDX_DB_PORT", "5432")
 os.environ.setdefault("TDX_DB_NAME", "aistock")
 os.environ.setdefault("TDX_DB_USER", "postgres")
 os.environ.setdefault("TDX_DB_PASSWORD", "lc78080808")
+
+
+def _clean_env_value(name: str) -> str:
+    return (os.environ.get(name) or "").strip().strip('"').strip("'")
+
+
+def _first_env(names: tuple[str, ...], *, required_label: str | None = None) -> str:
+    for name in names:
+        value = _clean_env_value(name)
+        if value:
+            return value
+    if required_label:
+        raise RuntimeError(f"Missing required environment setting: {required_label}")
+    return ""
+
+
+def _callback_url_from_env() -> str:
+    """Read the AIstock callback base URL from .env/os.environ."""
+    for name in (
+        "AISTOCK_QE_CALLBACK_BASE_URL",
+        "AISTOCK_BACKEND_CALLBACK_BASE_URL",
+        "AISTOCK_BACKEND_BASE_URL",
+    ):
+        value = _clean_env_value(name).rstrip("/")
+        if value:
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise RuntimeError(f"{name} must be an absolute http(s) URL, got: {value!r}")
+            return value
+    raise RuntimeError(
+        "Compute-node callback_url must come from .env; set "
+        "AISTOCK_QE_CALLBACK_BASE_URL or AISTOCK_BACKEND_CALLBACK_BASE_URL."
+    )
+
+
+def _join_wsl_path(root: str, suffix: str) -> str:
+    return f"{root.rstrip('/')}/{suffix.lstrip('/')}"
+
+
+def build_compute_node_seed_rows() -> list[tuple[object, ...]]:
+    """Build compute-node seed rows without hardcoded local workstation paths."""
+    callback_url = _callback_url_from_env()
+    rdagent_root_wsl = _first_env(("QLIB_RDAGENT_ROOT_WSL",), required_label="QLIB_RDAGENT_ROOT_WSL")
+    workspace_base = _first_env(("QE_WORKSPACE_WSL",)) or _join_wsl_path(rdagent_root_wsl, "qe_workspace")
+    factor_data_dir = _first_env(("RDAGENT_FACTOR_DATA_WSL",)) or _join_wsl_path(
+        rdagent_root_wsl, "git_ignore_folder/factor_implementation_source_data"
+    )
+    qlib_data_path = _first_env(
+        ("QLIB_DATA_PATH_WSL", "QLIB_DAY_DATA"),
+        required_label="QLIB_DATA_PATH_WSL or QLIB_DAY_DATA",
+    )
+    qlib_minute_path = _first_env(
+        ("QLIB_MINUTE_PATH_WSL", "QLIB_MINUTE_DATA"),
+        required_label="QLIB_MINUTE_PATH_WSL or QLIB_MINUTE_DATA",
+    )
+    capabilities = '["fin_factor","fin_model","fin_quant","fin_factor_report","qe_evolution"]'
+    return [
+        (
+            "wsl2-5080",
+            "本机 WSL (RTX 5080)",
+            "http://127.0.0.1:9000",
+            "RTX 5080",
+            16384,
+            capabilities,
+            "localhost:9100",
+            workspace_base,
+            factor_data_dir,
+            qlib_data_path,
+            qlib_minute_path,
+            rdagent_root_wsl,
+            callback_url,
+            "lc999",
+        ),
+        (
+            "rdagent-node1",
+            "Linux 独立机 (RTX 2060)",
+            "http://192.168.50.215:9000",
+            "RTX 2060",
+            6144,
+            capabilities,
+            "192.168.50.215:9100",
+            "/home/lc999/projects/RD-Agent-main/qe_workspace",
+            "/home/lc999/data/factor_data",
+            "/home/lc999/data/qlib_bin",
+            "/home/lc999/data/qlib_minute_bin",
+            "/home/lc999/projects/RD-Agent-main",
+            callback_url,
+            "lc999",
+        ),
+    ]
 
 
 def run_migration():
@@ -162,65 +290,34 @@ def run_migration():
         cur.execute(f"UPDATE {table} SET node_id = 'wsl2-5080' WHERE node_id IS NULL")
         print(f"  回填 {table}.node_id = 'wsl2-5080' — 完成 ({cur.rowcount} 行)")
 
-    # 7. Seed compute nodes with callback_url from environment.
-    def _callback_url_from_env() -> str:
-        """Read the AIstock callback base URL from .env/os.environ and fail fast if missing."""
-        env_names = (
-            "AISTOCK_QE_CALLBACK_BASE_URL",
-            "AISTOCK_BACKEND_CALLBACK_BASE_URL",
-            "AISTOCK_BACKEND_BASE_URL",
-        )
-        for name in env_names:
-            value = (os.environ.get(name) or "").strip().rstrip("/")
-            if value:
-                parsed = urlparse(value)
-                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                    raise RuntimeError(f"{name} must be an absolute http(s) URL, got: {value!r}")
-                return value
-        raise RuntimeError(
-            "Compute-node callback_url must come from .env; set "
-            "AISTOCK_QE_CALLBACK_BASE_URL or AISTOCK_BACKEND_CALLBACK_BASE_URL."
-        )
-
-    callback_url = _callback_url_from_env()
-    cur.execute("""
-        INSERT INTO infra.compute_nodes (
-            node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
-            capabilities, prometheus_target,
-            workspace_base, factor_data_dir, qlib_data_path, qlib_minute_path,
-            qlib_rdagent_root, callback_url, ssh_user
-        )
-        VALUES
-          ('wsl2-5080', '本机 WSL (RTX 5080)', 'http://127.0.0.1:9000', 'RTX 5080', 16384,
-           '["fin_factor","fin_model","fin_quant","fin_factor_report","qe_evolution"]',
-           'localhost:9100',
-           '/mnt/f/Dev/RD-Agent-main/qe_workspace',
-           '/mnt/f/dev/RD-Agent-main/git_ignore_folder/factor_implementation_source_data',
-           '/home/lc999/data/qlib_bin',
-           '/home/lc999/data/qlib_minute_bin',
-           '/mnt/f/Dev/RD-Agent-main',
-           %s, 'lc999'),
-          ('rdagent-node1', 'Linux 独立机 (RTX 2060)', 'http://192.168.50.215:9000', 'RTX 2060', 6144,
-           '["fin_factor","fin_model","fin_quant","fin_factor_report","qe_evolution"]',
-           '192.168.50.215:9100',
-           '/home/lc999/projects/RD-Agent-main/qe_workspace',
-           '/home/lc999/data/factor_data',
-           '/home/lc999/data/qlib_bin',
-           '/home/lc999/data/qlib_minute_bin',
-           '/home/lc999/projects/RD-Agent-main',
-           %s, 'lc999')
-        ON CONFLICT (node_id) DO UPDATE SET
-            workspace_base = EXCLUDED.workspace_base,
-            factor_data_dir = EXCLUDED.factor_data_dir,
-            qlib_data_path = EXCLUDED.qlib_data_path,
-            qlib_minute_path = EXCLUDED.qlib_minute_path,
-            qlib_rdagent_root = EXCLUDED.qlib_rdagent_root,
-            callback_url = EXCLUDED.callback_url,
-            ssh_user = EXCLUDED.ssh_user,
-            updated_at = NOW()
-    """, (callback_url, callback_url))
-    print(f"初始节点数据 upsert 完成 ({cur.rowcount} 行)")
-
+    # 7. Seed compute nodes from environment-driven path contracts.
+    seed_rows = build_compute_node_seed_rows()
+    for row in seed_rows:
+        cur.execute("""
+            INSERT INTO infra.compute_nodes (
+                node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
+                capabilities, prometheus_target,
+                workspace_base, factor_data_dir, qlib_data_path, qlib_minute_path,
+                qlib_rdagent_root, callback_url, ssh_user
+            )
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (node_id) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                api_base_url = EXCLUDED.api_base_url,
+                gpu_model = EXCLUDED.gpu_model,
+                gpu_vram_mb = EXCLUDED.gpu_vram_mb,
+                capabilities = EXCLUDED.capabilities::jsonb,
+                prometheus_target = EXCLUDED.prometheus_target,
+                workspace_base = EXCLUDED.workspace_base,
+                factor_data_dir = EXCLUDED.factor_data_dir,
+                qlib_data_path = EXCLUDED.qlib_data_path,
+                qlib_minute_path = EXCLUDED.qlib_minute_path,
+                qlib_rdagent_root = EXCLUDED.qlib_rdagent_root,
+                callback_url = EXCLUDED.callback_url,
+                ssh_user = EXCLUDED.ssh_user,
+                updated_at = NOW()
+        """, row)
+    print(f"Compute-node seed data upsert complete ({len(seed_rows)} rows)")
     # ── 8. updated_at 触发器 ──
     for table in ("infra.compute_nodes", "infra.dispatch_tasks"):
         func_name = f"update_{table.replace('.', '_')}_updated_at"
