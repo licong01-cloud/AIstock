@@ -1,4 +1,4 @@
-"""Static tool manifest for the AIstock MCP gateway.
+﻿"""Static tool manifest for the AIstock MCP gateway.
 
 The manifest is intentionally data-only. It lets lightweight catalog and
 self-check commands inspect all tools without importing every business-facing
@@ -244,6 +244,9 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_evolution_lineage',
                 'multi_alpha_orthogonality',
                 'multi_alpha_combine_preview',
+                'multi_alpha_combine_backtest_run',
+                'multi_alpha_combine_backtest_result_get',
+                'multi_alpha_combine_backtest_list',
                 'prediction_store_get_pointer',
                 'prediction_store_pull_pred',
                 'prediction_store_pull_label',
@@ -728,6 +731,24 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         requires_confirmation=False,
         reason="read-only POST preview: backend/mcp/modules/qe_archive.py uses POST /multi-alpha/combine/preview and service only combines caller-supplied prediction frames in memory",
     ),
+    "multi_alpha_combine_backtest_run": ToolMetadataOverride(
+        risk_level="long_running",
+        assistant_usable="preflight_required",
+        requires_confirmation=True,
+        reason="confirmed long-running orchestration: backend/mcp/modules/qe_archive.py requires MULTI_ALPHA_COMBINE_BACKTEST_RUN before POST /multi-alpha/combine-backtest/run",
+    ),
+    "multi_alpha_combine_backtest_result_get": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py uses GET /multi-alpha/combine-backtest/runs/{run_id} for persisted combine-backtest results",
+    ),
+    "multi_alpha_combine_backtest_list": ToolMetadataOverride(
+        risk_level="read_only",
+        assistant_usable="direct_or_catalog",
+        requires_confirmation=False,
+        reason="read-only GET evidence: backend/mcp/modules/qe_archive.py uses GET /multi-alpha/combine-backtest/runs to list persisted combine-backtest runs",
+    ),
     "list_validation_runs": ToolMetadataOverride(
         risk_level="read_only",
         assistant_usable="direct_or_catalog",
@@ -836,6 +857,8 @@ def _backend_endpoint_for(tool_name: str, module: str) -> str:
             return "multi-alpha/orthogonality"
         if tool_name == "multi_alpha_combine_preview":
             return "multi-alpha/combine/preview"
+        if tool_name.startswith("multi_alpha_combine_backtest_"):
+            return "multi-alpha/combine-backtest/*"
         if tool_name.startswith("prediction_store_") or tool_name == "model_store_health":
             return "prediction-store/*"
         return "qe-archive/*"
@@ -984,3 +1007,4 @@ def manifest_for_profile(profile: str) -> tuple[ToolManifestEntry, ...]:
 
 def tool_names_for_modules(modules: Iterable[str]) -> tuple[str, ...]:
     return tuple(entry.tool_name for entry in manifest_for_modules(modules))
+

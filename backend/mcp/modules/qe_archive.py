@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 QE_ARCHIVE_BACKFILL_CONFIRM = "QE_ARCHIVE_BACKFILL"
 QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE"
 QE_ARCHIVE_WORKER_CONFIRM = "QE_ARCHIVE_WORKER_RUN"
+MULTI_ALPHA_COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
 
 TOOL_NAMES = (
     "qe_archive_health",
@@ -44,6 +45,9 @@ TOOL_NAMES = (
     "qe_archive_query_evolution_lineage",
     "multi_alpha_orthogonality",
     "multi_alpha_combine_preview",
+    "multi_alpha_combine_backtest_run",
+    "multi_alpha_combine_backtest_result_get",
+    "multi_alpha_combine_backtest_list",
     "prediction_store_get_pointer",
     "prediction_store_pull_pred",
     "prediction_store_pull_label",
@@ -401,6 +405,30 @@ def register(registry: "ModuleRegistry") -> None:
                 "head": bounded_head,
             },
         )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_run")
+    def multi_alpha_combine_backtest_run(
+        action: str,
+        payload: dict[str, Any],
+        confirm_run: str | None = None,
+    ) -> Any:
+        registry.confirm(confirm_run, MULTI_ALPHA_COMBINE_BACKTEST_CONFIRM, "confirm_run")
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"submit", "run"}:
+            raise ValueError("action must be 'submit' or 'run'")
+        body = dict(payload or {})
+        body["run_async"] = bool(body.get("run_async", True))
+        return multi_alpha_client.post("/combine-backtest/run", body)
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_result_get")
+    def multi_alpha_combine_backtest_result_get(run_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return multi_alpha_client.get(f"/combine-backtest/runs/{safe_run_id}")
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_list")
+    def multi_alpha_combine_backtest_list(status: str | None = None, limit: int = 20) -> Any:
+        bounded_limit = max(1, min(int(limit), 200))
+        return multi_alpha_client.get("/combine-backtest/runs", params={"status": status, "limit": bounded_limit})
 
     @registry.mcp.tool(name="prediction_store_get_pointer")
     def prediction_store_get_pointer(run_id: str | None = None, experiment_id: str | None = None) -> Any:
