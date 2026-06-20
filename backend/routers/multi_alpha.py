@@ -7,7 +7,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.services.multi_alpha import MultiAlphaCombiner, MultiAlphaCombinerError, MultiAlphaOrthogonalityError, MultiAlphaOrthogonalityService
+from backend.services.multi_alpha import (
+    MultiAlphaCombineBacktestError,
+    MultiAlphaCombineBacktestService,
+    MultiAlphaCombiner,
+    MultiAlphaCombinerError,
+    MultiAlphaOrthogonalityError,
+    MultiAlphaOrthogonalityService,
+)
+from backend.services.multi_alpha.combine_backtest import error_payload
 
 
 router = APIRouter(prefix="/multi-alpha", tags=["multi-alpha"])
@@ -28,6 +36,20 @@ class CombinePreviewRequest(BaseModel):
     normalize_method: str = "zscore"
     walk_forward: dict[str, Any] | None = None
     head: int = Field(default=20, ge=0, le=1000)
+
+
+class CombineBacktestRunRequest(BaseModel):
+    roster: list[dict[str, Any]]
+    oos_start: str
+    oos_end: str
+    weighting_schemes: list[str] = Field(default_factory=lambda: ["equal", "orthogonality_aware", "ic_weighted", "risk_parity"])
+    normalize_method: str = "zscore"
+    walk_forward: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
+    backtest_config: dict[str, Any] = Field(default_factory=dict)
+    baseline_leg_id: str | None = None
+    topk: int = Field(default=20, ge=1, le=500)
+    min_date_coverage: float = Field(default=0.8, gt=0, le=1)
+    run_async: bool = True
 
 
 def _parse_run_ids(values: list[str]) -> list[str]:
@@ -63,3 +85,30 @@ def preview_multi_alpha_combination(request: CombinePreviewRequest) -> dict:
     except MultiAlphaCombinerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "success", "data": data}
+
+
+@router.post("/combine-backtest/run", summary="Submit a Tier-1 multi-alpha combine-backtest job")
+def submit_multi_alpha_combine_backtest(request: CombineBacktestRunRequest) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().submit_run(request.model_dump())
+    except MultiAlphaCombineBacktestError as exc:
+        raise HTTPException(status_code=400, detail=error_payload(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine-backtest/runs/{run_id}", summary="Get a multi-alpha combine-backtest run with scheme/LOO results")
+def get_multi_alpha_combine_backtest(run_id: str) -> dict:
+    try:
+        data = MultiAlphaCombineBacktestService().get_run(run_id)
+    except MultiAlphaCombineBacktestError as exc:
+        status_code = 404 if exc.reason_code == "run_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine-backtest/runs", summary="List multi-alpha combine-backtest runs")
+def list_multi_alpha_combine_backtests(status: str | None = None, limit: int = Query(default=20, ge=1, le=200)) -> dict:
+    data = MultiAlphaCombineBacktestService().list_runs(status=status, limit=limit)
+    return {"status": "success", "data": {"runs": data, "count": len(data)}}
