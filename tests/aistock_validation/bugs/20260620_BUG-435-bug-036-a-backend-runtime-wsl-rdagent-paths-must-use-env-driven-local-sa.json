@@ -29,18 +29,18 @@
       "timestamp": "2026-06-20T04:56:24.610242Z"
     },
     {
-      "timestamp": "2026-06-20T05:05:00Z",
-      "actor": "codex_app",
       "action": "expand_allowed_write_scope",
-      "note": "Scope expanded for BUG-036-A backend runtime env-driven path repair after user authorized implementation; no production DDL expected."
+      "actor": "codex_app",
+      "note": "Scope expanded for BUG-036-A backend runtime env-driven path repair after user authorized implementation; no production DDL expected.",
+      "timestamp": "2026-06-20T05:05:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-20T04:56:24.610247Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5640e69c7d5add2e5a2e1db7d55d7d54117757f3",
+  "fixed_at": "2026-06-20T06:40:01.629788Z",
   "github_issue_number": 1339,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1339",
   "last_seen_at": "2026-06-20T04:56:24.610247Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1341",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "architecture"
   ],
@@ -68,6 +69,10 @@
     "fingerprint": "4d52b33e2e64dde7b00db6f1",
     "source_event_id": "FE-20260620-4d52b33e2e64"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_bug435_runtime_paths.py -q -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
