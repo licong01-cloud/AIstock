@@ -1,0 +1,23 @@
+{
+  "schema_version": "aistock_bug443_fix_smoke_v1",
+  "collected_at": "2026-06-21T03:44:37.305203+08:00",
+  "full_recompute_triggered": false,
+  "production_runtime_touched": false,
+  "worker_selection": {
+    "observed_20000mb_available": 4,
+    "observed_14173mb_available": 2,
+    "metric_workers_for_four_frames": 2,
+    "worker_metric_precompute_enabled_default": false
+  },
+  "parent_metric_compute": {
+    "computed_factors": [
+      "factor_a",
+      "factor_b"
+    ],
+    "metric_parent_computed": 2,
+    "save_failures": [],
+    "max_concurrent_metric_calls": 2
+  },
+  "expected_business_result": "default path avoids passing metrics context into fork workers, keeps fail-fast resource gates, and computes missing metrics in bounded parent threads without a full 575-factor recompute",
+  "status": "passed"
+}
