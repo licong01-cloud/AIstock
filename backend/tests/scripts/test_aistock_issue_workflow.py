@@ -1199,6 +1199,8 @@ def test_doctor_reports_ready_when_client_entries_exist(
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "backend").mkdir()
+    (isolated_workflow_root / "backend" / "validation_app.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
     (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
@@ -1250,6 +1252,12 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert payload["blocking"] == []
     assert payload["code_intelligence"]["codegraph"]["status"] == "ok"
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
+    assert payload["validation_center_runtime_safety"]["workflow_gate"] == "ready"
+    assert payload["validation_center_runtime_safety"]["safe_app_module"] == "backend.validation_app:app"
+    assert payload["validation_center_runtime_safety"]["unsafe_app_module"] == "backend.main:app"
+    assert "8012" in payload["validation_center_runtime_safety"]["safe_command"]
+    compact = workflow._compact_payload(payload)
+    assert compact["validation_center_runtime_safety"]["safe_app_module"] == "backend.validation_app:app"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 

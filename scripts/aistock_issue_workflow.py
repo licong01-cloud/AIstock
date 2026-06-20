@@ -739,6 +739,16 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "github_max_number",
                 "github_scanned",
             )
+        if "validation_center_runtime_safety" in payload:
+            compact["validation_center_runtime_safety"] = _pick(
+                payload["validation_center_runtime_safety"],
+                "workflow_gate",
+                "safe_app_module",
+                "unsafe_app_module",
+                "safe_command",
+                "allowed_backend_ports",
+                "production_ports_forbidden",
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -5777,6 +5787,26 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
     }
 
 
+def _validation_center_runtime_safety(root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    app_path = root / "backend" / "validation_app.py"
+    return {
+        "schema_version": "aistock_validation_center_runtime_safety_v1",
+        "workflow_gate": "ready" if app_path.exists() else "warning",
+        "safe_app_module": "backend.validation_app:app",
+        "unsafe_app_module": "backend.main:app",
+        "safe_command": "python -m uvicorn backend.validation_app:app --host 127.0.0.1 --port 8012",
+        "allowed_backend_ports": [8011, 8012],
+        "production_ports_forbidden": [8001, 3000],
+        "warning": (
+            "Use backend.validation_app:app for Validation Center-only restarts; "
+            "do not start backend.main:app on VC dev ports because it can load business schedulers/QMT."
+        ),
+        "app_path": _repo_rel(app_path, root),
+        "app_exists": app_path.exists(),
+    }
+
+
 def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     canonical_root = _canonical_root()
     codex_skill = _codex_home() / "skills" / "fix-aistock-issue" / "SKILL.md"
@@ -5855,6 +5885,9 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     for item in code_intel.get("blocking") or []:
         blocking.append(f"code intelligence: {item}")
     h7_code_intelligence = _code_intelligence_readiness(code_intel)
+    vc_runtime_safety = _validation_center_runtime_safety(REPO_ROOT)
+    if vc_runtime_safety["workflow_gate"] != "ready":
+        warnings.append("Validation Center-only runtime app is missing; do not use backend.main:app as a substitute")
 
     gate = "blocked" if blocking else ("warning" if warnings else "ready")
     next_command = f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} run --bug-id BUG-XXX --mode plan --create-worktree"
@@ -5873,6 +5906,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "mcp": mcp,
         "code_intelligence": code_intel,
         "h7_code_intelligence": h7_code_intelligence,
+        "validation_center_runtime_safety": vc_runtime_safety,
         "client_manifest": client_manifest,
         "restart_recommended": client_manifest.get("restart_recommended"),
         "install_client_next_command": client_manifest.get("install_client_next_command"),
