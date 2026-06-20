@@ -1,0 +1,75 @@
+{
+  "actual": "当前最终验收全量耗时11987.3秒；请求workers=4但实际effective_workers=1；每因子指标计算串行，metrics累计约5984.6秒；因子公式执行累计约4347.7秒，存在明显优化空间。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/services/quantevolver/backtest_base_data_memory_cache.py",
+    "tests/aistock_validation/bugs/20260620_BUG-437-90.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-437",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T06:42:21.489017Z",
+  "description": "当前最终验收全量耗时11987.3秒；请求workers=4但实际effective_workers=1；每因子指标计算串行，metrics累计约5984.6秒；因子公式执行累计约4347.7秒，存在明显优化空间。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260620-6c516f230e99",
+      "timestamp": "2026-06-20T06:42:21.489013Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/evidence/20260620_full_chain_validation/full_chain_summary.json; debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug432.log"
+  ],
+  "expected": "官方因子独立指标全量计算保持official offline backtest数据源、2018-08-01~2026-04-30窗口、575因子×5指标窗口完整入库、无静默降级、swap=0、资源门禁有效，同时全量耗时目标接近或低于90分钟；完成前不得自动触发全量重算，需等待用户确认。",
+  "first_seen_at": "2026-06-20T06:42:21.489017Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1344,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1344",
+  "last_seen_at": "2026-06-20T06:42:21.489017Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "只读解析 debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug432.log；禁止在本优化完成前自动执行全量因子独立指标计算。",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "优化官方因子独立指标全量计算耗时到接近或低于90分钟",
+  "trigger_condition": {
+    "fingerprint": "6c516f230e9999619341ea8f",
+    "source_event_id": "FE-20260620-6c516f230e99"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
