@@ -3,7 +3,10 @@
   "allowed_write_scope": [
     "backend/tests/test_factor_metrics_authority_static.py",
     "tests/aistock_validation/bugs/20260622_BUG-461-issue.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/scripts/batch_factor_metrics_sync.py",
+    "backend/scripts/backfill_missing_factors.py",
+    "backend/scripts/backfill_missing_factors_v2.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-461",
