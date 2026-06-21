@@ -9,9 +9,10 @@ fallback is allowed in authoritative Paper v2 runs.
 from __future__ import annotations
 
 import math
+import logging
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterator, Protocol
 
 from backend.db.pg_pool import get_conn
@@ -42,6 +43,11 @@ V25_DAY_FEATURE_AUDIT_DATASETS: tuple[str, ...] = (
     "sector_data",
     "index_daily",
 )
+TURNOVER_RATE_F_MISSING_REASON_CODE = "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING"
+TURNOVER_RATE_F_INVALID_REASON_CODE = "V25_DAY_FEATURE_TURNOVER_RATE_F_INVALID"
+TURNOVER_RATE_F_NON_FINITE_REASON_CODE = "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -117,10 +123,8 @@ class DbV25DayFeatureProvider:
         turnover_rate = turnover_rate_raw / 100.0
         free_float_turnover_rate = self._free_float_turnover_rate(
             basic["turnover_rate_f"],
-            turnover_rate_raw=turnover_rate_raw,
             symbol=normalized_symbol,
             trade_date=feature_date,
-            audit=audit,
         )
         pb = self._required_float(basic["pb"], "pb", normalized_symbol, feature_date)
         if pb <= -1:
@@ -330,43 +334,49 @@ class DbV25DayFeatureProvider:
         cls,
         value: Any,
         *,
-        turnover_rate_raw: float,
         symbol: str,
         trade_date: date,
-        audit: list[dict[str, Any]],
     ) -> float:
+        if value is None:
+            cls._raise_free_float_turnover_rate_unavailable(
+                value,
+                symbol=symbol,
+                trade_date=trade_date,
+                reason_code=TURNOVER_RATE_F_MISSING_REASON_CODE,
+                message="V25 day_features turnover_rate_f is missing",
+                reason="market.daily_basic.turnover_rate_f is NULL",
+            )
+        if cls._is_nan_like_value(value):
+            cls._raise_free_float_turnover_rate_unavailable(
+                value,
+                symbol=symbol,
+                trade_date=trade_date,
+                reason_code=TURNOVER_RATE_F_NON_FINITE_REASON_CODE,
+                message="V25 day_features turnover_rate_f is not finite",
+                reason="market.daily_basic.turnover_rate_f is NaN",
+            )
         try:
             parsed = float(value)
-        except (TypeError, ValueError) as exc:
-            if value is None:
-                return cls._substitute_free_float_turnover_rate(
-                    value,
-                    turnover_rate_raw=turnover_rate_raw,
-                    trade_date=trade_date,
-                    audit=audit,
-                    reason="missing_source_value",
-                )
-            if cls._is_nan_like_value(value):
-                return cls._substitute_free_float_turnover_rate(
-                    value,
-                    turnover_rate_raw=turnover_rate_raw,
-                    trade_date=trade_date,
-                    audit=audit,
-                    reason="non_finite_source_value",
-                )
-            raise DataUnavailableError(
-                "V25 day_features turnover_rate_f is invalid",
-                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "value": value},
-            ) from exc
+        except (TypeError, ValueError, InvalidOperation) as exc:
+            cls._raise_free_float_turnover_rate_unavailable(
+                value,
+                symbol=symbol,
+                trade_date=trade_date,
+                reason_code=TURNOVER_RATE_F_INVALID_REASON_CODE,
+                message="V25 day_features turnover_rate_f is invalid",
+                reason=f"float conversion failed: {type(exc).__name__}: {exc}",
+                cause=exc,
+            )
         if math.isfinite(parsed):
             return parsed / 100.0
 
-        return cls._substitute_free_float_turnover_rate(
+        cls._raise_free_float_turnover_rate_unavailable(
             value,
-            turnover_rate_raw=turnover_rate_raw,
+            symbol=symbol,
             trade_date=trade_date,
-            audit=audit,
-            reason="non_finite_source_value",
+            reason_code=TURNOVER_RATE_F_NON_FINITE_REASON_CODE,
+            message="V25 day_features turnover_rate_f is not finite",
+            reason="parsed market.daily_basic.turnover_rate_f is not finite",
         )
 
     @staticmethod
@@ -378,30 +388,43 @@ class DbV25DayFeatureProvider:
         return False
 
     @staticmethod
-    def _substitute_free_float_turnover_rate(
+    def _raise_free_float_turnover_rate_unavailable(
         value: Any,
         *,
-        turnover_rate_raw: float,
+        symbol: str,
         trade_date: date,
-        audit: list[dict[str, Any]],
+        reason_code: str,
+        message: str,
         reason: str,
-    ) -> float:
-        # Some daily_basic rows contain missing/non-finite turnover_rate_f while
-        # same-row turnover_rate is valid. Keep the vector finite and audited
-        # without introducing neutral/zero defaults or future intraday data.
-        audit.append(
-            {
-                "role": "field_repair",
-                "dataset": "daily_basic",
-                "trade_date": trade_date.isoformat(),
-                "field": "turnover_rate_f",
-                "source_field": "turnover_rate",
-                "status": "substituted",
-                "reason": reason,
-                "source_value": str(value),
-            }
+        cause: BaseException | None = None,
+    ) -> None:
+        call = "DbV25DayFeatureProvider._free_float_turnover_rate"
+        source_value = str(value)
+        context = {
+            "call": call,
+            "dataset": "market.daily_basic",
+            "field": "turnover_rate_f",
+            "symbol": symbol,
+            "trade_date": trade_date.isoformat(),
+            "reason_code": reason_code,
+            "reason": reason,
+            "source_value": source_value,
+            "fail_closed_policy": "exclude_symbol_for_trade_date",
+            "forbidden_fallback": "turnover_rate",
+        }
+        logger.error(
+            "%s: reason_code=%s symbol=%s trade_date=%s source_value=%s policy=%s",
+            message,
+            reason_code,
+            symbol,
+            trade_date.isoformat(),
+            source_value,
+            context["fail_closed_policy"],
         )
-        return turnover_rate_raw / 100.0
+        error = DataUnavailableError(message, context=context)
+        if cause is not None:
+            raise error from cause
+        raise error
 
     @classmethod
     def _positive_li_price(cls, value: Any, field: str, symbol: str, trade_date: date) -> float:
