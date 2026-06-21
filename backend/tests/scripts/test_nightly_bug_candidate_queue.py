@@ -211,8 +211,11 @@ def test_p2_standard_candidates_do_not_compete_with_high_value_issue_drafts(tmp_
     assert payload["summary"]["candidate_count"] == 1
     assert payload["summary"]["high_value_candidate_count"] == 0
     assert payload["summary"]["issue_payload_ready_count"] == 0
+    assert payload["discovery_effectiveness"]["no_candidate_reason"] == "no_high_value_actionable_candidates"
     assert candidates[0]["value_lane"] == "standard"
     assert "not_high_value_candidate" in candidates[0]["quality_gate"]["reasons"]
+    summary_md = (tmp_path / "queue" / "candidate-summary.md").read_text(encoding="utf-8")
+    assert "no_candidate_reason: `no_high_value_actionable_candidates`" in summary_md
 
 
 def test_duplicate_fingerprint_is_marked_deduped(tmp_path: Path) -> None:

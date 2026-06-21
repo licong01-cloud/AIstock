@@ -1217,6 +1217,64 @@ def test_latest_codegraph_freshness_refreshes_missing_artifact_on_demand(tmp_pat
     assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json").exists()
 
 
+def test_latest_codegraph_freshness_persists_live_current_head_when_artifact_metadata_is_stale(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "stale-metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "old123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/stale-metadata.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    live_status = {
+        "available": True,
+        "index_exists": True,
+        "status": "ok",
+        "status_check": {"ok": True},
+        "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        "git_commit": "new456",
+        "graph_root": str(tmp_path),
+        "graph_root_source": "current_worktree",
+    }
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_codegraph_critical_files",
+        lambda root: [],
+    )
+
+    payload = adapter.latest_codegraph_freshness(
+        tmp_path,
+        live_status=live_status,
+        persist_effective=True,
+        output_dir=tmp_path / "tmp" / "validation" / "code-intelligence" / "latest",
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["effective_source"] == "persisted_effective_artifact"
+    assert payload["refreshed"] is True
+    assert payload["stale_metadata_warning"] is False
+    assert payload["effective"]["git_commit"] == "new456"
+    persisted = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json"
+    assert persisted.exists()
+    assert json.loads(persisted.read_text(encoding="utf-8"))["git_commit"] == "new456"
+
+
 def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
     artifact_dir.mkdir(parents=True)
@@ -1291,7 +1349,14 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         encoding="utf-8",
     )
     (artifact_dir / "ua-summary-manifest.json").write_text(
-        json.dumps({"summary_refs": [{"module": "validation"}, {"module": "issue_workflow"}]}),
+        json.dumps(
+            {
+                "summary_refs": [
+                    {"module": "validation", "freshness": "base_current"},
+                    {"module": "issue_workflow", "freshness": "base_current"},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     (artifact_dir / "llm-nightly-adaptive-scheduler.json").write_text(
@@ -1346,6 +1411,7 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
                     "accepted_count": 1,
                     "rejected_count": 0,
                     "closed_count": 0,
+                    "no_candidate_reason": "no_high_value_actionable_candidates",
                 }
             }
         ),
@@ -1395,10 +1461,14 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["value_metrics"]["broad_scan_avoided"] is True
     assert payload["value_metrics"]["high_value_candidates"] == 1
     assert payload["value_metrics"]["candidate_feedback"]["accepted_count"] == 1
+    assert payload["value_metrics"]["candidate_feedback"]["no_candidate_reason"] == "no_high_value_actionable_candidates"
     assert payload["value_metrics"]["candidate_feedback"]["placeholders_present"] is True
     assert payload["understand_anything"]["summary_count"] == 2
+    assert payload["understand_anything"]["manifest_freshness"] == "base_current"
+    assert payload["understand_anything"]["base_current_summary_count"] == 2
     assert "LLM + Code Intelligence Value" in markdown
     assert "llm_provider: `deepseek_api`" in markdown
+    assert "understand_anything: `available` freshness=`base_current` summaries=`2`" in markdown
     assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
     assert "advice_changed_plan: `True`" in markdown
     assert "graph_refs: `codegraph=" in markdown
@@ -1406,6 +1476,7 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert "discovery_plans: `executed=1, anomalies=0`" in markdown
     assert "bug_candidates: `candidates=2, high_value=1, issue_payload_drafts=1`" in markdown
     assert "candidate_feedback: `available=True, accepted=1, rejected=0, closed=0, pending=1`" in markdown
+    assert "candidate_no_issue_reason: `no_high_value_actionable_candidates`" in markdown
     assert "bug-candidates/manifest.json" in markdown
     assert "selected-plans.json" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
@@ -1699,6 +1770,48 @@ def test_pr_quality_runner_can_reference_ua_summary_manifest(
     assert payload["status"] == "runner_artifact_available"
     assert payload["latest_summary_manifest"]["artifact_path"].endswith("ua-summary-manifest.json")
     assert payload["latest_summary_manifest"]["summary_refs"][0]["module"] == "validation"
+
+
+def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_summary_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "ua-summary-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_understand_anything_summary_manifest_v1",
+                "generated_at": "2026-06-10T00:00:00Z",
+                "workflow_gate": "ready",
+                "summary_refs": [{"module": "validation", "summary_ref": "ua-validation-summary.md"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
+
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True)
+
+    assert payload["freshness"] == "base_current"
+    assert payload["latest_summary_manifest_freshness"] == "base_current"
 
 
 def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_path: Path, monkeypatch) -> None:

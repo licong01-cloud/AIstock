@@ -735,6 +735,17 @@ def test_run_p0_parser_accepts_documented_source_and_mode() -> None:
     assert args.mode == "plan"
 
 
+def test_ci_issue_janitor_parser_accepts_legacy_stdout_format_alias() -> None:
+    args = workflow.build_parser().parse_args(
+        ["ci-issue-janitor", "--superseded-only", "--apply", "--stdout-format", "compact"]
+    )
+
+    assert args.command == "ci-issue-janitor"
+    assert args.superseded_only is True
+    assert args.apply is True
+    assert args.output_format == "compact"
+
+
 def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) -> None:
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())

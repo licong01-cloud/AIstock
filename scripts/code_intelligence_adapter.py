@@ -602,6 +602,23 @@ def _persist_effective_codegraph_freshness(
     }
 
 
+def _latest_codegraph_artifact_needs_effective_persist(
+    *,
+    latest: dict[str, Any] | None,
+    effective: dict[str, Any] | None,
+    current_git_commit: str | None,
+) -> bool:
+    return bool(
+        latest
+        and latest.get("git_commit")
+        and current_git_commit
+        and str(latest.get("git_commit")) != str(current_git_commit)
+        and effective
+        and (effective or {}).get("freshness") == "fresh"
+        and str((effective or {}).get("git_commit") or "") == str(current_git_commit)
+    )
+
+
 def latest_codegraph_freshness(
     root: Path | None = None,
     *,
@@ -663,13 +680,11 @@ def latest_codegraph_freshness(
     )
     needs_effective_persist = bool(
         persist_effective
-        and latest
-        and latest.get("git_commit")
-        and current_git_commit
-        and str(latest.get("git_commit")) != str(current_git_commit)
-        and effective
-        and (effective or {}).get("freshness") == "fresh"
-        and str((effective or {}).get("git_commit") or "") == str(current_git_commit)
+        and _latest_codegraph_artifact_needs_effective_persist(
+            latest=latest,
+            effective=effective,
+            current_git_commit=current_git_commit,
+        )
     )
     if needs_effective_persist:
         latest = _persist_effective_codegraph_freshness(root, effective, output_dir=output_dir)
@@ -1279,6 +1294,34 @@ def _first_metric_float(*sources: dict[str, Any], key: str) -> float | None:
     return None
 
 
+def _ua_manifest_freshness(ua_manifest: dict[str, Any]) -> tuple[str, dict[str, int]]:
+    summary_refs = ua_manifest.get("summary_refs") if isinstance(ua_manifest.get("summary_refs"), list) else []
+    counts = {
+        "fresh": _first_metric_int(ua_manifest, key="fresh_summary_count"),
+        "base_current": _first_metric_int(ua_manifest, key="base_current_summary_count"),
+        "stale": _first_metric_int(ua_manifest, key="stale_summary_count"),
+        "missing": _first_metric_int(ua_manifest, key="missing_summary_count"),
+    }
+    if summary_refs and not any(counts.values()):
+        for item in summary_refs:
+            if not isinstance(item, dict):
+                continue
+            freshness = str(item.get("freshness") or "").strip()
+            if freshness in {"fresh", "base_current", "stale"}:
+                counts[freshness] += 1
+            elif freshness in {"missing", "unknown"}:
+                counts["missing"] += 1
+    if summary_refs and counts["fresh"] == len(summary_refs):
+        return "fresh", counts
+    if summary_refs and counts["stale"] == 0 and counts["missing"] == 0 and counts["base_current"] > 0:
+        return "base_current", counts
+    if counts["stale"] > 0:
+        return "stale", counts
+    if counts["missing"] > 0:
+        return "missing", counts
+    return "unknown", counts
+
+
 def _unique_refs(*values: Any) -> list[str]:
     refs: list[str] = []
     for value in values:
@@ -1342,6 +1385,7 @@ def build_llm_value_summary(
     context_quality = _mapping(context.get("context_quality"))
     hypothesis_rotation = _mapping(hypotheses.get("rotation"))
     discovery_rotation = _mapping(discovery_manifest.get("rotation"))
+    ua_manifest_freshness, ua_freshness_counts = _ua_manifest_freshness(ua_manifest)
     adaptive_consumption = _mapping(adaptive.get("advice_consumption"))
     scheduler_consumption = _mapping(scheduler.get("advice_consumption"))
     hypothesis_selected = _string_list(hypotheses.get("selected_plan_keys"))
@@ -1501,6 +1545,8 @@ def build_llm_value_summary(
                 key="confirmed_real_bug_rate",
             ),
             "noise_rate": _first_metric_float(bug_summary, bug_effectiveness, key="noise_rate"),
+            "no_candidate_reason": bug_effectiveness.get("no_candidate_reason")
+            or bug_summary.get("no_candidate_reason"),
             "placeholders_present": True,
         },
         "compact_only": True,
@@ -1528,6 +1574,11 @@ def build_llm_value_summary(
             "summary_ref": code_summary.get("understand_anything_summary_ref") or ua_summary.get("summary_ref"),
             "manifest_ref": artifact_refs["understand_anything_manifest_json"],
             "summary_count": len(ua_manifest.get("summary_refs") or []) if isinstance(ua_manifest.get("summary_refs"), list) else 0,
+            "manifest_freshness": ua_manifest_freshness,
+            "fresh_summary_count": ua_freshness_counts["fresh"],
+            "base_current_summary_count": ua_freshness_counts["base_current"],
+            "stale_summary_count": ua_freshness_counts["stale"],
+            "missing_summary_count": ua_freshness_counts["missing"],
         },
         "llm": {
             "provider": provider,
@@ -1604,7 +1655,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         "",
         f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
         f"- codegraph: `{codegraph.get('freshness') or 'unknown'}` / `{codegraph.get('status') or 'unknown'}`",
-        f"- understand_anything: `{ua.get('status') or 'unknown'}` summaries=`{ua.get('summary_count') or 0}`",
+        f"- understand_anything: `{ua.get('status') or 'unknown'}` freshness=`{ua.get('manifest_freshness') or 'unknown'}` summaries=`{ua.get('summary_count') or 0}`",
         f"- llm_provider: `{llm.get('provider') or 'unknown'}`",
         f"- llm_model: `{llm.get('model') or 'unknown'}`",
         f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
@@ -1617,6 +1668,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- discovery_plans: `executed={llm.get('discovery_executed_plan_count') or 0}, anomalies={llm.get('discovery_anomaly_count') or 0}`",
         f"- bug_candidates: `candidates={llm.get('bug_candidate_count') or 0}, high_value={metrics.get('high_value_candidates') or 0}, issue_payload_drafts={metrics.get('issue_payload_ready_count') or 0}`",
         f"- candidate_feedback: `available={bool(metrics.get('candidate_feedback_available'))}, accepted={feedback.get('accepted_count', 0)}, rejected={feedback.get('rejected_count', 0)}, closed={feedback.get('closed_count', 0)}, pending={feedback.get('pending_count', 0)}`",
+        f"- candidate_no_issue_reason: `{feedback.get('no_candidate_reason') or 'n/a'}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
@@ -1693,6 +1745,8 @@ def understand_anything_status(
             summary_manifest_freshness = "fresh"
         elif ref_freshness:
             summary_manifest_freshness = ",".join(sorted(ref_freshness))
+        elif refs and freshness in {"fresh", "base_current", "stale", "missing"}:
+            summary_manifest_freshness = freshness
     if graph_path.exists() and graph:
         manifest = {
             "node_count": len(graph.get("nodes") or []),
@@ -2861,9 +2915,13 @@ def cmd_freshness(args: argparse.Namespace) -> int:
 
 
 def cmd_latest_freshness(args: argparse.Namespace) -> int:
+    root = Path(args.root) if args.root else REPO_ROOT
+    live_status = codegraph_status(root, skip_external=args.skip_external)
     payload = latest_codegraph_freshness(
-        root=Path(args.root) if args.root else REPO_ROOT,
+        root=root,
+        live_status=live_status,
         refresh_if_stale=args.refresh_if_stale,
+        persist_effective=args.refresh_if_stale,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_age_hours=args.max_age_hours,
         skip_external=args.skip_external,
