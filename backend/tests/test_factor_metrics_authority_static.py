@@ -229,7 +229,6 @@ def test_official_qe_eval_v2_metric_paths_do_not_import_rdagent_factor_metrics()
         path for path in _production_python_files()
         if "quantevolver" in path.relative_to(REPO_ROOT).as_posix()
     ]
-    checked_paths.append(REPO_ROOT / "scripts" / "compute_factor_metrics_unified.py")
 
     for path in sorted(set(checked_paths)):
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -239,16 +238,15 @@ def test_official_qe_eval_v2_metric_paths_do_not_import_rdagent_factor_metrics()
     assert not bad_locations, "Official qe_eval_v2 path imports RD-Agent factor metrics: " + ", ".join(bad_locations)
 
 
-def test_compute_factor_metrics_unified_bootstraps_repo_and_uses_qe_eval_v2_engine() -> None:
-    text = (REPO_ROOT / "scripts" / "compute_factor_metrics_unified.py").read_text(
-        encoding="utf-8",
-        errors="replace",
+def test_retired_factor_metric_scripts_are_removed() -> None:
+    """Legacy script entrypoints must not bypass the official evaluation service."""
+    retired = (
+        REPO_ROOT / "scripts" / "compute_factor_metrics_unified.py",
+        REPO_ROOT / "scripts" / "batch_develop_factors_v2.py",
+        REPO_ROOT / "scripts" / "optimize_timeout_factors.py",
     )
 
-    assert "REPO_ROOT = Path(__file__).resolve().parents[1]" in text
-    assert "sys.path.insert(0, str(REPO_ROOT))" in text
-    assert "backend.services.quantevolver.qe_eval_v2_metric_engine" in text
-    assert "rdagent.app.factor_metrics" not in text
+    assert not any(path.exists() for path in retired)
 
 
 def test_qe_eval_v2_pit_coverage_excludes_only_full_series_warmup_and_suspension() -> None:
