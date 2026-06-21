@@ -44,8 +44,9 @@ DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 1024
 DEFAULT_RESOURCE_POLL_SEC = 5.0
 DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER = 5
 DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
-DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 1
-DEFAULT_FACTOR_WORKER_ESTIMATED_MB = 8 * 1024
+DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 4
+DEFAULT_FACTOR_WORKER_ESTIMATED_MB = 2 * 1024
+DEFAULT_METRIC_WORKER_ESTIMATED_MB = 2 * 1024
 DEFAULT_MAX_EFFECTIVE_WORKERS = 4
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
@@ -215,6 +216,7 @@ class OfficialFactorBatchComputeService:
             "metric_precomputed": 0,
             "metric_parent_computed": 0,
             "metric_precompute_failures": [],
+            "metric_parent_compute_failures": [],
         }
         success_count = 0
         fail_count = 0
@@ -264,6 +266,18 @@ class OfficialFactorBatchComputeService:
                     min_available_mb=limits.min_available_mb,
                     reason="available_memory_headroom",
                 )
+            worker_metric_precompute_enabled = self._worker_metric_precompute_enabled()
+            self._emit(
+                "metric_compute_strategy",
+                task_id=task_id,
+                batch_id=batch_id,
+                batch_index=batch_index,
+                worker_metric_precompute_enabled=worker_metric_precompute_enabled,
+                parent_metric_workers=self._select_metric_workers(
+                    min(len(batch), self._result_drain_chunk_size()),
+                    resource_before_batch,
+                ),
+            )
             self._emit(
                 "batch_started",
                 task_id=task_id,
@@ -408,8 +422,10 @@ class OfficialFactorBatchComputeService:
                     batch_id=batch_id,
                     swap_baseline_mb=resource_at_start.swap_mb,
                     result_handler=_handle_exec_result,
-                    metrics_ctx=metrics_ctx,
-                    compute_single_factor_metrics=compute_single_factor_metrics,
+                    metrics_ctx=metrics_ctx if worker_metric_precompute_enabled else None,
+                    compute_single_factor_metrics=(
+                        compute_single_factor_metrics if worker_metric_precompute_enabled else None
+                    ),
                     eligible_index=eligible_index,
                 )
                 for row in batch:
@@ -599,6 +615,30 @@ class OfficialFactorBatchComputeService:
         by_headroom = max(1, int(headroom_mb // estimated_per_worker_mb))
         return max(1, min(max_effective, by_headroom))
 
+    def _select_metric_workers(self, requested_workers: int, snapshot: ResourceSnapshot | None = None) -> int:
+        requested = max(1, int(requested_workers or 1))
+        max_effective = min(requested, _env_int("AISTOCK_OFFICIAL_FACTOR_METRIC_WORKERS", DEFAULT_METRIC_WORKERS))
+        if snapshot is None:
+            snapshot = _resource_snapshot(fast=True)
+        available_mb = snapshot.available_mb
+        if available_mb is None:
+            return max(1, max_effective)
+        limits = getattr(self, "_resource_limits", FactorResourceLimits())
+        min_available_mb = max(1, int(limits.min_available_mb or DEFAULT_MIN_AVAILABLE_MB))
+        if available_mb < min_available_mb:
+            return 1
+        estimated_per_worker_mb = max(
+            1,
+            _env_int("AISTOCK_OFFICIAL_FACTOR_METRIC_ESTIMATED_WORKER_MB", DEFAULT_METRIC_WORKER_ESTIMATED_MB),
+        )
+        headroom_mb = max(0.0, float(available_mb) - float(min_available_mb))
+        by_headroom = max(1, int(headroom_mb // estimated_per_worker_mb))
+        return max(1, min(max_effective, by_headroom))
+
+    def _worker_metric_precompute_enabled(self) -> bool:
+        raw = str(os.getenv("AISTOCK_OFFICIAL_FACTOR_WORKER_METRIC_PRECOMPUTE", "")).strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
     def _result_drain_chunk_size(self) -> int:
         return max(1, _env_int("AISTOCK_OFFICIAL_FACTOR_RESULT_DRAIN_CHUNK_SIZE", DEFAULT_RESULT_DRAIN_CHUNK_SIZE))
 
@@ -616,6 +656,14 @@ class OfficialFactorBatchComputeService:
         factor_ids: dict[str, int],
         batch_id: str,
     ) -> int:
+        parent_metric_results = self._compute_parent_metrics_for_frames(
+            frames,
+            metrics_error=metrics_error,
+            metrics_ctx=metrics_ctx,
+            compute_single_factor_metrics=compute_single_factor_metrics,
+            db_result=db_result,
+            batch_id=batch_id,
+        )
         success_delta = 0
         for frame in list(frames):
             if len(frame) == 2:
@@ -640,31 +688,35 @@ class OfficialFactorBatchComputeService:
             else:
                 try:
                     if metric_result is None:
-                        db_result["metric_parent_computed"] += 1
-                        metric_result = compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
-                    metrics_by_window = metric_result.get("metrics", {}) if isinstance(metric_result, dict) else {}
-                    flat_metrics = []
-                    for window_name, window_metrics in metrics_by_window.items():
-                        rec = dict(window_metrics)
-                        rec["factor_name"] = name
-                        rec["eval_window"] = window_name
-                        flat_metrics.append(rec)
-                    if flat_metrics:
-                        save_result = self._metric_writer()._save_metrics(
-                            {"metrics": flat_metrics, "calc_batch_id": calc_batch_id},
-                            snapshot_date=end_date,
-                            factor_ids=factor_ids,
-                        )
-                        db_result["inserted"] += int(save_result.get("inserted") or 0)
-                        db_result["skipped"] += int(save_result.get("skipped") or 0)
-                        if save_result.get("errors"):
-                            db_result["errors"].extend(save_result["errors"])
-                        full_metrics = metrics_by_window.get("full", {})
-                        monthly_series = full_metrics.get("monthly_ic_series")
-                        if monthly_series:
-                            self._metric_writer()._save_monthly_ic(name, end_date, monthly_series)
+                        metric_result = parent_metric_results.get(name)
+                    if metric_result is None:
+                        if name not in set(db_result.get("save_failures") or []):
+                            db_result["errors"].append(f"{name}: metrics_parent_missing")
+                            db_result["save_failures"].append(name)
                     else:
-                        db_result["errors"].append(f"{name}: metrics_empty")
+                        metrics_by_window = metric_result.get("metrics", {}) if isinstance(metric_result, dict) else {}
+                        flat_metrics = []
+                        for window_name, window_metrics in metrics_by_window.items():
+                            rec = dict(window_metrics)
+                            rec["factor_name"] = name
+                            rec["eval_window"] = window_name
+                            flat_metrics.append(rec)
+                        if flat_metrics:
+                            save_result = self._metric_writer()._save_metrics(
+                                {"metrics": flat_metrics, "calc_batch_id": calc_batch_id},
+                                snapshot_date=end_date,
+                                factor_ids=factor_ids,
+                            )
+                            db_result["inserted"] += int(save_result.get("inserted") or 0)
+                            db_result["skipped"] += int(save_result.get("skipped") or 0)
+                            if save_result.get("errors"):
+                                db_result["errors"].extend(save_result["errors"])
+                            full_metrics = metrics_by_window.get("full", {})
+                            monthly_series = full_metrics.get("monthly_ic_series")
+                            if monthly_series:
+                                self._metric_writer()._save_monthly_ic(name, end_date, monthly_series)
+                        else:
+                            db_result["errors"].append(f"{name}: metrics_empty")
                 except Exception as exc:
                     db_result["errors"].append(f"{name}: {type(exc).__name__}: {exc}")
                     db_result["save_failures"].append(name)
@@ -679,6 +731,85 @@ class OfficialFactorBatchComputeService:
             })
             success_delta += 1
         return success_delta
+
+    def _compute_parent_metrics_for_frames(
+        self,
+        frames: list[tuple[str, pd.DataFrame, dict[str, Any] | None, str | None]],
+        *,
+        metrics_error: str | None,
+        metrics_ctx: Any,
+        compute_single_factor_metrics: Any,
+        db_result: dict[str, Any],
+        batch_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        if metrics_error or metrics_ctx is None or compute_single_factor_metrics is None:
+            return {}
+
+        missing: list[tuple[str, pd.DataFrame]] = []
+        for frame in list(frames):
+            if len(frame) == 2:
+                name, df = frame  # type: ignore[misc]
+                metric_result = None
+            else:
+                name, df, metric_result, _metric_precompute_error = frame
+            if metric_result is None:
+                missing.append((name, df))
+        if not missing:
+            return {}
+
+        metric_workers = self._select_metric_workers(len(missing))
+        self._emit(
+            "metric_parent_compute_started",
+            batch_id=batch_id,
+            factor_count=len(missing),
+            metric_workers=metric_workers,
+        )
+
+        def _compute_one(item: tuple[str, pd.DataFrame]) -> tuple[str, dict[str, Any]]:
+            name, df = item
+            return name, compute_single_factor_metrics(name, df.rename(columns={"value": name}), metrics_ctx)
+
+        computed: dict[str, dict[str, Any]] = {}
+        if metric_workers <= 1 or len(missing) <= 1:
+            iterator = []
+            for item in missing:
+                name = item[0]
+                try:
+                    iterator.append(_compute_one(item))
+                except Exception as exc:
+                    error = f"{name}: {type(exc).__name__}: {exc}"
+                    db_result["errors"].append(error)
+                    db_result["save_failures"].append(name)
+                    db_result["metric_parent_compute_failures"].append(error)
+                    self._emit(
+                        "metric_parent_compute_failed",
+                        batch_id=batch_id,
+                        factor_name=name,
+                        error=error,
+                    )
+        else:
+            with ThreadPoolExecutor(max_workers=metric_workers, thread_name_prefix="official-metric") as pool:
+                futures = {pool.submit(_compute_one, item): item[0] for item in missing}
+                iterator = []
+                for future in as_completed(futures):
+                    try:
+                        iterator.append(future.result())
+                    except Exception as exc:
+                        name = futures[future]
+                        error = f"{name}: {type(exc).__name__}: {exc}"
+                        db_result["errors"].append(error)
+                        db_result["save_failures"].append(name)
+                        db_result["metric_parent_compute_failures"].append(error)
+                        self._emit(
+                            "metric_parent_compute_failed",
+                            batch_id=batch_id,
+                            factor_name=name,
+                            error=error,
+                        )
+        for name, metric_result in iterator:
+            computed[name] = metric_result
+            db_result["metric_parent_computed"] += 1
+        return computed
 
     def _compute_batch_frames(
         self,
@@ -699,6 +830,9 @@ class OfficialFactorBatchComputeService:
         timeout_sec = max(1, int(timeout_per_factor or 1800))
         baseline_mb = _resource_snapshot().swap_mb if swap_baseline_mb is None else swap_baseline_mb
         if os.name != "nt" and "fork" in multiprocessing.get_all_start_methods():
+            if not self._worker_metric_precompute_enabled():
+                metrics_ctx = None
+                compute_single_factor_metrics = None
             return self._compute_batch_frames_with_process_timeouts(
                 executor,
                 batch,
@@ -1254,9 +1388,16 @@ class OfficialFactorBatchComputeService:
                 "metric_precomputed": int(db_result.get("metric_precomputed") or 0),
                 "metric_parent_computed": int(db_result.get("metric_parent_computed") or 0),
                 "metric_precompute_failures": list(db_result.get("metric_precompute_failures") or [])[-12:],
+                "metric_parent_compute_failures": list(db_result.get("metric_parent_compute_failures") or [])[-12:],
+                "worker_metric_precompute_enabled": self._worker_metric_precompute_enabled(),
+                "parent_metric_workers": _env_int("AISTOCK_OFFICIAL_FACTOR_METRIC_WORKERS", DEFAULT_METRIC_WORKERS),
                 "worker_estimated_mb": _env_int(
                     "AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB",
                     DEFAULT_FACTOR_WORKER_ESTIMATED_MB,
+                ),
+                "metric_worker_estimated_mb": _env_int(
+                    "AISTOCK_OFFICIAL_FACTOR_METRIC_ESTIMATED_WORKER_MB",
+                    DEFAULT_METRIC_WORKER_ESTIMATED_MB,
                 ),
             },
             "resource_limits": asdict(getattr(self, "_resource_limits", FactorResourceLimits())),

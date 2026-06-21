@@ -483,7 +483,24 @@ def test_resource_gate_failure_does_not_drain_killed_worker_queue(monkeypatch):
     assert fake_queue.joined is True
 
 
-def test_select_batch_workers_throttles_when_available_memory_headroom_is_low():
+def test_select_batch_workers_throttles_when_available_memory_headroom_is_low(monkeypatch):
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=10**9,
+        hard_rss_mb=10**9,
+        min_available_mb=8192,
+        swap_growth_hard_stop_mb=10**9,
+    )
+    monkeypatch.setenv("AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB", "8192")
+
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 70000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 50000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 39000, 90)) == 3
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 1
+
+
+def test_select_batch_workers_default_keeps_four_workers_with_observed_headroom(monkeypatch):
+    monkeypatch.delenv("AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB", raising=False)
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
     service._resource_limits = FactorResourceLimits(
         soft_rss_mb=10**9,
@@ -492,10 +509,8 @@ def test_select_batch_workers_throttles_when_available_memory_headroom_is_low():
         swap_growth_hard_stop_mb=10**9,
     )
 
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 70000, 90)) == 4
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 50000, 90)) == 4
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 39000, 90)) == 3
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 1
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 14173, 90)) == 2
 
 
 def test_batch_compute_precomputes_metrics_in_worker_when_context_available(monkeypatch):
@@ -539,6 +554,196 @@ def test_batch_compute_precomputes_metrics_in_worker_when_context_available(monk
     assert result["factor_a"].success is True
     assert result["factor_a"].official_metric_result == {"metrics": {"full": {"monthly_ic_series": []}}}
     assert result["factor_a"].official_metric_elapsed_sec >= 0
+
+
+def test_process_batch_does_not_pass_metric_context_to_fork_workers_by_default(monkeypatch):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._resource_limits = FactorResourceLimits(
+        soft_rss_mb=10**9,
+        hard_rss_mb=10**9,
+        min_available_mb=0,
+        swap_growth_hard_stop_mb=10**9,
+    )
+    service._emit = lambda *args, **kwargs: None
+    service._check_resource_gate = lambda *args, **kwargs: ResourceGateDecision(True, None, {})
+    captured: dict[str, object] = {}
+
+    class _Process:
+        pid = 12345
+
+        def __init__(self, *args, **kwargs):
+            captured["args"] = kwargs["args"]
+            self.alive = False
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+    class _Queue:
+        def get_nowait(self):
+            raise queue.Empty
+
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class _Context:
+        def Queue(self):
+            return _Queue()
+
+        Process = _Process
+
+    monkeypatch.delenv("AISTOCK_OFFICIAL_FACTOR_WORKER_METRIC_PRECOMPUTE", raising=False)
+    monkeypatch.setattr(svc.os, "name", "posix")
+    monkeypatch.setattr(svc.multiprocessing, "get_all_start_methods", lambda: ["fork"])
+    monkeypatch.setattr(svc.multiprocessing, "get_context", lambda method: _Context())
+
+    service._compute_batch_frames(
+        object(),
+        [{"factor_name": "factor_a", "code_text": "result = 1"}],
+        workers=1,
+        timeout_per_factor=1800,
+        metrics_ctx={"large": "ctx"},
+        compute_single_factor_metrics=lambda *args, **kwargs: {},
+    )
+
+    args = captured["args"]
+    assert args[4] is None
+    assert args[5] is None
+
+
+def test_parent_metric_compute_parallelizes_missing_metrics(monkeypatch):
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = None
+    monkeypatch.setenv("AISTOCK_OFFICIAL_FACTOR_METRIC_WORKERS", "2")
+    monkeypatch.setattr(
+        "backend.services.quantevolver.official_factor_batch_compute_service._resource_snapshot",
+        lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
+    )
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _metrics(name, df, ctx):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    frames = [
+        ("factor_a", _base_df()[["close"]].rename(columns={"close": "value"}), None, None),
+        ("factor_b", _base_df()[["close"]].rename(columns={"close": "value"}), None, None),
+    ]
+    db_result = {
+        "errors": [],
+        "save_failures": [],
+        "metric_parent_computed": 0,
+        "metric_parent_compute_failures": [],
+    }
+
+    result = service._compute_parent_metrics_for_frames(
+        frames,
+        metrics_error=None,
+        metrics_ctx={"ctx": True},
+        compute_single_factor_metrics=_metrics,
+        db_result=db_result,
+        batch_id="batch",
+    )
+
+    assert sorted(result) == ["factor_a", "factor_b"]
+    assert db_result["metric_parent_computed"] == 2
+    assert db_result["save_failures"] == []
+    assert max_active == 2
+
+
+def test_parent_metric_compute_classifies_serial_failures(monkeypatch):
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = None
+    monkeypatch.setenv("AISTOCK_OFFICIAL_FACTOR_METRIC_WORKERS", "1")
+
+    def _metrics(name, df, ctx):
+        if name == "factor_bad":
+            raise RuntimeError("boom")
+        return {"metrics": {"full": {"monthly_ic_series": []}}}
+
+    frames = [
+        ("factor_good", _base_df()[["close"]].rename(columns={"close": "value"}), None, None),
+        ("factor_bad", _base_df()[["close"]].rename(columns={"close": "value"}), None, None),
+    ]
+    db_result = {
+        "errors": [],
+        "save_failures": [],
+        "metric_parent_computed": 0,
+        "metric_parent_compute_failures": [],
+    }
+
+    result = service._compute_parent_metrics_for_frames(
+        frames,
+        metrics_error=None,
+        metrics_ctx={"ctx": True},
+        compute_single_factor_metrics=_metrics,
+        db_result=db_result,
+        batch_id="batch",
+    )
+
+    assert list(result) == ["factor_good"]
+    assert db_result["metric_parent_computed"] == 1
+    assert db_result["save_failures"] == ["factor_bad"]
+    assert "factor_bad: RuntimeError: boom" in db_result["metric_parent_compute_failures"]
+
+
+def test_drain_success_frames_keeps_factor_success_when_parent_metric_fails(monkeypatch):
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = None
+    monkeypatch.setenv("AISTOCK_OFFICIAL_FACTOR_METRIC_WORKERS", "1")
+
+    def _metrics(name, df, ctx):
+        raise RuntimeError("metric failed")
+
+    db_result = {
+        "inserted": 0,
+        "skipped": 0,
+        "errors": [],
+        "save_failures": [],
+        "metric_precomputed": 0,
+        "metric_parent_computed": 0,
+        "metric_precompute_failures": [],
+        "metric_parent_compute_failures": [],
+    }
+    results: list[dict[str, object]] = []
+
+    success_delta = service._drain_success_frames(
+        [("factor_a", _base_df()[["close"]].rename(columns={"close": "value"}), None, None)],
+        results,
+        db_result=db_result,
+        metrics_error=None,
+        metrics_ctx={"ctx": True},
+        compute_single_factor_metrics=_metrics,
+        calc_batch_id="calc",
+        end_date="2026-04-30",
+        factor_ids={},
+        batch_id="batch",
+    )
+
+    assert success_delta == 1
+    assert results[0]["success"] is True
+    assert db_result["save_failures"] == ["factor_a"]
+    assert db_result["metric_parent_computed"] == 0
+    assert "factor_a: RuntimeError: metric failed" in db_result["metric_parent_compute_failures"]
 
 
 def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatch, tmp_path):
