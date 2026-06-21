@@ -22,12 +22,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260621-4d2c5b634b72",
       "timestamp": "2026-06-21T13:36:59.065872Z"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "timestamp": "2026-06-21T14:09:10Z",
+      "note": "Implementation and local validation completed; PR pending Tier2 review and user-owned backend restart after merge."
     }
   ],
   "evidence_uris": [],
   "expected": "node_parallelism=2 executes independent pred-backtest subprocess children without hanging; hung children time out fail-loud with workspace/node/scheme diagnostics.",
   "first_seen_at": "2026-06-21T13:36:59.065877Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-451-multi-alpha-combine-backtest-parallel-wsl-subpro-20260621",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 1398,
@@ -67,5 +73,21 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "validation_evidence": [
+    "PYTHONIOENCODING=utf-8 python -m pytest backend/tests/test_multi_alpha_combine_backtest.py::test_run_command_detaches_stdin_from_service_process backend/tests/test_multi_alpha_combine_backtest.py::test_run_command_timeout_fails_loud_and_keeps_context backend/tests/test_multi_alpha_combine_backtest.py::test_shell_executor_timeout_marks_critical_child_failed_without_hanging backend/tests/test_multi_alpha_combine_backtest.py::test_shell_executor_runs_two_real_wsl_children_concurrently_without_hang -q -s -> 4 passed (real WSL concurrent smoke included)",
+    "ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "git diff --check -> passed",
+    "PYTHONIOENCODING=utf-8 python -m pytest backend/tests/test_multi_alpha_combiner.py backend/tests/test_multi_alpha_combiner_rank_fusion.py backend/tests/test_multi_alpha_combine_backtest.py -q -> 37 passed",
+    "PYTHONIOENCODING=utf-8 python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "implementation_notes": [
+    {
+      "type": "fix_implementation",
+      "timestamp": "2026-06-21T14:09:10Z",
+      "note": "run_command now detaches subprocess stdin with subprocess.DEVNULL, keeps UTF-8/errors=replace capture, and converts subprocess.TimeoutExpired into a fail-loud MultiAlphaCombineBacktestError with node_id, workspace, backtest_name, stage, command, timeout, stdout_tail, and stderr_tail context. Shell executor qrun/read_exp/custom calls pass stage-specific context. Regression coverage includes a real node_parallelism=2 WSL smoke using two concurrent wsl bash -lc children, timeout failure propagation, and per-child workspace isolation."
+    }
+  ]
 }

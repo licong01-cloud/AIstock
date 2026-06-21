@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -180,6 +183,14 @@ def _service(
     return service, repo, executor, checker
 
 
+def _runtime_template(tmp_path: Path) -> Path:
+    template = tmp_path / "runtime_template"
+    template.mkdir()
+    for runtime_file in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (template / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+    return template
+
+
 class RaisingPanelBuilder:
     def build_combiner_legs(self, **_kwargs):
         raise AssertionError("rank-fusion-only combine-backtest must not build label panels")
@@ -254,6 +265,57 @@ def test_combine_backtest_limits_intra_run_parallelism_to_node_cap(tmp_path: Pat
     assert executor.max_active == 2
     assert max(executor.active_observations) <= 2
     assert len(executor.calls) == 5
+
+
+def test_shell_executor_runs_two_real_wsl_children_concurrently_without_hang(tmp_path: Path) -> None:
+    if shutil.which("wsl") is None:
+        pytest.skip("WSL is required for the real concurrent subprocess smoke")
+    executor = FakeExecutor(sleep_seconds=0.05)
+    service, _repo, _fake_executor, _checker = _service(tmp_path, executor=executor)
+    command = [
+        "wsl",
+        "bash",
+        "-lc",
+        "python3 - <<'PY'\n"
+        "import json\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "start = time.time()\n"
+        "time.sleep(5)\n"
+        "Path('qlib_results_enhanced.json').write_text(json.dumps({'absolute_returns': "
+        "{'cagr': 1.23, 'max_drawdown': -0.12, 'sharpe': 2.34, 'calmar': 10.25, "
+        "'topk_return_20': 0.07, 'topk_hit_rate_20': 0.66, 'turnover': 12.0}}))\n"
+        "print(f'ok real-wsl start={start:.6f} end={time.time():.6f} cwd={Path.cwd()}')\n"
+        "PY",
+    ]
+    service._executor = ShellPredBacktestExecutor()  # exercise real subprocesses instead of the fake executor
+    payload = _payload()
+    payload["weighting_schemes"] = ["equal"]
+    payload["backtest_config"] = {
+        "node_id": "wsl2-5080",
+        "node_parallelism": {"wsl2-5080": 2},
+        "runtime_template_dir": str(_runtime_template(tmp_path)),
+        "command": command,
+        "timeout_seconds": 30,
+    }
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    workspaces = sorted((tmp_path / "macb" / result["run_id"]).iterdir())
+    assert len({path.resolve() for path in workspaces}) == 2
+    assert {"baseline_leg_a", "combined_equal"} == {path.name for path in workspaces}
+    intervals: list[tuple[float, float]] = []
+    for workspace in workspaces:
+        stdout = (workspace / "pred_backtest_stdout.log").read_text(encoding="utf-8")
+        assert "ok real-wsl" in stdout
+        match = re.search(r"start=(?P<start>\d+\.\d+) end=(?P<end>\d+\.\d+)", stdout)
+        assert match is not None, stdout
+        intervals.append((float(match.group("start")), float(match.group("end"))))
+    assert len(intervals) == 2
+    assert max(start for start, _end in intervals) < min(end for _start, end in intervals)
+    assert run["loo"] == []
 
 
 def test_parallel_and_serial_results_match(tmp_path: Path) -> None:
@@ -481,6 +543,89 @@ def test_run_command_decodes_utf8_subprocess_output_on_windows_codepages(tmp_pat
     assert f"err prefix {marker} utf8" in completed.stderr
     assert f"out prefix {marker} utf8" in (tmp_path / "utf8_capture_stdout.log").read_text(encoding="utf-8")
     assert f"err prefix {marker} utf8" in (tmp_path / "utf8_capture_stderr.log").read_text(encoding="utf-8")
+
+
+def test_run_command_timeout_fails_loud_and_keeps_context(tmp_path: Path) -> None:
+    script = tmp_path / "hang.py"
+    script.write_text(
+        "import sys, time\n"
+        "print('starting hang', flush=True)\n"
+        "sys.stderr.write('stderr before timeout\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(100000)\n",
+        encoding="utf-8",
+    )
+
+    started_at = time.monotonic()
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        run_command(
+            [sys.executable, str(script)],
+            cwd=tmp_path,
+            timeout_seconds=1,
+            log_prefix="timeout_capture",
+            error_context={"workspace": str(tmp_path), "node_id": "wsl2-5080", "backtest_name": "combined_equal"},
+        )
+
+    assert time.monotonic() - started_at < 10
+    assert excinfo.value.reason_code == "pred_backtest_timeout"
+    assert excinfo.value.context["workspace"] == str(tmp_path)
+    assert excinfo.value.context["node_id"] == "wsl2-5080"
+    assert excinfo.value.context["backtest_name"] == "combined_equal"
+    assert "starting hang" in excinfo.value.context["stdout_tail"]
+    assert "stderr before timeout" in excinfo.value.context["stderr_tail"]
+    assert "starting hang" in (tmp_path / "timeout_capture_stdout.log").read_text(encoding="utf-8")
+    assert "stderr before timeout" in (tmp_path / "timeout_capture_stderr.log").read_text(encoding="utf-8")
+
+
+def test_run_command_detaches_stdin_from_service_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        observed["stdin"] = kwargs.get("stdin")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("backend.services.multi_alpha.combine_backtest.subprocess.run", fake_run)
+
+    completed = run_command(
+        [sys.executable, "-c", "print('ok')"],
+        cwd=tmp_path,
+        timeout_seconds=30,
+        log_prefix="stdin_capture",
+    )
+
+    assert completed.returncode == 0
+    assert observed["stdin"] is subprocess.DEVNULL
+
+
+def test_shell_executor_timeout_marks_critical_child_failed_without_hanging(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    payload["backtest_config"] = {
+        "node_id": "wsl2-5080",
+        "node_parallelism": {"wsl2-5080": 2},
+        "runtime_template_dir": str(_runtime_template(tmp_path)),
+        "command": [
+            sys.executable,
+            "-c",
+            "import sys, time; print('child started', flush=True); sys.stderr.write('child stderr\\n'); sys.stderr.flush(); time.sleep(100000)",
+        ],
+        "timeout_seconds": 1,
+    }
+    service._executor = ShellPredBacktestExecutor()
+
+    started_at = time.monotonic()
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(payload, run_async=False)
+
+    assert time.monotonic() - started_at < 20
+    assert excinfo.value.reason_code == "pred_backtest_timeout"
+    run_id = next(iter(repo.runs))
+    run = service.get_run(run_id)
+    assert run["run"]["status"] == "failed"
+    failed_children = run["run"]["reason"]["failed_child_tasks"]
+    assert failed_children["baseline_leg_a"]["reason_code"] == "pred_backtest_timeout"
+    assert failed_children["baseline_leg_a"]["context"]["backtest_name"] == "baseline_leg_a"
+    assert "child stderr" in failed_children["baseline_leg_a"]["context"]["stderr_tail"]
 
 
 def test_shell_executor_failure_keeps_utf8_stderr_tail(tmp_path: Path) -> None:

@@ -227,6 +227,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", 6 * 60 * 60)),
                 log_prefix="pred_backtest_qrun",
+                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "qrun"},
             )
             if qrun.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
@@ -242,6 +243,7 @@ class ShellPredBacktestExecutor:
                 timeout_seconds=int(backtest_config.get("read_timeout_seconds", 60 * 60)),
                 log_prefix="pred_backtest_read_exp_res",
                 env=env,
+                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "read_exp_res"},
             )
             if read_exp.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
@@ -255,6 +257,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", 6 * 60 * 60)),
                 log_prefix="pred_backtest",
+                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "custom_command"},
             )
             if completed.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
@@ -306,27 +309,56 @@ def run_command(
     timeout_seconds: int,
     log_prefix: str,
     env: Mapping[str, str] | None = None,
+    error_context: Mapping[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command_for_log: str | list[str]
     if isinstance(command, str):
         command_for_log = command
     else:
         command_for_log = [str(part) for part in command]
-    completed = subprocess.run(
-        command_for_log,
-        cwd=cwd,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        shell=isinstance(command_for_log, str),
-        timeout=timeout_seconds,
-        check=False,
-        env=dict(env) if env is not None else None,
-    )
+    try:
+        completed = subprocess.run(
+            command_for_log,
+            cwd=cwd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            shell=isinstance(command_for_log, str),
+            timeout=timeout_seconds,
+            check=False,
+            env=dict(env) if env is not None else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = _process_output_text(exc.stdout)
+        stderr = _process_output_text(exc.stderr)
+        (cwd / f"{log_prefix}_stdout.log").write_text(stdout, encoding="utf-8", errors="replace")
+        (cwd / f"{log_prefix}_stderr.log").write_text(stderr, encoding="utf-8", errors="replace")
+        context = {
+            "cwd": str(cwd),
+            "command": command_for_log,
+            "timeout_seconds": timeout_seconds,
+            "stdout_tail": stdout[-1000:],
+            "stderr_tail": stderr[-1000:],
+            **dict(error_context or {}),
+        }
+        raise MultiAlphaCombineBacktestError(
+            f"pred-backtest subprocess timed out after {timeout_seconds}s",
+            reason_code="pred_backtest_timeout",
+            context=context,
+        ) from exc
     (cwd / f"{log_prefix}_stdout.log").write_text(completed.stdout or "", encoding="utf-8", errors="replace")
     (cwd / f"{log_prefix}_stderr.log").write_text(completed.stderr or "", encoding="utf-8", errors="replace")
     return completed
+
+
+def _process_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 class MultiAlphaCombineBacktestRepository:
