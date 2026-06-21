@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 
 import pytest
 
@@ -27,7 +28,7 @@ from backend.services.research_assistant.models import (
     TraceEventCreate,
     WorkbenchDryRunExecuteRequest,
 )
-from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
+from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES, _adapt_json
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
     DialogueIntent,
@@ -36,6 +37,7 @@ from backend.services.research_assistant.service import (
     LlmCallResult,
     ModeDecision,
     ResearchAssistantCatalogNotReadyError,
+    ResearchAssistantRuntimeConfigInvalidError,
     ResearchAssistantService,
 )
 from backend.services.research_assistant.runtime_config import (
@@ -1104,6 +1106,104 @@ def test_active_runtime_config_accepts_empty_mcp_tool_refs_list() -> None:
     reuse = next(item for item in capabilities if item["capability_key"] == "skill_library.reuse")
 
     assert reuse["mcp_tool_refs"] == []
+
+
+def test_bug_439_empty_registry_mcp_tool_refs_shapes_self_heal_without_chat_crash(caplog: pytest.LogCaptureFixture) -> None:
+    svc = _chat_service()
+    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = {}
+    svc.repository.create_record("capabilities", capability)
+
+    caplog.set_level(logging.WARNING)
+    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本面和未来走势如何", dialogue_mode_override="analysis"))
+
+    text = result["assistant_message"]["content_text"]
+    repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert repaired is not None
+    assert repaired["mcp_tool_refs"] == []
+    assert "chat_turn_unexpected_error" not in text
+    assert result["cards"].get("error_card", {}).get("reason_code") != "chat_turn_unexpected_error"
+    assert "capability registry empty ref shape repaired" in caplog.text
+
+
+def test_bug_439_non_empty_registry_mcp_tool_refs_dict_returns_specific_config_error() -> None:
+    svc = _chat_service()
+    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
+    svc.repository.create_record("capabilities", capability)
+
+    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本面和未来走势如何", dialogue_mode_override="analysis"))
+
+    text = result["assistant_message"]["content_text"]
+    error = result["cards"]["error_card"]["error"]
+    assert "reason_code=capability_registry_invalid_mcp_tool_refs" in text
+    assert "chat_turn_unexpected_error" not in text
+    assert "capability_key=skill_library.reuse" in text
+    assert "field=mcp_tool_refs" in text
+    assert "actual_type=dict" in text
+    assert error["reason_code"] == "capability_registry_invalid_mcp_tool_refs"
+    assert error["capability_key"] == "skill_library.reuse"
+    assert error["field"] == "mcp_tool_refs"
+    assert error["actual_type"] == "dict"
+    assert result["cards"]["safety"]["fail_closed"] is True
+
+
+def test_bug_439_repository_json_adapter_preserves_empty_lists() -> None:
+    assert str(_adapt_json([])) == "'[]'"
+    assert str(_adapt_json({})) == "'{}'"
+
+
+def test_bug_439_sync_marks_dirty_empty_registry_refs_for_update_and_repairs() -> None:
+    svc = _chat_service()
+    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = {}
+    svc.repository.create_record("capabilities", capability)
+
+    dry_run = svc.sync_capabilities({"apply": False, "requested_by": "bug_439_unit"})
+    reuse_diff = next(item for item in dry_run["diff"] if item["capability_key"] == "skill_library.reuse")
+
+    assert reuse_diff["change"] == "update"
+    assert reuse_diff["reason"] == "capability_ref_shape_or_value_changed"
+
+    applied = svc.sync_capabilities({"apply": True, "requested_by": "bug_439_unit"})
+    repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert applied["applied_count"] >= 1
+    assert repaired is not None
+    assert repaired["mcp_tool_refs"] == []
+
+
+def test_bug_439_sync_refuses_non_empty_non_list_registry_refs() -> None:
+    svc = _chat_service()
+    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
+    svc.repository.create_record("capabilities", capability)
+
+    with pytest.raises(ResearchAssistantRuntimeConfigInvalidError) as exc_info:
+        svc.sync_capabilities({"apply": True, "requested_by": "bug_439_unit"})
+
+    error = exc_info.value.error_payload
+    assert error["reason_code"] == "capability_registry_invalid_mcp_tool_refs"
+    assert error["capability_key"] == "skill_library.reuse"
+    assert error["actual_type"] == "dict"
+
+
+def test_bug_439_catalog_ready_path_self_heals_empty_registry_refs() -> None:
+    svc = _chat_service()
+    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert capability is not None
+    capability["mcp_tool_refs"] = {}
+    svc.repository.create_record("capabilities", capability)
+
+    readiness = svc.ensure_catalog_ready()
+
+    repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert readiness["ready"] is True
+    assert repaired is not None
+    assert repaired["mcp_tool_refs"] == []
 
 
 def test_runtime_config_controls_api_page_defaults_and_max() -> None:
