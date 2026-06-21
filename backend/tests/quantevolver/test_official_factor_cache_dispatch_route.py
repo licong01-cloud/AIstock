@@ -266,6 +266,167 @@ def test_factor_cache_compute_blocks_legacy_resume(monkeypatch):
     assert "Extra inputs are not permitted" in str(exc.value)
 
 
+def test_factor_cache_status_recovers_official_dispatch_after_restart(monkeypatch):
+    class _FakeDispatchService:
+        def __init__(self):
+            self.progress_read = False
+
+        def get_task(self, task_id):
+            return {
+                "task_id": task_id,
+                "task_name": "official_factor_full_compute_2026-04-30",
+                "task_type": "official_factor_full_compute",
+                "node_id": "wsl2-5080",
+                "remote_task_id": "268",
+                "status": "running",
+                "created_at": "2026-06-21T02:53:22+08:00",
+                "started_at": "2026-06-21T02:53:22+08:00",
+                "config": {
+                    "task_type": "official_factor_full_compute",
+                    "payload": {
+                        "factor_names": [],
+                        "factor_data_dir": "/mnt/f/factor_data",
+                        "qlib_bin_path": "/home/lc999/data/qlib_bin",
+                        "start_date": "2018-08-01",
+                        "end_date": "2026-04-30",
+                        "window_train_start": "2018-08-01",
+                        "window_backtest_end": "2026-04-30",
+                        "workers": 4,
+                        "batch_size": 16,
+                        "cache_source": "official_offline_backtest_factor_data",
+                        "code_source": "code_text",
+                    },
+                },
+            }
+
+        def get_node_client(self, node_id):
+            svc = self
+
+            class _FakeClient:
+                async def get_task_progress(self, remote_task_id):
+                    svc.progress_read = True
+                    return {"status": "running", "progress_pct": 42, "log_tail": "remote-tail"}
+
+            return _FakeClient()
+
+        def get_task_logs_full(self, task_id, offset=0, limit=1000):
+            return {"lines": ["line-a", "line-b"]}
+
+    router._active_cache_tasks.clear()
+    fake = _FakeDispatchService()
+    monkeypatch.setattr(router, "_get_dispatch_service", lambda: fake)
+
+    result = router.factor_cache_compute_status("dispatch-task-1")
+
+    assert fake.progress_read is True
+    assert result["task_id"] == "dispatch-task-1"
+    assert result["dispatch_task_id"] == "dispatch-task-1"
+    assert result["remote_task_id"] == "268"
+    assert result["node_id"] == "wsl2-5080"
+    assert result["status"] == "running"
+    assert result["remote_status"] == "running"
+    assert result["progress_pct"] == 42
+    assert result["status_source"] == "dispatch_persistent"
+    assert result["window_train_start"] == "2018-08-01"
+    assert result["window_backtest_end"] == "2026-04-30"
+    assert result["factor_data_dir"] == "/mnt/f/factor_data"
+    assert result["qlib_bin_path"] == "/home/lc999/data/qlib_bin"
+    assert result["cache_source"] == "official_offline_backtest_factor_data"
+    assert result["code_source"] == "code_text"
+    assert result["factor_count"] == "all_enabled_code_text"
+    assert result["recent_log"] == "line-a\nline-b"
+
+
+def test_factor_cache_status_ignores_non_official_dispatch_task(monkeypatch):
+    class _FakeDispatchService:
+        def get_task(self, task_id):
+            return {"task_id": task_id, "task_type": "fin_factor", "status": "running"}
+
+    router._active_cache_tasks.clear()
+    monkeypatch.setattr(router, "_get_dispatch_service", lambda: _FakeDispatchService())
+
+    with pytest.raises(router.HTTPException) as exc:
+        router.factor_cache_compute_status("legacy-task")
+
+    assert exc.value.status_code == 404
+
+
+def test_factor_cache_active_tasks_merges_dispatch_after_restart(monkeypatch):
+    class _FakeDispatchService:
+        def list_tasks(self, **kwargs):
+            assert kwargs["task_type"] == "official_factor_full_compute"
+            return [
+                {
+                    "task_id": "persisted-1",
+                    "task_type": "official_factor_full_compute",
+                    "node_id": "wsl2-5080",
+                    "remote_task_id": "268",
+                    "status": "failed",
+                    "started_at": "2026-06-21T02:53:22+08:00",
+                    "finished_at": "2026-06-21T03:12:32+08:00",
+                    "error_message": "memory_gate_failed",
+                    "config": {
+                        "payload": {
+                            "workers": 4,
+                            "batch_size": 16,
+                            "start_date": "2018-08-01",
+                            "end_date": "2026-04-30",
+                            "cache_source": "official_offline_backtest_factor_data",
+                            "code_source": "code_text",
+                        }
+                    },
+                }
+            ]
+
+    router._active_cache_tasks.clear()
+    router._active_cache_tasks["memory-1"] = {
+        "task_id": "memory-1",
+        "status": "running",
+        "started_at": "2026-06-21T04:00:00+08:00",
+    }
+    monkeypatch.setattr(router, "_get_dispatch_service", lambda: _FakeDispatchService())
+
+    result = router.factor_cache_active_tasks()
+    tasks = result["tasks"]
+    task_ids = [task["task_id"] for task in tasks]
+
+    assert result["ok"] is True
+    assert task_ids[:2] == ["memory-1", "persisted-1"]
+    persisted = next(task for task in tasks if task["task_id"] == "persisted-1")
+    assert persisted["status"] == "failed"
+    assert persisted["remote_task_id"] == "268"
+    assert persisted["error"] == "memory_gate_failed"
+    assert persisted["window_train_start"] == "2018-08-01"
+    assert persisted["window_backtest_end"] == "2026-04-30"
+
+
+def test_factor_cache_active_tasks_reports_dispatch_listing_error(monkeypatch):
+    class _BrokenDispatchService:
+        def list_tasks(self, **kwargs):
+            raise RuntimeError("dispatch db unavailable")
+
+    router._active_cache_tasks.clear()
+    router._active_cache_tasks["memory-1"] = {"task_id": "memory-1", "status": "running"}
+    monkeypatch.setattr(router, "_get_dispatch_service", lambda: _BrokenDispatchService())
+
+    result = router.factor_cache_active_tasks()
+
+    assert result["ok"] is True
+    assert result["tasks"] == [{"task_id": "memory-1", "status": "running"}]
+    assert result["dispatch_task_source"] == "unavailable"
+    assert result["dispatch_error"] == "dispatch db unavailable"
+
+
+def test_factor_list_clears_stale_cache_task_selection():
+    source = Path("frontend/src/app/quantevolver/components/FactorList.tsx").read_text(encoding="utf-8")
+
+    assert "!tasks.some((task: CacheTask) => task.task_id === selectedCacheTaskId)" in source
+    assert "setSelectedCacheTask(null)" in source
+    assert "r.status === 404" in source
+    assert "setSelectedCacheTaskId(current => current === taskId ? null : current)" in source
+    assert "dispatch/WSL 状态同步异常" in source
+
+
 def test_official_evaluation_compute_forwards_to_full_compute_without_data_snapshot(monkeypatch):
     import asyncio
 

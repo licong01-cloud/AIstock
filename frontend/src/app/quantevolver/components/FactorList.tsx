@@ -467,6 +467,8 @@ export default function FactorList({
     result?: any;
     task_state?: any;
     failed_tail?: any[];
+    dispatch_sync_error?: string | null;
+    remote_progress_status?: string | null;
   };
   type RemoteNodeStats = {
     node_id: string;
@@ -569,6 +571,10 @@ export default function FactorList({
         setCacheTasks(tasks);
         if (!selectedCacheTaskId && tasks.length > 0) {
           setSelectedCacheTaskId(tasks[0].task_id);
+        } else if (selectedCacheTaskId && !tasks.some((task: CacheTask) => task.task_id === selectedCacheTaskId)) {
+          const nextTaskId = tasks[0]?.task_id || null;
+          setSelectedCacheTaskId(nextTaskId);
+          setSelectedCacheTask(null);
         }
       }
     } catch {}
@@ -579,6 +585,11 @@ export default function FactorList({
     if (!taskId) return;
     try {
       const r = await fetch(`${API}/quantevolver/factor-cache/compute-status/${encodeURIComponent(taskId)}`);
+      if (r.status === 404) {
+        setSelectedCacheTaskId(current => current === taskId ? null : current);
+        setSelectedCacheTask(current => current?.task_id === taskId ? null : current);
+        return;
+      }
       if (!r.ok) return;
       const d = await r.json();
       setSelectedCacheTask(d);
@@ -1977,6 +1988,11 @@ export default function FactorList({
                   <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
                     official offline | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
                   </div>
+                  {selectedCacheTask.dispatch_sync_error && (
+                    <div style={{ fontSize: 12, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
+                      dispatch/WSL 状态同步异常: {selectedCacheTask.dispatch_sync_error}
+                    </div>
+                  )}
                   {selectedCacheTask.factor_data_dir && (
                     <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, wordBreak: "break-all" }}>
                       factor_data_dir: {selectedCacheTask.factor_data_dir}
