@@ -1,7 +1,7 @@
 {
   "assigned_agent": "codex_app",
   "bug_id": "BUG-037",
-  "closed_at": null,
+  "closed_at": "2026-06-22T00:08:33+08:00",
   "closure_requirements": [
     "Single authoritative writer and supported read API are documented and enforced by tests or guardrails.",
     "Confirmed legacy-field compatibility paths are either removed, wrapped, or explicitly waived.",
@@ -15,6 +15,12 @@
       "actor": "codex_app",
       "note": "Created from 2026-05-13 read-only targeted scan as aggregate issue for factor metric legacy debt.",
       "timestamp": "2026-05-13T07:47:28Z"
+    },
+    {
+      "timestamp": "2026-06-22T00:08:33+08:00",
+      "actor": "codex_app",
+      "action": "historical_closure_verified",
+      "note": "Current-main inventory confirms official factor metrics are written by FactorOfficialEvaluationService, official ratings by FactorRatingService, RD-Agent/manual metric writers are legacy no-op paths, and factor metric readers are calc_engine scoped; no BUG-037 child defect remains."
     }
   ],
   "evidence_uris": [
@@ -42,11 +48,24 @@
   "risk_area": "data_integrity",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "verified",
   "title": "Historical factor metrics single-writer and legacy-field cleanup aggregate",
   "trigger_condition": {
     "scan_date": "2026-05-13",
     "scenario": "factor metric/rating legacy surfaces appear across runtime_or_pipeline code",
     "targeted_pattern": "factor_metrics_legacy_surface"
-  }
+  },
+  "fix_branch": "main",
+  "fix_commit": "a92234f27c08b3de0de2e29e8d75983d3c036252",
+  "fixed_at": "2026-06-22T00:08:33+08:00",
+  "verification_run_id": "bug020_bug037_historical_closure_20260621",
+  "validation_evidence": [
+    "writer inventory: active aistock_factor_metrics writer is FactorOfficialEvaluationService._save_metrics; RD-Agent/manual/batch legacy writers are no-op and do not execute their retained SQL constants",
+    "rating inventory: qe_factor_official_ratings writes are centralized in FactorRatingService; runtime reads use active official ratings and v2 rule guards",
+    "read inventory: production aistock_factor_metrics readers are calc_engine scoped to qe_eval_v2; correlation/standalone/QE surfaces use official-cache/metric contracts",
+    "python -m pytest backend/tests/test_factor_metrics_authority_static.py -q -k 'not local_path_or_secret_fallbacks' -p no:cacheprovider -> 14 passed, 1 deselected",
+    "python -m pytest backend/tests/quantevolver/test_factor_emit_hook.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_legacy_factor_paths_removed.py -q -p no:cacheprovider -> 45 passed",
+    "python -m nox -s l0 -> passed; guardrail scan blocking=0"
+  ],
+  "closure_note": "Closed as historical governance aggregate after current-main inventory. No confirmed live factor metrics/rating/eligibility/correlation/standalone-metrics defect remains under this aggregate. Remaining static local-path findings in test_factor_metrics_authority_static::test_production_runtime_code_has_no_local_path_or_secret_fallbacks are unrelated to factor metrics single-writer governance and belong to WSL/local-path cleanup scope, not BUG-037."
 }
