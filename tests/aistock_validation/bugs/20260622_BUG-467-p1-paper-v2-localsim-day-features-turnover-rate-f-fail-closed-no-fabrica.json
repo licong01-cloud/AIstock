@@ -29,13 +29,19 @@
       "actor": "codex-agent-teams-l6",
       "note": "LocalSim V25 day_features now fail-closed on missing/non-finite turnover_rate_f with reason_code/log context; no turnover_rate substitution remains. Regression tests cover missing/NaN/invalid turnover_rate_f and real turnover_rate_f path. BUG remains open pending Tier2 review/merge; final close-sync after merge should backfill final fix_commit/closed_at.",
       "timestamp": "2026-06-21T19:45:00Z"
+    },
+    {
+      "action": "pr_opened_for_tier2_review",
+      "actor": "codex-agent-teams-l6",
+      "note": "Opened PR #1435 for BUG-467. Issue remains open and will be closed by PR merge/close-sync; no services restarted and no production DB/DDL touched.",
+      "timestamp": "2026-06-21T19:50:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Fail-closed (DataUnavailableError) on missing free-float turnover and exclude that symbol from the day, OR compute it from a real free-float share count; if a substitution is genuinely accepted it must be a loud, explicit, operator-surfaced degradation, never an inline audit-only swap. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:12:05.201423Z",
   "fix_branch": "bug/BUG-467-p1-paper-v2-localsim-day-features-turnover-rate-20260622",
-  "fix_commit": null,
+  "fix_commit": "bbaee7587d2d4f375413dbd4d7b87f4a3a52519b",
   "fixed_at": null,
   "github_issue_number": 1432,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1432",
@@ -86,5 +92,6 @@
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed",
     "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed (633 passed, 1 skipped, 1 deselected; data quality smoke WARN legacy ledger consistency only)"
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1435"
 }
