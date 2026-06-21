@@ -34,7 +34,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.trading_core.models import AccountSnapshot, MinuteBar, Order, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -223,6 +223,34 @@ class FakeDbMinuteProvider:
         )
 
 
+class FakePartialExecutionEngine:
+    def execute_order(self, *, order: Order, minute_bars: list[MinuteBar], **_kwargs):
+        fill = Fill(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=100,
+            price=minute_bars[0].close,
+            trade_time=minute_bars[0].bar_time,
+            bar_time=minute_bars[0].bar_time,
+            reason="unit partial fill",
+        )
+        final_order = order.model_copy(
+            update={
+                "status": OrderStatus.PARTIALLY_FILLED,
+                "filled_quantity": 100,
+                "avg_fill_price": fill.price,
+            }
+        )
+        event = OrderEvent(
+            order_id=order.order_id,
+            event_type=OrderEventType.PARTIALLY_FILLED,
+            fill=fill,
+            reason=fill.reason,
+        )
+        return final_order, [fill], [event]
+
+
 def make_paper_enabled_manifest(
     *,
     topk: int = 50,
@@ -256,6 +284,71 @@ def save_manifest_with_default_execution_policy(
         source_backtest_status="COMPLETED",
         paper_enabled=True,
     )
+
+
+def test_update_failed_run_to_succeeded_raises_invalid_state_transition() -> None:
+    paper_repo = InMemoryPaperTradingV2Repository()
+    failed_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id="paper_status_guard",
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.FAILED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            error={"error_code": "UNIT_FAILED"},
+        )
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        paper_repo.update_run_status(failed_run, RunStatus.SUCCEEDED)
+
+    assert exc_info.value.context["reason_code"] == "PAPER_V2_RUN_TERMINAL_STATE_TRANSITION_BLOCKED"
+    assert exc_info.value.context["run_id"] == failed_run.run_id
+    assert exc_info.value.context["from_status"] == RunStatus.FAILED.value
+    assert exc_info.value.context["to_status"] == RunStatus.SUCCEEDED.value
+    assert paper_repo.get_run(failed_run.run_id).status == RunStatus.FAILED
+
+
+def test_day_runner_does_not_mark_succeeded_with_open_order() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(topk=1)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="open order guard",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.TDX_REALTIME,
+    )
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        suspend_status_provider=FakeSuspendProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        PaperTradingDayRunner(
+            repository=paper_repo,
+            calendar_provider=FakeCalendar(),
+            market_data_provider=provider,
+            execution_engine=FakePartialExecutionEngine(),
+            runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+            refresh_audit=RecordingRefreshAudit(),
+        ).run_day(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+        )
+
+    assert exc_info.value.context["reason_code"] == "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS"
+    assert exc_info.value.context["open_order_count"] == 1
+    assert exc_info.value.context["open_orders"][0]["status"] == OrderStatus.PARTIALLY_FILLED.value
+    run = paper_repo.get_run_by_portfolio_date(portfolio.portfolio_id, date(2024, 1, 2))
+    assert run is not None
+    assert run.status == RunStatus.FAILED
 
 
 def test_create_portfolio_uses_manifest_minute_policy_as_platform_default() -> None:
