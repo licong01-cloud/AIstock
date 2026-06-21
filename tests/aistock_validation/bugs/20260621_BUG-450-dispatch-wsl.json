@@ -29,15 +29,23 @@
   "expected": "factor-cache compute-status must recover official_factor_full_compute status from infra.dispatch_tasks/DispatchService when in-memory _active_cache_tasks is empty or stale; active-tasks must include persisted official full-compute tasks; UI must clear stale selected task ids on 404 or when active-tasks no longer contains them.",
   "first_seen_at": "2026-06-21T12:30:01.740504Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "799f3183619e9b622d81781b25e444226379e492",
+  "fixed_at": "2026-06-21T13:49:47.243200Z",
   "github_issue_number": 1395,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1395",
+  "implementation_notes": [
+    {
+      "note": "Added DispatchService fallback for factor-cache compute-status, merged persisted official_factor_full_compute tasks into active-tasks, overlaid persisted state on in-memory task details to avoid stale running status, and cleared stale UI selectedCacheTaskId on missing tasks/404. No full factor recompute, production restart, DB write, or DDL was performed.",
+      "timestamp": "2026-06-21T12:38:21.131836+00:00",
+      "type": "fix_implementation"
+    }
+  ],
   "last_seen_at": "2026-06-21T12:30:01.740504Z",
   "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1396",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -85,6 +93,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m py_compile backend/routers/quantevolver.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 14 passed",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_multi_alpha_command_generation.py -q -> 175 passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 qe_read_l3 with QE_READ_L3_SKIP_UI=1 -> passed; l0 success, validation_module_registry_l0 8 passed, qe_read_backend 14 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -98,12 +113,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "allowed",
-  "implementation_notes": [
-    {
-      "timestamp": "2026-06-21T12:38:21.131836+00:00",
-      "type": "fix_implementation",
-      "note": "Added DispatchService fallback for factor-cache compute-status, merged persisted official_factor_full_compute tasks into active-tasks, overlaid persisted state on in-memory task details to avoid stale running status, and cleared stale UI selectedCacheTaskId on missing tasks/404. No full factor recompute, production restart, DB write, or DDL was performed."
-    }
-  ]
+  "workflow_gate": "allowed"
 }
