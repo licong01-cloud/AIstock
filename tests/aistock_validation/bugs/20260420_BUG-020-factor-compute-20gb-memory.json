@@ -3,9 +3,9 @@
     "backend/services/factor_pipeline_v2/exec_sandbox.py",
     "backend/services/factor_pipeline_v2/factor_runner.py"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex_app",
   "bug_id": "BUG-020",
-  "closed_at": null,
+  "closed_at": "2026-06-22T00:08:33+08:00",
   "closure_requirements": [
     "Profile report committed",
     "Memory regression test (assert < threshold) added"
@@ -18,6 +18,12 @@
       "actor": "claude_code",
       "note": "Observed during factor library v2 cleanup batch runs",
       "timestamp": "2026-04-20T00:00:00Z"
+    },
+    {
+      "timestamp": "2026-06-22T00:08:33+08:00",
+      "actor": "codex_app",
+      "action": "historical_closure_verified",
+      "note": "Current main no longer contains the original factor_pipeline_v2 exec sandbox path or run_factor_pipeline_v2 entrypoint; replacement official factor compute resource-gate tests passed, so BUG-020 has no active code path to fix."
     }
   ],
   "evidence_uris": [
@@ -27,9 +33,9 @@
   "failing_run_id": null,
   "fingerprint": "aistock::factor_pipeline_v2::exec_sandbox_high_memory",
   "first_seen_at": "2026-04-20T00:00:00Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "main",
+  "fix_commit": "a92234f27c08b3de0de2e29e8d75983d3c036252",
+  "fixed_at": "2026-06-22T00:08:33+08:00",
   "github_issue_number": 8,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/8",
   "last_seen_at": "2026-05-13T07:03:20Z",
@@ -42,7 +48,7 @@
   "risk_area": "performance",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "submitted_at": null,
   "suspected_modules": [
     "backend/services/factor_pipeline_v2/"
@@ -52,5 +58,15 @@
     "memory_observed_gb": 20,
     "scenario": "exec_sandbox_2_factors_in_parallel"
   },
-  "verification_run_id": null
+  "verification_run_id": "bug020_bug037_historical_closure_20260621",
+  "validation_evidence": [
+    "active source scan: rg --files backend scripts tests | rg 'factor_pipeline_v2|run_factor_pipeline_v2|exec_sandbox|factor_runner' -> no active backend/scripts/tests files",
+    "broad active scan excluding history/tmp/.git -> only BUG JSON, docs/design legacy references, SQL/comment references; no runtime factor_pipeline_v2 consumer",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -p no:cacheprovider -> 30 passed, 1 skipped",
+    "python -m nox -s l0 -> passed; guardrail scan blocking=0"
+  ],
+  "closure_note": "Closed as historical/obsolete. The original allowed scope and reproduce command (backend/services/factor_pipeline_v2/* and scripts/run_factor_pipeline_v2.py) no longer exist on current main; current official full-compute path is official_factor_batch_compute_service with explicit resource gates, timeout/resource failure reporting, batch release evidence, and tests.",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }
