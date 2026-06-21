@@ -29,8 +29,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-21T17:30:22.871599Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9526012e6a16c4ee191f8b30b255bcd1e17c4dc6",
+  "fixed_at": "2026-06-21T20:02:34.223898Z",
   "github_issue_number": 1417,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1417",
   "last_seen_at": "2026-06-21T17:30:22.871599Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1421",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -60,6 +61,16 @@
     "fingerprint": "e7a7db4be5d3c8b17767c973",
     "source_event_id": "FE-20260622-e7a7db4be5d3"
   },
+  "validation_evidence": [
+    "python -m ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed",
+    "python -m pytest backend/tests/research_assistant/test_service.py -k user_message_module_key_seed_or_user_message_cjk_or_memory_seed_or_chat_context -q -> passed (6 passed, 85 deselected)",
+    "python -m pytest backend/tests/research_assistant/test_graph_injected_into_context.py backend/tests/research_assistant/test_service.py -k graph_context_and_module_seed_and_cjk -q -> passed (10 passed, 85 deselected)",
+    "nox -s l0 -> passed",
+    "nox -s research_assistant_backend -> passed (306 passed)",
+    "nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "nox -s validation_module_registry_l0 -> passed (8 passed, ownership scan passed)",
+    "nox -s ra_phase7_full_accept -> passed pre-rebase; GitHub PR checks 17 passed / 0 failed after rebase"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
