@@ -864,6 +864,38 @@ def _seed_qe_module_graph(svc: ResearchAssistantService) -> None:
     )
 
 
+def _seed_chinese_module_graph(svc: ResearchAssistantService) -> None:
+    validation = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.validation",
+            title="验证",
+            summary="Validation module.",
+            source_refs=["test://module/validation"],
+            approval_status="approved",
+        )
+    )
+    strategy_packages = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.strategy_packages",
+            title="策略包",
+            summary="Strategy packages module.",
+            source_refs=["test://module/strategy-packages"],
+            approval_status="approved",
+        )
+    )
+    svc.create_graph_relation(
+        GraphRelationCreate(
+            source_entity_id=validation["entity_id"],
+            target_entity_id=strategy_packages["entity_id"],
+            relation_type="governs",
+            evidence_refs=["test://graph/validation-governs-strategy-packages"],
+            approval_status="approved",
+        )
+    )
+
+
 def test_user_message_module_key_seed_expands_matching_module_subgraph() -> None:
     svc = _service()
     _seed_qe_module_graph(svc)
@@ -882,6 +914,43 @@ def test_user_message_module_key_seed_expands_matching_module_subgraph() -> None
     assert graph_context["relation_refs"][0]["relation_type"] == "promotes_to"
     assert graph_context["relation_refs"][0]["source_entity_key"] == "module.qe"
     assert graph_context["relation_refs"][0]["neighbor_entity_key"] == "module.strategy_package"
+
+
+def test_user_message_cjk_module_title_substring_seeds_module_and_expands_neighbor() -> None:
+    svc = _service()
+    _seed_chinese_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="策略包和验证什么关系",
+            dialogue_intent="analysis",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == ["module.strategy_packages"]
+    assert graph_context["relation_refs"][0]["relation_type"] == "governs"
+    assert graph_context["relation_refs"][0]["source_entity_key"] == "module.validation"
+    assert graph_context["relation_refs"][0]["target_entity_key"] == "module.strategy_packages"
+    assert graph_context["relation_refs"][0]["neighbor_entity_key"] == "module.validation"
+
+
+def test_user_message_cjk_common_two_char_title_does_not_substring_seed() -> None:
+    svc = _service()
+    _seed_chinese_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="我想验证一下这个想法",
+            dialogue_intent="dialogue",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == []
+    assert graph_context["relation_refs"] == []
 
 
 def test_user_message_module_key_seed_does_not_fire_without_module_term() -> None:

@@ -6361,6 +6361,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         query_terms = self._graph_message_module_terms(user_message)
         if not query_terms:
             return []
+        normalized_message = str(user_message or "").lower()
         limit = self.configured_limit("graph_summary_entities")
         page = self.repository.list_records(
             "entities",
@@ -6373,10 +6374,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if not re.fullmatch(r"module\.[a-z0-9]+(?:_[a-z0-9]+)*", entity_key):
                 continue
             entity_terms = self._graph_module_entity_terms(entity)
-            if query_terms.isdisjoint(entity_terms):
+            cjk_title_match = self._graph_module_title_matches_cjk_substring(entity, normalized_message)
+            if query_terms.isdisjoint(entity_terms) and not cjk_title_match:
                 continue
             suffix = entity_key.removeprefix("module.")
-            score = 2 if suffix in query_terms else 1
+            score = 2 if cjk_title_match or suffix in query_terms else 1
             matches.append((score, entity_key))
         matches.sort(key=lambda item: (-item[0], item[1]))
         return [entity_key for _, entity_key in matches[:limit]]
@@ -6391,6 +6393,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             terms.update(part for part in suffix.split("_") if part)
         terms.update(cls._graph_message_module_terms(str(entity.get("title") or "")))
         return terms
+
+    @staticmethod
+    def _graph_module_title_matches_cjk_substring(entity: dict[str, Any], normalized_message: str) -> bool:
+        if not normalized_message:
+            return False
+        title = str(entity.get("title") or "").lower()
+        cjk_segments = re.findall(r"[\u4e00-\u9fff]+", title)
+        return any(len(segment) >= 3 and segment in normalized_message for segment in cjk_segments)
 
     @staticmethod
     def _graph_message_module_terms(value: str | None) -> set[str]:
