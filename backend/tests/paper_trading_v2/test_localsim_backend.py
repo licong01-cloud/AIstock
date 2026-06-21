@@ -43,9 +43,12 @@ from backend.services.trading_core.errors import (
     BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
+    RiskRuleError,
     RuntimeConfigInvalidError,
 )
+from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.models import (
+    Fill,
     MinuteBar,
     OrderIntent,
     OrderSide,
@@ -173,6 +176,54 @@ def _buy_intent(
         quantity=quantity,
         order_type=OrderType.MARKET,
         target_trade_date=TRADE_DATE,
+    )
+
+
+def _ledger_fill(
+    *,
+    order_id: str = "ord_ledger_1",
+    fill_id: str = "fill_ledger_1",
+    symbol: str = "000001.SZ",
+    side: OrderSide = OrderSide.BUY,
+    quantity: int = 100,
+    price: float = 10.0,
+    trade_time: datetime | None = None,
+) -> Fill:
+    return Fill(
+        fill_id=fill_id,
+        order_id=order_id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        trade_time=trade_time
+        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        reason="unit ledger fill",
+    )
+
+
+def _unchecked_ledger_fill(
+    *,
+    order_id: str = "ord_unchecked",
+    fill_id: str = "fill_unchecked",
+    symbol: str = "000001.SZ",
+    side: OrderSide = OrderSide.BUY,
+    quantity: int = 150,
+    price: float = 10.0,
+    trade_time: datetime | None = None,
+) -> Fill:
+    return Fill.model_construct(
+        fill_id=fill_id,
+        order_id=order_id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        trade_time=trade_time
+        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        bar_time=None,
+        reason="unchecked unit ledger fill",
+        metadata={},
     )
 
 
@@ -522,3 +573,111 @@ def test_localsim_subscriber_isolation() -> None:
 
     backend_a.submit_order_intent(_buy_intent(backend_a))
     assert received_a and not received_b
+
+
+# ---------------------------------------------------------------------------
+# 10. LocalSim ledger money math, commission, and board-lot guardrails
+# ---------------------------------------------------------------------------
+
+
+def test_inmemoryledger_money_fields_are_decimal_quantized_without_float_drift() -> None:
+    ledger = InMemoryLedger(
+        portfolio_id="paper_decimal_math",
+        initial_cash=10_000_000.0,
+        fee_model=FeeModel(open_cost=0.0, close_cost=0.0, min_cost=0.0),
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_dec_1", fill_id="fill_dec_1", quantity=100, price=0.1)
+    )
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_dec_2", fill_id="fill_dec_2", quantity=100, price=0.2)
+    )
+
+    assert ledger.cash_decimal == Decimal("9999970.00")
+    assert ledger.cash_entries[0].notional == Decimal("10.00")
+    assert ledger.cash_entries[0].fee == Decimal("0.00")
+    assert ledger.cash_entries[0].cash_delta == Decimal("-10.00")
+    assert ledger.cash_entries[0].cash_after == Decimal("9999990.00")
+    assert ledger.cash_entries[1].cash_after == Decimal("9999970.00")
+
+
+def test_inmemoryledger_min_commission_is_charged_incrementally_per_order() -> None:
+    ledger = InMemoryLedger(
+        portfolio_id="paper_order_fee",
+        initial_cash=100_000.0,
+        fee_model=FeeModel(open_cost=0.001, close_cost=0.001, min_cost=5.0),
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_split", fill_id="fill_split_1", quantity=100, price=10.0)
+    )
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_split", fill_id="fill_split_2", quantity=100, price=60.0)
+    )
+
+    assert [entry.fee for entry in ledger.cash_entries] == [
+        Decimal("5.00"),
+        Decimal("2.00"),
+    ]
+    assert sum((entry.fee for entry in ledger.cash_entries), Decimal("0.00")) == Decimal(
+        "7.00"
+    )
+    assert ledger.cash_decimal == Decimal("92993.00")
+
+
+def test_inmemoryledger_rejects_non_board_lot_buy_loudly_at_apply_fill() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_board_buy", initial_cash=100_000.0)
+
+    with pytest.raises(RiskRuleError, match="LOCAL_SIM_BOARD_LOT_VIOLATION") as exc_info:
+        ledger.apply_fill(
+            _unchecked_ledger_fill(
+                order_id="ord_bad_buy",
+                fill_id="fill_bad_buy",
+                side=OrderSide.BUY,
+                quantity=150,
+            )
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCAL_SIM_BOARD_LOT_VIOLATION"
+    assert exc_info.value.context["operation"] == "apply_fill"
+    assert exc_info.value.context["order_id"] == "ord_bad_buy"
+    assert exc_info.value.context["fill_quantity"] == 150
+
+
+def test_inmemoryledger_rejects_non_board_lot_partial_sell_but_allows_full_exit() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_board_sell", initial_cash=100_000.0)
+    ledger.positions["000001.SZ"] = PositionLot(
+        portfolio_id=ledger.portfolio_id,
+        symbol="000001.SZ",
+        quantity=250,
+        available_quantity=250,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
+
+    with pytest.raises(RiskRuleError, match="LOCAL_SIM_BOARD_LOT_VIOLATION") as exc_info:
+        ledger.apply_fill(
+            _ledger_fill(
+                order_id="ord_bad_sell",
+                fill_id="fill_bad_sell",
+                side=OrderSide.SELL,
+                quantity=50,
+                price=11.0,
+            )
+        )
+    assert exc_info.value.context["reason_code"] == "LOCAL_SIM_BOARD_LOT_VIOLATION"
+    assert exc_info.value.context["held_quantity"] == 250
+
+    ledger.apply_fill(
+        _unchecked_ledger_fill(
+            order_id="ord_full_exit",
+            fill_id="fill_full_exit",
+            side=OrderSide.SELL,
+            quantity=250,
+            price=11.0,
+        )
+    )
+
+    assert "000001.SZ" not in ledger.positions
+    assert ledger.cash_entries[-1].notional == Decimal("2750.00")
