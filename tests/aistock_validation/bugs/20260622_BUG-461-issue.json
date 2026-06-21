@@ -30,8 +30,8 @@
   "expected": "backend/scripts 中不再保留旧因子指标同步、缺失因子补录或直接写库的可执行脚本入口；官方因子库只通过后端正式服务/API处理缓存、独立指标、相关性和QE回测。",
   "first_seen_at": "2026-06-21T18:24:38.156822Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "90156fe98db188e9d18b44e8f088480ff8de0639",
+  "fixed_at": "2026-06-21T19:27:23.082939Z",
   "github_issue_number": 1423,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1423",
   "last_seen_at": "2026-06-21T18:24:38.156822Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1424",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "3568ac90676d5bc4dde56ba9",
     "source_event_id": "FE-20260622-3568ac90676d"
   },
+  "validation_evidence": [
+    "local: python -m pytest backend/tests/test_factor_metrics_authority_static.py::test_retired_backend_factor_backfill_scripts_are_removed -q -p no:cacheprovider -> 1 passed; python -m nox -s l0 -> passed; python -m nox -s validation_module_registry_l0 -> passed; git diff --check -> passed; PR #1424 CI all green"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
