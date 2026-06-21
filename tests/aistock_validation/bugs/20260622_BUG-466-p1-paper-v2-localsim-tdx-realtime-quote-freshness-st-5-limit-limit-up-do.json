@@ -35,13 +35,19 @@
       "actor": "codex-l5",
       "note": "LocalSim TDX realtime freshness/ST limit/side limit-block validation completed; PR creation pending.",
       "timestamp": "2026-06-21T20:57:30.757011Z"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex-l5",
+      "note": "Opened PR #1438 for BUG-466; merge/production restart left to Tier2/user.",
+      "timestamp": "2026-06-21T21:04:26.971337Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Validate TDX quote freshness fail-closed (DataUnavailableError when timestamp missing/older than bound vs as_of_time); detect ST/*ST and apply 5% limit (fail-closed if ST status unavailable); block side-appropriate intents at limit-up/limit-down with explicit reason_code. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:11:39.976840Z",
   "fix_branch": "bug/BUG-466-p1-paper-v2-localsim-tdx-realtime-quote-freshnes-20260622",
-  "fix_commit": null,
+  "fix_commit": "100b314f7cee8360d3ddc575a719968e55782ae4",
   "fixed_at": null,
   "github_issue_number": 1431,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1431",
@@ -50,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1438",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -91,5 +98,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_pr"
+  "workflow_gate": "pr_opened"
 }
