@@ -311,6 +311,8 @@ def run_command(
         command_for_log,
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         shell=isinstance(command_for_log, str),
         timeout=timeout_seconds,

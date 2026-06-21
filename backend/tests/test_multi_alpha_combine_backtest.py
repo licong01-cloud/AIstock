@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -14,8 +15,10 @@ from backend.services.multi_alpha.combine_backtest import (
     InMemoryCombineBacktestRepository,
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
+    ShellPredBacktestExecutor,
     maybe_upload_combined_prediction,
     parse_request,
+    run_command,
 )
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder
 
@@ -327,6 +330,59 @@ def test_equal_scheme_failure_fails_run_and_marks_scheme_skipped(tmp_path: Path)
     assert scheme["skipped"] is True
     assert "fake_pred_backtest_failed" in scheme["skipped_reason"]
     assert run["loo"] == []
+
+
+def test_run_command_decodes_utf8_subprocess_output_on_windows_codepages(tmp_path: Path) -> None:
+    script = tmp_path / "emit_utf8.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'out prefix \\xe2\\x8f\\xb1 utf8\\\\n')\n"
+        "sys.stderr.buffer.write(b'err prefix \\xe2\\x8f\\xb1 utf8\\\\n')\n",
+        encoding="utf-8",
+    )
+
+    completed = run_command(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        timeout_seconds=30,
+        log_prefix="utf8_capture",
+    )
+    marker = "\u23f1"
+
+    assert completed.returncode == 0
+    assert f"out prefix {marker} utf8" in completed.stdout
+    assert f"err prefix {marker} utf8" in completed.stderr
+    assert f"out prefix {marker} utf8" in (tmp_path / "utf8_capture_stdout.log").read_text(encoding="utf-8")
+    assert f"err prefix {marker} utf8" in (tmp_path / "utf8_capture_stderr.log").read_text(encoding="utf-8")
+
+
+def test_shell_executor_failure_keeps_utf8_stderr_tail(tmp_path: Path) -> None:
+    script = tmp_path / "fail_utf8.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.buffer.write(b'failure stderr \\xe2\\x8f\\xb1 diagnostic\\\\n')\n"
+        "sys.exit(7)\n",
+        encoding="utf-8",
+    )
+    pred_pkl = tmp_path / "combined_prediction.pkl"
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_pkl)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for runtime_file in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+    marker = "\u23f1"
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        ShellPredBacktestExecutor().execute_pred_backtest(
+            workspace=workspace,
+            pred_pkl=pred_pkl,
+            node_id="wsl2-5080",
+            backtest_config={"command": [sys.executable, str(script)], "timeout_seconds": 30},
+        )
+
+    assert excinfo.value.reason_code == "pred_backtest_failed"
+    assert f"failure stderr {marker} diagnostic" in excinfo.value.context["stderr_tail"]
+    assert f"failure stderr {marker} diagnostic" in (workspace / "pred_backtest_stderr.log").read_text(encoding="utf-8")
 
 
 def test_prediction_store_upload_is_explicit_and_fail_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
