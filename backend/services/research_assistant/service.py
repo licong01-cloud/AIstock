@@ -106,6 +106,11 @@ from .prompt_pack import (
     PromptPackSnapshot,
     load_prompt_pack,
 )
+from .declarative_config import (
+    ResearchAssistantDeclarativeConfigError,
+    ResearchAssistantDeclarativeConfigSnapshot,
+    load_declarative_config,
+)
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import (
     DEFAULT_ENVIRONMENT,
@@ -114,7 +119,6 @@ from .runtime_config import (
     RuntimeConfigCapabilityValidationError,
     RuntimeConfigSnapshot,
     load_runtime_config,
-    validate_runtime_config_payload,
 )
 from .domain_ontology import DOMAIN_SPECS, domain_prompt_key
 from .mcp_catalog_sync import (
@@ -1326,6 +1330,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         "runtime_config_invalid_capability_mcp_tool_refs",
         "runtime_config_invalid_workflow_capability",
         "runtime_config_invalid_active_config",
+        "declarative_config_invalid_capability_mcp_tool_refs",
+        "declarative_config_invalid_workflow_capability",
+        "declarative_config_invalid_runtime_context",
+        "declarative_config_invalid_prompt_pack",
     }
 
     @staticmethod
@@ -1339,6 +1347,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         *,
         environment: str = DEFAULT_ENVIRONMENT,
         issue_fact_source: Any | None = None,
+        runtime_config_path: Path | None = None,
+        prompt_pack_path: Path | None = None,
     ) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
@@ -1346,6 +1356,70 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
         self.issue_fact_source = issue_fact_source or IssueCandidateFactSource()
+        self._declarative_config_lock = threading.RLock()
+        self._runtime_config_path = runtime_config_path
+        self._prompt_pack_path = prompt_pack_path
+        try:
+            self._declarative_config = load_declarative_config(
+                environment=environment,
+                runtime_config_path=runtime_config_path,
+                prompt_pack_path=prompt_pack_path,
+            )
+        except ResearchAssistantDeclarativeConfigError as exc:
+            raise ResearchAssistantRuntimeConfigInvalidError(exc.error_payload) from exc
+
+    def reload_declarative_config(
+        self,
+        *,
+        runtime_config_path: Path | None = None,
+        prompt_pack_path: Path | None = None,
+    ) -> dict[str, Any]:
+        if runtime_config_path is not None:
+            self._runtime_config_path = runtime_config_path
+        if prompt_pack_path is not None:
+            self._prompt_pack_path = prompt_pack_path
+        try:
+            snapshot = load_declarative_config(
+                environment=self.environment,
+                runtime_config_path=self._runtime_config_path,
+                prompt_pack_path=self._prompt_pack_path,
+            )
+        except ResearchAssistantDeclarativeConfigError as exc:
+            raise ResearchAssistantRuntimeConfigInvalidError(exc.error_payload) from exc
+        with self._declarative_config_lock:
+            self._declarative_config = snapshot
+        logger.warning(
+            "research assistant declarative config reloaded: runtime_source=%s prompt_source=%s",
+            snapshot.runtime_config.source_path,
+            snapshot.prompt_pack.source_path,
+        )
+        return self.declarative_config_status()
+
+    @property
+    def declarative_config(self) -> ResearchAssistantDeclarativeConfigSnapshot:
+        with self._declarative_config_lock:
+            return self._declarative_config
+
+    def declarative_config_status(self) -> dict[str, Any]:
+        snapshot = self.declarative_config
+        return {
+            "schema_version": "aistock_research_assistant_declarative_config_status_v1",
+            "authority": "yaml_memory",
+            "runtime_config": {
+                "config_key": snapshot.runtime_config.config_key,
+                "config_version": snapshot.runtime_config.config_version,
+                "source_path": snapshot.runtime_config.source_path,
+                "source_sha256": snapshot.runtime_config.source_sha256,
+            },
+            "prompt_pack": {
+                "pack_key": snapshot.prompt_pack.pack_key,
+                "pack_version": snapshot.prompt_pack.pack_version,
+                "source_path": snapshot.prompt_pack.source_path,
+                "source_sha256": snapshot.prompt_pack.source_sha256,
+            },
+            "workflow_capability_count": len(snapshot.workflow_capabilities),
+            "prompt_node_count": len(snapshot.prompt_nodes),
+        }
 
     @staticmethod
     def _exception_reason_code(exc: BaseException, *, server_key: str = "", tool_name: str = "") -> str:
@@ -1539,7 +1613,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _runtime_config_operator_action() -> str:
-        return "从 YAML 重新 seed/导入 RA runtime config 后重启后端"
+        return "fix configs/research_assistant/runtime_context.yaml and reload/restart Research Assistant"
 
     @staticmethod
     def _capability_registry_operator_action() -> str:
@@ -1826,32 +1900,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
 
     def _workflow_capabilities(self) -> list[dict[str, Any]]:
-        configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
-        if configured is None:
-            source = self.default_workflow_capabilities()
-        else:
-            if not isinstance(configured, list):
-                raise ValueError("planner.workflow_capabilities must be a list when configured")
-            source = []
-            for index, item in enumerate(configured):
-                if not isinstance(item, dict):
-                    raise ValueError(f"planner.workflow_capabilities[{index}] must be an object when configured")
-                item = dict(item)
-                if _retired_draft_storage_capability(item):
-                    continue
-                source.append(item)
-        merged: dict[str, dict[str, Any]] = {
-            str(item.get("capability_key")): self._canonicalize_capability_refs(dict(item), source="workflow_capabilities")
-            for item in source
-        }
-        for item in catalog_workflow_capabilities():
-            merged[str(item["capability_key"])] = self._canonicalize_capability_refs(dict(item), source="manifest_derived_workflow_capabilities")
-        return list(merged.values())
+        return self.declarative_config.workflow_capability_list()
 
     @classmethod
     def _canonicalize_capability_mcp_refs(cls, capability: dict[str, Any], *, source: str = "capability_catalog") -> dict[str, Any]:
         refs = capability.get("mcp_tool_refs")
         capability_key = str(capability.get("capability_key") or "")
+        if source == "declarative_yaml_memory_authority" and refs in (None, "", {}):
+            error = cls._payload_for_capability_registry_mcp_refs_error(
+                capability_key=capability_key,
+                actual_type=type(refs).__name__,
+                detail="YAML declarative authority requires mcp_tool_refs to be an explicit list",
+                source=source,
+            )
+            error["reason_code"] = "declarative_config_invalid_capability_mcp_tool_refs"
+            error["code"] = error["reason_code"]
+            error["stage"] = "declarative_config_validation"
+            error["config_key"] = RUNTIME_CONFIG_KEY
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
         if refs is None or refs == "" or refs == {}:
             logger.warning(
                 "research assistant capability mcp_tool_refs empty non-list normalized: capability_key=%s source=%s actual_type=%s",
@@ -1906,6 +1972,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _canonicalize_capability_skill_refs(cls, capability: dict[str, Any], *, source: str = "capability_catalog") -> dict[str, Any]:
         refs = capability.get("skill_refs")
         capability_key = str(capability.get("capability_key") or "")
+        if source == "declarative_yaml_memory_authority" and refs in (None, "", {}):
+            error = cls._payload_for_capability_registry_mcp_refs_error(
+                capability_key=capability_key,
+                field="skill_refs",
+                actual_type=type(refs).__name__,
+                detail="YAML declarative authority requires skill_refs to be an explicit list",
+                source=source,
+            )
+            error["reason_code"] = "declarative_config_invalid_workflow_capability"
+            error["code"] = error["reason_code"]
+            error["stage"] = "declarative_config_validation"
+            error["config_key"] = RUNTIME_CONFIG_KEY
+            raise ResearchAssistantRuntimeConfigInvalidError(error)
         if refs is None or refs == "" or refs == {}:
             logger.warning(
                 "research assistant capability skill_refs empty non-list normalized: capability_key=%s source=%s actual_type=%s",
@@ -2062,102 +2141,31 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         readiness = self.catalog_readiness()
         if not readiness["ready"]:
             raise ResearchAssistantCatalogNotReadyError(readiness)
-        self._align_capability_registry_ref_shapes_for_catalog_ready()
         return readiness
 
+    def _approved_workflow_capabilities(self) -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._workflow_capabilities()
+            if str(item.get("status") or "approved") == "approved"
+        ]
+
+    def _workflow_capability_by_key(self, capability_key: str, *, approved_only: bool = True) -> dict[str, Any] | None:
+        capability = self.declarative_config.workflow_capability(capability_key)
+        if not capability:
+            return None
+        if approved_only and str(capability.get("status") or "approved") != "approved":
+            return None
+        return capability
+
     def active_runtime_config(self) -> dict[str, Any]:
-        activation = self.active_runtime_config_activation()
-        raw_config = activation.get("config_json")
-        if not isinstance(raw_config, dict):
-            metadata = self._runtime_config_activation_metadata(activation)
-            reason_code = "runtime_config_invalid_active_config"
-            error = {
-                "reason_code": reason_code,
-                "code": reason_code,
-                "stage": "runtime_config_validation",
-                **metadata,
-                "field": "config_json",
-                "actual_type": type(raw_config).__name__,
-                "exception_type": "TypeError",
-                "message": (
-                    f"active RA runtime config is invalid: activation_id={metadata['activation_id']}; "
-                    f"config_key={metadata['config_key']}; field=config_json; actual_type={type(raw_config).__name__}; "
-                    f"operator_action={self._runtime_config_operator_action()}"
-                ),
-                "operator_action": self._runtime_config_operator_action(),
-            }
-            logger.error(
-                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s field=config_json actual_type=%s",
-                reason_code,
-                metadata["activation_id"],
-                metadata["config_key"],
-                type(raw_config).__name__,
-            )
-            raise ResearchAssistantRuntimeConfigInvalidError(error)
-        config = dict(raw_config)
-        try:
-            validate_runtime_config_payload(config, f"active runtime_config_activation {activation.get('activation_id')}")
-        except RuntimeConfigCapabilityValidationError as exc:
-            error = self._payload_for_runtime_config_error(exc, activation)
-            logger.error(
-                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s capability_key=%s field=%s actual_type=%s",
-                error["reason_code"],
-                error["activation_id"],
-                error["config_key"],
-                error["capability_key"],
-                error["field"],
-                error["actual_type"],
-            )
-            raise ResearchAssistantRuntimeConfigInvalidError(error) from exc
-        except ValueError as exc:
-            activation_id = str(activation.get("activation_id") or "")
-            config_key = str(activation.get("config_key") or RUNTIME_CONFIG_KEY)
-            reason_code = "runtime_config_invalid_active_config"
-            error = {
-                "reason_code": reason_code,
-                "code": reason_code,
-                "stage": "runtime_config_validation",
-                "activation_id": activation_id,
-                "config_key": config_key,
-                "config_version": activation.get("config_version"),
-                "source_id": activation.get("source_id"),
-                "field": "runtime_config",
-                "actual_type": type(config).__name__,
-                "exception_type": type(exc).__name__,
-                "message": (
-                    f"active RA runtime config is invalid: activation_id={activation_id}; "
-                    f"config_key={config_key}; error={exc}; "
-                    f"operator_action={self._runtime_config_operator_action()}"
-                ),
-                "operator_action": self._runtime_config_operator_action(),
-            }
-            logger.error(
-                "research assistant active runtime config invalid: reason_code=%s activation_id=%s config_key=%s error=%s",
-                reason_code,
-                activation_id,
-                config_key,
-                exc,
-            )
-            raise ResearchAssistantRuntimeConfigInvalidError(error) from exc
-        return config
+        return self.declarative_config.runtime_config_payload()
 
     def active_runtime_config_activation(self) -> dict[str, Any]:
-        activation = self.repository.find_one(
-            "runtime_config_activations",
-            {"config_key": RUNTIME_CONFIG_KEY, "environment": self.environment, "status": "active"},
-        )
-        if not activation:
-            raise RuntimeError("Research Assistant runtime config activation is missing; run catalog seed/import first")
-        return activation
+        return self.declarative_config.runtime_activation_record()
 
     def active_prompt_activation(self) -> dict[str, Any]:
-        activation = self.repository.find_one(
-            "prompt_activations",
-            {"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
-        )
-        if not activation:
-            raise RuntimeError("Research Assistant prompt activation is missing; run catalog seed/import first")
-        return activation
+        return self.declarative_config.prompt_activation_record()
 
     def configured_limit(self, key: str) -> int:
         config = self.active_runtime_config()
@@ -2609,7 +2617,61 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         max_limit = self.configured_limit("api_list_max_page_size")
         if resolved_limit > max_limit:
             raise ValueError(f"limit exceeds configured api_list_max_page_size: {max_limit}")
+        declarative_records = self._declarative_records_for_kind(kind)
+        if declarative_records is not None:
+            return self._page_declarative_records(kind, declarative_records, filters=filters, search=search, limit=resolved_limit, offset=offset)
         return self.repository.list_records(kind, filters=filters, search=search, limit=resolved_limit, offset=offset)
+
+    def _declarative_records_for_kind(self, kind: str) -> list[dict[str, Any]] | None:
+        if kind == "capabilities":
+            return [
+                {
+                    "capability_id": f"cap_{str(item['capability_key']).replace('.', '_').replace('-', '_')}",
+                    "declarative_authority": "yaml_memory",
+                    **item,
+                }
+                for item in self._workflow_capabilities()
+            ]
+        if kind == "prompt_nodes":
+            return [
+                {"declarative_authority": "yaml_memory", **item}
+                for item in self.declarative_config.prompt_node_list()
+            ]
+        if kind == "prompt_activations":
+            return [{"declarative_authority": "yaml_memory", **self.active_prompt_activation()}]
+        if kind == "runtime_config_activations":
+            return [{"declarative_authority": "yaml_memory", **self.active_runtime_config_activation()}]
+        return None
+
+    @staticmethod
+    def _page_declarative_records(
+        kind: str,
+        records: list[dict[str, Any]],
+        *,
+        filters: dict[str, Any] | None,
+        search: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        items = list(records)
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            items = [item for item in items if item.get(key) == value]
+        if search:
+            needle = search.lower()
+            items = [item for item in items if needle in str(item).lower()]
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit))
+        return {
+            "items": items[offset:offset + limit],
+            "total": len(items),
+            "page": offset // limit + 1,
+            "page_size": limit,
+            "has_more": offset + limit < len(items),
+            "declarative_authority": "yaml_memory",
+            "projection_kind": kind,
+        }
 
     def list_pipeline_issue_candidates(
         self,
@@ -2746,7 +2808,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         data.dialogue_mode = dialogue_mode
         activation = self.active_prompt_activation()
         version_refs = list(activation.get("version_refs") or [])
-        available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=self.configured_limit("prompt_nodes_active"))["items"]
+        available = [
+            item
+            for item in self.declarative_config.prompt_node_list()
+            if str(item.get("status") or "enabled") == "enabled"
+        ]
         if not available:
             raise RuntimeError("Prompt Tree is empty; run /research-assistant/catalogs/seed before chat")
         selected = self._select_prompt_nodes(available, data)
@@ -4149,10 +4215,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
         servers = [item for item in self._manifest_mcp_server_records() if str(item.get("status") or "") in {"ready", "enabled", "ok"}]
         tools = [item for item in self._manifest_mcp_catalog_records() if str(item.get("status") or "") in {"enabled", "ready", "approved"}]
-        capabilities = [
-            item
-            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
-        ]
+        capabilities = self._approved_workflow_capabilities()
         tools_by_server: dict[str, list[dict[str, Any]]] = {}
         for tool in sorted(tools, key=lambda item: (str(item.get("server_key") or ""), str(item.get("tool_name") or ""))):
             tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
@@ -4294,24 +4357,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _approved_capability_mcp_tool_refs(self) -> set[tuple[str, str]]:
         capabilities = [
             dict(item)
-            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
-            if str(item.get("status") or "") == "approved"
-        ]
-        repaired = self._repair_empty_capability_ref_shapes(capabilities)
-        if repaired:
-            capabilities = [
-                dict(item)
-                for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
-                if str(item.get("status") or "") == "approved"
-            ]
-        capabilities.extend(
-            dict(item)
             for item in self._workflow_capabilities()
             if str(item.get("status") or "approved") == "approved"
-        )
+        ]
         refs: set[tuple[str, str]] = set()
         for capability in capabilities:
-            canonical = self._canonicalize_capability_mcp_refs(capability, source="assistant_capabilities")
+            canonical = self._canonicalize_capability_mcp_refs(capability, source="declarative_yaml_memory_authority")
             for ref in canonical.get("mcp_tool_refs") if isinstance(canonical.get("mcp_tool_refs"), list) else []:
                 if not isinstance(ref, dict):
                     continue
@@ -4809,7 +4860,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
 
     def _prompt_text(self, prompt_key: str) -> str:
-        node = self.repository.find_one("prompt_nodes", {"prompt_key": prompt_key, "status": "enabled"})
+        node = self.declarative_config.prompt_node(prompt_key)
         if not node:
             raise RuntimeError(f"active prompt node is missing: {prompt_key}")
         return str(node["prompt_text"])
@@ -4832,11 +4883,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         intent_config = self._dialogue_intent_config()
         template = self._dialogue_card_template(dialogue_intent, intent_config)
         mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
-        capabilities = self.repository.list_records(
-            "capabilities",
-            filters={"status": "approved"},
-            limit=self.configured_limit("api_list_capabilities"),
-        )["items"]
+        capabilities = self._approved_workflow_capabilities()
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
@@ -5371,36 +5418,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 route.update(selected_tool)
         if isinstance(route, dict) and route.get("domain"):
             candidate = f"{route['domain']}.mcp_orchestration"
-            capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
-            if capability and self._capability_allows_tool(capability, call):
-                return candidate
-            capability = self._refresh_capability_cache_for_tool(
-                server_key=call.server_key,
-                tool_name=call.tool_name,
-                capability_key=candidate,
-            )
+            capability = self._workflow_capability_by_key(candidate)
             if capability and self._capability_allows_tool(capability, call):
                 return candidate
         inferred_domain = self._domain_for_mcp_tool(call.tool_name)
         if inferred_domain:
             candidate = f"{inferred_domain}.mcp_orchestration"
-            capability = self.repository.find_one("capabilities", {"capability_key": candidate, "status": "approved"})
+            capability = self._workflow_capability_by_key(candidate)
             if capability and self._capability_allows_tool(capability, call):
                 return candidate
-            capability = self._refresh_capability_cache_for_tool(
-                server_key=call.server_key,
-                tool_name=call.tool_name,
-                capability_key=candidate,
-            )
-            if capability and self._capability_allows_tool(capability, call):
-                return candidate
-        capabilities = self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+        capabilities = self._approved_workflow_capabilities()
         for capability in capabilities:
             if self._capability_allows_tool(capability, call):
                 return str(capability["capability_key"])
-        capability = self._refresh_capability_cache_for_tool(server_key=call.server_key, tool_name=call.tool_name)
-        if capability:
-            return str(capability["capability_key"])
         raise KeyError(f"approved capability not found for tool: {call.server_key}/{call.tool_name}")
 
     @staticmethod
@@ -5479,7 +5509,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "side_effect_level": tool.get("side_effect_level"),
             }
         capability_key = f"{route['domain']}.mcp_orchestration"
-        capability = self.repository.find_one("capabilities", {"capability_key": capability_key, "status": "approved"})
+        capability = self._workflow_capability_by_key(capability_key)
         if not capability:
             return {"eligible": False, "reason": "capability_not_approved", "capability_key": capability_key}
         if self._mcp_ref_pair(route["server_key"], route["tool_name"]) not in self._approved_capability_mcp_tool_refs():
@@ -7284,13 +7314,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         }
 
     def _prompt_text_for_key(self, target_prompt_key: str) -> str:
-        node = self.repository.find_one("prompt_node_versions", {"prompt_key": target_prompt_key, "status": "approved"})
+        node = self.declarative_config.prompt_node(target_prompt_key)
         if node and str(node.get("prompt_text") or "").strip():
             return str(node["prompt_text"])
-        legacy = self.repository.find_one("prompt_nodes", {"prompt_key": target_prompt_key, "status": "enabled"})
-        if legacy and str(legacy.get("prompt_text") or "").strip():
-            return str(legacy["prompt_text"])
-        raise KeyError(f"prompt text not found for target_prompt_key={target_prompt_key}; seed prompt pack first")
+        raise KeyError(f"prompt text not found for target_prompt_key={target_prompt_key}; fix prompt pack YAML and reload")
 
     def _ensure_default_reports_and_notifications(self, seeded: dict[str, int]) -> None:
         if not self.repository.list_records("reports", limit=1)["items"]:

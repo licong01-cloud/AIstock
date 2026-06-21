@@ -271,7 +271,7 @@ class ResearchAssistantExecutionMixin:
         data = request if isinstance(request, ActionProposalCreate) else ActionProposalCreate(**request)
         if not self.repository.get_record("tasks", data.task_id):
             raise KeyError(f"task not found: {data.task_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": data.capability_key, "status": "approved"})
+        capability = self._workflow_capability_by_key(data.capability_key)
         if not capability:
             raise KeyError(f"approved capability not found: {data.capability_key}")
         runtime_activation = self.active_runtime_config_activation()
@@ -335,7 +335,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"]})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]), approved_only=False)
         return {"proposal": proposal, "capability": capability, "events": self.action_proposal_events(action_proposal_id)}
 
     def action_proposal_events(self, action_proposal_id: str) -> dict[str, Any]:
@@ -365,7 +365,7 @@ class ResearchAssistantExecutionMixin:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
         if proposal.get("status") not in {"proposed", "preflight_failed"}:
             raise ValueError(f"proposal is not confirmable from status={proposal.get('status')}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -397,7 +397,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -466,7 +466,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -510,7 +510,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
