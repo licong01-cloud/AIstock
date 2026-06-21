@@ -65,5 +65,8 @@
     "python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -p no:cacheprovider -> 30 passed, 1 skipped",
     "python -m nox -s l0 -> passed; guardrail scan blocking=0"
   ],
-  "closure_note": "Closed as historical/obsolete. The original allowed scope and reproduce command (backend/services/factor_pipeline_v2/* and scripts/run_factor_pipeline_v2.py) no longer exist on current main; current official full-compute path is official_factor_batch_compute_service with explicit resource gates, timeout/resource failure reporting, batch release evidence, and tests."
+  "closure_note": "Closed as historical/obsolete. The original allowed scope and reproduce command (backend/services/factor_pipeline_v2/* and scripts/run_factor_pipeline_v2.py) no longer exist on current main; current official full-compute path is official_factor_batch_compute_service with explicit resource gates, timeout/resource failure reporting, batch release evidence, and tests.",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }

@@ -67,5 +67,8 @@
     "python -m pytest backend/tests/quantevolver/test_factor_emit_hook.py backend/tests/quantevolver/test_official_evaluation_cache_source.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_legacy_factor_paths_removed.py -q -p no:cacheprovider -> 45 passed",
     "python -m nox -s l0 -> passed; guardrail scan blocking=0"
   ],
-  "closure_note": "Closed as historical governance aggregate after current-main inventory. No confirmed live factor metrics/rating/eligibility/correlation/standalone-metrics defect remains under this aggregate. Remaining static local-path findings in test_factor_metrics_authority_static::test_production_runtime_code_has_no_local_path_or_secret_fallbacks are unrelated to factor metrics single-writer governance and belong to WSL/local-path cleanup scope, not BUG-037."
+  "closure_note": "Closed as historical governance aggregate after current-main inventory. No confirmed live factor metrics/rating/eligibility/correlation/standalone-metrics defect remains under this aggregate. Remaining static local-path findings in test_factor_metrics_authority_static::test_production_runtime_code_has_no_local_path_or_secret_fallbacks are unrelated to factor metrics single-writer governance and belong to WSL/local-path cleanup scope, not BUG-037.",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }
