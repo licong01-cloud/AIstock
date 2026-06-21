@@ -2,7 +2,11 @@
   "actual": "Research Assistant chat page 'Phase 7 Evidence / Blockers' panel (frontend/src/app/research-assistant/chat/page.tsx:646) renders Blocker/Evidence cards with two defects. (1) Layout breaks into per-character wrapping: .ra-evidence-ref-grid (research-assistant.css:254, grid-template-columns minmax(96px,0.28fr) 1fr) starves the value column inside the narrow side panel so long text degrades to per-char break; should stack to single column (label above value) at narrow width or fix column sizing. (2) Raw JSON shown on main UI: BlockerCard.tsx and EvidenceCard.tsx render <DiagnosticLogBlock data={card}> which via AssistantShared.tsx:101 prints the whole card object as <pre class=ra-json-preview>{JSON.stringify(card,null,2)}</pre>; should remove or collapse behind a developer-details toggle and show human-readable fields in main view. Minor: provenance shows only Object.keys(...).join(', ') (key names), should show source value. NOTE: as_of showing '-' is intended honest behavior, not a bug; do not change it.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/research-assistant.css",
+    "frontend/src/components/research-assistant/BlockerCard.tsx",
+    "frontend/src/components/research-assistant/EvidenceCard.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-402",
@@ -20,6 +24,44 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260617-65d1b27062d7",
       "timestamp": "2026-06-17T08:12:13.445093Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx"
+      ],
+      "note": "BUG-402 is a pure frontend Research Assistant UI rendering fix; scope expanded from registry-only triage to the exact card and CSS files identified in the task card/context pack. AssistantShared.tsx and as_of behavior remain out of scope.",
+      "timestamp": "2026-06-17T08:30:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx"
+      ],
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx",
+        "frontend/tests/research-assistant/research-assistant.spec.ts"
+      ],
+      "note": "Updated Phase7 frontend acceptance to match BUG-402: diagnostic raw JSON must be available only after expanding Developer details, not visible in the default main card view.",
+      "timestamp": "2026-06-17T09:10:00Z"
     }
   ],
   "evidence_uris": [],
@@ -96,5 +138,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }

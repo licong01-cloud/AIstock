@@ -324,7 +324,7 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
 
 
 
-test("Research Assistant blocker errors are visible as direct log blocks", async ({ page: browserPage }) => {
+test("Research Assistant blocker diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
   const response = {
     ...chatTurnResponse,
     assistant_message: {
@@ -333,7 +333,7 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
     },
     cards: {
       ...chatTurnResponse.cards,
-      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: false },
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
       action_proposals: [
         { title: "read-only health overview", approval_required: false, status: "read_only" },
         { title: "repair plan", approval_required: false, status: "plan_only" },
@@ -363,12 +363,15 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
 
   const blockerLog = browserPage.getByTestId("ra-blocker-log");
   await expect(blockerLog).toBeVisible();
-  await expect(blockerLog).toContainText("proposal-blocker-3");
   await expect(blockerLog).toContainText("approval_required");
   await expect(blockerLog).toContainText("local_data_apply_repair_confirmed");
   await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
   await expect(blockerLog).toContainText("action_proposals");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(1);
+  await blockerLog.locator("summary").click();
   await expect(blockerLog.locator("pre")).toBeVisible();
+  await expect(blockerLog.locator("pre")).toContainText("proposal-blocker-3");
   await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
   await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
 });

@@ -241,7 +241,7 @@
 .ra-evidence-card,
 .ra-blocker-card,
 .ra-agent-run-card,
-.ra-memory-node { border: 1px solid var(--ra-line); border-radius: 18px; background: #fffdf6; padding: 14px; box-shadow: 0 12px 32px rgba(28, 40, 31, 0.07); }
+.ra-memory-node { container-type: inline-size; border: 1px solid var(--ra-line); border-radius: 18px; background: #fffdf6; padding: 14px; box-shadow: 0 12px 32px rgba(28, 40, 31, 0.07); }
 .ra-evidence-card-insufficient,
 .ra-blocker-card-warning { border-color: rgba(212, 147, 39, 0.32); background: #fff8e8; }
 .ra-evidence-card-blocked,
@@ -251,9 +251,11 @@
 .ra-context-pack-routes,
 .ra-memory-tree-list { display: grid; gap: 10px; }
 .ra-evidence-ref { border-top: 1px dashed var(--ra-line); padding-top: 10px; }
-.ra-evidence-ref-grid { display: grid; grid-template-columns: minmax(96px, 0.28fr) 1fr; gap: 8px 10px; margin-top: 10px; }
+.ra-evidence-ref-grid { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 8px 10px; margin-top: 10px; }
 .ra-evidence-ref-grid span { color: var(--ra-muted); font-weight: 900; }
-.ra-evidence-ref-grid strong { min-width: 0; word-break: break-word; }
+.ra-evidence-ref-grid strong { min-width: 0; overflow-wrap: anywhere; word-break: normal; white-space: normal; }
+.ra-diagnostic-details { margin-top: 12px; }
+.ra-diagnostic-details > summary { cursor: pointer; color: var(--ra-muted); font-size: 12px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; }
 .ra-memory-tree-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .ra-memory-tree-list { list-style: none; padding: 0; margin: 0; }
 .ra-memory-node + .ra-memory-node { margin-top: 10px; }
@@ -381,6 +383,11 @@
   .pv2-form-grid { grid-template-columns: 1fr; }
   .ra-chat-composer { grid-template-columns: 1fr; }
   .ra-chat-send { min-height: 44px; }
+}
+
+@container (max-width: 420px) {
+  .ra-evidence-ref-grid { grid-template-columns: 1fr; gap: 4px; }
+  .ra-evidence-ref-grid span:not(:first-child) { margin-top: 6px; }
 }
 
 
