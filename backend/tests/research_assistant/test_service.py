@@ -832,6 +832,184 @@ def test_graph_skill_external_trace_and_workbench_contracts_are_replayable() -> 
     assert svc.list_records("mcp_tool_events", filters={"task_id": task["task_id"]})["total"] >= 1
 
 
+def _seed_qe_module_graph(svc: ResearchAssistantService) -> None:
+    qe = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.qe",
+            title="QE",
+            summary="Quant evolution module.",
+            source_refs=["test://module/qe"],
+            approval_status="approved",
+        )
+    )
+    strategy_package = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.strategy_package",
+            title="Strategy Package",
+            summary="Strategy package module promoted by QE.",
+            source_refs=["test://module/strategy-package"],
+            approval_status="approved",
+        )
+    )
+    svc.create_graph_relation(
+        GraphRelationCreate(
+            source_entity_id=qe["entity_id"],
+            target_entity_id=strategy_package["entity_id"],
+            relation_type="promotes_to",
+            evidence_refs=["test://graph/qe-promotes-strategy-package"],
+            approval_status="approved",
+        )
+    )
+
+
+def _seed_chinese_module_graph(svc: ResearchAssistantService) -> None:
+    validation = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.validation",
+            title="验证",
+            summary="Validation module.",
+            source_refs=["test://module/validation"],
+            approval_status="approved",
+        )
+    )
+    strategy_packages = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.strategy_packages",
+            title="策略包",
+            summary="Strategy packages module.",
+            source_refs=["test://module/strategy-packages"],
+            approval_status="approved",
+        )
+    )
+    svc.create_graph_relation(
+        GraphRelationCreate(
+            source_entity_id=validation["entity_id"],
+            target_entity_id=strategy_packages["entity_id"],
+            relation_type="governs",
+            evidence_refs=["test://graph/validation-governs-strategy-packages"],
+            approval_status="approved",
+        )
+    )
+
+
+def test_user_message_module_key_seed_expands_matching_module_subgraph() -> None:
+    svc = _service()
+    _seed_qe_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="Explain the QE module path before drafting a plan.",
+            dialogue_intent="analysis",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == ["module.qe"]
+    assert pack["graph_relation_refs"]
+    assert graph_context["relation_refs"][0]["relation_type"] == "promotes_to"
+    assert graph_context["relation_refs"][0]["source_entity_key"] == "module.qe"
+    assert graph_context["relation_refs"][0]["neighbor_entity_key"] == "module.strategy_package"
+
+
+def test_user_message_cjk_module_title_substring_seeds_module_and_expands_neighbor() -> None:
+    svc = _service()
+    _seed_chinese_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="策略包和验证什么关系",
+            dialogue_intent="analysis",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == ["module.strategy_packages"]
+    assert graph_context["relation_refs"][0]["relation_type"] == "governs"
+    assert graph_context["relation_refs"][0]["source_entity_key"] == "module.validation"
+    assert graph_context["relation_refs"][0]["target_entity_key"] == "module.strategy_packages"
+    assert graph_context["relation_refs"][0]["neighbor_entity_key"] == "module.validation"
+
+
+def test_user_message_cjk_common_two_char_title_does_not_substring_seed() -> None:
+    svc = _service()
+    _seed_chinese_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="我想验证一下这个想法",
+            dialogue_intent="dialogue",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == []
+    assert graph_context["relation_refs"] == []
+
+
+def test_user_message_module_key_seed_does_not_fire_without_module_term() -> None:
+    svc = _service()
+    _seed_qe_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="Please answer concisely with evidence.",
+            dialogue_intent="dialogue",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    assert graph_context["seed_entity_keys"] == []
+    assert graph_context["relation_refs"] == []
+
+
+def test_graph_entity_keys_for_memory_items_preserves_memory_seed_behavior() -> None:
+    svc = _service()
+
+    keys = svc._graph_entity_keys_for_memory_items(
+        [
+            {
+                "subject_key": "project.module.alpha_module",
+                "content_json": {"entity_keys": ["module.alpha_module"]},
+                "content_text": "alpha module context",
+            }
+        ],
+        user_message="alpha module analysis",
+    )
+
+    assert keys == ["module.alpha_module"]
+
+
+def test_chat_turn_injects_user_seeded_module_graph_into_llm_context() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+    _seed_qe_module_graph(svc)
+
+    result = svc.chat_turn(ChatTurnRequest(message="Explain QE module dependencies.", dialogue_mode_override="analysis"))
+
+    context_calls = [
+        call
+        for call in fake.calls
+        if "Context Pack Evidence Manifest" in " ".join(str(message.get("content")) for message in call.get("messages", []) if isinstance(message, dict))
+    ]
+    assert context_calls
+    messages = context_calls[0]["messages"]
+    assert isinstance(messages, list)
+    llm_context = " ".join(str(message.get("content")) for message in messages if isinstance(message, dict))
+    assert "Context Pack Evidence Manifest" in llm_context
+    assert "module.qe" in llm_context
+    assert "module.strategy_package" in llm_context
+    assert "promotes_to" in llm_context
+    assert "1 graph relations" in result["context_pack"]["pack_summary"]
+
+
 def test_candidate_issue_no_storage_response_is_stable_without_repository_row() -> None:
     svc = _service()
     first = svc.create_issue_candidate(IssueCandidateCreate(title="Duplicate Gate", problem_statement="same", dedupe_key="dedupe-x"))

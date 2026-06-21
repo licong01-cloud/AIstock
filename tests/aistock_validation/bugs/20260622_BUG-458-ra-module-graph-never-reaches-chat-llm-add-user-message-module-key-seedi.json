@@ -1,0 +1,75 @@
+{
+  "actual": "_graph_entity_keys_for_memory_items(service.py:6342) only seeds graph entity keys from memory items; user_message filters but does not seed, so module entities (ns=aistock/type=module) in the knowledge graph never surface in chat. Fix: add deterministic message to module-key direct seed and ensure graph_context reaches chat_turn LLM.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "configs/research_assistant/runtime_context.yaml",
+    "tests/aistock_validation/bugs/20260622_BUG-458-ra-module-graph-never-reaches-chat-llm-add-user-message-module-key-seedi.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-458",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T17:30:22.871599Z",
+  "description": "_graph_entity_keys_for_memory_items(service.py:6342) only seeds graph entity keys from memory items; user_message filters but does not seed, so module entities (ns=aistock/type=module) in the knowledge graph never surface in chat. Fix: add deterministic message to module-key direct seed and ensure graph_context reaches chat_turn LLM.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-e7a7db4be5d3",
+      "timestamp": "2026-06-21T17:30:22.871594Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-21T17:30:22.871599Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1417,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1417",
+  "last_seen_at": "2026-06-21T17:30:22.871599Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA module graph never reaches chat LLM - add user-message module-key seeding",
+  "trigger_condition": {
+    "fingerprint": "e7a7db4be5d3c8b17767c973",
+    "source_event_id": "FE-20260622-e7a7db4be5d3"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

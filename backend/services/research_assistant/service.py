@@ -3884,6 +3884,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "memory_items": compact_memories,
             "graph_context": {
                 "route_reason": graph_context.get("route_reason"),
+                "seed_entity_keys": list(graph_context.get("seed_entity_keys") or [])[:12],
+                "neighbor_entity_keys": list(graph_context.get("neighbor_entity_keys") or [])[:12],
                 "relation_refs": compact_relations,
             },
         }
@@ -6352,7 +6354,61 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if isinstance(content_json, dict):
                 item_keys.update(self._graph_entity_keys_from_content(content_json))
             keys.update(key for key in item_keys if self._graph_entity_key_matches_query(key, query_terms))
+        keys.update(self._graph_entity_keys_from_message(user_message))
         return sorted(keys)
+
+    def _graph_entity_keys_from_message(self, user_message: str | None) -> list[str]:
+        query_terms = self._graph_message_module_terms(user_message)
+        if not query_terms:
+            return []
+        normalized_message = str(user_message or "").lower()
+        limit = self.configured_limit("graph_summary_entities")
+        page = self.repository.list_records(
+            "entities",
+            filters={"namespace": "aistock", "entity_type": "module"},
+            limit=limit,
+        )
+        matches: list[tuple[int, str]] = []
+        for entity in page.get("items") or []:
+            entity_key = str(entity.get("entity_key") or "").strip()
+            if not re.fullmatch(r"module\.[a-z0-9]+(?:_[a-z0-9]+)*", entity_key):
+                continue
+            entity_terms = self._graph_module_entity_terms(entity)
+            cjk_title_match = self._graph_module_title_matches_cjk_substring(entity, normalized_message)
+            if query_terms.isdisjoint(entity_terms) and not cjk_title_match:
+                continue
+            suffix = entity_key.removeprefix("module.")
+            score = 2 if cjk_title_match or suffix in query_terms else 1
+            matches.append((score, entity_key))
+        matches.sort(key=lambda item: (-item[0], item[1]))
+        return [entity_key for _, entity_key in matches[:limit]]
+
+    @classmethod
+    def _graph_module_entity_terms(cls, entity: dict[str, Any]) -> set[str]:
+        entity_key = str(entity.get("entity_key") or "")
+        terms: set[str] = set()
+        if entity_key.startswith("module."):
+            suffix = entity_key.removeprefix("module.")
+            terms.add(suffix)
+            terms.update(part for part in suffix.split("_") if part)
+        terms.update(cls._graph_message_module_terms(str(entity.get("title") or "")))
+        return terms
+
+    @staticmethod
+    def _graph_module_title_matches_cjk_substring(entity: dict[str, Any], normalized_message: str) -> bool:
+        if not normalized_message:
+            return False
+        title = str(entity.get("title") or "").lower()
+        cjk_segments = re.findall(r"[\u4e00-\u9fff]+", title)
+        return any(len(segment) >= 3 and segment in normalized_message for segment in cjk_segments)
+
+    @staticmethod
+    def _graph_message_module_terms(value: str | None) -> set[str]:
+        if not value:
+            return set()
+        generic_terms = {"module", "capability", "mcp", "api", "process", "dataset", "strategy", "model"}
+        tokens = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", str(value).lower())
+        return {token for token in tokens if len(token) >= 2 and token not in generic_terms}
 
     @staticmethod
     def _graph_entity_keys_from_path(path: str) -> set[str]:
