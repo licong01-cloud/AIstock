@@ -136,8 +136,14 @@ class QmtStrategyLedgerReconciliationService:
         trade_date: date,
         broker_positions: list[dict[str, Any]] | tuple[dict[str, Any], ...],
         sync_summary: SyncSummary | None = None,
-        broker_authoritative: bool = False,
+        broker_authoritative: bool = True,
     ) -> ReconciliationReport:
+        if broker_authoritative is not True:
+            raise ValueError(
+                "MiniQMT qmt_strategy_ledger reconciliation requires broker_authoritative=True; "
+                "reason_code=MINIQMT_BROKER_AUTHORITY_REQUIRED"
+            )
+
         run = ReconciliationRunRecord(
             run_id=new_id("qmtrec"),
             account_id=account_id,
@@ -165,14 +171,12 @@ class QmtStrategyLedgerReconciliationService:
         raw_strategy_lot_quantities = {
             strategy_name: dict(quantities) for strategy_name, quantities in strategy_lot_quantities.items()
         }
-        position_authority_adjustments: tuple[dict[str, Any], ...] = ()
-        if broker_authoritative:
-            projection = broker_authoritative_strategy_projection(
-                strategy_lot_quantities=strategy_lot_quantities,
-                broker_quantities=broker_quantities,
-            )
-            strategy_lot_quantities = projection.projected_quantities
-            position_authority_adjustments = projection.adjustments
+        projection = broker_authoritative_strategy_projection(
+            strategy_lot_quantities=strategy_lot_quantities,
+            broker_quantities=broker_quantities,
+        )
+        strategy_lot_quantities = projection.projected_quantities
+        position_authority_adjustments = projection.adjustments
         strategy_totals = _strategy_totals(strategy_lot_quantities)
         overlap_symbols = tuple(
             sorted(
@@ -183,39 +187,23 @@ class QmtStrategyLedgerReconciliationService:
         )
 
         issues: list[ReconciliationIssueRecord] = []
-        if broker_authoritative:
-            for adjustment in position_authority_adjustments:
-                issue_type = str(adjustment.get("issue_type") or "")
-                if issue_type not in {"UNBACKED_STRATEGY_POSITION", "UNATTRIBUTED_BROKER_POSITION"}:
-                    continue
-                issues.append(
-                    self._append_issue(
-                        run_id=run.run_id,
-                        issue_type=issue_type,
-                        severity="WARNING",
-                        message=str(
-                            adjustment.get("message")
-                            or "MiniQMT broker-authoritative position projection adjusted local strategy lots"
-                        ),
-                        symbol=str(adjustment.get("symbol") or "") or None,
-                        context=dict(adjustment),
-                    )
+        for adjustment in position_authority_adjustments:
+            issue_type = str(adjustment.get("issue_type") or "")
+            if issue_type not in {"UNBACKED_STRATEGY_POSITION", "UNATTRIBUTED_BROKER_POSITION"}:
+                continue
+            issues.append(
+                self._append_issue(
+                    run_id=run.run_id,
+                    issue_type=issue_type,
+                    severity="WARNING",
+                    message=str(
+                        adjustment.get("message")
+                        or "MiniQMT broker-authoritative position projection adjusted local strategy lots"
+                    ),
+                    symbol=str(adjustment.get("symbol") or "") or None,
+                    context=dict(adjustment),
                 )
-        else:
-            for symbol in sorted(set(strategy_totals) | set(broker_quantities)):
-                strategy_qty = strategy_totals.get(symbol, 0)
-                broker_qty = broker_quantities.get(symbol, 0)
-                if strategy_qty != broker_qty:
-                    issues.append(
-                        self._append_issue(
-                            run_id=run.run_id,
-                            issue_type="POSITION_MISMATCH",
-                            severity="ERROR",
-                            message="strategy lot quantity does not match MiniQMT merged position quantity",
-                            symbol=symbol,
-                            context={"strategy_quantity": strategy_qty, "broker_quantity": broker_qty},
-                        )
-                    )
+            )
 
         unattributed_orders = self._repository.list_unattributed_orders(account_id=account_id, trade_date=trade_date)
         unattributed_trades = self._repository.list_unattributed_trades(account_id=account_id, trade_date=trade_date)
@@ -253,8 +241,8 @@ class QmtStrategyLedgerReconciliationService:
             "overlap_symbols": list(overlap_symbols),
             "strategy_ids_by_name": strategy_ids_by_name,
             "strategy_remark_prefixes_by_name": strategy_remark_prefixes_by_name,
-            "position_authority": "broker_positions" if broker_authoritative else "strategy_lot_quantities",
-            "broker_authoritative": broker_authoritative,
+            "position_authority": "broker_positions",
+            "broker_authoritative": True,
         }
         if sync_summary is not None:
             summary_json["sync_summary"] = sync_summary.to_dict()
@@ -275,7 +263,7 @@ class QmtStrategyLedgerReconciliationService:
             unattributed_orders=len(unattributed_orders),
             unattributed_trades=len(unattributed_trades),
             overlap_symbols=overlap_symbols,
-            position_authority="broker_positions" if broker_authoritative else "strategy_lot_quantities",
+            position_authority="broker_positions",
             raw_strategy_lot_quantities=raw_strategy_lot_quantities,
             position_authority_adjustments=position_authority_adjustments,
         )

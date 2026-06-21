@@ -340,6 +340,7 @@ def reconcile(payload: dict[str, Any]) -> dict[str, Any]:
         account_id=account_id,
         trade_date=trade_date,
         broker_positions=broker_positions,
+        broker_authoritative=True,
     )
     return {"success": True, "report": report.to_dict()}
 
