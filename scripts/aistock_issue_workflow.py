@@ -749,6 +749,15 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "allowed_backend_ports",
                 "production_ports_forbidden",
             )
+        if "worktree_hygiene" in payload:
+            compact["worktree_hygiene"] = _pick(
+                payload["worktree_hygiene"],
+                "workflow_gate",
+                "canonical_branch",
+            )
+            compact["worktree_hygiene"]["noncanonical_main_worktree_count"] = len(
+                payload["worktree_hygiene"].get("noncanonical_main_worktrees") or []
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -1662,6 +1671,10 @@ def _path_identity(path: Path) -> str:
         return str(path.absolute()).lower()
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    return _path_identity(left) == _path_identity(right)
+
+
 def _strict_bug_id_scan_roots(root: Path | None = None) -> set[str]:
     repo_root = root or REPO_ROOT
     return {
@@ -2431,6 +2444,66 @@ def _parse_worktree_list() -> list[dict[str, str]]:
     if current:
         items.append(current)
     return items
+
+
+def _worktree_hygiene_report(canonical_root: Path | None = None) -> dict[str, Any]:
+    """Detect stale worktrees that can poison root sync or issue workflow state."""
+    canonical_root = canonical_root or _canonical_root()
+    blocking: list[str] = []
+    warnings: list[str] = []
+    items: list[dict[str, Any]] = []
+
+    canonical_git = _git_snapshot(canonical_root) if canonical_root.exists() else {"ok": False}
+    if canonical_git.get("ok") and canonical_git.get("branch") != "main":
+        blocking.append(
+            "canonical root is not on local main; restore F:\\Dev\\AIstock to main...origin/main before workflow work"
+        )
+
+    for item in _parse_worktree_list():
+        raw_worktree = item.get("worktree")
+        if not raw_worktree:
+            continue
+        worktree_path = Path(raw_worktree)
+        branch_ref = item.get("branch") or ""
+        branch = branch_ref.removeprefix("refs/heads/")
+        is_canonical = _same_path(worktree_path, canonical_root)
+        if branch != "main" or is_canonical:
+            continue
+        snapshot = _git_snapshot(worktree_path)
+        dirty_count = int(snapshot.get("dirty_count") or 0)
+        status_text = str(snapshot.get("status") or "")
+        staged_count = sum(
+            1
+            for line in status_text.splitlines()[1:]
+            if len(line) >= 2 and line[0] not in {" ", "?"}
+        )
+        finding = {
+            "worktree": str(worktree_path),
+            "branch": branch,
+            "head": item.get("HEAD") or snapshot.get("head"),
+            "dirty_count": dirty_count,
+            "staged_count": staged_count,
+            "workflow_gate": "blocked",
+        }
+        items.append(finding)
+        blocking.append(
+            f"non-canonical worktree {worktree_path} is bound to local main; "
+            "task worktrees must use task branches and must not hold refs/heads/main"
+        )
+        if staged_count >= 100 or dirty_count >= 100:
+            blocking.append(
+                f"non-canonical main worktree {worktree_path} has {dirty_count} dirty path(s) "
+                f"and {staged_count} staged path(s); treat as stale-index pseudo changes until audited"
+            )
+
+    return {
+        "schema_version": "aistock_worktree_hygiene_v1",
+        "workflow_gate": "blocked" if blocking else ("warning" if warnings else "ready"),
+        "blocking": blocking,
+        "warnings": warnings,
+        "noncanonical_main_worktrees": items,
+        "canonical_branch": canonical_git.get("branch"),
+    }
 
 
 def _branch_for_path(path: Path) -> str | None:
@@ -5840,6 +5913,11 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append(f"canonical root has {canonical_git.get('dirty_count')} dirty file(s); root sync must stop")
     if canonical_git.get("branch") == "main" and canonical_git.get("head") != canonical_git.get("origin_main"):
         warnings.append("canonical root main is not equal to origin/main")
+    worktree_hygiene = _worktree_hygiene_report(canonical_root)
+    for item in worktree_hygiene.get("blocking") or []:
+        blocking.append(f"worktree hygiene: {item}")
+    for item in worktree_hygiene.get("warnings") or []:
+        warnings.append(f"worktree hygiene: {item}")
 
     github: dict[str, Any] = {
         "env_repository": os.environ.get("GITHUB_REPOSITORY"),
@@ -5901,6 +5979,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "repo_git": repo_git,
         "canonical_root": str(canonical_root),
         "canonical_git": canonical_git,
+        "worktree_hygiene": worktree_hygiene,
         "github": github,
         "bug_id_allocation": bug_id_allocation,
         "mcp": mcp,

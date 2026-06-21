@@ -12,6 +12,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 ## Non-Negotiable Rules
 
 - Start from latest `origin/main` in an isolated worktree and task branch; do not develop in the production root checkout.
+- Never bind a task worktree to local `main`. If `doctor` reports non-canonical `main` worktrees or stale-index pseudo changes, audit/export evidence outside the repo, remove only the unsafe worktree after approval, restore `F:\Dev\AIstock` to `main...origin/main`, and rerun `doctor`.
 - Run `python scripts/aistock_issue_workflow.py doctor` before manual exploration.
 - For small or unclear scope, run `python scripts/aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context and validation plan before loading more files.
 - If `doctor` reports stale or missing client wrappers, run `install-client --apply` after this workflow branch is merged, then restart old Codex/Claude windows before judging workflow behavior.
