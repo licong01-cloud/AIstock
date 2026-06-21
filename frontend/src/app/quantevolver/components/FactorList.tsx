@@ -219,6 +219,56 @@ export type MergedFactor = {
   cache_reconcile_required?: boolean | null;
 };
 
+const OFFICIAL_COMPUTE_DRIFT_WARNING_MS = 10 * 60 * 1000;
+
+function parseFactorTimestamp(value?: string | null): Date | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  let normalized = trimmed.replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    normalized = `${normalized}T00:00:00+08:00`;
+  } else if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)) {
+    normalized = `${normalized}+08:00`;
+  }
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatShanghaiDateTime(value?: string | null): string | null {
+  const parsed = parseFactorTimestamp(value);
+  if (!parsed) return null;
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(parsed);
+  const part = (type: string) => parts.find(p => p.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+}
+
+function pickOfficialComputeAt(factor: Pick<MergedFactor, "ind_calculated_at" | "cache_computed_at">): string | null {
+  const indTime = parseFactorTimestamp(factor.ind_calculated_at)?.getTime();
+  const cacheTime = parseFactorTimestamp(factor.cache_computed_at)?.getTime();
+  if (indTime == null && cacheTime == null) return null;
+  if (indTime != null && (cacheTime == null || indTime >= cacheTime)) return factor.ind_calculated_at || null;
+  return factor.cache_computed_at || null;
+}
+
+function computeTimeDriftMinutes(
+  indCalculatedAt?: string | null,
+  cacheComputedAt?: string | null,
+): number | null {
+  const indTime = parseFactorTimestamp(indCalculatedAt)?.getTime();
+  const cacheTime = parseFactorTimestamp(cacheComputedAt)?.getTime();
+  if (indTime == null || cacheTime == null) return null;
+  return Math.abs(indTime - cacheTime) / 60000;
+}
+
 const GRADE_COLORS: Record<string, string> = {
   S: "#7c3aed", A: "#2563eb", B: "#10b981", C: "#f59e0b", D: "#ef4444",
 };
@@ -2568,12 +2618,15 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_annual_return")}>年化(独立){getSortIndicator("ind_annual_return")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
+                <th
+                  style={{ ...thStyle, cursor: "pointer", width: 100 }}
+                  title="官方独立指标与因子值缓存已统一为同一份官方因子值缓存；此列展示最近一次官方链路写入时间。"
+                  onClick={() => handleSort("ind_calculated_at")}
+                >
+                  官方计算{getSortIndicator("ind_calculated_at")}
+                </th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
                 <th style={{ ...thStyle, width: 90 }}>远端同步</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_start_date")}>缓存开始{getSortIndicator("cache_start_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_end_date")}>缓存结束{getSortIndicator("cache_end_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} onClick={() => handleSort("cache_computed_at")}>缓存计算{getSortIndicator("cache_computed_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 80 }} onClick={() => handleSort("generated_at_utc")}>入库时间{getSortIndicator("generated_at_utc")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
@@ -2598,11 +2651,29 @@ export default function FactorList({
                 }, null);
                 const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
                 const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "官方共用缓存" : "");
+                const officialComputeAt = pickOfficialComputeAt(f);
+                const officialComputeDisplay = formatShanghaiDateTime(officialComputeAt);
+                const indCalculatedDisplay = formatShanghaiDateTime(f.ind_calculated_at);
+                const cacheComputedDisplay = formatShanghaiDateTime(f.cache_computed_at);
+                const computeDriftMinutes = computeTimeDriftMinutes(f.ind_calculated_at, f.cache_computed_at);
+                const hasComputeTimeDriftWarning =
+                  computeDriftMinutes != null && computeDriftMinutes > OFFICIAL_COMPUTE_DRIFT_WARNING_MS / 60000;
+                const computeTimeDriftLabel = hasComputeTimeDriftWarning
+                  ? `指标/缓存时间相差 ${Math.round(computeDriftMinutes)} 分钟，请确认官方链路是否完整刷新`
+                  : null;
                 const cacheTitleSuffix = [
                   cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
                   f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,
                   f.cache_window_train_start || f.cache_window_backtest_end ? `请求窗口: ${f.cache_window_train_start || "-"} ~ ${f.cache_window_backtest_end || "-"}` : null,
                   f.cache_as_of_date ? `截至: ${f.cache_as_of_date}` : null,
+                  `缓存计算: ${cacheComputedDisplay || f.cache_computed_at || "-"}`,
+                  `指标计算: ${indCalculatedDisplay || f.ind_calculated_at || "-"}`,
+                  computeTimeDriftLabel,
+                ].filter(Boolean).join("\n");
+                const officialComputeTitle = [
+                  `官方链路时间: ${officialComputeDisplay || "-"}`,
+                  f.cache_date_range ? `缓存覆盖: ${f.cache_date_range}` : null,
+                  cacheTitleSuffix,
                 ].filter(Boolean).join("\n");
                 const cacheTargetStart = cacheStartDate || cacheContext?.trainStart;
                 const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
@@ -2773,8 +2844,19 @@ export default function FactorList({
                           <span style={{ color: "#d1d5db", fontSize: 9 }}>-</span>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.ind_calculated_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.ind_calculated_at || undefined}>
-                        {f.ind_calculated_at ? f.ind_calculated_at.slice(0, 16).replace("T", " ") : "-"}
+                      <td
+                        style={{
+                          ...tdStyle,
+                          fontSize: 10,
+                          color: officialComputeDisplay ? (hasComputeTimeDriftWarning ? "#b45309" : "#64748b") : "#d1d5db",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={officialComputeTitle || undefined}
+                      >
+                        {officialComputeDisplay || "-"}
+                        {hasComputeTimeDriftWarning && (
+                          <span style={{ marginLeft: 4, color: "#d97706", fontWeight: 700 }}>!</span>
+                        )}
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
                         {f.cache_reconcile_required || f.cache_status === "missing_meta_reconcile_required" ? (
@@ -2788,7 +2870,7 @@ export default function FactorList({
                           f.cache_hash_match === false ? (
                             <span title={`源码已变更，缓存失效\n${f.cache_date_range}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
-                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: cacheCoverageOk ? "#d1fae5" : "#fef3c7", color: cacheCoverageOk ? "#059669" : "#d97706" }}>
+                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: cacheCoverageOk ? "#d1fae5" : "#fef3c7", color: cacheCoverageOk ? "#059669" : "#d97706" }}>
                               {(() => {
                                 if (!cacheTargetStart || !cacheTargetEnd || !f.cache_date_range?.includes("~")) {
                                   const prefix = `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
@@ -2804,7 +2886,7 @@ export default function FactorList({
                           )
                         ) : (
                           f.cache_status === "error" ? (
-                            <span title={`最近一次缓存计算失败${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}\n计算时间: ${f.cache_computed_at || "-"}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#dc2626", background: "#fee2e2" }}>✗ 计算失败</span>
+                            <span title={`最近一次缓存计算失败${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#dc2626", background: "#fee2e2" }}>✗ 计算失败</span>
                           ) : (
                             <span title={cacheTitleSuffix || undefined} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#9ca3af", background: "#f3f4f6" }}>— 无缓存</span>
                           )
@@ -2828,15 +2910,6 @@ export default function FactorList({
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_start_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_end_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_end_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_computed_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.cache_computed_at || undefined}>
-                        {f.cache_computed_at ? f.cache_computed_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.generated_at_utc ? f.generated_at_utc.slice(0, 10) : "-"}</td>
                       <td style={tdStyle}>
@@ -2892,7 +2965,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-        <td colSpan={23} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={22} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",
