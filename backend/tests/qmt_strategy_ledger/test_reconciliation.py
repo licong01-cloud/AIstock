@@ -86,7 +86,7 @@ def test_reconciliation_accepts_overlap_strategy_lots_when_broker_quantity_match
     assert report.strategy_lot_quantities["poc_strategy_b"]["001358.SZ"] == 6600
 
 
-def test_reconciliation_reports_position_mismatch_and_unattributed_trade() -> None:
+def test_reconciliation_reports_unbacked_strategy_position_warning_and_unattributed_trade() -> None:
     repo = _repo_with_overlap_lots()
     repo.upsert_unattributed_trade(
         UnattributedTradeRecord(
@@ -108,12 +108,23 @@ def test_reconciliation_reports_position_mismatch_and_unattributed_trade() -> No
     )
 
     issue_types = [issue.issue_type for issue in report.issues]
+    issue_severities = {issue.issue_type: issue.severity for issue in report.issues}
     assert report.run.status == "WARNING"
     assert report.run.completed_at is not None
     assert report.run.summary_json["issue_count"] == 2
-    assert issue_types == ["POSITION_MISMATCH", "UNATTRIBUTED_TRADE"]
-    mismatch = report.issues[0]
-    assert mismatch.context == {"strategy_quantity": 14200, "broker_quantity": 13200}
+    assert report.run.summary_json["broker_authoritative"] is True
+    assert report.position_authority == "broker_positions"
+    assert "POSITION_MISMATCH" not in issue_types
+    assert issue_types == ["UNBACKED_STRATEGY_POSITION", "UNATTRIBUTED_TRADE"]
+    assert issue_severities["UNBACKED_STRATEGY_POSITION"] == "WARNING"
+    unbacked = report.issues[0]
+    assert unbacked.context["strategy_quantity"] == 14200
+    assert unbacked.context["broker_quantity"] == 13200
+    assert unbacked.context["unbacked_quantity"] == 1000
+    assert unbacked.context["projected_strategy_quantities"] == {
+        "poc_strategy_a": 7100,
+        "poc_strategy_b": 6100,
+    }
     assert report.unattributed_trades == 1
 
 
@@ -303,3 +314,70 @@ def test_reconciliation_strategy_scope_blocks_prefixed_unattributed_order() -> N
     assert scope["status"] == "WARNING"
     assert scope["issue_count"] == 1
     assert scope["issue_types"] == ["UNATTRIBUTED_ORDER"]
+
+
+def test_broker_authoritative_default_reports_zero_broker_quantity_as_warning() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat_zero_broker",
+            strategy_name="StrategyZeroBroker",
+            display_name="Strategy Zero Broker",
+            account_id=ACCOUNT_ID,
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_zero_broker",
+            strategy_id="strat_zero_broker",
+            symbol="000001.SZ",
+            open_trade_id="trade_zero_broker",
+            open_date=TRADE_DATE,
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("1000.00"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+
+    report = QmtStrategyLedgerReconciliationService(repository=repo).reconcile_snapshot(
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        broker_positions=[{"stock_code": "000001.SZ", "quantity": 0}],
+    )
+
+    issue_types = [issue.issue_type for issue in report.issues]
+    assert report.run.status == "WARNING"
+    assert report.run.summary_json["broker_authoritative"] is True
+    assert report.position_authority == "broker_positions"
+    assert "POSITION_MISMATCH" not in issue_types
+    assert issue_types == ["UNBACKED_STRATEGY_POSITION"]
+    issue = report.issues[0]
+    assert issue.severity == "WARNING"
+    assert issue.context["strategy_quantity"] == 100
+    assert issue.context["broker_quantity"] == 0
+    assert issue.context["unbacked_quantity"] == 100
+    assert report.strategy_lot_quantities["StrategyZeroBroker"] == {}
+    assert report.raw_strategy_lot_quantities["StrategyZeroBroker"] == {"000001.SZ": 100}
+
+
+def test_reconciliation_rejects_non_broker_authoritative_downgrade() -> None:
+    repo = _repo_with_overlap_lots()
+
+    try:
+        QmtStrategyLedgerReconciliationService(repository=repo).reconcile_snapshot(
+            account_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            broker_positions=[{"stock_code": "001358.SZ", "quantity": 14200}],
+            broker_authoritative=False,
+        )
+    except ValueError as exc:
+        assert "reason_code=MINIQMT_BROKER_AUTHORITY_REQUIRED" in str(exc)
+    else:
+        raise AssertionError("expected broker_authoritative downgrade to fail loudly")

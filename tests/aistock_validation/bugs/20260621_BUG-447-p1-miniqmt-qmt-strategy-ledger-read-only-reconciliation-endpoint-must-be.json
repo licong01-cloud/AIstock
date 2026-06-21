@@ -1,0 +1,97 @@
+{
+  "actual": "reconcile_snapshot defaults broker_authoritative=False and routers/qmt_strategy_ledger.py:339 omits it, so the read-only endpoint emits ERROR POSITION_MISMATCH (incl broker_quantity=0 with strategy_quantity>0) for the same broker truth that autorun (scheduler.py:4502 broker_authoritative=True) reports as WARNING; BUG-400 symptom resurfaces on the API surface.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "tests/aistock_validation/bugs/20260621_BUG-447-p1-miniqmt-qmt-strategy-ledger-read-only-reconciliation-endpoint-must-be.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-447-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-447",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T10:52:37.647001Z",
+  "description": "backend/services/qmt_strategy_ledger/reconciliation.py::reconcile_snapshot (~132) takes broker_authoritative: bool = False (default). The autorun/scheduler path passes broker_authoritative=True (scheduler.py:4502) and caps strategy lots to broker truth, emitting WARNING-level UNBACKED_STRATEGY_POSITION/UNATTRIBUTED_BROKER_POSITION adjustments. But the read-only reconciliation HTTP endpoint (routers/qmt_strategy_ledger.py:339) calls reconcile_snapshot WITHOUT the flag and falls into the legacy branch (reconciliation.py:204-218) that emits ERROR POSITION_MISMATCH whenever strategy_qty != broker_qty (including broker_quantity=0 with strategy_quantity>0). The original BUG-400 evidence came from exactly this read-only API surface. Net: same physical broker truth yields WARNING via autorun but ERROR via the API, so BUG-400 (strategy-slot positions must be broker-authoritative) regresses on the read-only endpoint and misleads operators/monitoring.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-c208fd63268e",
+      "timestamp": "2026-06-21T10:52:37.646998Z"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "note": "Independent analysis confirmed read-only reconciliation defaulted to legacy non-broker-authoritative path. Fix makes broker-authoritative reconciliation mandatory, read-only router passes broker_authoritative=True, and regression tests assert WARNING authority adjustments instead of ERROR POSITION_MISMATCH. Scope expanded for docs/handoff/BUG-447-analysis.md per direct user instruction. No production services/DB/DDL touched.",
+      "timestamp": "2026-06-21T11:55:00Z"
+    },
+    {
+      "action": "fix_branch_rebased",
+      "actor": "codex",
+      "note": "Rebased fix branch onto latest origin/main. BUG remains open pending Tier2 review/merge; final fix_commit will be backfilled after merge close-sync.",
+      "timestamp": "2026-06-21T11:59:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "broker-authoritative must be an invariant: the read-only reconciliation endpoint also treats the broker as authority and returns WARNING-level UNBACKED/UNATTRIBUTED adjustments instead of ERROR POSITION_MISMATCH; prefer flipping the default to True or removing the legacy False branch so position authority cannot be downgraded by a caller; add regression test.",
+  "first_seen_at": "2026-06-21T10:52:37.647001Z",
+  "fix_branch": "bug/BUG-447-p1-miniqmt-qmt-strategy-ledger-read-only-reconci-20260621",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1385,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1385",
+  "last_seen_at": "2026-06-21T10:52:37.647001Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Call read-only reconciliation (routers/qmt_strategy_ledger.py:339) for a portfolio with over-attributed/multi-slot lots; observe ERROR POSITION_MISMATCH; compare reconciliation.py:139 default False vs scheduler.py:4502 True.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "[P1][MiniQMT][qmt_strategy_ledger] read-only reconciliation endpoint must be broker-authoritative (regresses BUG-400 POSITION_MISMATCH)",
+  "trigger_condition": {
+    "fingerprint": "c208fd63268e7fc8ead0b9fe",
+    "source_event_id": "FE-20260621-c208fd63268e"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix",
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py -q -> 7 passed",
+    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 15 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 64 passed",
+    "rtk python -m ruff check backend/services/qmt_strategy_ledger/reconciliation.py backend/routers/qmt_strategy_ledger.py backend/tests/qmt_strategy_ledger/test_reconciliation.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c \"set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3\" -> passed (UI skipped; backend dev-db-only tests ignored by hosted-ci path)"
+  ]
+}
