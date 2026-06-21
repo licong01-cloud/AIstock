@@ -2166,10 +2166,16 @@ class SimulationLifecycleScheduler:
         payload = run.run_payload_json
         if not self._mini_qmt_batch_has_broker_side_effect_evidence(payload):
             return None
-        terminal_status, reason = self._miniqmt_post_close_terminal_status(payload)
+        previous_open_order_evidence = self._latest_miniqmt_payload_evidence(payload, "open_order_evidence")
+        previous_submit_result_gate = self._latest_miniqmt_payload_evidence(payload, "submit_result_gate")
+        fresh_payload, fresh_reconcile = self._fresh_miniqmt_post_close_payload(
+            run=run,
+            as_of_time=as_of_time,
+        )
+        terminal_status, reason = self._miniqmt_post_close_terminal_status(fresh_payload)
         if terminal_status is None:
             return None
-        summary = self._mini_qmt_batch_residual_summary(payload)
+        summary = self._mini_qmt_batch_residual_summary(fresh_payload)
         evidence = {
             "schema_version": "miniqmt_post_close_terminalization_v1",
             "reason": reason,
@@ -2177,11 +2183,14 @@ class SimulationLifecycleScheduler:
             "terminal_status": terminal_status.value,
             "trade_date": run.trade_date.isoformat(),
             "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
-            "qmt_batch_status": payload.get("qmt_batch_status"),
-            "qmt_batch_id": payload.get("qmt_batch_id"),
+            "qmt_batch_status": fresh_payload.get("qmt_batch_status"),
+            "qmt_batch_id": fresh_payload.get("qmt_batch_id"),
             "residual_summary": summary,
-            "open_order_evidence": self._latest_miniqmt_payload_evidence(payload, "open_order_evidence"),
-            "submit_result_gate": self._latest_miniqmt_payload_evidence(payload, "submit_result_gate"),
+            "fresh_reconcile": fresh_reconcile,
+            "previous_open_order_evidence": previous_open_order_evidence,
+            "previous_submit_result_gate": previous_submit_result_gate,
+            "open_order_evidence": self._latest_miniqmt_payload_evidence(fresh_payload, "open_order_evidence"),
+            "submit_result_gate": self._latest_miniqmt_payload_evidence(fresh_payload, "submit_result_gate"),
             "audit_state": self._miniqmt_post_close_audit_state(terminal_status, reason),
         }
         updated = self.repository.update_simulation_daily_run(
@@ -2201,6 +2210,72 @@ class SimulationLifecycleScheduler:
             "status": updated.status.value,
             "reason": reason,
             "post_close_terminalization": True,
+        }
+
+    def _fresh_miniqmt_post_close_payload(
+        self,
+        *,
+        run: SimulationDailyRun,
+        as_of_time: datetime | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        try:
+            binding = self.repository.get_simulation_release_binding(run.binding_id)
+            runtime_release = self.repository.get_strategy_runtime_release(run.release_id)
+            context = self.context_provider.load_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=run.trade_date,
+            )
+            reconciliation = self._reconcile_after_submit(binding=binding, run=run, context=context)
+        except Exception as exc:
+            if isinstance(exc, DataUnavailableError) and getattr(exc, "context", {}).get(
+                "reason_code"
+            ) == "MINIQMT_POST_CLOSE_FRESH_RECONCILE_FAILED":
+                raise
+            raise DataUnavailableError(
+                "MiniQMT post-close terminalization requires a fresh broker reconcile before terminal status",
+                context={
+                    "reason_code": "MINIQMT_POST_CLOSE_FRESH_RECONCILE_FAILED",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "strategy_id": run.strategy_id,
+                    "release_id": run.release_id,
+                    "trade_date": run.trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "error_context": getattr(exc, "context", None),
+                },
+            ) from exc
+        if reconciliation is None:
+            raise DataUnavailableError(
+                "MiniQMT post-close terminalization fresh broker reconcile returned no payload",
+                context={
+                    "reason_code": "MINIQMT_POST_CLOSE_FRESH_RECONCILE_MISSING",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "strategy_id": run.strategy_id,
+                    "release_id": run.release_id,
+                    "trade_date": run.trade_date.isoformat(),
+                    "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
+                },
+            )
+        refreshed_run = self.repository.get_simulation_daily_run(run.run_id)
+        payload = refreshed_run.run_payload_json
+        sync_evidence = payload.get("sync_after_submit") if isinstance(payload.get("sync_after_submit"), dict) else {}
+        return payload, {
+            "schema_version": "miniqmt_post_close_fresh_reconcile_v1",
+            "source": "qmt_broker_snapshot_and_strategy_ledger",
+            "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "account_id": binding.broker_account_id,
+            "reconcile_payload_key": "reconcile_after_submit",
+            "sync_payload_key": "sync_after_submit",
+            "sync_evidence": sync_evidence,
+            "open_order_evidence": self._latest_miniqmt_payload_evidence(payload, "open_order_evidence"),
+            "submit_result_gate": self._latest_miniqmt_payload_evidence(payload, "submit_result_gate"),
         }
 
     @staticmethod
