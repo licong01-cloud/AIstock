@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,8 +15,10 @@ from backend.services.multi_alpha.combine_backtest import (
     InMemoryCombineBacktestRepository,
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
+    ShellPredBacktestExecutor,
     maybe_upload_combined_prediction,
     parse_request,
+    run_command,
 )
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder
 
@@ -23,26 +28,49 @@ INSTRUMENTS = ["A", "B", "C"]
 
 
 class FakeExecutor:
-    def __init__(self) -> None:
+    def __init__(self, *, sleep_seconds: float = 0.0, fail_names: set[str] | None = None) -> None:
         self.calls: list[dict] = []
+        self.sleep_seconds = sleep_seconds
+        self.fail_names = set(fail_names or set())
+        self.active = 0
+        self.max_active = 0
+        self.active_observations: list[int] = []
+        self._lock = threading.Lock()
 
     def execute_pred_backtest(self, *, workspace: Path, pred_pkl: Path, node_id: str, backtest_config: dict) -> dict:
-        frame = pd.read_pickle(pred_pkl).reset_index()
-        score_sum = float(frame["score"].sum())
         name = workspace.name
-        metrics = {
-            "cagr": 1.0 + score_sum / 1000.0,
-            "max_drawdown": -0.15,
-            "sharpe": 2.0 + score_sum / 1000.0,
-            "calmar": 6.0 + score_sum / 1000.0,
-            "topk_return_20": 0.05,
-            "topk_hit_rate_20": 0.6,
-            "turnover": 20.0,
-            "name": name,
-        }
-        self.calls.append({"workspace": workspace, "node_id": node_id, "metrics": metrics})
-        (workspace / "qlib_results_enhanced.json").write_text(json.dumps({"absolute_returns": metrics}), encoding="utf-8")
-        return metrics
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.active_observations.append(self.active)
+        try:
+            if self.sleep_seconds:
+                time.sleep(self.sleep_seconds)
+            if name in self.fail_names:
+                raise MultiAlphaCombineBacktestError(
+                    f"injected fake executor failure for {name}",
+                    reason_code="fake_pred_backtest_failed",
+                    context={"backtest_name": name},
+                )
+            frame = pd.read_pickle(pred_pkl).reset_index()
+            score_sum = float(frame["score"].sum())
+            metrics = {
+                "cagr": 1.0 + score_sum / 1000.0,
+                "max_drawdown": -0.15,
+                "sharpe": 2.0 + score_sum / 1000.0,
+                "calmar": 6.0 + score_sum / 1000.0,
+                "topk_return_20": 0.05,
+                "topk_hit_rate_20": 0.6,
+                "turnover": 20.0,
+                "name": name,
+            }
+            with self._lock:
+                self.calls.append({"workspace": workspace, "node_id": node_id, "metrics": metrics})
+            (workspace / "qlib_results_enhanced.json").write_text(json.dumps({"absolute_returns": metrics}), encoding="utf-8")
+            return metrics
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 class FakeCapacityChecker:
@@ -121,6 +149,7 @@ def _service(
     tmp_path: Path,
     *,
     capacity_checker: FakeCapacityChecker | None = None,
+    executor: FakeExecutor | None = None,
 ) -> tuple[MultiAlphaCombineBacktestService, InMemoryCombineBacktestRepository, FakeExecutor, FakeCapacityChecker]:
     preds = {
         "a1": _pred(1.0),
@@ -132,7 +161,7 @@ def _service(
     }
     labels = {run_id: _label() for run_id in preds}
     repo = InMemoryCombineBacktestRepository()
-    executor = FakeExecutor()
+    executor = executor or FakeExecutor()
     checker = capacity_checker or FakeCapacityChecker()
     service = MultiAlphaCombineBacktestService(
         panel_builder=MultiAlphaPanelBuilder(
@@ -177,6 +206,50 @@ def test_combine_backtest_persists_loo_for_three_or_more_legs(tmp_path: Path) ->
     assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_b", "leg_c"}
 
 
+def test_combine_backtest_limits_intra_run_parallelism_to_node_cap(tmp_path: Path) -> None:
+    executor = FakeExecutor(sleep_seconds=0.05)
+    service, _repo, _executor, _checker = _service(tmp_path, executor=executor)
+
+    result = service.submit_run(_payload_three_legs(), run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    assert executor.max_active == 2
+    assert max(executor.active_observations) <= 2
+    assert len(executor.calls) == 5
+
+
+def test_parallel_and_serial_results_match(tmp_path: Path) -> None:
+    serial_payload = _payload_three_legs()
+    serial_payload["backtest_config"] = {"node_id": "wsl2-5080", "node_parallelism": {"wsl2-5080": 1}}
+    parallel_payload = _payload_three_legs()
+    parallel_payload["backtest_config"] = {"node_id": "wsl2-5080", "node_parallelism": {"wsl2-5080": 2}}
+    serial_service, _serial_repo, _serial_executor, _serial_checker = _service(tmp_path / "serial")
+    parallel_service, _parallel_repo, _parallel_executor, _parallel_checker = _service(tmp_path / "parallel")
+
+    serial = serial_service.get_run(serial_service.submit_run(serial_payload, run_async=False)["run_id"])
+    parallel = parallel_service.get_run(parallel_service.submit_run(parallel_payload, run_async=False)["run_id"])
+
+    serial_schemes = {row["weighting_scheme"]: row for row in serial["scheme_results"]}
+    parallel_schemes = {row["weighting_scheme"]: row for row in parallel["scheme_results"]}
+    assert set(serial_schemes) == set(parallel_schemes)
+    for scheme, serial_row in serial_schemes.items():
+        parallel_row = parallel_schemes[scheme]
+        assert parallel_row["weights_json"] == serial_row["weights_json"]
+        assert parallel_row["per_window_weights_json"] == serial_row["per_window_weights_json"]
+        for key in ("cagr", "max_drawdown", "sharpe", "calmar", "vs_baseline_sharpe_delta", "vs_baseline_calmar_delta"):
+            assert parallel_row[key] == pytest.approx(serial_row[key])
+
+    serial_loo = {(row["weighting_scheme"], row["dropped_leg_id"]): row for row in serial["loo"]}
+    parallel_loo = {(row["weighting_scheme"], row["dropped_leg_id"]): row for row in parallel["loo"]}
+    assert set(serial_loo) == set(parallel_loo)
+    for key, serial_row in serial_loo.items():
+        parallel_row = parallel_loo[key]
+        assert parallel_row["marginal_sharpe"] == pytest.approx(serial_row["marginal_sharpe"])
+        assert parallel_row["marginal_calmar"] == pytest.approx(serial_row["marginal_calmar"])
+        assert parallel_row["marginal_cagr"] == pytest.approx(serial_row["marginal_cagr"])
+
+
 def test_combine_backtest_deterministic_combined_prediction(tmp_path: Path) -> None:
     service, _repo, _executor, _checker = _service(tmp_path)
     first = service.submit_run(_payload(), run_async=False)
@@ -215,6 +288,101 @@ def test_node_capacity_exhaustion_fails_loud_before_executor(tmp_path: Path) -> 
     run_id = next(iter(repo.runs))
     assert repo.runs[run_id]["status"] == "failed"
     assert executor.calls == []
+
+
+def test_noncritical_child_failure_records_reason_and_continues(tmp_path: Path) -> None:
+    service, repo, executor, _checker = _service(
+        tmp_path,
+        executor=FakeExecutor(fail_names={"loo_equal_drop_leg_b"}),
+    )
+
+    result = service.submit_run(_payload_three_legs(), run_async=False)
+    run_id = result["run_id"]
+    run = service.get_run(run_id)
+
+    assert run["run"]["status"] == "partial_failed"
+    assert run["run"]["reason"]["logical_status"] == "partial_failed"
+    failed = run["run"]["reason"]["failed_child_tasks"]
+    assert failed["loo_equal_drop_leg_b"]["reason_code"] == "fake_pred_backtest_failed"
+    assert len(run["scheme_results"]) == 1
+    assert len(run["loo"]) == 2
+    assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_c"}
+    assert repo.runs[run_id]["status"] == "failed"
+    assert {call["workspace"].name for call in executor.calls} >= {"baseline_leg_a", "combined_equal", "loo_equal_drop_leg_a", "loo_equal_drop_leg_c"}
+
+
+def test_equal_scheme_failure_fails_run_and_marks_scheme_skipped(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(
+        tmp_path,
+        executor=FakeExecutor(fail_names={"combined_equal"}),
+    )
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(_payload_three_legs(), run_async=False)
+
+    assert excinfo.value.reason_code == "fake_pred_backtest_failed"
+    run_id = next(iter(repo.runs))
+    run = service.get_run(run_id)
+    assert run["run"]["status"] == "failed"
+    assert run["run"]["reason"]["logical_status"] == "failed"
+    scheme = run["scheme_results"][0]
+    assert scheme["weighting_scheme"] == "equal"
+    assert scheme["skipped"] is True
+    assert "fake_pred_backtest_failed" in scheme["skipped_reason"]
+    assert run["loo"] == []
+
+
+def test_run_command_decodes_utf8_subprocess_output_on_windows_codepages(tmp_path: Path) -> None:
+    script = tmp_path / "emit_utf8.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'out prefix \\xe2\\x8f\\xb1 utf8\\\\n')\n"
+        "sys.stderr.buffer.write(b'err prefix \\xe2\\x8f\\xb1 utf8\\\\n')\n",
+        encoding="utf-8",
+    )
+
+    completed = run_command(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        timeout_seconds=30,
+        log_prefix="utf8_capture",
+    )
+    marker = "\u23f1"
+
+    assert completed.returncode == 0
+    assert f"out prefix {marker} utf8" in completed.stdout
+    assert f"err prefix {marker} utf8" in completed.stderr
+    assert f"out prefix {marker} utf8" in (tmp_path / "utf8_capture_stdout.log").read_text(encoding="utf-8")
+    assert f"err prefix {marker} utf8" in (tmp_path / "utf8_capture_stderr.log").read_text(encoding="utf-8")
+
+
+def test_shell_executor_failure_keeps_utf8_stderr_tail(tmp_path: Path) -> None:
+    script = tmp_path / "fail_utf8.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.buffer.write(b'failure stderr \\xe2\\x8f\\xb1 diagnostic\\\\n')\n"
+        "sys.exit(7)\n",
+        encoding="utf-8",
+    )
+    pred_pkl = tmp_path / "combined_prediction.pkl"
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_pkl)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for runtime_file in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+    marker = "\u23f1"
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        ShellPredBacktestExecutor().execute_pred_backtest(
+            workspace=workspace,
+            pred_pkl=pred_pkl,
+            node_id="wsl2-5080",
+            backtest_config={"command": [sys.executable, str(script)], "timeout_seconds": 30},
+        )
+
+    assert excinfo.value.reason_code == "pred_backtest_failed"
+    assert f"failure stderr {marker} diagnostic" in excinfo.value.context["stderr_tail"]
+    assert f"failure stderr {marker} diagnostic" in (workspace / "pred_backtest_stderr.log").read_text(encoding="utf-8")
 
 
 def test_prediction_store_upload_is_explicit_and_fail_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,8 @@ from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlp
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
 DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "risk_parity")
-TERMINAL_STATUSES = {"succeeded", "failed"}
+LOGICAL_PARTIAL_FAILED_STATUS = "partial_failed"
+TERMINAL_STATUSES = {"succeeded", "failed", LOGICAL_PARTIAL_FAILED_STATUS}
 PREDICTION_STORE_UPLOAD_URL_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_URL"
 PREDICTION_STORE_UPLOAD_TIMEOUT_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_TIMEOUT_SEC"
 DEFAULT_UPLOAD_TIMEOUT_SEC = 120.0
@@ -75,6 +77,29 @@ class CombineBacktestRequest:
     topk: int = 20
     min_date_coverage: float = 0.8
     run_async: bool = True
+
+
+@dataclass(frozen=True)
+class _PredictionTask:
+    name: str
+    kind: str
+    frame: pd.DataFrame
+    critical: bool = False
+    scheme: str | None = None
+    dropped_leg_id: str | None = None
+    weights_json: Mapping[str, Any] | None = None
+    per_window_weights_json: Sequence[Mapping[str, Any]] | None = None
+
+
+@dataclass(frozen=True)
+class _PredictionTaskOutcome:
+    task: _PredictionTask
+    metrics: Mapping[str, Any] | None = None
+    error: Mapping[str, Any] | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.error is None and self.metrics is not None
 
 
 class BacktestExecutor(Protocol):
@@ -286,6 +311,8 @@ def run_command(
         command_for_log,
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         shell=isinstance(command_for_log, str),
         timeout=timeout_seconds,
@@ -349,6 +376,21 @@ class MultiAlphaCombineBacktestRepository:
                          turnover, vs_baseline_sharpe_delta, vs_baseline_calmar_delta,
                          pred_persisted, skipped, skipped_reason)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, weighting_scheme) DO UPDATE SET
+                        weights_json = EXCLUDED.weights_json,
+                        per_window_weights_json = EXCLUDED.per_window_weights_json,
+                        cagr = EXCLUDED.cagr,
+                        max_drawdown = EXCLUDED.max_drawdown,
+                        sharpe = EXCLUDED.sharpe,
+                        calmar = EXCLUDED.calmar,
+                        topk_return_20 = EXCLUDED.topk_return_20,
+                        topk_hit_rate_20 = EXCLUDED.topk_hit_rate_20,
+                        turnover = EXCLUDED.turnover,
+                        vs_baseline_sharpe_delta = EXCLUDED.vs_baseline_sharpe_delta,
+                        vs_baseline_calmar_delta = EXCLUDED.vs_baseline_calmar_delta,
+                        pred_persisted = EXCLUDED.pred_persisted,
+                        skipped = EXCLUDED.skipped,
+                        skipped_reason = EXCLUDED.skipped_reason
                     """,
                     (
                         run_id,
@@ -378,6 +420,10 @@ class MultiAlphaCombineBacktestRepository:
                     INSERT INTO strategy_pkg.multi_alpha_combine_backtest_loo
                         (run_id, weighting_scheme, dropped_leg_id, marginal_sharpe, marginal_calmar, marginal_cagr)
                     VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, weighting_scheme, dropped_leg_id) DO UPDATE SET
+                        marginal_sharpe = EXCLUDED.marginal_sharpe,
+                        marginal_calmar = EXCLUDED.marginal_calmar,
+                        marginal_cagr = EXCLUDED.marginal_cagr
                     """,
                     (
                         run_id,
@@ -406,7 +452,7 @@ class MultiAlphaCombineBacktestRepository:
                     (run_id,),
                 )
                 loo = cur.fetchall()
-        return {"run": dict(run), "scheme_results": [dict(row) for row in schemes], "loo": [dict(row) for row in loo]}
+        return {"run": _with_logical_status(dict(run)), "scheme_results": [dict(row) for row in schemes], "loo": [dict(row) for row in loo]}
 
     def list_runs(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 200))
@@ -414,7 +460,7 @@ class MultiAlphaCombineBacktestRepository:
         where = ""
         if status:
             where = "WHERE status = %s"
-            params.append(status)
+            params.append("failed" if status == LOGICAL_PARTIAL_FAILED_STATUS else status)
         params.append(limit)
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -429,7 +475,10 @@ class MultiAlphaCombineBacktestRepository:
                     tuple(params),
                 )
                 rows = cur.fetchall()
-        return [dict(row) for row in rows]
+        payloads = [_with_logical_status(dict(row)) for row in rows]
+        if status in {"failed", LOGICAL_PARTIAL_FAILED_STATUS}:
+            payloads = [row for row in payloads if row.get("status") == status]
+        return payloads
 
 
 class InMemoryCombineBacktestRepository:
@@ -439,6 +488,7 @@ class InMemoryCombineBacktestRepository:
         self.runs: dict[str, dict[str, Any]] = {}
         self.scheme_results: list[dict[str, Any]] = []
         self.loo: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def create_run(self, *, run_id: str, request: CombineBacktestRequest, roster_hash: str) -> None:
         self.runs[run_id] = {
@@ -457,27 +507,34 @@ class InMemoryCombineBacktestRepository:
         }
 
     def update_run_status(self, run_id: str, *, status: str, reason: Mapping[str, Any] | None = None) -> None:
-        self.runs[run_id]["status"] = status
-        self.runs[run_id]["reason"] = dict(reason or {}) if reason is not None else None
+        with self._lock:
+            self.runs[run_id]["status"] = status
+            self.runs[run_id]["reason"] = dict(reason or {}) if reason is not None else None
 
     def insert_scheme_result(self, run_id: str, row: Mapping[str, Any]) -> None:
-        self.scheme_results.append({"run_id": run_id, **dict(row)})
+        with self._lock:
+            self.scheme_results.append({"run_id": run_id, **dict(row)})
 
     def insert_loo(self, run_id: str, row: Mapping[str, Any]) -> None:
-        self.loo.append({"run_id": run_id, **dict(row)})
+        with self._lock:
+            self.loo.append({"run_id": run_id, **dict(row)})
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        run = self.runs.get(run_id)
-        if not run:
-            return None
-        return {
-            "run": dict(run),
-            "scheme_results": [dict(row) for row in self.scheme_results if row["run_id"] == run_id],
-            "loo": [dict(row) for row in self.loo if row["run_id"] == run_id],
-        }
+        with self._lock:
+            run = self.runs.get(run_id)
+            if not run:
+                return None
+            return {
+                "run": _with_logical_status(dict(run)),
+                "scheme_results": [dict(row) for row in self.scheme_results if row["run_id"] == run_id],
+                "loo": [dict(row) for row in self.loo if row["run_id"] == run_id],
+            }
 
     def list_runs(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        rows = [dict(row) for row in self.runs.values() if not status or row["status"] == status]
+        with self._lock:
+            rows = [_with_logical_status(dict(row)) for row in self.runs.values()]
+            if status:
+                rows = [row for row in rows if row["status"] == status]
         return rows[:limit]
 
 
@@ -518,12 +575,21 @@ class MultiAlphaCombineBacktestService:
     def execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
         try:
             payload = self._execute_run(run_id, request)
-            self._repository.update_run_status(run_id, status="succeeded", reason=None)
-            return payload
         except Exception as exc:
             reason = error_payload(exc)
             self._repository.update_run_status(run_id, status="failed", reason=reason)
             raise
+        status = str(payload.get("status") or "succeeded")
+        reason = payload.get("reason") if isinstance(payload.get("reason"), Mapping) else None
+        self._repository.update_run_status(run_id, status=_persisted_run_status(status), reason=reason)
+        if status == "failed":
+            first_child_error = _first_child_error(reason)
+            raise MultiAlphaCombineBacktestError(
+                "combine-backtest run failed; see run.reason failed_child_tasks for details",
+                reason_code=str((first_child_error or {}).get("reason_code") or "combine_backtest_child_failed"),
+                context={"run_id": run_id, "reason": dict(reason or {})},
+            )
+        return payload
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         payload = self._repository.get_run(run_id)
@@ -552,111 +618,176 @@ class MultiAlphaCombineBacktestService:
                 leg_id=request.baseline_leg_id,
             )
 
-        baseline_metrics: dict[str, Any] | None = None
+        task_specs: list[_PredictionTask] = []
         if request.baseline_leg_id:
-            baseline_metrics = self._run_prediction(
-                run_id=run_id,
-                name=f"baseline_{request.baseline_leg_id}",
-                frame=leg_by_id[request.baseline_leg_id].pred_frame,
-                node_id=node_id,
-                node_parallelism_limit=node_parallelism[node_id],
-                backtest_config=request.backtest_config,
+            task_specs.append(
+                _PredictionTask(
+                    name=f"baseline_{request.baseline_leg_id}",
+                    kind="baseline",
+                    frame=leg_by_id[request.baseline_leg_id].pred_frame,
+                    critical=True,
+                )
             )
 
-        scheme_payloads: list[dict[str, Any]] = []
-        loo_payloads: list[dict[str, Any]] = []
         for scheme in request.weighting_schemes:
-            scheme_payload = self._run_scheme(
-                run_id=run_id,
-                legs=panels,
-                scheme=scheme,
-                request=request,
-                baseline_metrics=baseline_metrics,
-                node_id=node_id,
-                node_parallelism_limit=node_parallelism[node_id],
+            result = combine_legs(legs=panels, scheme=scheme, request=request)
+            task_specs.append(
+                _PredictionTask(
+                    name=f"combined_{scheme}",
+                    kind="scheme",
+                    scheme=scheme,
+                    frame=result.combined_score_frame.rename(columns={"combined_score": "score"}),
+                    critical=scheme == "equal",
+                    weights_json=result.weights,
+                    per_window_weights_json=result.per_window_weights,
+                )
             )
-            scheme_payloads.append(scheme_payload)
             if len(panels) <= 2:
                 continue
             for dropped_leg in sorted(leg_by_id):
                 loo_legs = [leg for leg in panels if leg.leg_id != dropped_leg]
-                loo = self._run_loo(
-                    run_id=run_id,
-                    legs=loo_legs,
-                    full_metrics=scheme_payload,
-                    scheme=scheme,
-                    dropped_leg_id=dropped_leg,
-                    request=request,
-                    node_id=node_id,
-                    node_parallelism_limit=node_parallelism[node_id],
+                loo_result = combine_legs(legs=loo_legs, scheme=scheme, request=request)
+                task_specs.append(
+                    _PredictionTask(
+                        name=f"loo_{scheme}_drop_{dropped_leg}",
+                        kind="loo",
+                        scheme=scheme,
+                        dropped_leg_id=dropped_leg,
+                        frame=loo_result.combined_score_frame.rename(columns={"combined_score": "score"}),
+                    )
                 )
-                loo_payloads.append(loo)
-        return {"run_id": run_id, "scheme_results": scheme_payloads, "loo": loo_payloads}
 
-    def _run_scheme(
+        outcomes = self._run_prediction_tasks(
+            run_id=run_id,
+            tasks=task_specs,
+            node_id=node_id,
+            node_parallelism_limit=node_parallelism[node_id],
+            backtest_config=request.backtest_config,
+        )
+        return self._persist_task_outcomes(run_id=run_id, outcomes=outcomes)
+
+    def _run_prediction_tasks(
         self,
         *,
         run_id: str,
-        legs: Sequence[CombinerLeg],
-        scheme: str,
-        request: CombineBacktestRequest,
-        baseline_metrics: Mapping[str, Any] | None,
+        tasks: Sequence[_PredictionTask],
         node_id: str,
         node_parallelism_limit: int,
-    ) -> dict[str, Any]:
-        result = combine_legs(legs=legs, scheme=scheme, request=request)
-        metrics = self._run_prediction(
-            run_id=run_id,
-            name=f"combined_{scheme}",
-            frame=result.combined_score_frame.rename(columns={"combined_score": "score"}),
-            node_id=node_id,
-            node_parallelism_limit=node_parallelism_limit,
-            backtest_config=request.backtest_config,
-        )
-        row = {
-            "weighting_scheme": scheme,
-            "weights_json": result.weights,
-            "per_window_weights_json": result.per_window_weights,
-            **metric_columns(metrics),
-            "vs_baseline_sharpe_delta": delta(metrics.get("sharpe"), (baseline_metrics or {}).get("sharpe")),
-            "vs_baseline_calmar_delta": delta(metrics.get("calmar"), (baseline_metrics or {}).get("calmar")),
-            "pred_persisted": bool(metrics.get("pred_persisted")),
-            "skipped": False,
-            "skipped_reason": None,
-        }
-        self._repository.insert_scheme_result(run_id, row)
-        return row
+        backtest_config: Mapping[str, Any],
+    ) -> list[_PredictionTaskOutcome]:
+        if not tasks:
+            return []
+        max_workers = max(1, min(int(node_parallelism_limit), len(tasks)))
+        outcomes_by_name: dict[str, _PredictionTaskOutcome] = {}
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="macb-pred") as pool:
+            future_map = {
+                pool.submit(
+                    self._run_prediction,
+                    run_id=run_id,
+                    name=task.name,
+                    frame=task.frame,
+                    node_id=node_id,
+                    node_parallelism_limit=node_parallelism_limit,
+                    backtest_config=backtest_config,
+                ): task
+                for task in tasks
+            }
+            for future in as_completed(future_map):
+                task = future_map[future]
+                try:
+                    metrics = future.result()
+                    outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, metrics=metrics)
+                except Exception as exc:
+                    outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, error=error_payload(exc))
+        return [outcomes_by_name[task.name] for task in tasks]
 
-    def _run_loo(
-        self,
-        *,
-        run_id: str,
-        legs: Sequence[CombinerLeg],
-        full_metrics: Mapping[str, Any],
-        scheme: str,
-        dropped_leg_id: str,
-        request: CombineBacktestRequest,
-        node_id: str,
-        node_parallelism_limit: int,
-    ) -> dict[str, Any]:
-        result = combine_legs(legs=legs, scheme=scheme, request=request)
-        metrics = self._run_prediction(
-            run_id=run_id,
-            name=f"loo_{scheme}_drop_{dropped_leg_id}",
-            frame=result.combined_score_frame.rename(columns={"combined_score": "score"}),
-            node_id=node_id,
-            node_parallelism_limit=node_parallelism_limit,
-            backtest_config=request.backtest_config,
+    def _persist_task_outcomes(self, *, run_id: str, outcomes: Sequence[_PredictionTaskOutcome]) -> dict[str, Any]:
+        baseline_metrics = next(
+            (dict(outcome.metrics or {}) for outcome in outcomes if outcome.task.kind == "baseline" and outcome.succeeded),
+            None,
         )
-        row = {
-            "weighting_scheme": scheme,
-            "dropped_leg_id": dropped_leg_id,
-            "marginal_sharpe": delta(full_metrics.get("sharpe"), metrics.get("sharpe")),
-            "marginal_calmar": delta(full_metrics.get("calmar"), metrics.get("calmar")),
-            "marginal_cagr": delta(full_metrics.get("cagr"), metrics.get("cagr")),
-        }
-        self._repository.insert_loo(run_id, row)
-        return row
+        failed = [outcome for outcome in outcomes if not outcome.succeeded]
+        failed_by_name = {outcome.task.name: outcome.error for outcome in failed}
+        scheme_payloads: list[dict[str, Any]] = []
+        full_metrics_by_scheme: dict[str, Mapping[str, Any]] = {}
+        for outcome in outcomes:
+            task = outcome.task
+            if task.kind != "scheme":
+                continue
+            if outcome.succeeded:
+                metrics = dict(outcome.metrics or {})
+                row = {
+                    "weighting_scheme": task.scheme,
+                    "weights_json": dict(task.weights_json or {}),
+                    "per_window_weights_json": list(task.per_window_weights_json or []),
+                    **metric_columns(metrics),
+                    "vs_baseline_sharpe_delta": delta(metrics.get("sharpe"), (baseline_metrics or {}).get("sharpe")),
+                    "vs_baseline_calmar_delta": delta(metrics.get("calmar"), (baseline_metrics or {}).get("calmar")),
+                    "pred_persisted": bool(metrics.get("pred_persisted")),
+                    "skipped": False,
+                    "skipped_reason": None,
+                }
+                full_metrics_by_scheme[str(task.scheme)] = metrics
+            else:
+                row = {
+                    "weighting_scheme": task.scheme,
+                    "weights_json": dict(task.weights_json or {}),
+                    "per_window_weights_json": list(task.per_window_weights_json or []),
+                    **metric_columns({}),
+                    "vs_baseline_sharpe_delta": None,
+                    "vs_baseline_calmar_delta": None,
+                    "pred_persisted": False,
+                    "skipped": True,
+                    "skipped_reason": json.dumps(outcome.error or {}, ensure_ascii=False, default=str),
+                }
+            self._repository.insert_scheme_result(run_id, row)
+            scheme_payloads.append(row)
+
+        loo_payloads: list[dict[str, Any]] = []
+        for outcome in outcomes:
+            task = outcome.task
+            if task.kind != "loo":
+                continue
+            full_metrics = full_metrics_by_scheme.get(str(task.scheme))
+            if not outcome.succeeded or full_metrics is None:
+                if full_metrics is None and outcome.succeeded:
+                    failed_by_name[task.name] = {
+                        "reason_code": "loo_full_scheme_missing",
+                        "message": f"cannot compute LOO marginal because full scheme metrics are unavailable: {task.scheme}",
+                        "context": {"weighting_scheme": task.scheme, "dropped_leg_id": task.dropped_leg_id},
+                    }
+                continue
+            metrics = dict(outcome.metrics or {})
+            row = {
+                "weighting_scheme": task.scheme,
+                "dropped_leg_id": task.dropped_leg_id,
+                "marginal_sharpe": delta(full_metrics.get("sharpe"), metrics.get("sharpe")),
+                "marginal_calmar": delta(full_metrics.get("calmar"), metrics.get("calmar")),
+                "marginal_cagr": delta(full_metrics.get("cagr"), metrics.get("cagr")),
+            }
+            self._repository.insert_loo(run_id, row)
+            loo_payloads.append(row)
+
+        critical_failures = [outcome for outcome in failed if outcome.task.critical or outcome.task.kind == "baseline"]
+        if critical_failures:
+            status = "failed"
+        elif failed_by_name:
+            status = LOGICAL_PARTIAL_FAILED_STATUS
+        else:
+            status = "succeeded"
+        reason = None
+        if failed_by_name:
+            reason = {
+                "reason_code": "combine_backtest_child_tasks_failed",
+                "failed_child_tasks": failed_by_name,
+                "logical_status": status,
+            }
+            if status == LOGICAL_PARTIAL_FAILED_STATUS:
+                reason["storage_note"] = (
+                    "PostgreSQL run.status currently allows running/succeeded/failed only; "
+                    "partial_failed is recorded in reason.logical_status until the schema is extended."
+                )
+        return {"run_id": run_id, "scheme_results": scheme_payloads, "loo": loo_payloads, "status": status, "reason": reason}
 
     def _run_prediction(
         self,
@@ -859,6 +990,31 @@ def validate_node_parallelism(*, node_id: str, backtest_config: Mapping[str, Any
     return {node_id: limit}
 
 
+def _persisted_run_status(status: str) -> str:
+    if status == LOGICAL_PARTIAL_FAILED_STATUS:
+        return "failed"
+    return status
+
+
+def _first_child_error(reason: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    if not isinstance(reason, Mapping):
+        return None
+    failed_child_tasks = reason.get("failed_child_tasks")
+    if not isinstance(failed_child_tasks, Mapping):
+        return None
+    for value in failed_child_tasks.values():
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
+def _with_logical_status(row: dict[str, Any]) -> dict[str, Any]:
+    reason = row.get("reason")
+    if isinstance(reason, Mapping) and reason.get("logical_status") == LOGICAL_PARTIAL_FAILED_STATUS:
+        row["status"] = LOGICAL_PARTIAL_FAILED_STATUS
+    return row
+
+
 def maybe_upload_combined_prediction(
     *,
     run_id: str,
@@ -1048,3 +1204,4 @@ def error_payload(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, MultiAlphaPanelError):
         return {"reason_code": exc.reason_code, "message": str(exc), "leg_id": exc.leg_id, "context": exc.context}
     return {"reason_code": type(exc).__name__, "message": str(exc)}
+
