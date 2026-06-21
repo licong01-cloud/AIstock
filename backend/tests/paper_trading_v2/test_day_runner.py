@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -11,9 +12,9 @@ from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
 )
-from backend.services.paper_trading_v2.models import PaperRun
+from backend.services.paper_trading_v2.models import PaperRun, PaperSessionDay, PaperSessionPhase, PaperSessionStatus
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
-from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
+from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository, PaperTradingV2Repository
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -33,6 +34,7 @@ from backend.services.strategy_package.selection_artifact import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
+from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -89,6 +91,74 @@ class FakeLimitProvider:
             up_limit=11.0,
             down_limit=9.0,
         )
+
+
+class RecordingConnection:
+    def __init__(self) -> None:
+        self.autocommit = True
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+        self.executed: list[tuple[str, tuple | None]] = []
+        self.fail_on_sql: str | None = None
+        self.connection_ids: list[int] = []
+
+    def cursor(self, *args, **kwargs):
+        self.connection_ids.append(id(self))
+        return RecordingCursor(self)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+    def putconn(self) -> None:
+        self.closed = True
+
+
+class RecordingCursor:
+    rowcount = 1
+
+    def __init__(self, conn: RecordingConnection) -> None:
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def execute(self, sql: str, params=None) -> None:
+        normalized = " ".join(sql.split())
+        self.conn.executed.append((normalized, params))
+        if self.conn.fail_on_sql and self.conn.fail_on_sql in normalized:
+            raise RuntimeError("forced repository write failure")
+
+    def fetchone(self):
+        return (True,)
+
+
+def recording_conn_factory(conn: RecordingConnection):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = True):
+        original = conn.autocommit
+        conn.autocommit = autocommit
+        try:
+            yield conn
+            if not autocommit and manage_transaction:
+                conn.commit()
+        except Exception:
+            if not autocommit and manage_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.autocommit = original
+
+    return factory
 
 
 class FakeSuspendProvider:
@@ -712,6 +782,134 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
         "ORDER_EXECUTED",
         "RUN_SUCCEEDED",
     ]
+
+
+def test_localsim_cash_ledger_save_is_idempotent_by_fill_id() -> None:
+    paper_repo = InMemoryPaperTradingV2Repository()
+    run_id = "run_cash_idempotent"
+    entry = CashLedgerEntry(
+        fill_id="fill_same",
+        portfolio_id="paper_cash_idempotent",
+        trade_date=date(2024, 1, 2),
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        notional=1000.0,
+        fee=5.0,
+        cash_delta=-1005.0,
+        cash_after=98_995.0,
+    )
+
+    paper_repo.save_cash_entry(run_id, entry)
+    paper_repo.save_cash_entry(run_id, entry)
+
+    assert paper_repo.cash_entries[run_id] == [entry]
+
+
+def test_pg_cash_ledger_insert_uses_unique_conflict_guard() -> None:
+    conn = RecordingConnection()
+    repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
+    entry = CashLedgerEntry(
+        fill_id="fill_pg_same",
+        portfolio_id="paper_cash_pg",
+        trade_date=date(2024, 1, 2),
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        notional=1000.0,
+        fee=5.0,
+        cash_delta=-1005.0,
+        cash_after=98_995.0,
+    )
+
+    repo.save_cash_entry("run_cash_pg", entry)
+
+    assert any("ON CONFLICT(run_id, fill_id) DO NOTHING" in sql for sql, _ in conn.executed)
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+
+
+def test_pg_positions_delete_insert_rollback_is_single_transaction() -> None:
+    conn = RecordingConnection()
+    conn.fail_on_sql = "INSERT INTO paper_v2.positions"
+    repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
+
+    with pytest.raises(RuntimeError, match="forced repository write failure"):
+        repo.save_positions(
+            run_id="run_positions_atomic",
+            trade_date=date(2024, 1, 2),
+            positions=[
+                PositionLot(
+                    portfolio_id="paper_positions_atomic",
+                    symbol="000001.SZ",
+                    quantity=100,
+                    available_quantity=100,
+                    avg_cost=10.0,
+                    trade_date=date(2024, 1, 2),
+                )
+            ],
+            prices={"000001.SZ": 10.0},
+        )
+
+    assert [sql for sql, _ in conn.executed if "paper_v2.positions" in sql] == [
+        "DELETE FROM paper_v2.positions WHERE run_id = %s",
+        next(sql for sql, _ in conn.executed if sql.startswith("INSERT INTO paper_v2.positions")),
+    ]
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+
+
+def test_session_tick_lock_reuses_one_connection_for_cursor_and_writes() -> None:
+    conn = RecordingConnection()
+    repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
+
+    with repo.session_tick_lock("session_atomic"):
+        repo.save_cash_entry(
+            "run_session_atomic",
+            CashLedgerEntry(
+                fill_id="fill_session_atomic",
+                portfolio_id="paper_session_atomic",
+                trade_date=date(2024, 1, 2),
+                symbol="000001.SZ",
+                side=OrderSide.BUY,
+                notional=1000.0,
+                fee=5.0,
+                cash_delta=-1005.0,
+                cash_after=98_995.0,
+            ),
+        )
+        repo.save_session_day(
+            PaperSessionDay(
+                session_day_id="session_day_atomic",
+                session_id="session_atomic",
+                portfolio_id="paper_session_atomic",
+                trade_date=date(2024, 1, 2),
+                run_id="run_session_atomic",
+                status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                data_source=MinuteDataSource.TDX_REALTIME,
+                actual_bar_count=1,
+                latest_available_bar_time=datetime(2024, 1, 2, 9, 31),
+                last_processed_bar_time=datetime(2024, 1, 2, 9, 31),
+                created_at=datetime(2024, 1, 2, 9, 31),
+                updated_at=datetime(2024, 1, 2, 9, 31),
+            )
+        )
+
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+    assert "SELECT pg_try_advisory_lock(2402, hashtext(%s))" in [sql for sql, _ in conn.executed]
+    assert "SELECT pg_advisory_unlock(2402, hashtext(%s))" in [sql for sql, _ in conn.executed]
+    assert len(set(conn.connection_ids)) == 1
+    assert any("INSERT INTO paper_v2.cash_ledger" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO paper_v2.session_day" in sql for sql, _ in conn.executed)
 
 
 def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_equity() -> None:
