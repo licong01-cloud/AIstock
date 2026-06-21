@@ -9,7 +9,7 @@ the run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Callable, Iterator, Protocol
@@ -35,6 +35,9 @@ from backend.services.paper_trading_v2.day_features import DbV25DayFeatureProvid
 PRICE_UNIT_DIVISOR = 1000.0
 MINUTE_VOLUME_HAND_SIZE = 100
 PRICE_TICK = Decimal("0.01")
+TDX_REALTIME_QUOTE_MAX_AGE = timedelta(minutes=5)
+TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW = timedelta(seconds=30)
+PRICE_COMPARE_EPSILON = 1e-6
 
 TdxMinuteFetcher = Callable[[str, date], list[dict[str, Any]]]
 RealtimeQuoteFetcher = Callable[[list[str]], dict[str, dict[str, Any]]]
@@ -165,6 +168,18 @@ class PreviousClose:
     source: str = "market.kline_daily_raw.previous_trading_day_close"
 
 
+@dataclass(frozen=True)
+class DailyStStatus:
+    """Point-in-time ST/*ST status from the authoritative local market table."""
+
+    symbol: str
+    trade_date: date
+    is_st: bool
+    source: str = "market.stock_st"
+    start_date: date | None = None
+    end_date: date | None = None
+
+
 class SuspendStatusProvider(Protocol):
     """Provider boundary for daily suspension status."""
 
@@ -176,6 +191,13 @@ class PreviousCloseProvider(Protocol):
     """Provider boundary for explicit previous close lookup."""
 
     def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
+        ...
+
+
+class StStatusProvider(Protocol):
+    """Provider boundary for point-in-time ST/*ST status."""
+
+    def get_st_status(self, symbol: str, trade_date: date) -> DailyStStatus:
         ...
 
 
@@ -229,6 +251,56 @@ class DbSuspendStatusProvider:
         )
 
 
+class DbStStatusProvider:
+    """Read point-in-time ST/*ST rows from ``market.stock_st``."""
+
+    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+        self.conn_factory = conn_factory or get_conn
+
+    def get_st_status(self, symbol: str, trade_date: date) -> DailyStStatus:
+        normalized_symbol = str(symbol or "").strip()
+        if not normalized_symbol:
+            raise DataUnavailableError(
+                "symbol is required for ST status lookup",
+                context={"reason_code": "ST_STATUS_SYMBOL_MISSING", "trade_date": trade_date.isoformat()},
+            )
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT start_date, end_date
+                        FROM market.stock_st
+                        WHERE ts_code = %s
+                          AND COALESCE(start_date, ann_date) <= %s
+                          AND (end_date IS NULL OR end_date >= %s)
+                        ORDER BY COALESCE(start_date, ann_date) DESC, ann_date DESC
+                        LIMIT 1
+                        """,
+                        (normalized_symbol, trade_date, trade_date),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "ST status query failed",
+                context={
+                    "reason_code": "ST_STATUS_QUERY_FAILED",
+                    "symbol": normalized_symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "table": "market.stock_st",
+                },
+            ) from exc
+        if row is None:
+            return DailyStStatus(symbol=normalized_symbol, trade_date=trade_date, is_st=False)
+        return DailyStStatus(
+            symbol=normalized_symbol,
+            trade_date=trade_date,
+            is_st=True,
+            start_date=row[0],
+            end_date=row[1],
+        )
+
+
 class PreTradeTradabilityProvider:
     """Combine suspend_d and realtime quote evidence before order creation.
 
@@ -243,11 +315,13 @@ class PreTradeTradabilityProvider:
         suspend_status_provider: SuspendStatusProvider | None = None,
         realtime_quote_fetcher: RealtimeQuoteFetcher | None = None,
         realtime_quote_source: str | None = None,
+        st_status_provider: StStatusProvider | None = None,
         require_realtime_quote: bool = False,
     ) -> None:
         self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider()
         self.realtime_quote_fetcher = realtime_quote_fetcher
         self.realtime_quote_source = realtime_quote_source or "not_configured"
+        self.st_status_provider = st_status_provider or DbStStatusProvider()
         self.require_realtime_quote = bool(require_realtime_quote)
 
     def get_statuses(
@@ -256,17 +330,22 @@ class PreTradeTradabilityProvider:
         trade_date: date,
         *,
         require_realtime_quote: bool | None = None,
+        as_of_time: datetime | None = None,
+        side_by_symbol: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
         normalized_symbols = _normalize_symbol_list(symbols)
         if not normalized_symbols:
             return {}
         require_quote = self.require_realtime_quote if require_realtime_quote is None else bool(require_realtime_quote)
+        effective_as_of_time = as_of_time or datetime.now()
+        normalized_sides = _normalize_side_by_symbol(side_by_symbol, normalized_symbols)
         quotes: dict[str, dict[str, Any]] = {}
         if require_quote:
             if self.realtime_quote_fetcher is None:
                 raise DataUnavailableError(
                     "pre-trade realtime quote fetcher is required",
                     context={
+                        "reason_code": "REALTIME_QUOTE_FETCHER_MISSING",
                         "trade_date": trade_date.isoformat(),
                         "symbols": normalized_symbols,
                         "quote_source": self.realtime_quote_source,
@@ -274,13 +353,18 @@ class PreTradeTradabilityProvider:
                 )
             try:
                 quotes = self.realtime_quote_fetcher(normalized_symbols)
+            except DataUnavailableError:
+                raise
             except Exception as exc:
                 raise DataUnavailableError(
                     "pre-trade realtime quote fetch failed",
                     context={
+                        "reason_code": "REALTIME_QUOTE_FETCH_FAILED",
                         "trade_date": trade_date.isoformat(),
                         "symbols": normalized_symbols,
                         "quote_source": self.realtime_quote_source,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
                     },
                 ) from exc
 
@@ -318,13 +402,33 @@ class PreTradeTradabilityProvider:
                         quote_evidence={"quote_source": self.realtime_quote_source, "quote_present": False},
                     ).to_payload()
                     continue
-                quote_payload = quote_tradability_evidence(symbol=symbol, quote=quote, source=self.realtime_quote_source)
+                quote_payload = quote_tradability_evidence(
+                    symbol=symbol,
+                    quote=quote,
+                    source=self.realtime_quote_source,
+                    trade_date=trade_date,
+                    as_of_time=effective_as_of_time,
+                    st_status_provider=self.st_status_provider,
+                    side=normalized_sides.get(symbol),
+                )
                 if quote_payload["no_tradable_market"]:
                     statuses[symbol] = PreTradeTradabilityStatus(
                         symbol=symbol,
                         trade_date=trade_date,
                         is_tradable=False,
                         reason_code="NO_TRADABLE_REALTIME_QUOTE",
+                        source=self.realtime_quote_source,
+                        suspend_status=suspend_payload,
+                        quote_evidence=quote_payload,
+                    ).to_payload()
+                    continue
+                blocked_reason_code = quote_payload.get("side_block_reason_code") or quote_payload.get("limit_state_reason_code")
+                if blocked_reason_code:
+                    statuses[symbol] = PreTradeTradabilityStatus(
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        is_tradable=False,
+                        reason_code=str(blocked_reason_code),
                         source=self.realtime_quote_source,
                         suspend_status=suspend_payload,
                         quote_evidence=quote_payload,
@@ -368,30 +472,55 @@ def fetch_tdx_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return quotes
 
 
-def quote_tradability_evidence(*, symbol: str, quote: dict[str, Any], source: str) -> dict[str, Any]:
+def quote_tradability_evidence(
+    *,
+    symbol: str,
+    quote: dict[str, Any],
+    source: str,
+    trade_date: date,
+    as_of_time: datetime,
+    st_status_provider: StStatusProvider,
+    side: str | None = None,
+    max_quote_age: timedelta = TDX_REALTIME_QUOTE_MAX_AGE,
+) -> dict[str, Any]:
     kline = quote.get("K") if isinstance(quote.get("K"), dict) else {}
     bid_price, bid_volume = _best_quote_level(quote, side="bid")
     ask_price, ask_volume = _best_quote_level(quote, side="ask")
     open_price = _first_number(kline, ("Open", "open"))
     high_price = _first_number(kline, ("High", "high"))
     low_price = _first_number(kline, ("Low", "low"))
-    last_price = _first_number(kline, ("Close", "Last", "close", "last"))
+    last_price = _first_number(kline, ("Close", "close"))
     if last_price is None:
         last_price = _first_number(quote, ("lastPrice", "last_price", "price", "close"))
+    pre_close_price = _first_number(kline, ("Last", "pre_close", "PreClose", "preClose", "preclose"))
+    if pre_close_price is None:
+        pre_close_price = _first_number(quote, ("pre_close", "preClose", "preclose", "lastClose", "last_close"))
     total_hand = _first_number(quote, ("TotalHand", "total_hand", "volume", "vol"))
     amount = _first_number(quote, ("Amount", "amount"))
+    quote_timestamp = _require_tdx_quote_timestamp(
+        symbol=symbol,
+        quote=quote,
+        trade_date=trade_date,
+        as_of_time=as_of_time,
+        source=source,
+        max_quote_age=max_quote_age,
+    )
     ohl_zero = not any(_is_positive(value) for value in (open_price, high_price, low_price))
     turnover_zero = not _is_positive(total_hand) and not _is_positive(amount)
     book_empty = not (_is_positive(bid_price) and _is_positive(bid_volume)) and not (
         _is_positive(ask_price) and _is_positive(ask_volume)
     )
     no_tradable_market = bool(book_empty and (ohl_zero or turnover_zero))
-    return {
+    common_payload = {
         "schema_version": "pre_trade_quote_tradability_evidence_v1",
         "symbol": symbol,
         "quote_source": source,
         "quote_present": True,
+        "quote_timestamp": quote_timestamp.isoformat(),
+        "quote_age_seconds": max(0.0, (_normalize_datetime_for_compare(as_of_time) - quote_timestamp).total_seconds()),
+        "quote_max_age_seconds": max_quote_age.total_seconds(),
         "last_price": last_price,
+        "pre_close": pre_close_price,
         "open": open_price,
         "high": high_price,
         "low": low_price,
@@ -406,6 +535,356 @@ def quote_tradability_evidence(*, symbol: str, quote: dict[str, Any], source: st
         "book_empty": book_empty,
         "no_tradable_market": no_tradable_market,
     }
+    if no_tradable_market:
+        return common_payload
+    st_status = _require_st_status(
+        st_status_provider,
+        symbol=symbol,
+        trade_date=trade_date,
+        context_source=f"{source}.quote_tradability",
+    )
+    if last_price is None or last_price <= 0:
+        raise DataUnavailableError(
+            "TDX realtime quote last price is missing or invalid",
+            context={
+                "reason_code": "REALTIME_QUOTE_LAST_PRICE_MISSING",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "quote_source": source,
+                "last_price": last_price,
+            },
+        )
+    if pre_close_price is None or pre_close_price <= 0:
+        raise DataUnavailableError(
+            "TDX realtime quote previous close is missing or invalid",
+            context={
+                "reason_code": "REALTIME_QUOTE_PRE_CLOSE_MISSING",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "quote_source": source,
+                "pre_close": pre_close_price,
+            },
+        )
+    limit_pct = _a_share_daily_limit_pct(symbol, st_status=st_status)
+    limit_up = _round_price_tick_raw(pre_close_price * (1.0 + limit_pct))
+    limit_down = _round_price_tick_raw(pre_close_price * (1.0 - limit_pct))
+    if limit_down >= limit_up:
+        raise DataUnavailableError(
+            "TDX realtime quote derived limit price range is invalid",
+            context={
+                "reason_code": "REALTIME_QUOTE_LIMIT_RANGE_INVALID",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "quote_source": source,
+                "pre_close": pre_close_price,
+                "limit_pct": limit_pct,
+                "limit_up": limit_up,
+                "limit_down": limit_down,
+            },
+        )
+    normalized_side = _normalize_order_side(side)
+    at_limit_up = bool(last_price >= limit_up - PRICE_COMPARE_EPSILON)
+    at_limit_down = bool(last_price <= limit_down + PRICE_COMPARE_EPSILON)
+    blocked_sides: list[str] = []
+    if at_limit_up:
+        blocked_sides.append("BUY")
+    if at_limit_down:
+        blocked_sides.append("SELL")
+    side_block_reason_code = None
+    if normalized_side == "BUY" and at_limit_up:
+        side_block_reason_code = "LIMIT_UP_BUY_BLOCKED"
+    elif normalized_side == "SELL" and at_limit_down:
+        side_block_reason_code = "LIMIT_DOWN_SELL_BLOCKED"
+    limit_state_reason_code = "REALTIME_QUOTE_LIMIT_STATE_REQUIRES_SIDE" if blocked_sides and normalized_side is None else None
+    return {
+        **common_payload,
+        "limit_pct": limit_pct,
+        "limit_up": limit_up,
+        "limit_down": limit_down,
+        "is_st": st_status.is_st,
+        "st_status_source": st_status.source,
+        "at_limit_up": at_limit_up,
+        "at_limit_down": at_limit_down,
+        "blocked_sides": blocked_sides,
+        "requested_side": normalized_side,
+        "side_block_reason_code": side_block_reason_code,
+        "limit_state_reason_code": limit_state_reason_code,
+    }
+
+
+def _normalize_side_by_symbol(side_by_symbol: dict[str, Any] | None, symbols: list[str]) -> dict[str, str]:
+    if not side_by_symbol:
+        return {}
+    normalized: dict[str, str] = {}
+    for symbol in symbols:
+        side = _normalize_order_side(side_by_symbol.get(symbol))
+        if side is not None:
+            normalized[symbol] = side
+    return normalized
+
+
+def _normalize_order_side(side: Any) -> str | None:
+    if side is None:
+        return None
+    value = getattr(side, "value", side)
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized in {"BUY", "B"}:
+        return "BUY"
+    if normalized in {"SELL", "S"}:
+        return "SELL"
+    raise DataUnavailableError(
+        "pre-trade quote side is invalid",
+        context={"reason_code": "PRE_TRADE_SIDE_INVALID", "side": str(value)},
+    )
+
+
+def _require_tdx_quote_timestamp(
+    *,
+    symbol: str,
+    quote: dict[str, Any],
+    trade_date: date,
+    as_of_time: datetime,
+    source: str,
+    max_quote_age: timedelta,
+) -> datetime:
+    raw_timestamp = _extract_tdx_quote_timestamp_raw(quote)
+    if raw_timestamp is None:
+        raise DataUnavailableError(
+            "TDX realtime quote timestamp is missing",
+            context={
+                "reason_code": "REALTIME_QUOTE_TIMESTAMP_MISSING",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "quote_source": source,
+                "timestamp_fields_checked": _tdx_quote_timestamp_field_names(),
+            },
+        )
+    try:
+        quote_timestamp = _parse_tdx_quote_timestamp(raw_timestamp, trade_date=trade_date)
+    except ValueError as exc:
+        raise DataUnavailableError(
+            "TDX realtime quote timestamp is invalid",
+            context={
+                "reason_code": "REALTIME_QUOTE_TIMESTAMP_INVALID",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "quote_source": source,
+                "raw_timestamp": raw_timestamp,
+                "parse_error": str(exc),
+            },
+        ) from exc
+    if quote_timestamp.date() != trade_date:
+        raise DataUnavailableError(
+            "TDX realtime quote timestamp date does not match trade_date",
+            context={
+                "reason_code": "REALTIME_QUOTE_DATE_MISMATCH",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "quote_source": source,
+                "quote_timestamp": quote_timestamp.isoformat(),
+                "raw_timestamp": raw_timestamp,
+            },
+        )
+    as_of_cmp = _normalize_datetime_for_compare(as_of_time)
+    age = as_of_cmp - quote_timestamp
+    if age > max_quote_age:
+        raise DataUnavailableError(
+            "TDX realtime quote is stale",
+            context={
+                "reason_code": "REALTIME_QUOTE_STALE",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "quote_source": source,
+                "quote_timestamp": quote_timestamp.isoformat(),
+                "quote_age_seconds": age.total_seconds(),
+                "max_quote_age_seconds": max_quote_age.total_seconds(),
+                "raw_timestamp": raw_timestamp,
+            },
+        )
+    if quote_timestamp - as_of_cmp > TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW:
+        raise DataUnavailableError(
+            "TDX realtime quote timestamp is in the future",
+            context={
+                "reason_code": "REALTIME_QUOTE_FUTURE_TIMESTAMP",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "quote_source": source,
+                "quote_timestamp": quote_timestamp.isoformat(),
+                "max_future_skew_seconds": TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW.total_seconds(),
+                "raw_timestamp": raw_timestamp,
+            },
+        )
+    return quote_timestamp
+
+
+def _extract_tdx_quote_timestamp_raw(quote: dict[str, Any]) -> Any | None:
+    for key in _tdx_quote_timestamp_field_names():
+        if key in quote and quote.get(key) not in (None, ""):
+            return quote.get(key)
+    kline = quote.get("K")
+    if isinstance(kline, dict):
+        for key in _tdx_quote_timestamp_field_names():
+            if key in kline and kline.get(key) not in (None, ""):
+                return kline.get(key)
+    return None
+
+
+def _tdx_quote_timestamp_field_names() -> tuple[str, ...]:
+    return (
+        "ServerTime",
+        "serverTime",
+        "server_time",
+        "timestamp",
+        "quote_timestamp",
+        "quoteTime",
+        "quote_time",
+        "time",
+        "Time",
+        "datetime",
+        "date_time",
+        "update_time",
+    )
+
+
+def _parse_tdx_quote_timestamp(value: Any, *, trade_date: date) -> datetime:
+    if isinstance(value, datetime):
+        return _normalize_datetime_for_compare(value)
+    text = str(value).strip()
+    if not text:
+        raise ValueError("empty timestamp")
+    if text.isdigit():
+        if len(text) <= 6:
+            return _parse_tdx_intraday_time(text, trade_date=trade_date)
+        if len(text) == 8:
+            raise ValueError("date-only timestamp has no intraday time")
+        if len(text) == 14:
+            return datetime.strptime(text, "%Y%m%d%H%M%S")
+        numeric = int(text)
+        if numeric >= 10**12:
+            return datetime.fromtimestamp(numeric / 1000)
+        if numeric >= 10**9:
+            return datetime.fromtimestamp(numeric)
+        raise ValueError(f"unsupported numeric timestamp length {len(text)}")
+    normalized = text.replace("/", "-")
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        return _normalize_datetime_for_compare(datetime.fromisoformat(normalized))
+    except ValueError as iso_exc:
+        iso_parse_error = str(iso_exc)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%H:%M:%S", "%H:%M"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        if fmt.startswith("%H"):
+            return datetime.combine(trade_date, parsed.time())
+        return parsed
+    raise ValueError(f"unsupported timestamp format {text!r}; iso_parse_error={iso_parse_error}")
+
+
+def _parse_tdx_intraday_time(value: str, *, trade_date: date) -> datetime:
+    if len(value) <= 4:
+        padded = value.zfill(4)
+        hour = int(padded[:2])
+        minute = int(padded[2:4])
+        second = 0
+    else:
+        padded = value.zfill(6)
+        hour = int(padded[:2])
+        minute = int(padded[2:4])
+        second = int(padded[4:6])
+    if hour > 23 or minute > 59 or second > 59:
+        raise ValueError(f"invalid intraday timestamp {value!r}")
+    return datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute, second)
+
+
+def _normalize_datetime_for_compare(value: datetime) -> datetime:
+    return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+
+def _require_st_status(
+    st_status_provider: StStatusProvider | None,
+    *,
+    symbol: str,
+    trade_date: date,
+    context_source: str,
+) -> DailyStStatus:
+    if st_status_provider is None:
+        raise DataUnavailableError(
+            "ST status provider is required",
+            context={
+                "reason_code": "ST_STATUS_PROVIDER_MISSING",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "source": context_source,
+            },
+        )
+    try:
+        status = st_status_provider.get_st_status(symbol, trade_date)
+    except DataUnavailableError as exc:
+        if exc.context.get("reason_code"):
+            raise
+        raise DataUnavailableError(
+            "ST status is unavailable",
+            context={
+                "reason_code": "ST_STATUS_UNAVAILABLE",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "source": context_source,
+                "provider_error": exc.message,
+                "provider_context": exc.context,
+            },
+        ) from exc
+    except Exception as exc:
+        raise DataUnavailableError(
+            "ST status provider failed",
+            context={
+                "reason_code": "ST_STATUS_PROVIDER_FAILED",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "source": context_source,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        ) from exc
+    if not isinstance(status, DailyStStatus):
+        raise DataUnavailableError(
+            "ST status provider returned invalid payload",
+            context={
+                "reason_code": "ST_STATUS_INVALID_PAYLOAD",
+                "symbol": symbol,
+                "trade_date": trade_date.isoformat(),
+                "source": context_source,
+                "payload_type": type(status).__name__,
+            },
+        )
+    return status
+
+
+def _a_share_daily_limit_pct(symbol: str, *, st_status: DailyStStatus) -> float:
+    if st_status.is_st:
+        return 0.05
+    code = str(symbol or "").split(".")[0]
+    suffix = str(symbol or "").split(".")[-1].upper() if "." in str(symbol or "") else ""
+    if suffix in {"BJ", "BSE"} or code.startswith(("4", "8")):
+        return 0.30
+    if code.startswith(("300", "301", "302", "688", "689")):
+        return 0.20
+    return 0.10
+
+
+def _round_price_tick_raw(value: float) -> float:
+    raw_tick = PRICE_TICK * Decimal(str(PRICE_UNIT_DIVISOR))
+    rounded_units = (Decimal(str(value)) / raw_tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return float(rounded_units * raw_tick)
 
 
 def _normalize_symbol_list(symbols: list[str]) -> list[str]:
@@ -593,6 +1072,18 @@ class _InjectedLimitProviderPreviousCloseProvider:
         )
 
 
+class _InjectedLimitProviderStStatusProvider:
+    """Keep legacy unit-test limit-provider fixtures deterministic without DB access."""
+
+    def get_st_status(self, symbol: str, trade_date: date) -> DailyStStatus:
+        return DailyStStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_st=False,
+            source="injected_limit_provider.non_st_unit_test_fixture",
+        )
+
+
 class PaperV2MinuteMarketDataProvider:
     """Build strict minute execution inputs from TDX or historical DB data."""
 
@@ -602,6 +1093,7 @@ class PaperV2MinuteMarketDataProvider:
         limit_price_provider: LimitPriceProvider | None = None,
         suspend_status_provider: SuspendStatusProvider | None = None,
         previous_close_provider: PreviousCloseProvider | None = None,
+        st_status_provider: StStatusProvider | None = None,
         day_feature_provider: V25DayFeatureProvider | None = None,
         tdx_fetcher: TdxMinuteFetcher | None = None,
         conn_factory: ConnFactory | None = None,
@@ -615,6 +1107,16 @@ class PaperV2MinuteMarketDataProvider:
             self.previous_close_provider = _InjectedLimitProviderPreviousCloseProvider(limit_price_provider)
         else:
             self.previous_close_provider = DbPreviousCloseProvider(conn_factory=self.conn_factory)
+        if st_status_provider is not None:
+            self.st_status_provider = st_status_provider
+        elif (
+            previous_close_provider is None
+            and limit_price_provider is not None
+            and not isinstance(limit_price_provider, StkLimitPriceProvider)
+        ):
+            self.st_status_provider = _InjectedLimitProviderStStatusProvider()
+        else:
+            self.st_status_provider = DbStStatusProvider(conn_factory=self.conn_factory)
         self.day_feature_provider = day_feature_provider or DbV25DayFeatureProvider(conn_factory=self.conn_factory)
         self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
 
@@ -1104,7 +1606,8 @@ class PaperV2MinuteMarketDataProvider:
             trade_date,
             requested_source="TDX_REALTIME.previous_close",
         )
-        limit_pct = self._a_share_daily_limit_pct(symbol)
+        st_status = self._required_st_status(symbol, trade_date, context_source="TDX_REALTIME.derived_limit_price")
+        limit_pct = _a_share_daily_limit_pct(symbol, st_status=st_status)
         up_limit = self._round_price_tick(previous_close.pre_close * (1.0 + limit_pct))
         down_limit = self._round_price_tick(previous_close.pre_close * (1.0 - limit_pct))
         if down_limit >= up_limit:
@@ -1118,6 +1621,8 @@ class PaperV2MinuteMarketDataProvider:
                     "up_limit": up_limit,
                     "down_limit": down_limit,
                     "source": previous_close.source,
+                    "st_status_source": st_status.source,
+                    "is_st": st_status.is_st,
                 },
             )
         return (
@@ -1129,7 +1634,10 @@ class PaperV2MinuteMarketDataProvider:
                 down_limit=down_limit,
             ),
             previous_close.source,
-            f"derived_from_previous_close.{previous_close.source}.a_share_board_limit_pct_{limit_pct:.2f}",
+            (
+                f"derived_from_previous_close.{previous_close.source}."
+                f"a_share_board_limit_pct_{limit_pct:.2f}.{st_status.source}"
+            ),
         )
 
     def _required_previous_close(self, symbol: str, trade_date: date, *, requested_source: str) -> PreviousClose:
@@ -1152,15 +1660,13 @@ class PaperV2MinuteMarketDataProvider:
             )
         return previous_close
 
-    @staticmethod
-    def _a_share_daily_limit_pct(symbol: str) -> float:
-        code = str(symbol or "").split(".")[0]
-        suffix = str(symbol or "").split(".")[-1].upper() if "." in str(symbol or "") else ""
-        if suffix in {"BJ", "BSE"} or code.startswith(("4", "8")):
-            return 0.30
-        if code.startswith(("300", "301", "302", "688", "689")):
-            return 0.20
-        return 0.10
+    def _required_st_status(self, symbol: str, trade_date: date, *, context_source: str) -> DailyStStatus:
+        return _require_st_status(
+            self.st_status_provider,
+            symbol=symbol,
+            trade_date=trade_date,
+            context_source=context_source,
+        )
 
     @staticmethod
     def _round_price_tick(value: float) -> float:
