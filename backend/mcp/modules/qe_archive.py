@@ -45,7 +45,7 @@ TOOL_NAMES = (
     "qe_archive_query_evolution_lineage",
     "multi_alpha_orthogonality",
     "multi_alpha_combine_preview",
-    "multi_alpha_combine_backtest_run",
+    "multi_alpha_combine_backtest_run_confirmed",
     "multi_alpha_combine_backtest_result_get",
     "multi_alpha_combine_backtest_list",
     "prediction_store_get_pointer",
@@ -406,8 +406,8 @@ def register(registry: "ModuleRegistry") -> None:
             },
         )
 
-    @registry.mcp.tool(name="multi_alpha_combine_backtest_run")
-    def multi_alpha_combine_backtest_run(
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_run_confirmed")
+    def multi_alpha_combine_backtest_run_confirmed(
         action: str,
         payload: dict[str, Any],
         confirm_run: str | None = None,
