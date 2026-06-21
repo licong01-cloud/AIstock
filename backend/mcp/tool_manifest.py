@@ -244,7 +244,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_evolution_lineage',
                 'multi_alpha_orthogonality',
                 'multi_alpha_combine_preview',
-                'multi_alpha_combine_backtest_run',
+                'multi_alpha_combine_backtest_run_confirmed',
                 'multi_alpha_combine_backtest_result_get',
                 'multi_alpha_combine_backtest_list',
                 'prediction_store_get_pointer',
@@ -731,7 +731,7 @@ TOOL_METADATA_OVERRIDES: dict[str, ToolMetadataOverride] = {
         requires_confirmation=False,
         reason="read-only POST preview: backend/mcp/modules/qe_archive.py uses POST /multi-alpha/combine/preview and service only combines caller-supplied prediction frames in memory",
     ),
-    "multi_alpha_combine_backtest_run": ToolMetadataOverride(
+    "multi_alpha_combine_backtest_run_confirmed": ToolMetadataOverride(
         risk_level="long_running",
         assistant_usable="preflight_required",
         requires_confirmation=True,
