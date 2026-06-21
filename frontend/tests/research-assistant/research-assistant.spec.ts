@@ -376,6 +376,69 @@ test("Research Assistant blocker diagnostics are collapsed behind developer deta
   await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
 });
 
+test("Research Assistant evidence diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "Evidence card keeps provenance readable and raw diagnostic payload collapsed.",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      evidence_cards: [
+        {
+          card_id: "evidence-card-1",
+          title: "stock evidence",
+          summary: "Quote evidence captured from stock MCP.",
+          status: "supported",
+          evidence_refs: [
+            {
+              source: "stock_analysis.latest_quote",
+              source_ref: "stock_analysis:000688",
+              as_of: "",
+              provenance: {
+                source: "stock_analysis",
+                server_key: "aistock-stock-analysis",
+                trace_id: "trace-secret-raw-json",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("show stock evidence");
+  await browserPage.locator(".ra-chat-send").click();
+
+  const evidenceCard = browserPage.getByTestId("ra-evidence-card");
+  await expect(evidenceCard).toBeVisible();
+  const evidenceGrid = evidenceCard.locator(".ra-evidence-ref-grid");
+  await expect(evidenceGrid).toContainText("stock_analysis.latest_quote");
+  await expect(evidenceGrid).toContainText("stock_analysis");
+  await expect(evidenceGrid).toContainText("-");
+  await expect(evidenceGrid).not.toContainText("trace-secret-raw-json");
+  await expect(evidenceGrid).not.toContainText("{");
+
+  const evidenceLog = browserPage.getByTestId("ra-evidence-log");
+  await expect(evidenceLog).toBeVisible();
+  await expect(evidenceLog.locator("summary")).toContainText("Developer details / Diagnostic log");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.locator("summary").click();
+  await expect(evidenceLog.locator("pre")).toBeVisible();
+  await expect(evidenceLog.locator("pre")).toContainText("trace-secret-raw-json");
+  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(0);
+});
+
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
