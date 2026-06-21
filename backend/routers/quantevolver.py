@@ -3474,6 +3474,195 @@ def _get_all_factors_with_code_text() -> list:
 # 当前运行中的后台任务
 _active_cache_tasks: Dict[str, Dict[str, Any]] = {}
 _cache_meta_ttl: Dict[str, Dict[str, Any]] = {}
+_OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE = "official_factor_full_compute"
+_FACTOR_CACHE_RECENT_TASK_LIMIT = 20
+_FACTOR_CACHE_RUNNING_STATUSES = {"running", "queued", "paused"}
+_FACTOR_CACHE_TERMINAL_STATUSES = {"success", "completed", "failed", "canceled"}
+
+
+def _json_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _iso_value(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return value
+    return value
+
+
+def _get_dispatch_service():
+    from ..services.dispatch_service import DispatchService
+
+    return DispatchService()
+
+
+def _dispatch_factor_cache_task(task: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not task or task.get("task_type") != _OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE:
+        return None
+    config = _json_mapping(task.get("config"))
+    payload = _json_mapping(config.get("payload"))
+    factor_names = payload.get("factor_names") if isinstance(payload.get("factor_names"), list) else None
+    start_date = payload.get("window_train_start") or payload.get("start_date")
+    end_date = payload.get("window_backtest_end") or payload.get("end_date")
+    status = task.get("status") or "unknown"
+    return {
+        "task_id": str(task.get("task_id")),
+        "dispatch_task_id": str(task.get("task_id")),
+        "remote_task_id": task.get("remote_task_id"),
+        "node_id": task.get("node_id"),
+        "status": status,
+        "dispatch_status": status,
+        "started_at": _iso_value(task.get("started_at") or task.get("created_at")),
+        "finished_at": _iso_value(task.get("finished_at")),
+        "workers": payload.get("workers"),
+        "batch_size": payload.get("batch_size"),
+        "factor_count": len(factor_names) if factor_names else "all_enabled_code_text",
+        "include_disabled": bool(payload.get("include_disabled", False)),
+        "strict_backtest_data": True,
+        "data_source_mode": payload.get("cache_source") or "official_offline_backtest_factor_data",
+        "cache_source": payload.get("cache_source") or "official_offline_backtest_factor_data",
+        "code_source": payload.get("code_source") or "code_text",
+        "factor_data_dir": payload.get("factor_data_dir"),
+        "qlib_bin_path": payload.get("qlib_bin_path"),
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+        "start": start_date,
+        "end": end_date,
+        "cache_root": "rdagent_assets/factor_values",
+        "dispatch_payload": payload,
+        "error": task.get("error_message"),
+        "status_source": "dispatch_persistent",
+    }
+
+
+def _load_factor_cache_memory_task_detail(task: Mapping[str, Any]) -> Dict[str, Any]:
+    log_path_raw = task.get("log_path")
+    recent_log = ""
+    if log_path_raw:
+        log_path = Path(str(log_path_raw))
+        if log_path.exists() and log_path.is_file():
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                    recent_log = "".join(lines[-50:])
+            except Exception as e:
+                logger.warning("read factor-cache task log failed %s: %s", log_path, e)
+
+    result = None
+    result_path_raw = task.get("result_path")
+    if task.get("status") in _FACTOR_CACHE_TERMINAL_STATUSES and result_path_raw:
+        result_path = Path(str(result_path_raw))
+        if result_path.exists() and result_path.is_file():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("read factor-cache task result failed %s: %s", result_path, e)
+
+    task_state = _load_json_file(Path(str(task.get("task_state_path")))) if task.get("task_state_path") else None
+    failed_tail = _load_failed_tail(Path(str(task.get("failed_log_path"))), limit=10) if task.get("failed_log_path") else []
+
+    merged = dict(task)
+    for key in ("experiment_id", "factor_data_dir", "data_source_mode", "window_train_start", "window_backtest_end", "strict_backtest_data"):
+        if merged.get(key) is None and task_state and key in task_state:
+            merged[key] = task_state.get(key)
+        if merged.get(key) is None and result and key in result:
+            merged[key] = result.get(key)
+
+    return {**merged, "recent_log": recent_log, "result": result, "task_state": task_state, "failed_tail": failed_tail}
+
+
+async def _read_factor_cache_remote_progress(svc: Any, task: Mapping[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    remote_task_id = task.get("remote_task_id")
+    node_id = task.get("node_id")
+    if not remote_task_id or not node_id:
+        return {"remote_progress_status": "missing_remote_mapping"}, "missing remote_task_id or node_id"
+    try:
+        client = svc.get_node_client(str(node_id))
+        progress = await client.get_task_progress(str(remote_task_id))
+    except Exception as e:
+        return {"remote_progress_status": "unreachable"}, str(e)
+    if not isinstance(progress, Mapping):
+        return {"remote_progress_status": "invalid_response"}, "node progress response is not an object"
+    if progress.get("error"):
+        return {"remote_progress_status": "node_error"}, f"node returned error: {progress.get('error')}"
+
+    updates: Dict[str, Any] = {"remote_progress": dict(progress), "remote_progress_status": "ok"}
+    node_status = progress.get("status")
+    if node_status:
+        updates["remote_status"] = node_status
+        updates["status"] = "failed" if node_status == "fail" else node_status
+    for key in ("current_loop", "total_loops", "progress_pct", "best_ic", "best_sharpe", "best_ann_return", "best_max_dd", "log_tail"):
+        if key in progress:
+            updates[key] = progress.get(key)
+    return updates, None
+
+
+def _load_factor_cache_dispatch_task_detail(task_id: str, *, sync_remote: bool = True) -> Optional[Dict[str, Any]]:
+    svc = _get_dispatch_service()
+    task = svc.get_task(task_id)
+    if not task or task.get("task_type") != _OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE:
+        return None
+
+    dispatch_sync_error = None
+    mapped = _dispatch_factor_cache_task(task)
+    if not mapped:
+        return None
+
+    if sync_remote and task.get("status") in _FACTOR_CACHE_RUNNING_STATUSES:
+        try:
+            remote_updates, dispatch_sync_error = asyncio.run(_read_factor_cache_remote_progress(svc, task))
+            mapped.update(remote_updates)
+        except Exception as e:
+            dispatch_sync_error = str(e)
+
+    recent_log = ""
+    try:
+        logs = svc.get_task_logs_full(task_id, offset=0, limit=5000)
+        lines = logs.get("lines") or []
+        if isinstance(lines, list):
+            recent_log = "\n".join(str(line) for line in lines[-50:])
+    except Exception as e:
+        dispatch_sync_error = dispatch_sync_error or f"log_read_failed: {e}"
+    if not recent_log and mapped.get("log_tail"):
+        recent_log = str(mapped.get("log_tail"))
+
+    result = None
+    if mapped.get("status") in _FACTOR_CACHE_TERMINAL_STATUSES:
+        try:
+            result = asyncio.run(svc.get_task_results(task_id))
+        except Exception as e:
+            dispatch_sync_error = dispatch_sync_error or f"result_read_failed: {e}"
+
+    if dispatch_sync_error:
+        mapped["dispatch_sync_error"] = dispatch_sync_error
+
+    return {**mapped, "recent_log": recent_log, "result": result, "task_state": None, "failed_tail": []}
+
+
+def _list_factor_cache_dispatch_tasks(limit: int = _FACTOR_CACHE_RECENT_TASK_LIMIT) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    try:
+        svc = _get_dispatch_service()
+        rows = svc.list_tasks(task_type=_OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE, limit=limit)
+    except Exception as e:
+        logger.warning("list persisted official factor-cache dispatch tasks failed: %s", e)
+        return [], str(e)
+    tasks: List[Dict[str, Any]] = []
+    for row in rows:
+        mapped = _dispatch_factor_cache_task(row)
+        if mapped:
+            tasks.append(mapped)
+    return tasks, None
 
 
 def _load_cache_meta(ttl_sec: int = 30, meta_path: Optional[Path] = None) -> dict:
@@ -4036,47 +4225,51 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     }
 
 
-@router.get("/factor-cache/compute-status/{task_id}", summary="查询计算任务状态")
+@router.get("/factor-cache/compute-status/{task_id}", summary="Query factor cache compute task status")
 def factor_cache_compute_status(task_id: str):
-    """查询因子值计算任务状态 + 尾部日志。"""
+    """Return official factor-cache task status from memory or persisted dispatch state."""
     task = _active_cache_tasks.get(task_id)
-    if not task:
-        raise HTTPException(404, f"任务 {task_id} 不存在")
-
-    log_path = Path(task.get("log_path", ""))
-    recent_log = ""
-    if log_path.exists():
+    if task:
+        dispatch_task_id = str(task.get("dispatch_task_id") or task_id)
         try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-                recent_log = "".join(lines[-50:])
+            dispatch_task = _load_factor_cache_dispatch_task_detail(dispatch_task_id)
         except Exception as e:
-            logger.warning(f"读取任务日志失败 {log_path}: {e}")
+            memory_task = _load_factor_cache_memory_task_detail(task)
+            memory_task["dispatch_sync_error"] = str(e)
+            return memory_task
+        if dispatch_task:
+            return {**_load_factor_cache_memory_task_detail(task), **dispatch_task}
+        return _load_factor_cache_memory_task_detail(task)
 
-    result = None
-    result_path = Path(task.get("result_path", ""))
-    if task.get("status") in ("completed", "failed") and result_path.exists():
-        try:
-            result = json.loads(result_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning(f"读取任务结果失败 {result_path}: {e}")
+    dispatch_task = _load_factor_cache_dispatch_task_detail(task_id)
+    if dispatch_task:
+        return dispatch_task
 
-    task_state = _load_json_file(Path(task.get("task_state_path", "")))
-    failed_tail = _load_failed_tail(Path(task.get("failed_log_path", "")), limit=10)
-
-    merged = dict(task)
-    for key in ("experiment_id", "factor_data_dir", "data_source_mode", "window_train_start", "window_backtest_end", "strict_backtest_data"):
-        if merged.get(key) is None and task_state and key in task_state:
-            merged[key] = task_state.get(key)
-        if merged.get(key) is None and result and key in result:
-            merged[key] = result.get(key)
-
-    return {**merged, "recent_log": recent_log, "result": result, "task_state": task_state, "failed_tail": failed_tail}
+    raise HTTPException(404, f"task {task_id} not found or not an official_factor_full_compute dispatch task")
 
 
-@router.get("/factor-cache/active-tasks", summary="当前所有缓存任务")
+@router.get("/factor-cache/active-tasks", summary="List active and recent factor cache tasks")
 def factor_cache_active_tasks():
-    return {"ok": True, "tasks": list(_active_cache_tasks.values())}
+    """Return in-memory tasks plus persisted official full-compute dispatch tasks after restart."""
+    tasks_by_id: Dict[str, Dict[str, Any]] = {}
+    dispatch_tasks, dispatch_error = _list_factor_cache_dispatch_tasks()
+    for task in dispatch_tasks:
+        tasks_by_id[str(task["task_id"])] = task
+    for task_id, task in _active_cache_tasks.items():
+        task_key = str(task_id)
+        persisted = tasks_by_id.get(task_key)
+        tasks_by_id[task_key] = {**task, **persisted} if persisted else task
+    tasks = sorted(
+        tasks_by_id.values(),
+        key=lambda item: str(item.get("started_at") or item.get("finished_at") or ""),
+        reverse=True,
+    )
+    return {
+        "ok": True,
+        "tasks": tasks[:_FACTOR_CACHE_RECENT_TASK_LIMIT],
+        "dispatch_task_source": "unavailable" if dispatch_error else "ok",
+        "dispatch_error": dispatch_error,
+    }
 
 
 @router.get("/factor-cache/remote-stats", summary="远端因子值缓存同步统计")
