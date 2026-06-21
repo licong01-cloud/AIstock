@@ -10,11 +10,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from backend.routers.multi_alpha import CombineBacktestRunRequest
 from backend.services.multi_alpha.combine_backtest import (
     COMBINE_BACKTEST_CONFIRM,
+    DEFAULT_WEIGHTING_SCHEMES,
     InMemoryCombineBacktestRepository,
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
+    RANK_FUSION_WEIGHTING_SCHEMES,
     ShellPredBacktestExecutor,
     maybe_upload_combined_prediction,
     parse_request,
@@ -177,6 +180,40 @@ def _service(
     return service, repo, executor, checker
 
 
+class RaisingPanelBuilder:
+    def build_combiner_legs(self, **_kwargs):
+        raise AssertionError("rank-fusion-only combine-backtest must not build label panels")
+
+
+def _rank_fusion_service(
+    tmp_path: Path,
+    *,
+    executor: FakeExecutor | None = None,
+    panel_builder: object | None = None,
+) -> tuple[MultiAlphaCombineBacktestService, InMemoryCombineBacktestRepository, FakeExecutor, FakeCapacityChecker]:
+    preds = {
+        "a1": _pred(1.0),
+        "a2": _pred(2.0),
+        "b1": _pred(-1.0),
+        "b2": _pred(-2.0),
+        "c1": _pred(3.0),
+        "c2": _pred(4.0),
+    }
+    repo = InMemoryCombineBacktestRepository()
+    executor = executor or FakeExecutor()
+    checker = FakeCapacityChecker()
+    service = MultiAlphaCombineBacktestService(
+        panel_builder=panel_builder,  # type: ignore[arg-type]
+        prediction_loader=lambda run_id: preds[run_id],
+        executor=executor,
+        repository=repo,
+        capacity_checker=checker,
+        workspace_root=tmp_path / "macb",
+        clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
+    )
+    return service, repo, executor, checker
+
+
 def test_combine_backtest_runs_ic_weighted_and_risk_parity_and_persists(tmp_path: Path) -> None:
     service, repo, executor, checker = _service(tmp_path)
 
@@ -263,8 +300,98 @@ def test_combine_backtest_deterministic_combined_prediction(tmp_path: Path) -> N
 
 def test_parse_request_respects_confirmation_constant_name() -> None:
     assert COMBINE_BACKTEST_CONFIRM == "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
+    assert DEFAULT_WEIGHTING_SCHEMES == ("equal", "orthogonality_aware", "ic_weighted", "risk_parity")
+    assert RANK_FUSION_WEIGHTING_SCHEMES == ("rank_fusion_rrf", "rank_fusion_borda")
     request = parse_request(_payload())
     assert request.weighting_schemes == ("equal", "ic_weighted", "risk_parity")
+
+
+def test_rank_fusion_schemes_are_opt_in_not_default() -> None:
+    payload = _payload()
+    payload.pop("weighting_schemes")
+
+    request = parse_request(payload)
+
+    assert request.weighting_schemes == DEFAULT_WEIGHTING_SCHEMES
+    assert not any(scheme in request.weighting_schemes for scheme in RANK_FUSION_WEIGHTING_SCHEMES)
+
+
+def test_rest_request_model_preserves_rank_fusion_options() -> None:
+    payload = _payload()
+    payload["weighting_schemes"] = ["rank_fusion_rrf"]
+    payload["rank_fusion"] = {"rrf_k": 42, "leg_weights": {"leg_a": 2.0}}
+
+    request = CombineBacktestRunRequest(**payload)
+
+    assert request.model_dump()["rank_fusion"] == {"rrf_k": 42, "leg_weights": {"leg_a": 2.0}}
+
+
+def test_rank_fusion_rrf_and_borda_run_and_persist_metadata(tmp_path: Path) -> None:
+    service, _repo, _executor, _checker = _rank_fusion_service(tmp_path)
+    payload = _payload_three_legs()
+    payload["weighting_schemes"] = ["rank_fusion_rrf", "rank_fusion_borda"]
+    payload["rank_fusion"] = {"rrf_k": 42}
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    schemes = {row["weighting_scheme"]: row for row in run["scheme_results"]}
+    assert set(schemes) == {"rank_fusion_rrf", "rank_fusion_borda"}
+    assert all(not row["skipped"] for row in schemes.values())
+    assert all(row["sharpe"] is not None and row["calmar"] is not None for row in schemes.values())
+    assert schemes["rank_fusion_rrf"]["weights_json"]["method"] == "rrf"
+    assert schemes["rank_fusion_rrf"]["weights_json"]["rrf_k"] == 42
+    assert schemes["rank_fusion_rrf"]["per_window_weights_json"][0]["rank_fusion"] is True
+    assert schemes["rank_fusion_borda"]["weights_json"]["method"] == "borda"
+    assert "rrf_k" not in schemes["rank_fusion_borda"]["weights_json"]
+    assert schemes["rank_fusion_borda"]["per_window_weights_json"][0]["method"] == "borda"
+    assert len(run["loo"]) == 6
+    assert {
+        (row["weighting_scheme"], row["dropped_leg_id"])
+        for row in run["loo"]
+    } == {
+        ("rank_fusion_rrf", "leg_a"),
+        ("rank_fusion_rrf", "leg_b"),
+        ("rank_fusion_rrf", "leg_c"),
+        ("rank_fusion_borda", "leg_a"),
+        ("rank_fusion_borda", "leg_b"),
+        ("rank_fusion_borda", "leg_c"),
+    }
+
+
+def test_rank_fusion_only_path_does_not_require_label_panels(tmp_path: Path) -> None:
+    service, _repo, _executor, _checker = _rank_fusion_service(
+        tmp_path,
+        panel_builder=RaisingPanelBuilder(),
+    )
+    payload = _payload()
+    payload["weighting_schemes"] = ["rank_fusion_rrf"]
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    assert run["scheme_results"][0]["weighting_scheme"] == "rank_fusion_rrf"
+    assert run["scheme_results"][0]["skipped"] is False
+
+
+def test_rank_fusion_migration_allows_new_schemes_and_rollback_restores_old_set() -> None:
+    path = Path("backend/migrations/multi_alpha_combine_backtest_rankfusion_schemes_20260621.sql")
+    text = path.read_text(encoding="utf-8")
+    forward, rollback = text.split("-- Rollback", maxsplit=1)
+    old_schemes = {"equal", "orthogonality_aware", "ic_weighted", "risk_parity"}
+
+    for scheme in (*old_schemes, "rank_fusion_rrf", "rank_fusion_borda"):
+        assert f"'{scheme}'" in forward
+    assert "ck_macb_scheme_supported" in forward
+    assert "ck_macb_loo_scheme_supported" in forward
+    assert "DROP CONSTRAINT IF EXISTS ck_macb_scheme_supported" in forward
+    assert "DROP CONSTRAINT IF EXISTS ck_macb_loo_scheme_supported" in forward
+    for scheme in old_schemes:
+        assert f"'{scheme}'" in rollback
+    assert "'rank_fusion_rrf'" not in rollback
+    assert "'rank_fusion_borda'" not in rollback
 
 
 def test_node_parallelism_must_cover_selected_node(tmp_path: Path) -> None:

@@ -28,12 +28,16 @@ from psycopg2.extras import Json, RealDictCursor
 import requests
 
 from backend.db.pg_pool import get_conn
+from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
+from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
 
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
 DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "risk_parity")
+RANK_FUSION_WEIGHTING_SCHEMES = ("rank_fusion_rrf", "rank_fusion_borda")
+SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES
 LOGICAL_PARTIAL_FAILED_STATUS = "partial_failed"
 TERMINAL_STATUSES = {"succeeded", "failed", LOGICAL_PARTIAL_FAILED_STATUS}
 PREDICTION_STORE_UPLOAD_URL_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_URL"
@@ -72,6 +76,7 @@ class CombineBacktestRequest:
     weighting_schemes: tuple[str, ...] = DEFAULT_WEIGHTING_SCHEMES
     normalize_method: str = "zscore"
     walk_forward: Mapping[str, Any] = field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
+    rank_fusion: Mapping[str, Any] = field(default_factory=dict)
     backtest_config: Mapping[str, Any] = field(default_factory=dict)
     baseline_leg_id: str | None = None
     topk: int = 20
@@ -545,6 +550,7 @@ class MultiAlphaCombineBacktestService:
         self,
         *,
         panel_builder: MultiAlphaPanelBuilder | None = None,
+        prediction_loader: Any | None = None,
         executor: BacktestExecutor | None = None,
         repository: Any | None = None,
         capacity_checker: NodeCapacityChecker | None = None,
@@ -552,6 +558,8 @@ class MultiAlphaCombineBacktestService:
         clock: CallableUtc | None = None,
     ) -> None:
         self._panel_builder = panel_builder or MultiAlphaPanelBuilder()
+        self._prediction_loader = prediction_loader
+        self._model_store = ModelStoreService()
         self._executor = executor or ShellPredBacktestExecutor()
         self._repository = repository or MultiAlphaCombineBacktestRepository()
         self._capacity_checker = capacity_checker or DatabaseQENodeCapacityChecker()
@@ -603,13 +611,19 @@ class MultiAlphaCombineBacktestService:
     def _execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
         node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
         node_parallelism = validate_node_parallelism(node_id=node_id, backtest_config=request.backtest_config)
-        panels = self._panel_builder.build_combiner_legs(
-            legs=request.roster,
-            oos_start=request.oos_start,
-            oos_end=request.oos_end,
-            topk=request.topk,
-            min_date_coverage=request.min_date_coverage,
-        )
+        needs_panel_metrics = any(not is_rank_fusion_scheme(scheme) for scheme in request.weighting_schemes)
+        if needs_panel_metrics:
+            panels = self._panel_builder.build_combiner_legs(
+                legs=request.roster,
+                oos_start=request.oos_start,
+                oos_end=request.oos_end,
+                topk=request.topk,
+                min_date_coverage=request.min_date_coverage,
+            )
+            prediction_legs = _strip_panel_metrics(panels)
+        else:
+            panels = self._build_prediction_only_legs(request)
+            prediction_legs = panels
         leg_by_id = {leg.leg_id: leg for leg in panels}
         if request.baseline_leg_id and request.baseline_leg_id not in leg_by_id:
             raise MultiAlphaCombineBacktestError(
@@ -630,7 +644,8 @@ class MultiAlphaCombineBacktestService:
             )
 
         for scheme in request.weighting_schemes:
-            result = combine_legs(legs=panels, scheme=scheme, request=request)
+            combine_input = prediction_legs if is_rank_fusion_scheme(scheme) else panels
+            result = combine_legs(legs=combine_input, scheme=scheme, request=request)
             task_specs.append(
                 _PredictionTask(
                     name=f"combined_{scheme}",
@@ -638,14 +653,15 @@ class MultiAlphaCombineBacktestService:
                     scheme=scheme,
                     frame=result.combined_score_frame.rename(columns={"combined_score": "score"}),
                     critical=scheme == "equal",
-                    weights_json=result.weights,
-                    per_window_weights_json=result.per_window_weights,
+                    weights_json=weights_payload(result, scheme=scheme, request=request),
+                    per_window_weights_json=per_window_weights_payload(result, scheme=scheme),
                 )
             )
             if len(panels) <= 2:
                 continue
             for dropped_leg in sorted(leg_by_id):
-                loo_legs = [leg for leg in panels if leg.leg_id != dropped_leg]
+                source_legs = prediction_legs if is_rank_fusion_scheme(scheme) else panels
+                loo_legs = [leg for leg in source_legs if leg.leg_id != dropped_leg]
                 loo_result = combine_legs(legs=loo_legs, scheme=scheme, request=request)
                 task_specs.append(
                     _PredictionTask(
@@ -665,6 +681,33 @@ class MultiAlphaCombineBacktestService:
             backtest_config=request.backtest_config,
         )
         return self._persist_task_outcomes(run_id=run_id, outcomes=outcomes)
+
+    def _build_prediction_only_legs(self, request: CombineBacktestRequest) -> list[CombinerLeg]:
+        legs: list[CombinerLeg] = []
+        for spec in request.roster:
+            seed_frames = [self._load_prediction_frame(run_id=run_id, leg_id=spec.leg_id) for run_id in spec.seed_run_ids]
+            ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
+            ensemble = filter_prediction_window(
+                ensemble,
+                leg_id=spec.leg_id,
+                oos_start=request.oos_start,
+                oos_end=request.oos_end,
+            )
+            legs.append(CombinerLeg(leg_id=spec.leg_id, pred_frame=ensemble, metadata=dict(spec.metadata)))
+        return legs
+
+    def _load_prediction_frame(self, *, run_id: str, leg_id: str) -> pd.DataFrame:
+        try:
+            if self._prediction_loader is not None:
+                return normalize_prediction_frame(self._prediction_loader(run_id), run_id=run_id)
+            return normalize_prediction_frame(pd.read_pickle(self._model_store.prediction_path(run_id=run_id)), run_id=run_id)
+        except (PredictionStoreError, MultiAlphaOrthogonalityError, OSError, ValueError, TypeError, KeyError) as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"failed to load prediction artifact for rank-fusion: {type(exc).__name__}: {exc}",
+                reason_code="prediction_missing_or_invalid",
+                leg_id=leg_id,
+                context={"run_id": run_id},
+            ) from exc
 
     def _run_prediction_tasks(
         self,
@@ -850,6 +893,7 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         weighting_schemes=schemes,
         normalize_method=str(payload.get("normalize_method") or "zscore"),
         walk_forward=dict(payload.get("walk_forward") or {"enabled": True, "window": 60, "min_periods": 2}),
+        rank_fusion=dict(payload.get("rank_fusion") or {}),
         backtest_config=dict(payload.get("backtest_config") or {}),
         baseline_leg_id=str(payload.get("baseline_leg_id") or roster[0].leg_id),
         topk=topk,
@@ -866,6 +910,7 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
         "weighting_schemes": request.weighting_schemes,
         "normalize_method": request.normalize_method,
         "walk_forward": request.walk_forward,
+        "rank_fusion": request.rank_fusion,
         "backtest_config": request.backtest_config,
         "baseline_leg_id": request.baseline_leg_id,
         "topk": request.topk,
@@ -889,8 +934,86 @@ def _coerce_panel_spec(item: Mapping[str, Any]) -> PanelLegSpec:
     return PanelLegSpec(leg_id=leg_id, seed_run_ids=seed_run_ids, metadata=metadata)
 
 
+def seed_ensemble_prediction_only(frames: Sequence[pd.DataFrame], *, leg_id: str) -> pd.DataFrame:
+    if not frames:
+        raise MultiAlphaCombineBacktestError(
+            "at least one seed prediction frame is required for rank-fusion",
+            reason_code="seed_prediction_missing",
+            leg_id=leg_id,
+        )
+    renamed: list[pd.DataFrame] = []
+    for idx, frame in enumerate(frames):
+        selected = frame[["trade_date", "instrument", "score"]].copy()
+        selected = selected.rename(columns={"score": f"score__seed_{idx}"})
+        renamed.append(selected)
+    merged: pd.DataFrame | None = None
+    for frame in renamed:
+        merged = frame if merged is None else merged.merge(frame, on=["trade_date", "instrument"], how="outer")
+    if merged is None or merged.empty:
+        raise MultiAlphaCombineBacktestError(
+            "seed predictions have no rows for rank-fusion",
+            reason_code="seed_prediction_empty",
+            leg_id=leg_id,
+        )
+    score_cols = [col for col in merged.columns if str(col).startswith("score__seed_")]
+    merged["score"] = merged[score_cols].mean(axis=1, skipna=True)
+    out = merged[["trade_date", "instrument", "score"]].dropna(subset=["score"])
+    if out.empty:
+        raise MultiAlphaCombineBacktestError(
+            "seed ensemble produced no valid score rows for rank-fusion",
+            reason_code="seed_ensemble_empty",
+            leg_id=leg_id,
+        )
+    return out.groupby(["trade_date", "instrument"], as_index=False, sort=True)["score"].mean()
+
+
+def filter_prediction_window(frame: pd.DataFrame, *, leg_id: str, oos_start: str, oos_end: str) -> pd.DataFrame:
+    start = pd.to_datetime(oos_start, errors="coerce")
+    end = pd.to_datetime(oos_end, errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        raise MultiAlphaCombineBacktestError(
+            "rank-fusion prediction window requires valid oos_start/oos_end",
+            reason_code="invalid_window",
+            leg_id=leg_id,
+            context={"oos_start": oos_start, "oos_end": oos_end},
+        )
+    start_date = start.date()
+    end_date = end.date()
+    if end_date < start_date:
+        raise MultiAlphaCombineBacktestError(
+            "rank-fusion prediction window requires oos_end >= oos_start",
+            reason_code="invalid_window",
+            leg_id=leg_id,
+            context={"oos_start": oos_start, "oos_end": oos_end},
+        )
+    selected = frame[(frame["trade_date"] >= start_date) & (frame["trade_date"] <= end_date)].copy()
+    if selected.empty:
+        raise MultiAlphaCombineBacktestError(
+            "seed ensemble has no prediction rows in requested OOS window for rank-fusion",
+            reason_code="prediction_window_empty",
+            leg_id=leg_id,
+            context={"oos_start": oos_start, "oos_end": oos_end},
+        )
+    return selected
+
+
+def _strip_panel_metrics(legs: Sequence[CombinerLeg]) -> list[CombinerLeg]:
+    return [
+        CombinerLeg(leg_id=leg.leg_id, pred_frame=leg.pred_frame, metadata=dict(leg.metadata))
+        for leg in legs
+    ]
+
+
 def combine_legs(*, legs: Sequence[CombinerLeg], scheme: str, request: CombineBacktestRequest) -> Any:
     try:
+        if is_rank_fusion_scheme(scheme):
+            method = rank_fusion_method_for_scheme(scheme)
+            return MultiAlphaCombiner().combine_rank_fusion(
+                legs=legs,
+                method=method,
+                rrf_k=rank_fusion_rrf_k(request) if method == "rrf" else 60.0,
+                leg_weights=rank_fusion_leg_weights(request),
+            )
         return MultiAlphaCombiner().combine(
             legs=legs,
             weighting_scheme=scheme,
@@ -903,6 +1026,97 @@ def combine_legs(*, legs: Sequence[CombinerLeg], scheme: str, request: CombineBa
             reason_code="scheme_not_computable",
             context={"weighting_scheme": scheme},
         ) from exc
+
+
+def is_rank_fusion_scheme(scheme: str) -> bool:
+    return scheme in RANK_FUSION_WEIGHTING_SCHEMES
+
+
+def rank_fusion_method_for_scheme(scheme: str) -> str:
+    if scheme == "rank_fusion_rrf":
+        return "rrf"
+    if scheme == "rank_fusion_borda":
+        return "borda"
+    raise MultiAlphaCombineBacktestError(
+        f"unsupported rank-fusion weighting_scheme={scheme!r}",
+        reason_code="unsupported_scheme",
+        context={"allowed": list(SUPPORTED_WEIGHTING_SCHEMES)},
+    )
+
+
+def rank_fusion_rrf_k(request: CombineBacktestRequest) -> float:
+    raw = request.rank_fusion.get("rrf_k", 60.0) if isinstance(request.rank_fusion, Mapping) else 60.0
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"rank_fusion.rrf_k must be numeric, got {raw!r}",
+            reason_code="rank_fusion_rrf_k_invalid",
+        ) from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise MultiAlphaCombineBacktestError(
+            f"rank_fusion.rrf_k must be positive and finite, got {raw!r}",
+            reason_code="rank_fusion_rrf_k_invalid",
+        )
+    return parsed
+
+
+def rank_fusion_leg_weights(request: CombineBacktestRequest) -> Mapping[str, float] | None:
+    if not isinstance(request.rank_fusion, Mapping):
+        return None
+    raw = request.rank_fusion.get("leg_weights")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise MultiAlphaCombineBacktestError(
+            "rank_fusion.leg_weights must be an object mapping leg_id to weight",
+            reason_code="rank_fusion_leg_weights_invalid",
+        )
+    parsed: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            parsed_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise MultiAlphaCombineBacktestError(
+                f"rank_fusion.leg_weights for {key!r} must be numeric, got {value!r}",
+                reason_code="rank_fusion_leg_weights_invalid",
+            ) from exc
+        if not math.isfinite(parsed_value) or parsed_value < 0:
+            raise MultiAlphaCombineBacktestError(
+                f"rank_fusion.leg_weights for {key!r} must be non-negative and finite, got {value!r}",
+                reason_code="rank_fusion_leg_weights_invalid",
+            )
+        parsed[str(key)] = parsed_value
+    return parsed
+
+
+def weights_payload(result: Any, *, scheme: str, request: CombineBacktestRequest) -> dict[str, Any]:
+    weights = dict(result.weights or {})
+    if not is_rank_fusion_scheme(scheme):
+        return weights
+    method = rank_fusion_method_for_scheme(scheme)
+    payload: dict[str, Any] = {
+        "leg_weights": weights,
+        "method": method,
+    }
+    if method == "rrf":
+        payload["rrf_k"] = rank_fusion_rrf_k(request)
+    return payload
+
+
+def per_window_weights_payload(result: Any, *, scheme: str) -> list[dict[str, Any]]:
+    if not is_rank_fusion_scheme(scheme):
+        return list(result.per_window_weights or [])
+    summary = dict(getattr(result, "summary", {}) or {})
+    return [
+        {
+            "weighting_scheme": scheme,
+            "method": rank_fusion_method_for_scheme(scheme),
+            "rrf_k": summary.get("rrf_k"),
+            "rank_fusion": True,
+            "window_count": 0,
+        }
+    ]
 
 
 def write_qlib_prediction(frame: pd.DataFrame, path: Path) -> None:
@@ -1157,11 +1371,11 @@ def make_run_id(*, roster_hash: str, oos_start: str, oos_end: str, ts: datetime)
 
 def _normalize_scheme(value: Any) -> str:
     scheme = str(value or "").strip().lower()
-    if scheme not in DEFAULT_WEIGHTING_SCHEMES:
+    if scheme not in SUPPORTED_WEIGHTING_SCHEMES:
         raise MultiAlphaCombineBacktestError(
             f"unsupported weighting_scheme={value!r}",
             reason_code="unsupported_scheme",
-            context={"allowed": list(DEFAULT_WEIGHTING_SCHEMES)},
+            context={"allowed": list(SUPPORTED_WEIGHTING_SCHEMES)},
         )
     return scheme
 

@@ -45,6 +45,7 @@ class CombineBacktestRunRequest(BaseModel):
     weighting_schemes: list[str] = Field(default_factory=lambda: ["equal", "orthogonality_aware", "ic_weighted", "risk_parity"])
     normalize_method: str = "zscore"
     walk_forward: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
+    rank_fusion: dict[str, Any] = Field(default_factory=dict)
     backtest_config: dict[str, Any] = Field(default_factory=dict)
     baseline_leg_id: str | None = None
     topk: int = Field(default=20, ge=1, le=500)
