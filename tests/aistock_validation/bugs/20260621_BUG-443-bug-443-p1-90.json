@@ -39,15 +39,28 @@
   "expected": "???????????????? official_offline_backtest_factor_data ? 2018-08-01~2026-04-30 ????64GB WSL?????????swap??????????????fail-fast???????????575????????????????????90????????",
   "first_seen_at": "2026-06-20T19:21:56.208321Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "603819a038227950ad3926b06f77732331e7f599",
+  "fixed_at": "2026-06-21T02:02:33.306088Z",
   "github_issue_number": 1366,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1366",
+  "implementation_notes": [
+    {
+      "note": "Full 90-minute validation failed in business compute path, so BUG-443 requires scoped quantevolver service/test changes rather than registry-only closure. No production restart or full recompute is allowed during fix; use targeted tests and subset smoke until user approves another full run.",
+      "timestamp": "2026-06-20T19:25:00Z",
+      "type": "scope_expansion"
+    },
+    {
+      "note": "Changed official full compute default path to avoid shipping metrics context into forked factor workers, lowering child process memory pressure. Missing metrics are computed in bounded parent ThreadPool workers with explicit metric_parent_compute_failures/save_failures, and factor worker memory estimate default is reduced to 2GB so observed 20GB headroom can keep 4 effective workers. Resource gates remain fail-fast and visible; no full 575-factor recompute was run during this fix.",
+      "timestamp": "2026-06-20T19:45:00Z",
+      "type": "fix_implementation"
+    }
+  ],
   "last_seen_at": "2026-06-20T19:21:56.208321Z",
   "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1368",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "validation_passed",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -71,6 +84,13 @@
     "fingerprint": "b5e77068a0f9ebb7544b7d16",
     "source_event_id": "FE-20260621-b5e77068a0f9"
   },
+  "validation_evidence": [
+    "targeted official quantevolver tests -> 44 passed, 1 skipped",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_ui not run because no dev backend 8011 was active"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -83,26 +103,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "fix_allowed_with_scoped_quantevolver_paths",
-  "implementation_notes": [
-    {
-      "type": "scope_expansion",
-      "timestamp": "2026-06-20T19:25:00Z",
-      "note": "Full 90-minute validation failed in business compute path, so BUG-443 requires scoped quantevolver service/test changes rather than registry-only closure. No production restart or full recompute is allowed during fix; use targeted tests and subset smoke until user approves another full run."
-    },
-    {
-      "type": "fix_implementation",
-      "timestamp": "2026-06-20T19:45:00Z",
-      "note": "Changed official full compute default path to avoid shipping metrics context into forked factor workers, lowering child process memory pressure. Missing metrics are computed in bounded parent ThreadPool workers with explicit metric_parent_compute_failures/save_failures, and factor worker memory estimate default is reduced to 2GB so observed 20GB headroom can keep 4 effective workers. Resource gates remain fail-fast and visible; no full 575-factor recompute was run during this fix."
-    }
-  ],
-  "validation_evidence": [
-    "tests/aistock_validation/history/qe/evidence/20260621_bug437_90min_full_compute_validation/summary.json",
-    "tests/aistock_validation/history/qe/evidence/20260621_bug443_fix_validation/summary.json",
-    "python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_official_evaluation_cache_source.py -q -> 44 passed, 1 skipped",
-    "git diff --check -> passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> passed",
-    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; full qe_read_ui requires dev backend 8011 and failed service probe with HTTP 502 when no dev backend was running"
-  ]
+  "workflow_gate": "fix_allowed_with_scoped_quantevolver_paths"
 }
