@@ -27,16 +27,16 @@
       "timestamp": "2026-06-21T11:07:53.506576Z"
     },
     {
-      "timestamp": "2026-06-21T11:18:00Z",
-      "actor": "codex",
       "action": "scope_registration_for_pr_1383",
-      "note": "Registered BUG-449 to provide explicit allowed_write_scope and validation evidence for PR #1383 PR-quality P0/P1 gate."
+      "actor": "codex",
+      "note": "Registered BUG-449 to provide explicit allowed_write_scope and validation evidence for PR #1383 PR-quality P0/P1 gate.",
+      "timestamp": "2026-06-21T11:18:00Z"
     },
     {
-      "timestamp": "2026-06-21T11:28:00Z",
-      "actor": "codex",
       "action": "rebase_origin_main",
-      "note": "Rebased PR branch onto origin/main 970acb82; implementation commit became 65420cd2."
+      "actor": "codex",
+      "note": "Rebased PR branch onto origin/main 970acb82; implementation commit became 65420cd2.",
+      "timestamp": "2026-06-21T11:28:00Z"
     }
   ],
   "evidence_uris": [
@@ -46,8 +46,8 @@
   "expected": "Backend source PRs for RA P1 config work carry linked GitHub issue, BUG JSON, validation evidence, production gates, and allowed_write_scope covering all changed files.",
   "first_seen_at": "2026-06-21T11:07:53.506580Z",
   "fix_branch": "feature/ra-declarative-config-memory-authority-p1-20260621",
-  "fix_commit": "65420cd2",
-  "fixed_at": null,
+  "fix_commit": "de6a649eb97711e12d085cfe171e77bd999bd6ae",
+  "fixed_at": "2026-06-21T13:30:01.048027Z",
   "github_issue_number": 1389,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1389",
   "last_seen_at": "2026-06-21T11:07:53.506580Z",
@@ -55,6 +55,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1383",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -68,7 +69,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -77,6 +78,15 @@
     "fingerprint": "4f0991ecabd6c0b4fb33278a",
     "source_event_id": "FE-20260621-4f0991ecabd6"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/research_assistant/test_config_authority_characterization.py -q -> 3 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_backend -> 298 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s ra_phase7_full_accept -> passed (PLAYWRIGHT_SKIP_WEBSERVER=1 with prestarted 3011 test frontend after webServer cleanup hang)",
+    "ruff check changed RA py files -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -88,19 +98,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "validation_evidence": [
-    "rtk proxy python -m compileall backend/services/research_assistant -> passed",
-    "rtk proxy ruff check backend/services/research_assistant/declarative_config.py backend/services/research_assistant/service.py backend/services/research_assistant/execution.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -> passed",
-    "rtk proxy git diff --check -> passed",
-    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py -q -> 83 passed",
-    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -q -> 97 passed",
-    "rtk proxy python -m pytest backend/tests/research_assistant/test_execution_closure.py backend/tests/research_assistant/test_stock_analysis_mcp.py backend/tests/research_assistant/test_mcp_catalog_sync.py -q -> 22 passed",
-    "rtk proxy python -m pytest backend/tests/research_assistant -q -> 295 passed",
-    "rtk proxy python -m nox -s l0 -> passed",
-    "rtk proxy python -m nox -s research_assistant_backend -> 295 passed",
-    "rtk proxy python -m nox -s research_assistant_mcp_contract -> 38 passed",
-    "rtk proxy python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "rtk proxy python -m nox -s ra_phase7_full_accept -> passed"
-  ]
+  }
 }
