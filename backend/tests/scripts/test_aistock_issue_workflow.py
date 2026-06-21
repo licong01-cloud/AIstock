@@ -1258,7 +1258,84 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert "8012" in payload["validation_center_runtime_safety"]["safe_command"]
     compact = workflow._compact_payload(payload)
     assert compact["validation_center_runtime_safety"]["safe_app_module"] == "backend.validation_app:app"
+    assert compact["worktree_hygiene"]["workflow_gate"] == "ready"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_doctor_blocks_noncanonical_main_worktree_with_stale_index(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = isolated_workflow_root / "worktrees" / "private-repo-doc-main-20260519"
+    stale.mkdir(parents=True)
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "backend").mkdir()
+    (isolated_workflow_root / "backend" / "validation_app.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_parse_worktree_list",
+        lambda: [
+            {"worktree": str(isolated_workflow_root), "HEAD": "abc1234", "branch": "refs/heads/main"},
+            {"worktree": str(stale), "HEAD": "old1234", "branch": "refs/heads/main"},
+        ],
+    )
+
+    def fake_git_snapshot(root: Path) -> dict[str, Any]:
+        if root == stale:
+            status = "## main...origin/main\n" + "\n".join(f"A  stale-{idx}.txt" for idx in range(120))
+            return {
+                "ok": True,
+                "branch": "main",
+                "head": "old1234",
+                "origin_main": "abc1234",
+                "dirty": True,
+                "dirty_count": 120,
+                "status": status,
+            }
+        return {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+            "status": "## main...origin/main",
+        }
+
+    monkeypatch.setattr(workflow, "_git_snapshot", fake_git_snapshot)
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok"},
+            "understand_anything": {"status": "available"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=True)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["worktree_hygiene"]["workflow_gate"] == "blocked"
+    assert payload["worktree_hygiene"]["noncanonical_main_worktrees"][0]["staged_count"] == 120
+    assert any("non-canonical worktree" in item for item in payload["blocking"])
+    assert compact["worktree_hygiene"]["noncanonical_main_worktree_count"] == 1
 
 
 def test_doctor_warns_when_bug_allocator_lags_github(

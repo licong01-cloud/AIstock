@@ -33,6 +33,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Every non-trivial feature, bugfix, or documentation change uses a new task branch and an isolated worktree from latest `origin/main`.
 - Do not develop directly in `F:\Dev\AIstock` when it is on `main` or dirty.
 - Do not reuse another active window's physical worktree.
+- Do not create or keep a non-root worktree on local `main`; task worktrees must use task branches. If a stale worktree holds `main`, audit it outside the repo, remove it safely, and restore `F:\Dev\AIstock` to `main...origin/main`.
 - Before editing, check `git status --short --branch`, current branch, and recent commits.
 - Stage and commit only files belonging to the current task.
 - Never run destructive Git commands such as `git reset --hard`, `git checkout -- .`, or `git clean -fd` unless the user explicitly approves that exact action.
