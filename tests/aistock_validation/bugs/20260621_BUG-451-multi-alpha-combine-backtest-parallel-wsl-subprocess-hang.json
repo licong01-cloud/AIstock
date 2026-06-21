@@ -28,13 +28,19 @@
       "actor": "codex",
       "timestamp": "2026-06-21T14:09:10Z",
       "note": "Implementation and local validation completed; PR pending Tier2 review and user-owned backend restart after merge."
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex",
+      "timestamp": "2026-06-21T14:24:02Z",
+      "note": "Opened PR #1404 for BUG-451; CI pending, merge/restart left to user and Tier2 review."
     }
   ],
   "evidence_uris": [],
   "expected": "node_parallelism=2 executes independent pred-backtest subprocess children without hanging; hung children time out fail-loud with workspace/node/scheme diagnostics.",
   "first_seen_at": "2026-06-21T13:36:59.065877Z",
   "fix_branch": "bug/BUG-451-multi-alpha-combine-backtest-parallel-wsl-subpro-20260621",
-  "fix_commit": null,
+  "fix_commit": "871fbe36d7ec7f99f3e273c3cab2785e01fca2d7",
   "fixed_at": null,
   "github_issue_number": 1398,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1398",
@@ -89,5 +95,11 @@
       "timestamp": "2026-06-21T14:09:10Z",
       "note": "run_command now detaches subprocess stdin with subprocess.DEVNULL, keeps UTF-8/errors=replace capture, and converts subprocess.TimeoutExpired into a fail-loud MultiAlphaCombineBacktestError with node_id, workspace, backtest_name, stage, command, timeout, stdout_tail, and stderr_tail context. Shell executor qrun/read_exp/custom calls pass stage-specific context. Regression coverage includes a real node_parallelism=2 WSL smoke using two concurrent wsl bash -lc children, timeout failure propagation, and per-child workspace isolation."
     }
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1404",
+  "related_prs": [
+    "https://github.com/licong01-cloud/AIstock/pull/1353",
+    "https://github.com/licong01-cloud/AIstock/pull/1375",
+    "https://github.com/licong01-cloud/AIstock/pull/1404"
   ]
 }
