@@ -582,7 +582,7 @@ def test_catalog_readiness_blocks_chat_until_seeded() -> None:
     health = svc.health()
     assert health["status"] == "catalog_not_ready"
     assert health["catalog_readiness"]["ready"] is False
-    assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
+    assert "skills" in health["catalog_readiness"]["missing_catalogs"]
 
     with pytest.raises(ResearchAssistantCatalogNotReadyError) as excinfo:
         svc.chat_turn(ChatTurnRequest(message="帮我设计一个 QE 实验草案，先不要执行。"))
@@ -593,12 +593,13 @@ def test_catalog_readiness_blocks_chat_until_seeded() -> None:
         svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="QE 实验草案", phase="planning"))
 
     seed_result = svc.seed_catalogs()
-    assert seed_result["seeded"]["prompt_nodes"] >= 1
+    assert seed_result["seeded"]["prompt_nodes"] == 0
+    assert seed_result["seeded"]["skills"] >= 1
     assert svc.health()["status"] == "ok"
     assert svc.catalog_readiness()["ready"] is True
 
 
-def test_seed_catalogs_retires_superseded_active_activations() -> None:
+def test_seed_catalogs_leaves_retired_db_activation_projection_untouched() -> None:
     repository = InMemoryResearchAssistantRepository()
     svc = ResearchAssistantService(repository=repository)
     repository.create_record(
@@ -631,20 +632,22 @@ def test_seed_catalogs_retires_superseded_active_activations() -> None:
     svc.seed_catalogs()
     svc.seed_catalogs()
 
-    assert repository.get_record("runtime_config_activations", "runtime_config_activation_old_active")["status"] == "retired"
-    assert repository.get_record("prompt_activations", "prompt_activation_old_active")["status"] == "retired"
-    prompt_actives = repository.list_records(
+    assert repository.get_record("runtime_config_activations", "runtime_config_activation_old_active")["status"] == "active"
+    assert repository.get_record("prompt_activations", "prompt_activation_old_active")["status"] == "active"
+    prompt_actives = svc.list_records(
         "prompt_activations",
         filters={"assistant_key": "research_assistant", "environment": svc.environment, "status": "active"},
         limit=10,
-    )["items"]
-    runtime_actives = repository.list_records(
+    )
+    runtime_actives = svc.list_records(
         "runtime_config_activations",
         filters={"config_key": "research_assistant.runtime_context", "environment": svc.environment, "status": "active"},
         limit=10,
-    )["items"]
-    assert len(prompt_actives) == 1
-    assert len(runtime_actives) == 1
+    )
+    assert prompt_actives["declarative_authority"] == "yaml_memory"
+    assert runtime_actives["declarative_authority"] == "yaml_memory"
+    assert prompt_actives["items"][0]["activation_id"] != "prompt_activation_old_active"
+    assert runtime_actives["items"][0]["activation_id"] != "runtime_config_activation_old_active"
     assert svc.catalog_readiness()["ready"] is True
 
 
@@ -1135,7 +1138,7 @@ def test_local_data_management_catalog_prompt_and_cards() -> None:
     assert apply_tool["requires_approval"] is True
     assert apply_tool["required_confirmations"] == [ASSISTANT_APPROVAL_CONFIRM]
 
-    workflow_capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.plan_repair"})
+    workflow_capability = svc._workflow_capability_by_key("local_data.plan_repair")
     assert workflow_capability is not None
     assert workflow_capability["status"] == "approved"
 
@@ -1217,7 +1220,7 @@ def test_bug_160_utf8_business_overviews_keep_specific_mcp_cards() -> None:
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
     svc = _chat_service()
 
-    prompt_nodes = svc.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=200)["items"]
+    prompt_nodes = svc.list_records("prompt_nodes", filters={"status": "enabled"}, limit=200)["items"]
     assert prompt_nodes
     for node in prompt_nodes:
         prompt_text = str(node["prompt_text"])
@@ -1318,55 +1321,60 @@ def test_bad_declarative_prompt_pack_returns_specific_config_error(tmp_path) -> 
     assert "operator_action=fix YAML and restart/reload Research Assistant" in error["message"]
 
 
-def test_declarative_config_parity_with_db_projection_after_seed() -> None:
+def test_declarative_config_uses_yaml_authority_without_db_projection_after_seed() -> None:
     svc = _chat_service()
     memory_by_key = {item["capability_key"]: item for item in svc._workflow_capabilities()}
-    projected = svc.repository.list_records("capabilities", limit=svc.configured_limit("api_list_capabilities"))["items"]
-    projected_by_key = {item["capability_key"]: item for item in projected}
+    assert svc.repository.list_records("capabilities", limit=svc.configured_limit("api_list_capabilities"))["total"] == 0
 
-    assert set(projected_by_key) == set(memory_by_key)
+    listed = svc.list_records("capabilities", limit=svc.configured_limit("api_list_capabilities"))
+    listed_by_key = {item["capability_key"]: item for item in listed["items"]}
+
+    assert listed["declarative_authority"] == "yaml_memory"
+    assert set(listed_by_key) == set(memory_by_key)
     for key, memory_item in memory_by_key.items():
-        projected_item = projected_by_key[key]
+        listed_item = listed_by_key[key]
         for field in ("capability_key", "mcp_tool_refs", "skill_refs", "risk_level", "side_effect_level", "status"):
-            assert projected_item[field] == memory_item[field]
+            assert listed_item[field] == memory_item[field]
 
 
-def test_declarative_prompt_pack_parity_and_db_projection_pollution_ignored() -> None:
+def test_declarative_prompt_pack_uses_yaml_authority_and_db_pollution_is_ignored() -> None:
     svc = _chat_service()
     memory_by_key = {item["prompt_key"]: item for item in svc.declarative_config.prompt_node_list()}
-    projected = svc.repository.list_records("prompt_nodes", limit=svc.configured_limit("prompt_nodes_active"))["items"]
-    projected_by_key = {item["prompt_key"]: item for item in projected}
+    assert svc.repository.list_records("prompt_nodes", limit=svc.configured_limit("prompt_nodes_active"))["total"] == 0
 
-    assert set(projected_by_key) == set(memory_by_key)
-    for key, memory_item in memory_by_key.items():
-        projected_item = projected_by_key[key]
-        for field in ("prompt_key", "prompt_text", "checksum", "status"):
-            assert projected_item[field] == memory_item[field]
+    listed_before = svc.list_records("prompt_nodes", limit=svc.configured_limit("prompt_nodes_active"))
+    listed_by_key = {item["prompt_key"]: item for item in listed_before["items"]}
+    assert listed_before["declarative_authority"] == "yaml_memory"
+    assert set(listed_by_key) == set(memory_by_key)
 
-    root = svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant"})
-    assert root is not None
-    svc.repository.update_record("prompt_nodes", root["prompt_node_id"], {"prompt_text": "DB projection polluted"})
+    root = dict(memory_by_key["root.assistant"])
+    root["prompt_text"] = "DB projection polluted"
+    root["checksum"] = "dirty-db-prompt-checksum"
+    svc.repository.create_record("prompt_nodes", root)
 
     assert svc._prompt_text("root.assistant") == memory_by_key["root.assistant"]["prompt_text"]
     assert svc._prompt_text_for_key("root.assistant") == memory_by_key["root.assistant"]["prompt_text"]
     listed = svc.list_records("prompt_nodes", filters={"prompt_key": "root.assistant"})
     assert listed["declarative_authority"] == "yaml_memory"
     assert listed["items"][0]["prompt_text"] == memory_by_key["root.assistant"]["prompt_text"]
+    assert svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant"})["prompt_text"] == "DB projection polluted"
 
 
 def test_db_runtime_config_projection_mutation_is_not_declarative_read_authority() -> None:
     svc = _chat_service()
     activation_id = svc.active_runtime_config_activation()["activation_id"]
-    projected = svc.repository.get_record("runtime_config_activations", activation_id)
-    assert projected is not None
-    config = copy.deepcopy(projected["config_json"])
+    assert svc.repository.get_record("runtime_config_activations", activation_id) is None
+    active = svc.active_runtime_config_activation()
+    config = copy.deepcopy(active["config_json"])
     for capability in config["planner"]["workflow_capabilities"]:
         if capability["capability_key"] == "skill_library.reuse":
             capability["mcp_tool_refs"] = "[]"
             break
     else:
         raise AssertionError("skill_library.reuse capability missing from projected runtime config")
-    svc.repository.update_record("runtime_config_activations", activation_id, {"config_json": config})
+    dirty = dict(active)
+    dirty["config_json"] = config
+    svc.repository.create_record("runtime_config_activations", dirty)
 
     result = svc.chat_turn(ChatTurnRequest(message="stock analysis question", dialogue_mode_override="analysis"))
 
@@ -1391,8 +1399,9 @@ def test_active_runtime_config_accepts_empty_mcp_tool_refs_list() -> None:
 
 def test_bug_439_empty_registry_mcp_tool_refs_shape_is_ignored_by_declarative_reads(caplog: pytest.LogCaptureFixture) -> None:
     svc = _chat_service()
-    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    capability = svc._workflow_capability_by_key("skill_library.reuse")
     assert capability is not None
+    capability["capability_id"] = "cap_skill_library_reuse_dirty_empty"
     capability["mcp_tool_refs"] = {}
     svc.repository.create_record("capabilities", capability)
 
@@ -1410,8 +1419,9 @@ def test_bug_439_empty_registry_mcp_tool_refs_shape_is_ignored_by_declarative_re
 
 def test_bug_439_non_empty_registry_mcp_tool_refs_dict_is_ignored_by_declarative_reads() -> None:
     svc = _chat_service()
-    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    capability = svc._workflow_capability_by_key("skill_library.reuse")
     assert capability is not None
+    capability["capability_id"] = "cap_skill_library_reuse_dirty_non_empty"
     dirty_refs = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
     capability["mcp_tool_refs"] = dirty_refs
     svc.repository.create_record("capabilities", capability)
@@ -1435,46 +1445,51 @@ def test_bug_439_repository_json_adapter_preserves_empty_lists() -> None:
     assert str(_adapt_json({})) == "'{}'"
 
 
-def test_bug_439_sync_marks_dirty_empty_registry_refs_for_update_and_repairs() -> None:
+def test_bug_439_sync_is_retired_noop_and_does_not_repair_dirty_registry_refs() -> None:
     svc = _chat_service()
-    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    capability = svc._workflow_capability_by_key("skill_library.reuse")
     assert capability is not None
+    capability["capability_id"] = "cap_skill_library_reuse_dirty_sync"
     capability["mcp_tool_refs"] = {}
     svc.repository.create_record("capabilities", capability)
 
     dry_run = svc.sync_capabilities({"apply": False, "requested_by": "bug_439_unit"})
     reuse_diff = next(item for item in dry_run["diff"] if item["capability_key"] == "skill_library.reuse")
 
-    assert reuse_diff["change"] == "update"
-    assert reuse_diff["reason"] == "capability_ref_shape_or_value_changed"
+    assert dry_run["db_projection_retired"] is True
+    assert reuse_diff["change"] == "retired_db_projection"
+    assert reuse_diff["reason"] == "yaml_memory_authority_no_db_write"
 
     applied = svc.sync_capabilities({"apply": True, "requested_by": "bug_439_unit"})
     repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
-    assert applied["applied_count"] >= 1
+    assert applied["applied_count"] == 0
+    assert applied["db_projection_retired"] is True
     assert repaired is not None
-    assert repaired["mcp_tool_refs"] == []
+    assert repaired["mcp_tool_refs"] == {}
 
 
-def test_bug_439_sync_refuses_non_empty_non_list_registry_refs() -> None:
+def test_bug_439_sync_ignores_non_empty_non_list_registry_refs_after_db_projection_retired() -> None:
     svc = _chat_service()
-    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    capability = svc._workflow_capability_by_key("skill_library.reuse")
     assert capability is not None
+    capability["capability_id"] = "cap_skill_library_reuse_dirty_sync_non_empty"
     capability["mcp_tool_refs"] = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
     svc.repository.create_record("capabilities", capability)
 
-    with pytest.raises(ResearchAssistantRuntimeConfigInvalidError) as exc_info:
-        svc.sync_capabilities({"apply": True, "requested_by": "bug_439_unit"})
+    result = svc.sync_capabilities({"apply": True, "requested_by": "bug_439_unit"})
+    unchanged = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
 
-    error = exc_info.value.error_payload
-    assert error["reason_code"] == "capability_registry_invalid_mcp_tool_refs"
-    assert error["capability_key"] == "skill_library.reuse"
-    assert error["actual_type"] == "dict"
+    assert result["db_projection_retired"] is True
+    assert result["applied_count"] == 0
+    assert unchanged is not None
+    assert unchanged["mcp_tool_refs"] == {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
 
 
 def test_bug_439_catalog_ready_path_does_not_make_db_projection_authoritative() -> None:
     svc = _chat_service()
-    capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    capability = svc._workflow_capability_by_key("skill_library.reuse")
     assert capability is not None
+    capability["capability_id"] = "cap_skill_library_reuse_dirty_catalog_ready"
     capability["mcp_tool_refs"] = {}
     svc.repository.create_record("capabilities", capability)
 
@@ -1484,6 +1499,67 @@ def test_bug_439_catalog_ready_path_does_not_make_db_projection_authoritative() 
     assert readiness["ready"] is True
     assert unchanged is not None
     assert unchanged["mcp_tool_refs"] == {}
+
+
+def test_dirty_db_declarative_rows_do_not_change_yaml_backed_behavior() -> None:
+    svc = _chat_service()
+    baseline_capability_key = svc._capability_key_for_tool(
+        McpToolCall(server_key="aistock-stock-analysis", tool_name="stock_analysis_get_quote", payload_json={})
+    )
+    baseline_prompt = svc._prompt_text("root.assistant")
+    baseline_runtime_activation = svc.active_runtime_config_activation()["activation_id"]
+
+    dirty_capability = dict(svc._workflow_capability_by_key("stock_analysis.mcp_orchestration") or {})
+    dirty_capability["capability_id"] = "cap_stock_analysis_dirty_db_projection"
+    dirty_capability["mcp_tool_refs"] = []
+    dirty_capability["checksum"] = "dirty-db-capability-checksum"
+    svc.repository.create_record("capabilities", dirty_capability)
+
+    dirty_prompt = dict(svc.declarative_config.prompt_node("root.assistant") or {})
+    dirty_prompt["prompt_text"] = "Dirty DB prompt projection must not be read"
+    dirty_prompt["checksum"] = "dirty-db-prompt-checksum"
+    svc.repository.create_record("prompt_nodes", dirty_prompt)
+
+    dirty_runtime = dict(svc.active_runtime_config_activation())
+    dirty_runtime["config_json"] = {"planner": {"workflow_capabilities": []}}
+    svc.repository.create_record("runtime_config_activations", dirty_runtime)
+
+    assert svc._capability_key_for_tool(
+        McpToolCall(server_key="aistock-stock-analysis", tool_name="stock_analysis_get_quote", payload_json={})
+    ) == baseline_capability_key
+    assert svc._prompt_text("root.assistant") == baseline_prompt
+    assert svc.active_runtime_config_activation()["activation_id"] == baseline_runtime_activation
+    assert svc.list_records("capabilities", filters={"capability_key": "stock_analysis.mcp_orchestration"})["items"][0]["mcp_tool_refs"]
+    assert svc.list_records("prompt_nodes", filters={"prompt_key": "root.assistant"})["items"][0]["prompt_text"] == baseline_prompt
+    assert svc.list_records("runtime_config_activations", filters={"status": "active"})["declarative_authority"] == "yaml_memory"
+
+
+def test_runtime_config_reload_updates_former_db_bypass_capability_reads(tmp_path) -> None:
+    svc = _chat_service()
+    route_call = McpToolCall(server_key="research-assistant", tool_name="assistant_create_memory_candidate", payload_json={})
+    assert svc._capability_key_for_tool(route_call) == "memory.write_candidate"
+
+    def mutate(config: dict[str, object]) -> None:
+        for capability in config["planner"]["workflow_capabilities"]:
+            if capability["capability_key"] == "memory.write_candidate":
+                capability["mcp_tool_refs"] = [
+                    ref
+                    for ref in capability["mcp_tool_refs"]
+                    if ref["tool_name"] != "assistant_create_memory_candidate"
+                ]
+                capability["title"] = "Memory write reload test"
+                return
+        raise AssertionError("memory.write_candidate missing from runtime config")
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
+
+    reloaded = svc._workflow_capability_by_key("memory.write_candidate")
+    assert reloaded is not None
+    assert reloaded["title"] == "Memory write reload test"
+    assert not svc._capability_has_tool_ref(reloaded, "research-assistant", "assistant_create_memory_candidate")
+    assert ("research-assistant", "assistant_create_memory_candidate") not in svc._approved_capability_mcp_tool_refs()
+    with pytest.raises(KeyError, match="approved capability not found"):
+        svc._capability_key_for_tool(route_call)
 
 
 def test_runtime_config_controls_api_page_defaults_and_max(tmp_path) -> None:
@@ -2649,8 +2725,9 @@ def test_bug_403_business_summary_fails_closed_when_synthesis_is_unavailable() -
 def test_bug_352_local_data_daily_status_ignores_stale_db_capability_projection() -> None:
     svc = _chat_service(FakeLlmClient())
     svc.local_data_service_factory = FakeLocalDataDailyStatusService
-    capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    capability = svc._workflow_capability_by_key("local_data.mcp_orchestration")
     assert capability is not None
+    capability["capability_id"] = "cap_local_data_mcp_orchestration_stale_db_projection"
     capability["mcp_tool_refs"] = [
         ref
         for ref in capability["mcp_tool_refs"]

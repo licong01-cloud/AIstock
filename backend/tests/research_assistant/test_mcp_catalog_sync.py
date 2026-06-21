@@ -186,9 +186,10 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     assert any(tool["server_key"] == "aistock-stock-analysis" and tool["tool_name"] == "stock_analysis_get_quote" for tool in tools)
     assert not any(tool["server_key"] == "aistock-qe-archive" for tool in tools)
     assert not any(tool["server_key"] == "aistock-factor-library" for tool in tools)
-    mcp_capability = svc.repository.find_one("capabilities", {"capability_key": "mcp_capability.mcp_orchestration"})
+    mcp_capability = svc._workflow_capability_by_key("mcp_capability.mcp_orchestration")
     assert mcp_capability is not None
     assert mcp_capability["mcp_tool_refs"] == [{"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}]
+    assert svc.repository.list_records("capabilities", limit=500)["total"] == 0
 
     catalog = svc._mcp_tool_catalog_snapshot()
     assert catalog["source"] == "gateway_manifest_derived_catalog"

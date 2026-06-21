@@ -9,7 +9,9 @@
     "backend/tests/research_assistant/test_service.py",
     "backend/tests/research_assistant/test_execution_closure.py",
     "tests/aistock_validation/bugs/20260621_BUG-453-ra-declarative-config-must-stop-writing-db-projections-and-flip-residual.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-453",
@@ -27,6 +29,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260621-14e2c01ed8f6",
       "timestamp": "2026-06-21T15:34:36.469563Z"
+    },
+    {
+      "timestamp": "2026-06-21T18:53:40.283386Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Expanded allowed_write_scope to backend/tests/research_assistant/test_api.py and test_mcp_catalog_sync.py after research_assistant_backend exposed stale declarative DB projection expectations; expectation-only test updates."
+    },
+    {
+      "timestamp": "2026-06-21T18:53:40.283386Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Implemented YAML memory authority P2: seed/sync no longer write declarative capability/prompt/runtime DB projections; former direct-read sites use declarative config/manifest helpers; tests updated/added for no DB projection, dirty DB invariance, YAML reload coverage. Validation: targeted RA tests 106 passed; l0 passed; research_assistant_backend 302 passed; research_assistant_mcp_contract 38 passed; validation_module_registry_l0 8 passed; ra_phase7_full_accept passed; git diff --check passed; ruff passed."
+    },
+    {
+      "timestamp": "2026-06-21T21:31:55.282947Z",
+      "actor": "codex",
+      "action": "validation",
+      "note": "Final validation after rebase to origin/main fdc9d020: targeted RA tests 112 passed; l0 passed; research_assistant_backend 308 passed; research_assistant_mcp_contract 38 passed; validation_module_registry_l0 8 passed; ra_phase7_full_accept passed; git diff --check passed; ruff passed. No services 8001/3000/19080 were started or restarted; no production DB or DDL touched."
     }
   ],
   "evidence_uris": [],
@@ -50,7 +70,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -75,5 +96,15 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "validation_evidence": [
+    "targeted RA config authority/parity/execution/service/api/catalog tests -> 112 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_backend -> 308 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s ra_phase7_full_accept -> passed (backend 308 passed, frontend lint/build passed, Playwright Phase7 4 passed + RA UI 8 passed, crosscheck passed)",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "git diff --check -> passed",
+    "ruff check changed Python files -> passed"
+  ]
 }
