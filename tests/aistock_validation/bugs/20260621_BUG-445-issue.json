@@ -1,0 +1,102 @@
+{
+  "actual": "当前因子库表格同时显示因子值缓存、缓存开始、缓存结束、缓存计算、指标计算等多列；同一官方缓存链路在 UI 中被展示成多套缓存/多套日期，且 UTC 与北京时间字符串未统一格式化。",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/routers/quantevolver.py",
+    "tests/aistock_validation/bugs/20260621_BUG-445-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-445",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T04:23:32.984624Z",
+  "description": "当前因子库表格同时显示因子值缓存、缓存开始、缓存结束、缓存计算、指标计算等多列；同一官方缓存链路在 UI 中被展示成多套缓存/多套日期，且 UTC 与北京时间字符串未统一格式化。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-c914a281d54b",
+      "timestamp": "2026-06-21T04:23:32.984620Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "因子库默认表格只保留一列统一因子值缓存状态/时间段和一列统一官方计算时间；缓存开始/缓存结束/缓存计算不再默认常驻显示，详细信息进入 tooltip；时间统一按北京时间展示，若指标与缓存计算时间显著不一致再显示告警。",
+  "first_seen_at": "2026-06-21T04:23:32.984624Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1378,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1378",
+  "last_seen_at": "2026-06-21T04:23:32.984624Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 /quantevolver/factors，查看表格列：指标计算、因子值缓存、缓存开始、缓存结束、缓存计算；对比 /api/v1/quantevolver/factors 返回的 ind_calculated_at 与 cache_computed_at。",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "因子库缓存列重复且时间展示歧义",
+  "trigger_condition": {
+    "fingerprint": "c914a281d54bf0ccbc2a5ac5",
+    "source_event_id": "FE-20260621-c914a281d54b"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "backend/routers/quantevolver.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/quantevolver/components/FactorList.tsx",
+    "ui_routes": [
+      "/src/app/quantevolver/components/FactorList.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
