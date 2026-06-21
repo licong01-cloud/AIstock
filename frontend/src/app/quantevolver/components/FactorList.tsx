@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import FullPipelineDialog from "./FullPipelineDialog";
 import ManualFactorDialog from "./ManualFactorDialog";
 import IcSeriesChart from "./charts/IcSeriesChart";
 
@@ -406,10 +405,7 @@ export default function FactorList({
   const [cleanupExecuteResult, setCleanupExecuteResult] = useState<{ ok: boolean; batch_id: string; disabled_count: number; by_reason: Record<string, number>; errors: string[]; rollback_sql: string } | null>(null);
 
   // 全流程批处理
-  const [pipelineOpen, setPipelineOpen] = useState(false);
   const [manualDialogOpen, setManualDialogOpen] = useState(false);
-  const [pipelineTaskIds, setPipelineTaskIds] = useState<string[]>([]);
-  const [pipelineFactorNames, setPipelineFactorNames] = useState<string[]>([]);
 
   // 因子计算日志详情
   type CalcWindow = { eval_window: string; status: string; error_message?: string | null; n_trading_days?: number | null; required_days?: number | null; data_start?: string | null; data_end?: string | null; calculated_at?: string | null };
@@ -2160,22 +2156,6 @@ export default function FactorList({
                 {metricsLoading ? "提交中..." : `提交官方指标计算(${actualSelectedFactors.size})`}
               </button>
 
-              <button
-                onClick={() => {
-                  const names = Array.from(actualSelectedFactors).map(key => key.split("||")[0]);
-                  setPipelineFactorNames(names);
-                  setPipelineTaskIds([]);
-                  setPipelineOpen(true);
-                }}
-                disabled={actualSelectedFactors.size === 0 || pipelineOpen}
-                style={{
-                  padding: "6px 14px", fontSize: 12, cursor: (actualSelectedFactors.size === 0 || pipelineOpen) ? "not-allowed" : "pointer",
-                  borderRadius: 6, border: "none", background: "#7c3aed", color: "#fff", fontWeight: 600,
-                  opacity: (actualSelectedFactors.size === 0 || pipelineOpen) ? 0.5 : 1,
-                }}
-              >
-                全流程处理({actualSelectedFactors.size})
-              </button>
             </>
           )}
 
@@ -2345,42 +2325,25 @@ export default function FactorList({
               style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>清空</button>
             <button
               onClick={computeSelectedTasksMetrics}
-              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen}
+              disabled={selectedTasks.size === 0 || taskComputing.size > 0}
               style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? "not-allowed" : "pointer",
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskComputing.size > 0 ? "not-allowed" : "pointer",
                 background: "#7c3aed", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? 0.5 : 1,
+                opacity: selectedTasks.size === 0 || taskComputing.size > 0 ? 0.5 : 1,
               }}
             >
               {taskComputing.size > 0 ? `计算中(${taskComputing.size})...` : `计算选中Task的IC指标(${selectedTasks.size})`}
             </button>
             <button
               onClick={() => analyzeSelectedTasksFactors()}
-              disabled={selectedTasks.size === 0 || taskAnalyzing || pipelineOpen}
+              disabled={selectedTasks.size === 0 || taskAnalyzing}
               style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskAnalyzing ? "not-allowed" : "pointer",
                 background: "#2563eb", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
+                opacity: selectedTasks.size === 0 || taskAnalyzing ? 0.5 : 1,
               }}
             >
               {taskAnalyzing ? "分析中..." : `批量分析(${selectedTasks.size})`}
-            </button>
-            <button
-              onClick={() => {
-                const tasks = Array.from(selectedTasks);
-                if (tasks.length === 0) return;
-                setPipelineTaskIds(tasks);
-                setPipelineOpen(true);
-              }}
-              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen}
-              style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none",
-                cursor: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
-                background: "linear-gradient(135deg, #7c3aed, #2563eb)", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
-              }}
-            >
-              全流程处理({selectedTasks.size})
             </button>
           </div>
 
@@ -2419,23 +2382,6 @@ export default function FactorList({
                     )}
                     {computing && <span style={{ fontSize: 11, color: "#7c3aed" }}>计算中...</span>}
                     {result && <span style={{ fontSize: 11, color: result.ok ? "#059669" : "#dc2626", fontWeight: 600 }}>{result.msg}</span>}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setPipelineTaskIds([t.task_id]);
-                        setPipelineOpen(true);
-                      }}
-                      disabled={pipelineOpen}
-                      style={{
-                        padding: "2px 8px", fontSize: 10, borderRadius: 4,
-                        border: "1px solid #7c3aed", background: pipelineOpen ? "#f3f4f6" : "#faf5ff",
-                        color: pipelineOpen ? "#9ca3af" : "#7c3aed", fontWeight: 600,
-                        cursor: pipelineOpen ? "not-allowed" : "pointer",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      全流程
-                    </button>
                   </div>
                   {isExp && (
                     <div style={{ borderTop: "1px solid #e5e7eb", padding: 12, background: "#fff" }}>
@@ -3481,22 +3427,6 @@ export default function FactorList({
           </div>
         )}
       </section>}
-
-      {pipelineOpen && (
-        <FullPipelineDialog
-          open={pipelineOpen}
-          taskIds={pipelineTaskIds.length > 0 ? pipelineTaskIds : undefined}
-          factorNames={pipelineFactorNames.length > 0 ? pipelineFactorNames : undefined}
-          cacheStartDate={cacheStartDate}
-          cacheEndDate={cacheEndDate}
-          onClose={() => setPipelineOpen(false)}
-          onComplete={() => {
-            loadData();
-            loadSourceTasks();
-            loadIndSummary();
-          }}
-        />
-      )}
 
       <ManualFactorDialog
         open={manualDialogOpen}
