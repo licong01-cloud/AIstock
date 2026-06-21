@@ -42,8 +42,8 @@
   "expected": "broker-authoritative must be an invariant: the read-only reconciliation endpoint also treats the broker as authority and returns WARNING-level UNBACKED/UNATTRIBUTED adjustments instead of ERROR POSITION_MISMATCH; prefer flipping the default to True or removing the legacy False branch so position authority cannot be downgraded by a caller; add regression test.",
   "first_seen_at": "2026-06-21T10:52:37.647001Z",
   "fix_branch": "bug/BUG-447-p1-miniqmt-qmt-strategy-ledger-read-only-reconci-20260621",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bb0477c8c7241334b16c5a4211b7f1b89a1efa13",
+  "fixed_at": "2026-06-21T12:20:05.326058Z",
   "github_issue_number": 1385,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1385",
   "last_seen_at": "2026-06-21T10:52:37.647001Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1393",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -71,6 +72,16 @@
     "fingerprint": "c208fd63268e7fc8ead0b9fe",
     "source_event_id": "FE-20260621-c208fd63268e"
   },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py -q -> 7 passed",
+    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 15 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 64 passed",
+    "rtk python -m ruff check backend/services/qmt_strategy_ledger/reconciliation.py backend/routers/qmt_strategy_ledger.py backend/tests/qmt_strategy_ledger/test_reconciliation.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -83,15 +94,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py -q -> 7 passed",
-    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 15 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 64 passed",
-    "rtk python -m ruff check backend/services/qmt_strategy_ledger/reconciliation.py backend/routers/qmt_strategy_ledger.py backend/tests/qmt_strategy_ledger/test_reconciliation.py -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk cmd /c \"set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3\" -> passed (UI skipped; backend dev-db-only tests ignored by hosted-ci path)"
-  ]
+  "workflow_gate": "ready_for_fix"
 }
