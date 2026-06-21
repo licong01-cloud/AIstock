@@ -31,8 +31,8 @@
   "expected": "Before post-close terminalization the run MUST re-reconcile from fresh broker facts (_sync_miniqmt_snapshot + recomputed open-order evidence, or reuse _reconcile_after_submit); terminal status reflects end-of-day broker state; filled orders are never marked FAILED_TERMINAL; include reconcile audit (as_of/source); no silent fallback to stale payload.",
   "first_seen_at": "2026-06-21T10:46:04.876184Z",
   "fix_branch": "bug/BUG-446-p1-paper-v2-miniqmt-eod-post-close-terminalizati-20260622",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "eced67a75fa473b64737e51f76db3cf1fd972154",
+  "fixed_at": "2026-06-21T16:55:05.425830Z",
   "github_issue_number": 1384,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1384",
   "last_seen_at": "2026-06-21T10:46:04.876184Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1413",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -86,6 +87,13 @@
     ],
     "visual_acceptance_required": false
   },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 66 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed; rtk python -m json.tool BUG JSON -> passed; rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
