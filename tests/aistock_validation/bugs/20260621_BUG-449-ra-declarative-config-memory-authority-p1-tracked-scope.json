@@ -11,7 +11,9 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-449",
-  "closed_at": null,
+  "close_sync_commit": "dee727ba5202d37be49398424e54ea546db2ac5b",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1397",
+  "closed_at": "2026-06-21T13:41:00.844842Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -37,6 +39,12 @@
       "actor": "codex",
       "note": "Rebased PR branch onto origin/main 970acb82; implementation commit became 65420cd2.",
       "timestamp": "2026-06-21T11:28:00Z"
+    },
+    {
+      "action": "closed_after_close_sync_pr_merged",
+      "actor": "codex",
+      "note": "Issue #1389 already closed with status:fixed; close-sync PR #1397 merged; BUG JSON marked closed with closed_at.",
+      "timestamp": "2026-06-21T13:41:00.844842Z"
     }
   ],
   "evidence_uris": [
@@ -51,6 +59,7 @@
   "github_issue_number": 1389,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1389",
   "last_seen_at": "2026-06-21T11:07:53.506580Z",
+  "merge_commit": "de6a649eb97711e12d085cfe171e77bd999bd6ae",
   "module": "research_assistant",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -69,7 +78,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
