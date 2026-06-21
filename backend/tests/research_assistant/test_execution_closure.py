@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
+import yaml
 
 from backend.services.research_assistant.models import (
     ActionProposalApprovalRequest,
@@ -12,6 +15,7 @@ from backend.services.research_assistant.models import (
     TaskCreate,
 )
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
+from backend.services.research_assistant.runtime_config import load_runtime_config
 from backend.services.research_assistant.service import ResearchAssistantService
 
 
@@ -19,6 +23,14 @@ def _service() -> ResearchAssistantService:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     svc.seed_catalogs()
     return svc
+
+
+def _reload_runtime_config_fixture(svc: ResearchAssistantService, tmp_path, mutator) -> None:
+    payload = copy.deepcopy(load_runtime_config().config)
+    mutator(payload)
+    path = tmp_path / "runtime_context.yaml"
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    svc.reload_declarative_config(runtime_config_path=path)
 
 
 def _qe_payload() -> dict[str, object]:
@@ -68,7 +80,7 @@ def test_capability_sync_dry_run_and_apply_excludes_blocked_catalog_entries() ->
     assert "生成 QE" in qe_draft["description_for_llm"]
 
 
-def test_action_proposal_digest_preflight_and_dry_run_boundaries() -> None:
+def test_action_proposal_digest_preflight_and_dry_run_boundaries(tmp_path) -> None:
     svc = _service()
     proposal = _proposal(svc)
     assert proposal["status"] == "proposed"
@@ -88,8 +100,14 @@ def test_action_proposal_digest_preflight_and_dry_run_boundaries() -> None:
     assert preflight["preflight"]["approval_required"] is True
     assert preflight["preflight"]["assistant_usable"] == "preflight_required"
 
-    capability = svc.repository.find_one("capabilities", {"capability_key": proposal["capability_key"]})
-    svc.repository.update_record("capabilities", capability["capability_id"], {"checksum": "stale-checksum"})
+    def mutate(config: dict[str, object]) -> None:
+        for capability in config["planner"]["workflow_capabilities"]:
+            if capability["capability_key"] == proposal["capability_key"]:
+                capability["description_for_llm"] = "Changed after proposal creation to force a stale plan digest."
+                return
+        raise AssertionError(f"capability missing from runtime config: {proposal['capability_key']}")
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
     with pytest.raises(ValueError, match="plan_digest"):
         svc.execute_action_proposal(proposal["action_proposal_id"], ActionProposalExecuteRequest())
 
@@ -199,14 +217,16 @@ def test_qe_validate_can_show_summary_without_materialize_or_run() -> None:
     assert result["tool_event"]["response_json"]["diff_summary"]["run"] is False
 
 
-def test_execution_gateway_uses_runtime_retry_policy_for_retryable_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execution_gateway_uses_runtime_retry_policy_for_retryable_errors(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     svc = _service()
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["execution"] = dict(config["execution"])
-    config["execution"]["max_retries"] = 1
-    config["execution"]["retryable_error_codes"] = ["transient_network"]
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        execution = dict(config["execution"])
+        execution["max_retries"] = 1
+        execution["retryable_error_codes"] = ["transient_network"]
+        config["execution"] = execution
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
 
     proposal = _proposal(svc)
     svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "CONFIRM_QE_DRAFT"})
