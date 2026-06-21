@@ -244,13 +244,20 @@ def _weights_for_scheme(
     train_dates: Sequence[Any],
     all_dates: Sequence[Any],
     walk_forward: bool = False,
+    min_periods: int | None = None,
 ) -> dict[str, float]:
     if scheme == "equal":
         return _equal_weights(legs)
     if scheme == "ic_weighted":
         return _metric_weights(legs, train_dates=train_dates if walk_forward else None)
     if scheme == "risk_parity":
-        return _risk_parity_weights(legs, aligned=aligned, train_dates=train_dates, all_dates=all_dates)
+        return _risk_parity_weights(
+            legs,
+            aligned=aligned,
+            train_dates=train_dates,
+            all_dates=all_dates,
+            min_periods=min_periods,
+        )
     if scheme == "orthogonality_aware":
         return _orthogonality_weights(legs, aligned=aligned, train_dates=train_dates)
     raise MultiAlphaCombinerError(f"unsupported weighting_scheme={scheme!r}")
@@ -287,15 +294,32 @@ def _risk_parity_weights(
     aligned: pd.DataFrame,
     train_dates: Sequence[Any],
     all_dates: Sequence[Any],
+    min_periods: int | None = None,
 ) -> dict[str, float]:
     train = aligned[aligned["trade_date"].isin(train_dates)]
     raw: dict[str, float] = {}
+    diagnostics: list[dict[str, Any]] = []
+    required_periods = max(2, int(min_periods or 2))
     for leg in legs:
         returns = _returns_for_leg(leg, train=train, train_dates=train_dates, all_dates=all_dates)
-        vol = returns.std(ddof=0) if len(returns) else float("nan")
-        raw[leg.leg_id] = 0.0 if not math.isfinite(float(vol)) or float(vol) <= 0 else 1.0 / float(vol)
-    if sum(raw.values()) <= 0:
-        raise MultiAlphaCombinerError("risk_parity has no positive inverse-volatility weights; check leg realized returns")
+        finite_returns = _finite_float_series(returns)
+        vol = finite_returns.std(ddof=0) if len(finite_returns) else float("nan")
+        diagnostic = _risk_parity_leg_diagnostic(
+            leg_id=leg.leg_id,
+            returns=returns,
+            finite_returns=finite_returns,
+            train_dates=train_dates,
+            vol=vol,
+            required_periods=required_periods,
+        )
+        diagnostics.append(diagnostic)
+        if diagnostic["reason"] is None:
+            raw[leg.leg_id] = 1.0 / float(vol)
+        else:
+            raw[leg.leg_id] = 0.0
+    invalid = [item for item in diagnostics if item["reason"] is not None]
+    if invalid or sum(raw.values()) <= 0:
+        raise MultiAlphaCombinerError(_risk_parity_noncomputable_message(diagnostics, train_dates=train_dates))
     return _normalize_positive(raw, fallback=_equal_weights(legs))
 
 
@@ -307,16 +331,97 @@ def _returns_for_leg(
     all_dates: Sequence[Any],
 ) -> pd.Series:
     if leg.returns_by_date is not None:
-        return pd.Series([leg.returns_by_date[date] for date in train_dates if date in leg.returns_by_date], dtype="float64")
+        return pd.Series(
+            {date: leg.returns_by_date[date] for date in train_dates if date in leg.returns_by_date},
+            dtype="float64",
+        )
     if leg.realized_returns is not None:
         if len(leg.realized_returns) < len(all_dates):
             raise MultiAlphaCombinerError(
                 f"leg {leg.leg_id} realized_returns length={len(leg.realized_returns)} is shorter than date count={len(all_dates)}"
             )
         date_to_index = {date: idx for idx, date in enumerate(all_dates)}
-        return pd.Series([float(leg.realized_returns[date_to_index[date]]) for date in train_dates], dtype="float64")
+        return pd.Series(
+            {date: float(leg.realized_returns[date_to_index[date]]) for date in train_dates},
+            dtype="float64",
+        )
     raise MultiAlphaCombinerError(
         f"risk_parity requires realized_returns or returns_by_date for leg {leg.leg_id}; prediction scores are not returns"
+    )
+
+
+def _finite_float_series(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.empty:
+        return numeric.astype("float64")
+    finite_mask = numeric.notna() & numeric.map(lambda value: math.isfinite(float(value)))
+    return numeric[finite_mask].astype("float64")
+
+
+def _risk_parity_leg_diagnostic(
+    *,
+    leg_id: str,
+    returns: pd.Series,
+    finite_returns: pd.Series,
+    train_dates: Sequence[Any],
+    vol: float,
+    required_periods: int,
+) -> dict[str, Any]:
+    missing_dates = [_date_text(date) for date in train_dates if date not in set(returns.index)]
+    valid_count = int(len(finite_returns))
+    reason: str | None
+    if valid_count < required_periods:
+        reason = "insufficient_valid_returns"
+    elif not math.isfinite(float(vol)):
+        reason = "non_finite_volatility"
+    elif float(vol) <= 0:
+        reason = "non_positive_volatility"
+    else:
+        reason = None
+    return {
+        "leg_id": leg_id,
+        "reason": reason,
+        "vol": float(vol) if math.isfinite(float(vol)) else float("nan"),
+        "valid_return_count": valid_count,
+        "observed_return_count": int(len(returns)),
+        "train_date_count": int(len(train_dates)),
+        "required_periods": int(required_periods),
+        "missing_dates": missing_dates,
+    }
+
+
+def _risk_parity_noncomputable_message(
+    diagnostics: Sequence[Mapping[str, Any]],
+    *,
+    train_dates: Sequence[Any],
+) -> str:
+    window = (
+        f"{_date_text(train_dates[0])}..{_date_text(train_dates[-1])}"
+        if train_dates
+        else "<empty>"
+    )
+    parts = []
+    for item in diagnostics:
+        reason = item["reason"] or "computable"
+        vol = item["vol"]
+        vol_text = f"{float(vol):.12g}" if math.isfinite(float(vol)) else "nan"
+        missing = ",".join(item["missing_dates"]) if item["missing_dates"] else "-"
+        parts.append(
+            "leg={leg_id} reason={reason} vol={vol} valid_returns={valid}/{train} "
+            "observed_returns={observed} required_min_periods={required} missing_dates={missing}".format(
+                leg_id=item["leg_id"],
+                reason=reason,
+                vol=vol_text,
+                valid=item["valid_return_count"],
+                train=item["train_date_count"],
+                observed=item["observed_return_count"],
+                required=item["required_periods"],
+                missing=missing,
+            )
+        )
+    return (
+        "risk_parity has non-computable inverse-volatility weights "
+        f"for train_window={window}; " + "; ".join(parts)
     )
 
 
@@ -573,6 +678,7 @@ def _combine_walk_forward(
             train_dates=train_dates,
             all_dates=dates,
             walk_forward=True,
+            min_periods=config.min_periods,
         )
         out = _combine_aligned(aligned, weights=weights, dates=[apply_date])
         rows.append(out)

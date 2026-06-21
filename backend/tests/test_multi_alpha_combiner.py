@@ -72,6 +72,61 @@ def test_risk_parity_prefers_lower_realized_volatility() -> None:
     assert math.isclose(sum(result.weights.values()), 1.0)
 
 
+def test_walk_forward_risk_parity_uses_dated_topk_returns_for_positive_weights() -> None:
+    legs = [
+        CombinerLeg(
+            "volatile",
+            _frame([[1, 2, 3], [1, 2, 3], [1, 2, 3]]),
+            returns_by_date={DATES[0]: 0.0, DATES[1]: 0.2, DATES[2]: -0.2},
+        ),
+        CombinerLeg(
+            "steady",
+            _frame([[2, 3, 4], [2, 3, 4], [2, 3, 4]]),
+            returns_by_date={DATES[0]: 0.01, DATES[1]: 0.02, DATES[2]: 0.01},
+        ),
+    ]
+
+    result = MultiAlphaCombiner().combine(
+        legs=legs,
+        weighting_scheme="risk_parity",
+        walk_forward={"enabled": True, "window": 2, "min_periods": 2},
+    )
+
+    assert result.summary["walk_forward"]["window_count"] == 1
+    weights = result.per_window_weights[0]["weights"]
+    assert result.per_window_weights[0]["apply_date"] == "2026-01-04"
+    assert weights["steady"] > weights["volatile"] > 0
+    assert math.isclose(sum(weights.values()), 1.0)
+
+
+def test_walk_forward_risk_parity_reports_noncomputable_leg_details() -> None:
+    legs = [
+        CombinerLeg(
+            "flat",
+            _frame([[1, 2, 3], [1, 2, 3], [1, 2, 3]]),
+            returns_by_date={DATES[0]: 0.01, DATES[1]: 0.01, DATES[2]: 0.01},
+        ),
+        CombinerLeg(
+            "moving",
+            _frame([[2, 3, 4], [2, 3, 4], [2, 3, 4]]),
+            returns_by_date={DATES[0]: 0.0, DATES[1]: 0.2, DATES[2]: -0.2},
+        ),
+    ]
+
+    with pytest.raises(MultiAlphaCombinerError) as excinfo:
+        MultiAlphaCombiner().combine(
+            legs=legs,
+            weighting_scheme="risk_parity",
+            walk_forward={"enabled": True, "window": 2, "min_periods": 2},
+        )
+
+    message = str(excinfo.value)
+    assert "train_window=2026-01-02..2026-01-03" in message
+    assert "leg=flat reason=non_positive_volatility vol=0" in message
+    assert "valid_returns=2/2" in message
+    assert "leg=moving reason=computable" in message
+
+
 def test_risk_parity_requires_realized_returns() -> None:
     legs = [
         CombinerLeg("a", _frame([[1, 2, 3], [1, 2, 3], [1, 2, 3]])),
