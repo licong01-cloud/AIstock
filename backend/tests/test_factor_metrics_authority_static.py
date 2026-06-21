@@ -220,6 +220,17 @@ def test_quantevolver_ui_does_not_reference_legacy_factor_metric_fields() -> Non
     assert not bad_locations, "Quantevolver UI uses legacy factor fields: " + ", ".join(bad_locations)
 
 
+def test_retired_backend_factor_backfill_scripts_are_removed() -> None:
+    """Backend legacy backfill/sync scripts must not remain executable."""
+    retired = (
+        REPO_ROOT / "backend" / "scripts" / "batch_factor_metrics_sync.py",
+        REPO_ROOT / "backend" / "scripts" / "backfill_missing_factors.py",
+        REPO_ROOT / "backend" / "scripts" / "backfill_missing_factors_v2.py",
+    )
+
+    assert not any(path.exists() for path in retired)
+
+
 def test_official_qe_eval_v2_metric_paths_do_not_import_rdagent_factor_metrics() -> None:
     """AIstock official qe_eval_v2 metrics must be self-contained, not RD-Agent-owned."""
     banned = "rdagent.app.factor_metrics"
