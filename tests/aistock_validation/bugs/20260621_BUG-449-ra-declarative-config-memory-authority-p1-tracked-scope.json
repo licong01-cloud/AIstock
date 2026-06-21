@@ -31,6 +31,12 @@
       "actor": "codex",
       "action": "scope_registration_for_pr_1383",
       "note": "Registered BUG-449 to provide explicit allowed_write_scope and validation evidence for PR #1383 PR-quality P0/P1 gate."
+    },
+    {
+      "timestamp": "2026-06-21T11:28:00Z",
+      "actor": "codex",
+      "action": "rebase_origin_main",
+      "note": "Rebased PR branch onto origin/main 970acb82; implementation commit became 65420cd2."
     }
   ],
   "evidence_uris": [
@@ -40,7 +46,7 @@
   "expected": "Backend source PRs for RA P1 config work carry linked GitHub issue, BUG JSON, validation evidence, production gates, and allowed_write_scope covering all changed files.",
   "first_seen_at": "2026-06-21T11:07:53.506580Z",
   "fix_branch": "feature/ra-declarative-config-memory-authority-p1-20260621",
-  "fix_commit": "8481bc76",
+  "fix_commit": "65420cd2",
   "fixed_at": null,
   "github_issue_number": 1389,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1389",
