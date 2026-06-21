@@ -1,0 +1,77 @@
+{
+  "actual": "Final job exits code 2 with unrecognized arguments: --stdout-format compact.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260621_BUG-454-nightly-summary-janitor-passes-unsupported-stdout-format-compact.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-454",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T15:54:14.287419Z",
+  "description": "Final job exits code 2 with unrecognized arguments: --stdout-format compact.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-05f58b326503",
+      "timestamp": "2026-06-21T15:54:14.287414Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/27882799951/job/82517362163"
+  ],
+  "expected": "Nightly summary/auto-bug can close stale issues after recovery without failing when all upstream jobs are green.",
+  "first_seen_at": "2026-06-21T15:54:14.287419Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1408,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1408",
+  "last_seen_at": "2026-06-21T15:54:14.287419Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 27882799951 --repo licong01-cloud/AIstock --job 82517362163 --log",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly summary janitor passes unsupported stdout-format compact",
+  "trigger_condition": {
+    "fingerprint": "05f58b3265034df6f9f7653c",
+    "source_event_id": "FE-20260621-05f58b326503"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
