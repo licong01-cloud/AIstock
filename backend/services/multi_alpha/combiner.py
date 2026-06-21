@@ -114,6 +114,54 @@ class MultiAlphaCombiner:
         )
         return CombineResult(combined_score_frame=combined, weights=weights, per_window_weights=per_window, summary=summary)
 
+    def combine_rank_fusion(
+        self,
+        *,
+        legs: Sequence[CombinerLeg | Mapping[str, Any]],
+        method: str = "rrf",
+        rrf_k: float = 60.0,
+        leg_weights: Mapping[str, float] | None = None,
+    ) -> CombineResult:
+        """Combine prediction legs by per-date score ranks without labels."""
+
+        normalized_legs = [_coerce_leg(item) for item in legs]
+        if len(normalized_legs) < 2:
+            raise MultiAlphaCombinerError("at least two legs are required")
+        if len({leg.leg_id for leg in normalized_legs}) != len(normalized_legs):
+            raise MultiAlphaCombinerError("leg ids must be unique")
+
+        fusion_method = _normalize_rank_fusion_method(method)
+        k = _normalize_rrf_k(rrf_k) if fusion_method == "rrf" else 60.0
+        weights = _rank_fusion_weights(normalized_legs, leg_weights)
+        ranked_frames = {leg.leg_id: _rank_fusion_leg_scores(leg) for leg in normalized_legs}
+        candidate_dates = _rank_fusion_candidate_dates(normalized_legs, ranked_frames)
+        combined, dropped_dates = _combine_rank_fusion_frames(
+            ranked_frames,
+            weights=weights,
+            method=fusion_method,
+            rrf_k=k,
+            candidate_dates=candidate_dates,
+        )
+        summary = _rank_fusion_summary(
+            combined,
+            legs=normalized_legs,
+            ranked_frames=ranked_frames,
+            method=fusion_method,
+            rrf_k=k,
+            dropped_dates=dropped_dates,
+        )
+        return CombineResult(combined_score_frame=combined, weights=weights, per_window_weights=[], summary=summary)
+
+    def rank_fusion(
+        self,
+        *,
+        legs: Sequence[CombinerLeg | Mapping[str, Any]],
+        method: str = "rrf",
+        rrf_k: float = 60.0,
+        leg_weights: Mapping[str, float] | None = None,
+    ) -> CombineResult:
+        return self.combine_rank_fusion(legs=legs, method=method, rrf_k=rrf_k, leg_weights=leg_weights)
+
 
 def _coerce_leg(item: CombinerLeg | Mapping[str, Any]) -> CombinerLeg:
     if isinstance(item, CombinerLeg):
@@ -304,6 +352,198 @@ def _combine_aligned(aligned: pd.DataFrame, *, weights: Mapping[str, float], dat
             raise MultiAlphaCombinerError(f"aligned panel missing leg column {col}")
         selected["combined_score"] += float(weight) * selected[col]
     return selected[["trade_date", "instrument", "combined_score"]].sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+
+
+def _normalize_rank_fusion_method(value: str) -> str:
+    method = str(value or "rrf").strip().lower().replace("_", "-")
+    aliases = {
+        "reciprocal-rank-fusion": "rrf",
+        "rank-fusion-rrf": "rrf",
+        "rank-fusion-borda": "borda",
+    }
+    method = aliases.get(method, method)
+    allowed = {"rrf", "borda"}
+    if method not in allowed:
+        raise MultiAlphaCombinerError(f"unsupported rank_fusion method={value!r}; expected one of {sorted(allowed)}")
+    return method
+
+
+def _normalize_rrf_k(value: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MultiAlphaCombinerError(f"rrf_k must be numeric, got {value!r}") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise MultiAlphaCombinerError(f"rrf_k must be positive and finite, got {value!r}")
+    return parsed
+
+
+def _rank_fusion_weights(legs: Sequence[CombinerLeg], leg_weights: Mapping[str, float] | None) -> dict[str, float]:
+    if leg_weights is None:
+        return {leg.leg_id: 1.0 for leg in legs}
+    input_weights = {str(key): value for key, value in leg_weights.items()}
+    raw: dict[str, float] = {}
+    unknown = sorted(set(input_weights) - {leg.leg_id for leg in legs})
+    if unknown:
+        raise MultiAlphaCombinerError(f"leg_weights contains unknown leg ids: {unknown}")
+    for leg in legs:
+        value = input_weights.get(leg.leg_id, 1.0)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise MultiAlphaCombinerError(f"leg_weights for {leg.leg_id} must be numeric, got {value!r}") from exc
+        if not math.isfinite(parsed) or parsed < 0:
+            raise MultiAlphaCombinerError(f"leg_weights for {leg.leg_id} must be non-negative and finite, got {value!r}")
+        raw[leg.leg_id] = parsed
+    if sum(raw.values()) <= 0:
+        raise MultiAlphaCombinerError("leg_weights must contain at least one positive weight")
+    return raw
+
+
+def _rank_fusion_leg_scores(leg: CombinerLeg) -> pd.DataFrame:
+    _reject_label_only_rank_fusion_source(leg)
+    frame = normalize_prediction_frame(leg.pred_frame, run_id=leg.leg_id)
+    frame = frame.sort_values(["trade_date", "score", "instrument"], ascending=[True, False, True]).reset_index(drop=True)
+    frame["rank"] = frame.groupby("trade_date").cumcount() + 1
+    frame["date_count"] = frame.groupby("trade_date")["instrument"].transform("size")
+    return frame[["trade_date", "instrument", "rank", "date_count"]]
+
+
+def _reject_label_only_rank_fusion_source(leg: CombinerLeg) -> None:
+    if isinstance(leg.pred_frame, pd.Series):
+        if str(leg.pred_frame.name or "").lower() == "label":
+            raise MultiAlphaCombinerError(f"rank_fusion refuses label-only score source for leg {leg.leg_id}")
+        return
+    frame = leg.pred_frame if isinstance(leg.pred_frame, pd.DataFrame) else pd.DataFrame(leg.pred_frame)
+    score_col = _rank_fusion_column_by_names(frame, ("score", "prediction", "pred"))
+    label_col = _rank_fusion_column_by_names(frame, ("label",))
+    if score_col is None and label_col is not None:
+        raise MultiAlphaCombinerError(f"rank_fusion refuses label-only score source for leg {leg.leg_id}")
+
+
+def _rank_fusion_candidate_dates(legs: Sequence[CombinerLeg], ranked_frames: Mapping[str, pd.DataFrame]) -> list[Any]:
+    candidate_dates: set[Any] = set()
+    for leg in legs:
+        metadata_dates = leg.metadata.get("trade_dates") if isinstance(leg.metadata, Mapping) else None
+        if metadata_dates is not None:
+            for raw_date in metadata_dates:
+                date = pd.to_datetime(raw_date, errors="coerce")
+                if pd.notna(date):
+                    candidate_dates.add(date.date())
+        candidate_dates.update(_candidate_dates_from_prediction_obj(leg.pred_frame))
+        candidate_dates.update(ranked_frames[leg.leg_id]["trade_date"].unique())
+    return _sorted_dates(candidate_dates)
+
+
+def _candidate_dates_from_prediction_obj(obj: Any) -> set[Any]:
+    if isinstance(obj, pd.Series):
+        frame = obj.to_frame(name="score")
+    elif isinstance(obj, pd.DataFrame):
+        frame = obj.copy()
+    else:
+        frame = pd.DataFrame(obj)
+    values: Any | None = None
+    if isinstance(frame.index, pd.MultiIndex):
+        index_names = [str(name or "").lower() for name in frame.index.names]
+        date_level = _find_rank_fusion_level(index_names, ("datetime", "date", "trade_date", "time"))
+        if date_level is None and frame.index.nlevels >= 2:
+            date_level = 0
+        values = frame.index.get_level_values(date_level) if date_level is not None else None
+    elif isinstance(frame.index, pd.DatetimeIndex):
+        values = frame.index
+    else:
+        date_col = _rank_fusion_column_by_names(frame, ("datetime", "date", "trade_date", "time"))
+        values = frame[date_col] if date_col is not None else None
+    if values is None:
+        return set()
+    dates = pd.to_datetime(values, errors="coerce")
+    return {date.date() for date in dates if pd.notna(date)}
+
+
+def _rank_fusion_column_by_names(frame: pd.DataFrame, names: Sequence[str]) -> Any | None:
+    lowered = {str(col).lower(): col for col in frame.columns}
+    for name in names:
+        if name in lowered:
+            return lowered[name]
+    return None
+
+
+def _find_rank_fusion_level(names: Sequence[str], tokens: Sequence[str]) -> int | None:
+    for idx, name in enumerate(names):
+        if any(token in name for token in tokens):
+            return idx
+    return None
+
+
+def _combine_rank_fusion_frames(
+    ranked_frames: Mapping[str, pd.DataFrame],
+    *,
+    weights: Mapping[str, float],
+    method: str,
+    rrf_k: float,
+    candidate_dates: Sequence[Any],
+) -> tuple[pd.DataFrame, list[str]]:
+    rows: list[dict[str, Any]] = []
+    dropped_dates: list[str] = []
+    for trade_date in candidate_dates:
+        score_by_instrument: dict[str, float] = {}
+        for leg_id, frame in ranked_frames.items():
+            day = frame[frame["trade_date"] == trade_date]
+            if day.empty:
+                continue
+            weight = float(weights[leg_id])
+            for row in day.itertuples(index=False):
+                instrument = str(row.instrument)
+                contribution = _rank_fusion_contribution(method=method, rank=float(row.rank), date_count=float(row.date_count), rrf_k=rrf_k)
+                score_by_instrument[instrument] = score_by_instrument.get(instrument, 0.0) + weight * contribution
+        if not score_by_instrument:
+            dropped_dates.append(_date_text(trade_date))
+            continue
+        rows.extend(
+            {"trade_date": trade_date, "instrument": instrument, "combined_score": score}
+            for instrument, score in score_by_instrument.items()
+        )
+    if not rows:
+        raise MultiAlphaCombinerError("rank_fusion produced no combined rows; all candidate dates were empty")
+    combined = pd.DataFrame(rows)
+    combined = combined.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+    return combined[["trade_date", "instrument", "combined_score"]], dropped_dates
+
+
+def _rank_fusion_contribution(*, method: str, rank: float, date_count: float, rrf_k: float) -> float:
+    if method == "rrf":
+        return 1.0 / (rrf_k + rank)
+    if method == "borda":
+        return date_count - rank
+    raise MultiAlphaCombinerError(f"unsupported rank_fusion method={method!r}")
+
+
+def _rank_fusion_summary(
+    combined: pd.DataFrame,
+    *,
+    legs: Sequence[CombinerLeg],
+    ranked_frames: Mapping[str, pd.DataFrame],
+    method: str,
+    rrf_k: float,
+    dropped_dates: Sequence[str],
+) -> dict[str, Any]:
+    dates = _sorted_dates(combined["trade_date"].unique())
+    observed_dates = _sorted_dates(set().union(*(set(frame["trade_date"].unique()) for frame in ranked_frames.values())))
+    return {
+        "leg_count": len(legs),
+        "legs": [leg.leg_id for leg in legs],
+        "weighting_scheme": f"rank_fusion_{method}",
+        "rank_fusion_method": method,
+        "rrf_k": rrf_k if method == "rrf" else None,
+        "row_count": int(len(combined)),
+        "input_row_count": int(sum(len(frame) for frame in ranked_frames.values())),
+        "n_dates": int(len(dates)),
+        "date_start": _date_text(dates[0]) if dates else None,
+        "date_end": _date_text(dates[-1]) if dates else None,
+        "input_date_count": int(len(observed_dates)),
+        "instrument_count": int(combined["instrument"].nunique()),
+        "dropped_dates": list(dropped_dates),
+    }
 
 
 def _combine_walk_forward(
