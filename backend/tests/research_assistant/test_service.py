@@ -5,6 +5,7 @@ import json
 import logging
 
 import pytest
+import yaml
 
 from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.services.research_assistant.models import (
@@ -293,6 +294,20 @@ def test_issue_candidate_fact_source_initializes_pipeline_center_lazily() -> Non
     assert calls == ["created"]
     source.issue_candidate_summary()
     assert calls == ["created"]
+
+
+def _write_runtime_config_fixture(tmp_path, mutator) -> object:
+    payload = copy.deepcopy(load_runtime_config().config)
+    mutator(payload)
+    path = tmp_path / "runtime_context.yaml"
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _reload_runtime_config_fixture(svc: ResearchAssistantService, tmp_path, mutator) -> object:
+    path = _write_runtime_config_fixture(tmp_path, mutator)
+    svc.reload_declarative_config(runtime_config_path=path)
+    return path
 
 
 def _runtime_config_payload_with_mutated_capability(capability_key: str, field: str, value: object) -> dict[str, object]:
@@ -1067,36 +1082,124 @@ def test_runtime_config_declares_api_list_limit_for_each_catalog() -> None:
     assert missing == []
 
 
-def test_bad_active_runtime_config_mcp_tool_refs_returns_specific_config_error() -> None:
+def test_bad_declarative_runtime_config_mcp_tool_refs_returns_specific_config_error(tmp_path) -> None:
+    def mutate(config: dict[str, object]) -> None:
+        planner = config["planner"]
+        assert isinstance(planner, dict)
+        capabilities = planner["workflow_capabilities"]
+        assert isinstance(capabilities, list)
+        for capability in capabilities:
+            assert isinstance(capability, dict)
+            if capability["capability_key"] == "skill_library.reuse":
+                capability["mcp_tool_refs"] = "[]"
+                break
+        else:
+            raise AssertionError("skill_library.reuse capability missing from runtime config")
+
+    runtime_path = _write_runtime_config_fixture(tmp_path, mutate)
+
+    with pytest.raises(ResearchAssistantRuntimeConfigInvalidError) as exc_info:
+        ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), runtime_config_path=runtime_path)
+
+    error = exc_info.value.error_payload
+    text = str(error)
+    assert error["reason_code"] == "declarative_config_invalid_capability_mcp_tool_refs"
+    assert error["stage"] == "declarative_config_load"
+    assert error["config_key"] == "research_assistant.runtime_context"
+    assert error["capability_key"] == "skill_library.reuse"
+    assert error["field"] == "mcp_tool_refs"
+    assert error["actual_type"] == "str"
+    assert "operator_action=fix configs/research_assistant/runtime_context.yaml" in error["message"]
+    assert "chat_turn_unexpected_error" not in text
+
+
+def test_bad_declarative_prompt_pack_returns_specific_config_error(tmp_path) -> None:
+    pack_path = tmp_path / "pack.yaml"
+    pack_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_prompt_pack_v1",
+                "pack_key": "research_assistant.main",
+                "pack_version": "test-bad",
+                "nodes": [],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ResearchAssistantRuntimeConfigInvalidError) as exc_info:
+        ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), prompt_pack_path=pack_path)
+
+    error = exc_info.value.error_payload
+    assert error["reason_code"] == "declarative_config_invalid_prompt_pack"
+    assert error["stage"] == "declarative_config_load"
+    assert error["field"] == "prompt_pack"
+    assert str(error["source_path"]).endswith("pack.yaml")
+    assert "operator_action=fix YAML and restart/reload Research Assistant" in error["message"]
+
+
+def test_declarative_config_parity_with_db_projection_after_seed() -> None:
     svc = _chat_service()
-    activation = svc.active_runtime_config_activation()
-    config = copy.deepcopy(activation["config_json"])
+    memory_by_key = {item["capability_key"]: item for item in svc._workflow_capabilities()}
+    projected = svc.repository.list_records("capabilities", limit=svc.configured_limit("api_list_capabilities"))["items"]
+    projected_by_key = {item["capability_key"]: item for item in projected}
+
+    assert set(projected_by_key) == set(memory_by_key)
+    for key, memory_item in memory_by_key.items():
+        projected_item = projected_by_key[key]
+        for field in ("capability_key", "mcp_tool_refs", "skill_refs", "risk_level", "side_effect_level", "status"):
+            assert projected_item[field] == memory_item[field]
+
+
+def test_declarative_prompt_pack_parity_and_db_projection_pollution_ignored() -> None:
+    svc = _chat_service()
+    memory_by_key = {item["prompt_key"]: item for item in svc.declarative_config.prompt_node_list()}
+    projected = svc.repository.list_records("prompt_nodes", limit=svc.configured_limit("prompt_nodes_active"))["items"]
+    projected_by_key = {item["prompt_key"]: item for item in projected}
+
+    assert set(projected_by_key) == set(memory_by_key)
+    for key, memory_item in memory_by_key.items():
+        projected_item = projected_by_key[key]
+        for field in ("prompt_key", "prompt_text", "checksum", "status"):
+            assert projected_item[field] == memory_item[field]
+
+    root = svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant"})
+    assert root is not None
+    svc.repository.update_record("prompt_nodes", root["prompt_node_id"], {"prompt_text": "DB projection polluted"})
+
+    assert svc._prompt_text("root.assistant") == memory_by_key["root.assistant"]["prompt_text"]
+    assert svc._prompt_text_for_key("root.assistant") == memory_by_key["root.assistant"]["prompt_text"]
+    listed = svc.list_records("prompt_nodes", filters={"prompt_key": "root.assistant"})
+    assert listed["declarative_authority"] == "yaml_memory"
+    assert listed["items"][0]["prompt_text"] == memory_by_key["root.assistant"]["prompt_text"]
+
+
+def test_db_runtime_config_projection_mutation_is_not_declarative_read_authority() -> None:
+    svc = _chat_service()
+    activation_id = svc.active_runtime_config_activation()["activation_id"]
+    projected = svc.repository.get_record("runtime_config_activations", activation_id)
+    assert projected is not None
+    config = copy.deepcopy(projected["config_json"])
     for capability in config["planner"]["workflow_capabilities"]:
         if capability["capability_key"] == "skill_library.reuse":
             capability["mcp_tool_refs"] = "[]"
             break
     else:
-        raise AssertionError("skill_library.reuse capability missing from seeded runtime config")
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+        raise AssertionError("skill_library.reuse capability missing from projected runtime config")
+    svc.repository.update_record("runtime_config_activations", activation_id, {"config_json": config})
 
-    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本情况、近期走势、未来趋势怎样", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(message="stock analysis question", dialogue_mode_override="analysis"))
 
     text = result["assistant_message"]["content_text"]
-    error = result["cards"]["error_card"]["error"]
-    assert "reason_code=runtime_config_invalid_capability_mcp_tool_refs" in text
+    assert "runtime_config_invalid_capability_mcp_tool_refs" not in text
+    assert "declarative_config_invalid_capability_mcp_tool_refs" not in text
     assert "chat_turn_unexpected_error" not in text
-    assert "activation_id=" in text
-    assert "config_key=research_assistant.runtime_context" in text
-    assert "capability_key=skill_library.reuse" in text
-    assert "field=mcp_tool_refs" in text
-    assert "actual_type=str" in text
-    assert "从 YAML 重新 seed/导入 RA runtime config 后重启后端" in text
-    assert error["reason_code"] == "runtime_config_invalid_capability_mcp_tool_refs"
-    assert error["capability_key"] == "skill_library.reuse"
-    assert error["field"] == "mcp_tool_refs"
-    assert error["actual_type"] == "str"
-    assert result["cards"]["safety"]["fail_closed"] is True
-    assert result["task_events_ref"]["default_limit"] == 100
+    assert "error_card" not in result["cards"]
+    listed = svc.list_records("runtime_config_activations", filters={"status": "active"})
+    assert listed["declarative_authority"] == "yaml_memory"
+    assert listed["items"][0]["config_json"]["planner"]["workflow_capabilities"] != config["planner"]["workflow_capabilities"]
 
 
 def test_active_runtime_config_accepts_empty_mcp_tool_refs_list() -> None:
@@ -1108,7 +1211,7 @@ def test_active_runtime_config_accepts_empty_mcp_tool_refs_list() -> None:
     assert reuse["mcp_tool_refs"] == []
 
 
-def test_bug_439_empty_registry_mcp_tool_refs_shapes_self_heal_without_chat_crash(caplog: pytest.LogCaptureFixture) -> None:
+def test_bug_439_empty_registry_mcp_tool_refs_shape_is_ignored_by_declarative_reads(caplog: pytest.LogCaptureFixture) -> None:
     svc = _chat_service()
     capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
     assert capability is not None
@@ -1116,38 +1219,37 @@ def test_bug_439_empty_registry_mcp_tool_refs_shapes_self_heal_without_chat_cras
     svc.repository.create_record("capabilities", capability)
 
     caplog.set_level(logging.WARNING)
-    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本面和未来走势如何", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(message="stock analysis question", dialogue_mode_override="analysis"))
 
     text = result["assistant_message"]["content_text"]
-    repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
-    assert repaired is not None
-    assert repaired["mcp_tool_refs"] == []
+    unchanged = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert unchanged is not None
+    assert unchanged["mcp_tool_refs"] == {}
     assert "chat_turn_unexpected_error" not in text
     assert result["cards"].get("error_card", {}).get("reason_code") != "chat_turn_unexpected_error"
-    assert "capability registry empty ref shape repaired" in caplog.text
+    assert "capability registry empty ref shape repaired" not in caplog.text
 
 
-def test_bug_439_non_empty_registry_mcp_tool_refs_dict_returns_specific_config_error() -> None:
+def test_bug_439_non_empty_registry_mcp_tool_refs_dict_is_ignored_by_declarative_reads() -> None:
     svc = _chat_service()
     capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
     assert capability is not None
-    capability["mcp_tool_refs"] = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
+    dirty_refs = {"server_key": "research-assistant", "tool_name": "assistant_list_mcp_tools"}
+    capability["mcp_tool_refs"] = dirty_refs
     svc.repository.create_record("capabilities", capability)
 
-    result = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本面和未来走势如何", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(message="stock analysis question", dialogue_mode_override="analysis"))
 
     text = result["assistant_message"]["content_text"]
-    error = result["cards"]["error_card"]["error"]
-    assert "reason_code=capability_registry_invalid_mcp_tool_refs" in text
+    unchanged = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    assert unchanged is not None
+    assert unchanged["mcp_tool_refs"] == dirty_refs
+    assert "capability_registry_invalid_mcp_tool_refs" not in text
     assert "chat_turn_unexpected_error" not in text
-    assert "capability_key=skill_library.reuse" in text
-    assert "field=mcp_tool_refs" in text
-    assert "actual_type=dict" in text
-    assert error["reason_code"] == "capability_registry_invalid_mcp_tool_refs"
-    assert error["capability_key"] == "skill_library.reuse"
-    assert error["field"] == "mcp_tool_refs"
-    assert error["actual_type"] == "dict"
-    assert result["cards"]["safety"]["fail_closed"] is True
+    assert "error_card" not in result["cards"]
+    listed = svc.list_records("capabilities", filters={"capability_key": "skill_library.reuse"})
+    assert listed["declarative_authority"] == "yaml_memory"
+    assert listed["items"][0]["mcp_tool_refs"] == []
 
 
 def test_bug_439_repository_json_adapter_preserves_empty_lists() -> None:
@@ -1191,7 +1293,7 @@ def test_bug_439_sync_refuses_non_empty_non_list_registry_refs() -> None:
     assert error["actual_type"] == "dict"
 
 
-def test_bug_439_catalog_ready_path_self_heals_empty_registry_refs() -> None:
+def test_bug_439_catalog_ready_path_does_not_make_db_projection_authoritative() -> None:
     svc = _chat_service()
     capability = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
     assert capability is not None
@@ -1200,21 +1302,23 @@ def test_bug_439_catalog_ready_path_self_heals_empty_registry_refs() -> None:
 
     readiness = svc.ensure_catalog_ready()
 
-    repaired = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
+    unchanged = svc.repository.find_one("capabilities", {"capability_key": "skill_library.reuse"})
     assert readiness["ready"] is True
-    assert repaired is not None
-    assert repaired["mcp_tool_refs"] == []
+    assert unchanged is not None
+    assert unchanged["mcp_tool_refs"] == {}
 
 
-def test_runtime_config_controls_api_page_defaults_and_max() -> None:
+def test_runtime_config_controls_api_page_defaults_and_max(tmp_path) -> None:
     svc = _service()
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["query_limits"] = dict(config["query_limits"])
-    config["query_limits"]["api_list_skills"] = 2
-    config["query_limits"]["api_list_max_page_size"] = 3
-    config["query_limits"]["router_mcp_servers"] = 1
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        query_limits = dict(config["query_limits"])
+        query_limits["api_list_skills"] = 2
+        query_limits["api_list_max_page_size"] = 3
+        query_limits["router_mcp_servers"] = 1
+        config["query_limits"] = query_limits
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
 
     skills = svc.list_records("skills")
     assert skills["page_size"] == 2
@@ -1229,13 +1333,15 @@ def test_runtime_config_controls_api_page_defaults_and_max() -> None:
         svc.list_records("skills", limit=0)
 
 
-def test_context_pack_token_budget_max_is_runtime_config_driven() -> None:
+def test_context_pack_token_budget_max_is_runtime_config_driven(tmp_path) -> None:
     svc = _service()
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["query_limits"] = dict(config["query_limits"])
-    config["query_limits"]["context_pack_max_token_budget"] = 9
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        query_limits = dict(config["query_limits"])
+        query_limits["context_pack_max_token_budget"] = 9
+        config["query_limits"] = query_limits
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
     task = svc.create_task(TaskCreate(title="context pack budget gate"))
 
     with pytest.raises(ValueError, match="context_pack_max_token_budget"):
@@ -2362,7 +2468,7 @@ def test_bug_403_business_summary_fails_closed_when_synthesis_is_unavailable() -
     assert "local_data_get_preset_daily_status" not in text
 
 
-def test_bug_352_local_data_daily_status_refreshes_stale_capability_cache() -> None:
+def test_bug_352_local_data_daily_status_ignores_stale_db_capability_projection() -> None:
     svc = _chat_service(FakeLlmClient())
     svc.local_data_service_factory = FakeLocalDataDailyStatusService
     capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
@@ -2390,9 +2496,9 @@ def test_bug_352_local_data_daily_status_refreshes_stale_capability_cache() -> N
     assert "Insufficient evidence" not in text
     assert "daily_basic" in text
     assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
-    refreshed = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
-    assert refreshed is not None
-    assert any(ref["tool_name"] == "local_data_get_preset_daily_status" for ref in refreshed["mcp_tool_refs"])
+    unchanged = svc.repository.find_one("capabilities", {"capability_key": "local_data.mcp_orchestration"})
+    assert unchanged is not None
+    assert all(ref["tool_name"] != "local_data_get_preset_daily_status" for ref in unchanged["mcp_tool_refs"])
 
 
 def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
@@ -2850,27 +2956,29 @@ def test_chat_history_token_budget_drops_oldest_first() -> None:
     assert "当前消息" in all_content
 
 
-def test_long_chat_auto_compacts_with_key_facts_and_fresh_tail() -> None:
+def test_long_chat_auto_compacts_with_key_facts_and_fresh_tail(tmp_path) -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["model_context"]["fallback_context_window_tokens"] = 10000
-    config["model_context"]["safety_buffer"]["ratio"] = 0.01
-    config["model_context"]["safety_buffer"]["min_tokens"] = 1
-    config["budget"]["response"]["reserved_ratio"] = 0.01
-    config["budget"]["response"]["min_reserved_tokens"] = 1
-    config["budget"]["response"]["max_tokens"] = 64
-    config["budget"]["context_pack"]["min_tokens"] = 1
-    config["history_fetch"]["page_size"] = 10
-    config["history_fetch"]["max_pages"] = 2
-    config["fresh_tail"]["min_messages"] = 1
-    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
-    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
-    config["compaction"]["trigger"]["proactive_utilization_ratio"] = 0.05
-    config["compaction"]["trigger"]["mandatory_utilization_ratio"] = 0.10
-    config["compaction"]["worker"]["max_output_ratio"] = 0.10
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        config["model_context"]["fallback_context_window_tokens"] = 10000
+        config["model_context"]["safety_buffer"]["ratio"] = 0.01
+        config["model_context"]["safety_buffer"]["min_tokens"] = 1
+        config["budget"]["response"]["reserved_ratio"] = 0.01
+        config["budget"]["response"]["min_reserved_tokens"] = 1
+        config["budget"]["response"]["max_tokens"] = 64
+        config["budget"]["context_pack"]["min_tokens"] = 1
+        config["history_fetch"]["page_size"] = 10
+        config["history_fetch"]["max_pages"] = 2
+        config["fresh_tail"]["min_messages"] = 1
+        config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+        config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+        config["compaction"]["trigger"]["proactive_utilization_ratio"] = 0.05
+        config["compaction"]["trigger"]["mandatory_utilization_ratio"] = 0.10
+        config["compaction"]["worker"]["max_output_ratio"] = 0.10
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
+    config = svc.active_runtime_config()
 
     conv_id = "conv_compact_001"
     svc.repository.create_record("conversations", {
@@ -2905,16 +3013,17 @@ def test_long_chat_auto_compacts_with_key_facts_and_fresh_tail() -> None:
     assert "3:" in final_content
 
 
-def test_reactive_context_overflow_compacts_and_retries_without_user_interruption() -> None:
+def test_reactive_context_overflow_compacts_and_retries_without_user_interruption(tmp_path) -> None:
     fake = PromptTooLongOnceLlmClient()
     svc = _chat_service(fake)
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["fresh_tail"]["min_messages"] = 1
-    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
-    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
-    config["compaction"]["worker"]["max_retries"] = 2
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        config["fresh_tail"]["min_messages"] = 1
+        config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+        config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+        config["compaction"]["worker"]["max_retries"] = 2
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
 
     conv_id = "conv_reactive_001"
     svc.repository.create_record("conversations", {
@@ -2946,12 +3055,13 @@ def test_reactive_context_overflow_compacts_and_retries_without_user_interruptio
     assert any("上一次模型调用因为上下文过长" in str(message["content"]) for message in retry_messages)
 
 
-def test_model_routing_uses_runtime_config_long_context_threshold() -> None:
+def test_model_routing_uses_runtime_config_long_context_threshold(tmp_path) -> None:
     svc = _service()
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["model_routing"]["long_context_trigger_tokens"] = 10
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        config["model_routing"]["long_context_trigger_tokens"] = 10
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
 
     route = svc.route_model(ModelRouteRequest(role="primary_reasoner", risk_level="medium", token_estimate=11))
 
@@ -2960,16 +3070,17 @@ def test_model_routing_uses_runtime_config_long_context_threshold() -> None:
     assert route["model_profile"]["model_profile_id"] == "model_deepseek_v4_pro_primary"
 
 
-def test_high_risk_reactive_overflow_fail_fast_after_configured_retries() -> None:
+def test_high_risk_reactive_overflow_fail_fast_after_configured_retries(tmp_path) -> None:
     fake = MainPromptTooLongLlmClient()
     svc = _chat_service(fake)
-    activation = svc.active_runtime_config_activation()
-    config = dict(activation["config_json"])
-    config["fresh_tail"]["min_messages"] = 1
-    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
-    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
-    config["compaction"]["worker"]["max_retries"] = 1
-    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    def mutate(config: dict[str, object]) -> None:
+        config["fresh_tail"]["min_messages"] = 1
+        config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+        config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+        config["compaction"]["worker"]["max_retries"] = 1
+
+    _reload_runtime_config_fixture(svc, tmp_path, mutate)
 
     conv_id = "conv_fail_fast_001"
     svc.repository.create_record("conversations", {
