@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-439",
-  "closed_at": null,
+  "closed_at": "2026-06-21T02:08:00Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,12 +38,18 @@
       "actor": "codex",
       "note": "Implemented registry-read fail-closed hardening for non-list mcp_tool_refs/skill_refs, fixed repository _adapt_json empty-list persistence provenance, added startup/sync self-heal for empty shapes, and added 010 repair migration forward/rollback. Validation passed: targeted BUG-439 pytest 7 passed; nox l0 passed; nox research_assistant_backend 291 passed; nox research_assistant_mcp_contract 38 passed; nox validation_module_registry_l0 8 passed; nox ra_phase7_full_accept passed (backend 291 passed, frontend lint/build with existing warnings, Playwright 4+8 passed, crosscheck/catalog/ownership passed); git diff --check passed; ruff changed files passed. No production DB connection, no DDL apply, no production service start/restart; production_ddl_gate remains pending.",
       "timestamp": "2026-06-20T20:13:27Z"
+    },
+    {
+      "action": "final_close_sync_metadata",
+      "actor": "codex",
+      "timestamp": "2026-06-21T02:08:00Z",
+      "note": "Post-merge aftercare: GitHub Issue #1355 is closed with status:fixed; BUG JSON remains status=fixed per registry schema, closed_at/fix_branch backfilled; production_ddl_gate stays pending because migration 010 was not applied by Codex."
     }
   ],
   "evidence_uris": [],
   "expected": "Registry-origin mcp_tool_refs are normalized or fail-closed with a specific capability_registry_invalid_mcp_tool_refs config error; empty dict/None/empty string normalize to []; non-empty non-list stays loud and specific; sync/migration repair legacy empty dict rows; chat_turn does not crash as unexpected error.",
   "first_seen_at": "2026-06-20T17:33:59.111728Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-439-ra-capability-registry-stores-mcp-tool-refs-non-20260621",
   "fix_commit": "d54c8ed1377aa33c74195a91077f33bebb9b4422",
   "fixed_at": "2026-06-21T02:03:46.412456Z",
   "github_issue_number": 1355,
