@@ -65,7 +65,7 @@ from .models import (
     PortfolioStatus,
 )
 from .replay import PaperTradingHistoricalReplay
-from .repository import PaperTradingV2Repository
+from .repository import PaperTradingV2Repository, assert_orders_terminal_before_run_success
 from .risk_targets import overlay_risk_forced_exit_targets
 
 
@@ -1432,6 +1432,7 @@ class PaperTradingLiveMinuteExecutor:
                 message="target positions match current positions; live day finalized without orders",
                 context={"trade_date": trade_date.isoformat(), "position_count": len(current_positions), "nav": snapshot.nav},
             )
+            self._assert_orders_terminal_before_success(run)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
             self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
             self.repository.update_session_status(
@@ -1811,10 +1812,11 @@ class PaperTradingLiveMinuteExecutor:
         allow_partial_fill = bool((policy_json.get("algo_config") or {}).get("allow_partial_fill", True))
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         remaining_states = [state for state in states if state.remaining_quantity > 0 and state.status not in FINAL_ORDER_STATUSES]
-        if remaining_states and not allow_partial_fill:
-            error = ExecutionAlgoError(
+        if remaining_states:
+            error = InvalidStateTransitionError(
                 "live minute execution left unfilled quantity at market close",
                 context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
                     "session_id": session.session_id,
                     "run_id": run.run_id,
                     "remaining_orders": [
@@ -1862,6 +1864,7 @@ class PaperTradingLiveMinuteExecutor:
                 "remaining_order_count": len(remaining_states),
             },
         )
+        self._assert_orders_terminal_before_success(run)
         self.repository.update_run_status(run, RunStatus.SUCCEEDED)
         self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
         self.repository.update_session_status(
@@ -1877,6 +1880,10 @@ class PaperTradingLiveMinuteExecutor:
             context={"trade_date": run.trade_date.isoformat(), "fill_count": len(fills), "nav": snapshot.nav},
         )
         return self._progress(session.session_id)
+
+    def _assert_orders_terminal_before_success(self, run: PaperRun) -> None:
+        orders = self.repository.list_orders_for_run(run.run_id)
+        assert_orders_terminal_before_run_success(run_id=run.run_id, orders=orders)
 
     def _mark_run_failed(self, session: PaperTradingSession, run: PaperRun, exc: TradingCoreError) -> None:
         error = exc.to_dict()

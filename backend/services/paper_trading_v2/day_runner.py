@@ -68,7 +68,7 @@ from backend.services.trading_core.models import (
 )
 from backend.services.trading_core.oms import OMS
 
-from .broker import MiniQMTSimBackend
+from .broker import MiniQMTSimBackend, OrderHandle
 from .execution import MiniQMTAlgoExecutionResult, build_minqmt_execution_quality_report
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
@@ -78,7 +78,7 @@ from .auto_run import (
     miniqmt_strategy_slot_id,
 )
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
-from .repository import PaperTradingV2Repository
+from .repository import PaperTradingV2Repository, assert_orders_terminal_before_run_success, non_terminal_orders_for_run_success
 from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
 
@@ -611,6 +611,7 @@ class PaperTradingDayRunner:
                     message="target positions match current positions; persisted mark-to-market snapshot without orders",
                     context={"position_count": len(position_list), "snapshot_time": snapshot_time.isoformat()},
                 )
+                self._assert_orders_terminal_before_success(run, [])
                 succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
                 ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
                 self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 no-rebalance day run succeeded")
@@ -751,6 +752,7 @@ class PaperTradingDayRunner:
                 snapshot=account_snapshot,
                 metadata={"position_count": len(position_list), "order_count": len(orders), "fill_count": len(fills)},
             )
+            self._assert_orders_terminal_before_success(run, orders)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
             ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
             self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 day run succeeded")
@@ -1691,7 +1693,43 @@ class PaperTradingDayRunner:
                 "execution_quality_report": execution_quality_report,
             },
         )
-        succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+        session_id = self._miniqmt_session_id_from_run(run)
+        open_orders = non_terminal_orders_for_run_success(orders)
+        if session_id and hasattr(self.repository, "get_session") and open_orders:
+            pending_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="MINIQMT_RUN_PENDING_RECONCILE",
+                message="MiniQMT broker-authoritative snapshot persisted with non-terminal orders; run requires later broker reconciliation",
+                context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                    "order_count": len(orders),
+                    "fill_count": fill_count,
+                    "new_fill_count": len(fills),
+                    "open_order_count": len(open_orders),
+                    "open_orders": open_orders,
+                },
+            )
+            return PaperDayRunResult(
+                portfolio=pending_portfolio,
+                run=run,
+                orders=orders,
+                fills=fills,
+                events=events,
+                positions=position_list,
+                account_snapshot=snapshot,
+            )
+        if not session_id and hasattr(self.repository, "get_session") and open_orders:
+            orders, terminal_events = self._terminalize_minqmt_orders_before_non_live_success(
+                run=run,
+                trade_date=trade_date,
+                broker=broker,
+                orders=orders,
+            )
+            events.extend(terminal_events)
+        if hasattr(self.repository, "get_session"):
+            self._assert_orders_terminal_before_success(run, orders)
+        succeeded = run if run.status == RunStatus.SUCCEEDED else self.repository.update_run_status(run, RunStatus.SUCCEEDED)
         ready_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         self.repository.save_run_event(
             run_id=run.run_id,
@@ -1733,6 +1771,103 @@ class PaperTradingDayRunner:
             positions=position_list,
             account_snapshot=snapshot,
         )
+
+    def _assert_orders_terminal_before_success(self, run: PaperRun, orders: list[Any] | None = None) -> None:
+        checked_orders = list(orders) if orders is not None else self.repository.list_orders_for_run(run.run_id)
+        assert_orders_terminal_before_run_success(run_id=run.run_id, orders=checked_orders)
+
+    def _terminalize_minqmt_orders_before_non_live_success(
+        self,
+        *,
+        run: PaperRun,
+        trade_date: date,
+        broker: MiniQMTSimBackend,
+        orders: list[Any],
+    ) -> tuple[list[Any], list[OrderEvent]]:
+        terminalized: list[Any] = []
+        events: list[OrderEvent] = []
+        for order in orders:
+            if not non_terminal_orders_for_run_success([order]):
+                terminalized.append(order)
+                continue
+            native = self._miniqmt_native_context_from_order(order)
+            if native is None:
+                raise InvalidStateTransitionError(
+                    "MiniQMT non-live run cannot be marked SUCCEEDED because an open order lacks native broker ids",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "status": order.status.value,
+                    },
+                )
+            handle = OrderHandle(
+                handle_id=native["handle_id"],
+                backend_id="minqmt_sim",
+                submitted_at=order.created_at,
+                intent_id=order.intent_id,
+            )
+            try:
+                ack = broker.cancel(handle)
+            except TradingCoreError:
+                raise
+            except Exception as exc:
+                raise BrokerSubmitError(
+                    "MiniQMT non-live run failed to cancel open order before success",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_TERMINALIZE_CANCEL_FAILED",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "handle_id": handle.handle_id,
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc),
+                    },
+                ) from exc
+            if not ack.accepted:
+                raise InvalidStateTransitionError(
+                    "MiniQMT non-live run cannot be marked SUCCEEDED because open order cancel was rejected",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_TERMINALIZE_CANCEL_REJECTED",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "handle_id": handle.handle_id,
+                        "cancel_reason": ack.reason,
+                    },
+                )
+            final_order, event = self.oms.cancel_order(
+                order,
+                ack.reason or "MiniQMT non-live run terminalized open order before success",
+            )
+            metadata = {
+                **dict(final_order.metadata or {}),
+                "authority_source": "MINIQMT_NON_LIVE_TERMINALIZE_BEFORE_SUCCESS",
+                "terminalize_reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                "terminalize_trade_date": trade_date.isoformat(),
+                "terminalize_cancel_ack": ack.model_dump(mode="json"),
+            }
+            final_order = final_order.model_copy(update={"metadata": metadata})
+            event = event.model_copy(update={"metadata": metadata})
+            self.repository.save_order_event(run.run_id, event)
+            self.repository.save_order(run.run_id, final_order)
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="MINIQMT_NON_LIVE_ORDER_CANCELLED_BEFORE_SUCCESS",
+                message="MiniQMT non-live run cancelled an open order before marking the run succeeded",
+                context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                    "order_id": order.order_id,
+                    "symbol": order.symbol,
+                    "previous_status": order.status.value,
+                    "final_status": final_order.status.value,
+                    "cancel_ack": ack.model_dump(mode="json"),
+                },
+            )
+            terminalized.append(final_order)
+            events.append(event)
+        return terminalized, events
 
     def reconcile_minqmt_native_run(
         self,

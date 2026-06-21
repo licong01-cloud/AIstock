@@ -12,7 +12,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, SessionLockTimeoutError
 from backend.services.trading_core.ledger import CashLedgerEntry
-from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, OrderStatus, PositionLot, RunStatus
 
 from .market_data import MinuteDataSource
 from .models import (
@@ -80,6 +80,69 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
     "latest_run_trade_date": "lr.trade_date",
     "latest_run_time": "COALESCE(lr.started_at, lr.completed_at)",
 }
+TERMINAL_RUN_STATUSES = {RunStatus.SUCCEEDED, RunStatus.FAILED}
+RUN_SUCCESS_TERMINAL_ORDER_STATUSES = {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
+
+
+def _terminal_run_status_values() -> tuple[str, ...]:
+    return tuple(status.value for status in TERMINAL_RUN_STATUSES)
+
+
+def _completed_at_for_run_status(status: RunStatus, current_completed_at: datetime | None) -> datetime | None:
+    return datetime.now(UTC) if status in TERMINAL_RUN_STATUSES else current_completed_at
+
+
+def _run_status_transition_error(
+    *,
+    run_id: str,
+    from_status: RunStatus | str | None,
+    to_status: RunStatus,
+    stale_run_status: RunStatus | str | None = None,
+) -> InvalidStateTransitionError:
+    from_value = from_status.value if isinstance(from_status, RunStatus) else from_status
+    stale_value = stale_run_status.value if isinstance(stale_run_status, RunStatus) else stale_run_status
+    context: dict[str, Any] = {
+        "reason_code": "PAPER_V2_RUN_TERMINAL_STATE_TRANSITION_BLOCKED",
+        "run_id": run_id,
+        "from_status": from_value,
+        "to_status": to_status.value,
+    }
+    if stale_value is not None:
+        context["stale_run_status"] = stale_value
+    return InvalidStateTransitionError(
+        "paper v2 run status transition blocked by current persisted state",
+        context=context,
+    )
+
+
+def non_terminal_orders_for_run_success(orders: list[Order]) -> list[dict[str, Any]]:
+    return [
+        {
+            "order_id": order.order_id,
+            "symbol": order.symbol,
+            "status": order.status.value,
+            "quantity": order.quantity,
+            "filled_quantity": order.filled_quantity,
+            "remaining_quantity": order.remaining_quantity,
+        }
+        for order in orders
+        if order.status not in RUN_SUCCESS_TERMINAL_ORDER_STATUSES
+    ]
+
+
+def assert_orders_terminal_before_run_success(*, run_id: str, orders: list[Order]) -> None:
+    open_orders = non_terminal_orders_for_run_success(orders)
+    if open_orders:
+        raise InvalidStateTransitionError(
+            "paper v2 run cannot be marked SUCCEEDED while orders are non-terminal",
+            context={
+                "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                "run_id": run_id,
+                "open_order_count": len(open_orders),
+                "open_orders": open_orders,
+                "terminal_order_statuses": sorted(status.value for status in RUN_SUCCESS_TERMINAL_ORDER_STATUSES),
+            },
+        )
 
 
 def _broker_binding_conflicts(existing: PaperBrokerAccountBinding, candidate: PaperBrokerAccountBinding) -> bool:
@@ -983,21 +1046,37 @@ class PaperTradingV2Repository:
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
         updated = run.model_copy(
-            update={"status": status, "error": error, "completed_at": datetime.now(UTC) if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else run.completed_at}
+            update={"status": status, "error": error, "completed_at": _completed_at_for_run_status(status, run.completed_at)}
         )
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE paper_v2.run SET status = %s, completed_at = %s, error_json = %s WHERE run_id = %s",
+                    """
+                    UPDATE paper_v2.run
+                    SET status = %s, completed_at = %s, error_json = %s
+                    WHERE run_id = %s
+                      AND status <> ALL(%s)
+                    """,
                     (
                         updated.status.value,
                         updated.completed_at,
                         psycopg2.extras.Json(error) if error else None,
                         updated.run_id,
+                        list(_terminal_run_status_values()),
                     ),
                 )
                 if cur.rowcount != 1:
-                    raise InvalidStateTransitionError("paper run update failed", context={"run_id": run.run_id})
+                    cur.execute("SELECT status FROM paper_v2.run WHERE run_id = %s", (run.run_id,))
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id})
+                    current_status = row[0]
+                    raise _run_status_transition_error(
+                        run_id=run.run_id,
+                        from_status=current_status,
+                        to_status=status,
+                        stale_run_status=run.status,
+                    )
         return updated
 
     def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
@@ -2924,8 +3003,19 @@ class InMemoryPaperTradingV2Repository:
             raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run_id}) from exc
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
+        try:
+            current = self.runs[run.run_id]
+        except KeyError as exc:
+            raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id}) from exc
+        if current.status in TERMINAL_RUN_STATUSES:
+            raise _run_status_transition_error(
+                run_id=run.run_id,
+                from_status=current.status,
+                to_status=status,
+                stale_run_status=run.status,
+            )
         updated = run.model_copy(
-            update={"status": status, "error": error, "completed_at": datetime.now(UTC) if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else run.completed_at}
+            update={"status": status, "error": error, "completed_at": _completed_at_for_run_status(status, current.completed_at)}
         )
         self.runs[run.run_id] = updated
         return updated

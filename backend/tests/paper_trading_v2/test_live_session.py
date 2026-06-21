@@ -24,8 +24,8 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import BrokerConnectivityError, DataUnavailableError
-from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, PositionLot, RunStatus
+from backend.services.trading_core.errors import BrokerConnectivityError, DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, OrderStatus, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -1502,3 +1502,66 @@ def test_live_tdx_fetch_failure_waits_without_failing_session() -> None:
     days = paper_repo.list_session_days(session.session_id)
     assert days[-1].run_id == run.run_id
     assert days[-1].last_processed_bar_time is None
+
+def test_live_finalize_does_not_mark_succeeded_with_open_order() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={
+                "validated_execution_policy": {
+                    "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 2, "allow_partial_fill": True}},
+                }
+            },
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 2),
+        )
+    ).model_copy(update={"status": OrderStatus.PARTIALLY_FILLED, "filled_quantity": 300, "avg_fill_price": 10.1})
+    paper_repo.save_order(run.run_id, order)
+    paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=300,
+            remaining_quantity=300,
+            status=OrderStatus.PARTIALLY_FILLED.value,
+            last_processed_bar_time=datetime(2024, 1, 2, 14, 59),
+        )
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(make_bars()),
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+            session.session_id,
+            as_of_time=datetime(2024, 1, 2, 16, 0),
+        )
+
+    assert exc_info.value.context["reason_code"] == "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS"
+    assert exc_info.value.context["run_id"] == run.run_id
+    assert paper_repo.get_run(run.run_id).status == RunStatus.FAILED
