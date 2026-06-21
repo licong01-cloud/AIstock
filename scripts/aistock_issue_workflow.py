@@ -10564,6 +10564,12 @@ def build_parser() -> argparse.ArgumentParser:
             default="compact",
             help="Stdout format. Default compact keeps success output short; --output still writes the full JSON artifact.",
         )
+        command_parser.add_argument(
+            "--stdout-format",
+            choices=OUTPUT_FORMAT_CHOICES,
+            dest="output_format",
+            help=argparse.SUPPRESS,
+        )
     doctor = sub.add_parser("doctor", help="Check repo, GitHub, MCP, and client-entry readiness.")
     doctor.add_argument("--skip-external", action="store_true", help="Skip gh/network-style checks for offline tests.")
     add_output_options(doctor)

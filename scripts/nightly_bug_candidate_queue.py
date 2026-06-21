@@ -169,6 +169,10 @@ def discovery_effectiveness_summary(
         no_candidate_reason = summary.get("no_candidate_reason") or "candidate_quality_gate_found_no_actionable_candidate"
     elif quality_debt_count == candidate_count:
         no_candidate_reason = "only_historical_quality_debt_candidates"
+    elif len(issue_payload_refs) == 0 and high_value_candidate_count == 0:
+        no_candidate_reason = "no_high_value_actionable_candidates"
+    elif len(issue_payload_refs) == 0 and high_value_candidate_count > 0:
+        no_candidate_reason = "high_value_candidates_failed_quality_gate"
     return {
         "schema_version": "aistock_nightly_discovery_effectiveness_v1",
         "candidate_count": candidate_count,

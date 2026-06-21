@@ -1,0 +1,85 @@
+{
+  "actual": "doctor returns workflow_gate=warning because latest artifact commit differs from current HEAD while effective freshness is fresh.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260621_BUG-455-codegraph-latest-freshness-artifact-keeps-stale-commit-metadata-despite.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "scripts/nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+    "tests/aistock_validation/bugs/20260621_BUG-454-nightly-summary-janitor-passes-unsupported-stdout-format-compact.json",
+    "tests/aistock_validation/bugs/20260621_BUG-456-understand-anything-freshness-is-available-but-lacks-clear-latest-freshn.json",
+    "tests/aistock_validation/bugs/20260621_BUG-457-nightly-llm-discovery-emits-many-anomalies-but-no-high-value-issue-draft.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-455",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T15:55:57.195860Z",
+  "description": "doctor returns workflow_gate=warning because latest artifact commit differs from current HEAD while effective freshness is fresh.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-c8d64a913059",
+      "timestamp": "2026-06-21T15:55:57.195857Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/code-intelligence/latest/codegraph-freshness.json"
+  ],
+  "expected": "The latest CodeGraph freshness artifact or compact summary clearly matches current HEAD or labels live-effective freshness without stale commit confusion.",
+  "first_seen_at": "2026-06-21T15:55:57.195860Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1409,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1409",
+  "last_seen_at": "2026-06-21T15:55:57.195860Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py doctor --skip-external --output-format full-json",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CodeGraph latest freshness artifact keeps stale commit metadata despite live fresh graph",
+  "trigger_condition": {
+    "fingerprint": "c8d64a9130598daeab44d598",
+    "source_event_id": "FE-20260621-c8d64a913059"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
