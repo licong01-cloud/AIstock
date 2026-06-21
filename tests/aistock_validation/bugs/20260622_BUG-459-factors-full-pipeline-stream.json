@@ -29,8 +29,8 @@
   "expected": "因子库页面和后端仅保留官方权威路径；旧/factors/full-pipeline-stream与FullPipelineDialog不可再被调用。",
   "first_seen_at": "2026-06-21T17:34:52.649273Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5453f3cf5c5f3ae4852295310409d0296621b182",
+  "fixed_at": "2026-06-21T18:42:21.155767Z",
   "github_issue_number": 1418,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1418",
   "last_seen_at": "2026-06-21T17:34:52.649273Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1419",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -88,6 +89,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "local: python -m nox -s l0 passed; python -m nox -s validation_module_registry_l0 passed; verify-clients passed; git diff --check passed; PR CI all green"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
