@@ -82,5 +82,7 @@
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
     "rtk cmd /c paper_v2_l3 hosted CI env -> passed (paper_v2_backend 633 passed, 1 skipped, 1 deselected; data quality gates passed)"
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1441",
+  "pr_opened_at": "2026-06-21T21:37:59Z"
 }
