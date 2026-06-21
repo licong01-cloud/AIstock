@@ -38,8 +38,8 @@
   "expected": "Nightly/doctor emits compact UA availability and freshness guidance that distinguishes base-current/ancestor/old summary from missing graph, without blocking issue workflow.",
   "first_seen_at": "2026-06-21T15:56:23.537282Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a92ec1b5f794a73b61f823653cfa1e3f9834b5ca",
+  "fixed_at": "2026-06-21T17:04:22.869768Z",
   "github_issue_number": 1410,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1410",
   "last_seen_at": "2026-06-21T15:56:23.537282Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1414",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -68,6 +69,15 @@
     "fingerprint": "52d6b31bb1c601d66f9eee3a",
     "source_event_id": "FE-20260621-52d6b31bb1c6"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> passed (58 passed)",
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed (165 passed)",
+    "pytest backend/tests/scripts/test_nightly_bug_candidate_queue.py -q -> passed (9 passed)",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s validation_center_backend -> passed (458 passed)",
+    "workflow-smoke scripts/aistock_issue_workflow.py/scripts/code_intelligence_adapter.py/scripts/nightly_bug_candidate_queue.py -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
