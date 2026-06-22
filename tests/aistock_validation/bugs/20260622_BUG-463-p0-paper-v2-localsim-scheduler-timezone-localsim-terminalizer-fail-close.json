@@ -1,0 +1,88 @@
+{
+  "actual": "simulation_runtime/scheduler.py uses naive datetime.now() (5300) and hardcoded CST windows incl. time(15,0) tagged tzinfo=UTC (4203) with no ZoneInfo, so UTC deploys never match the A-share session / EOD never fires; both terminalizers are MiniQMT-only (2065/2127 early-return != MINIQMT_SIM) so LocalSim runs never get post-close/stale terminalized; cash defaults to 0.0 silently (3477); roll-forward/inner run_once lack a trading-day gate.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260622_BUG-463-p0-paper-v2-localsim-scheduler-timezone-localsim-terminalizer-fail-close.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-463-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-463",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T19:09:58.030388Z",
+  "description": "[LocalSim L2] simulation_runtime/scheduler.py: (a) naive datetime.now() (5300) + hardcoded CST windows incl. time(15,0) tagged tzinfo=UTC (4203), no ZoneInfo anywhere -> on a UTC backend the A-share session/EOD windows never match and EOD never fires; snapshot time is 8h off. (b) both terminalizers (_terminalize_stale_miniqmt_active_runs:2065, _terminalize_post_close_miniqmt_runs:2127) early-return for non-MINIQMT_SIM, so LocalSim runs are NEVER post-close/stale terminalized (stuck non-terminal across days). (c) cash silently defaults to 0.0 (3477) -> all buys SKIPPED. (d) roll-forward/inner run_once lack a trading-day gate. FIX: normalize all scheduler time to Asia/Shanghai (mirror live_session); add a LocalSim post-close + stale terminalizer mirroring the MiniQMT ones; fail-closed (DataUnavailableError) when context.cash is None; add a trading-day gate to inner run_once/roll-forward. MiniQMT logic untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-385549276b89",
+      "timestamp": "2026-06-21T19:09:58.030384Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Normalize all scheduler time to Asia/Shanghai (like live_session); add a LocalSim post-close + stale terminalizer mirroring the MiniQMT ones; fail-closed (DataUnavailableError) when context.cash is None instead of 0.0; add trading-day gate to inner run_once/roll-forward. MiniQMT logic untouched.",
+  "first_seen_at": "2026-06-21T19:09:58.030388Z",
+  "fix_branch": "bug/BUG-463-p0-paper-v2-localsim-scheduler-timezone-localsim-20260622",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1428,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1428",
+  "last_seen_at": "2026-06-21T19:09:58.030388Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect scheduler.py:5300 datetime.now() naive, 4203 time(15,0) tzinfo=UTC, 2065/2127 terminalizers MiniQMT-only, 3477 cash 0.0 default.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][Paper v2][LocalSim] scheduler timezone + LocalSim terminalizer + fail-closed cash + trading-day gate",
+  "trigger_condition": {
+    "fingerprint": "385549276b89b2383d6fb771",
+    "source_event_id": "FE-20260622-385549276b89"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix",
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 70 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 11 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py docs/handoff/BUG-463-analysis.md -> passed",
+    "rtk python -m json.tool tests/aistock_validation/bugs/20260622_BUG-463-p0-paper-v2-localsim-scheduler-timezone-localsim-terminalizer-fail-close.json -> json ok",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "rtk cmd /c paper_v2_l3 hosted CI env -> passed (paper_v2_backend 633 passed, 1 skipped, 1 deselected; data quality gates passed)"
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1441",
+  "pr_opened_at": "2026-06-21T21:37:59Z"
+}

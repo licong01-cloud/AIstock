@@ -265,7 +265,7 @@ class CountingContextProvider(StaticSimulationRunContextProvider):
         )
 
 
-def _position_context(*, portfolio_id: str, local_broker=None) -> SimulationRunContext:
+def _position_context(*, portfolio_id: str, local_broker=None, cash: float | None = 100_000) -> SimulationRunContext:
     return SimulationRunContext(
         portfolio_id=portfolio_id,
         current_positions={
@@ -288,6 +288,7 @@ def _position_context(*, portfolio_id: str, local_broker=None) -> SimulationRunC
         },
         current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0},
         local_broker=local_broker,
+        cash=cash,
     )
 
 
@@ -1234,6 +1235,42 @@ def test_scheduler_fails_localsim_submit_without_durable_execution_snapshot() ->
     assert runs[0].run_payload_json["broker_called"] is True
     assert "local_sim_persistence" not in runs[0].run_payload_json
     assert runs[0].run_payload_json["submit_failure"]["stage"] == "LOCAL_SIM_PERSISTENCE_SNAPSHOT_MISSING"
+
+
+def test_scheduler_fails_closed_when_localsim_cash_context_is_missing() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    broker = FakeLocalSimBroker()
+    context = SimulationRunContext(
+        portfolio_id="portfolio_missing_cash",
+        current_positions={},
+        current_prices={"000001.SZ": 10.0, "688001.SH": 20.0},
+        local_broker=broker,
+        top_k=1,
+        cash=None,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+    latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    diagnostic = latest_run.run_payload_json["local_sim_retry_diagnostics"]
+
+    assert result.failed_count == 1
+    assert result.results[0].error["context"]["reason_code"] == "LOCALSIM_CASH_CONTEXT_MISSING"
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert diagnostic["stage"] == "LOCAL_SIM_CASH_CONTEXT_MISSING"
+    assert diagnostic["context"]["reason_code"] == "LOCALSIM_CASH_CONTEXT_MISSING"
+    assert latest_run.run_payload_json["broker_called"] is False
+    assert broker.submitted == []
 
 
 def test_scheduler_localsim_cash_fit_runs_sells_before_buys_and_skips_cash_residual() -> None:
@@ -3159,6 +3196,89 @@ def test_scheduler_terminalizes_stale_historical_miniqmt_planning_runs_before_to
     assert terminalized.run_payload_json["stale_active_terminalization"]["had_broker_side_effect"] is False
 
 
+def test_scheduler_terminalizes_stale_historical_localsim_planning_runs_before_today_tick() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_local_stale")}
+        ),
+    )
+    stale = scheduler.run_once(
+        trade_date=date(2026, 5, 20),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        created_by="unit_test_localsim_stale",
+    )
+    stale_run = repo.get_simulation_daily_run(stale.results[0].run.run_id)
+
+    today = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    terminalized = repo.get_simulation_daily_run(stale_run.run_id)
+    evidence = terminalized.run_payload_json["localsim_stale_active_terminalization"]
+
+    assert today.stale_terminalized_count == 1
+    assert today.stale_run_results[0]["run_id"] == stale_run.run_id
+    assert today.stale_run_results[0]["reason_code"] == "LOCALSIM_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
+    assert terminalized.status == SimulationDailyRunStatus.CANCELLED
+    assert evidence["reason_code"] == "LOCALSIM_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
+    assert evidence["previous_status"] == "PLANNING_EXECUTION"
+    assert evidence["had_broker_side_effect"] is False
+
+
+def test_scheduler_post_close_terminalizes_localsim_persisted_active_run_with_shanghai_eod() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _local_sim_context_with_real_broker(
+                    portfolio_id="portfolio_local_post_close",
+                    release=release,
+                    paper_repository=paper_repo,
+                )
+            }
+        ),
+    )
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+    run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    repo.update_simulation_daily_run(run.run_id, status=SimulationDailyRunStatus.INTRADAY_RUNNING)
+
+    post_close = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 7, 5, tzinfo=UTC),
+    )
+    latest = repo.get_simulation_daily_run(run.run_id)
+    terminalization = latest.run_payload_json["localsim_post_close_terminalization"]
+
+    assert post_close.stale_terminalized_count == 1
+    assert post_close.results[0].status == "POST_CLOSE_TERMINALIZED"
+    assert post_close.stale_run_results[0]["run_id"] == run.run_id
+    assert post_close.stale_run_results[0]["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTED_SUCCESS"
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert terminalization["as_of_time"] == "2026-05-21T15:05:00+08:00"
+    assert terminalization["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTED_SUCCESS"
+    assert terminalization["local_sim_persistence_status"] == "PERSISTED"
+
+
 def test_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -3387,7 +3507,7 @@ def test_scheduler_reports_unattended_trading_windows_without_submitting_orders(
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=False,
-        as_of_time=datetime(2026, 5, 21, 9, 22, tzinfo=UTC),
+        as_of_time=datetime(2026, 5, 21, 1, 22, tzinfo=UTC),
     )
 
     assert status["restart_recovery_mode"] == "persisted_state_only"
@@ -3425,7 +3545,7 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
         trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
     )
 
-    result = background.run_once(as_of_time=datetime(2026, 5, 21, 9, 22, tzinfo=UTC))
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 1, 22, tzinfo=UTC))
 
     assert result["should_run"] is True
     assert result["submit"] is False
@@ -3477,7 +3597,7 @@ def test_background_scheduler_skips_non_trading_day_before_lifecycle_execution(
         trading_calendar_service=calendar,
     )
 
-    result = background.run_once(as_of_time=datetime(2026, 6, 19, 9, 30, tzinfo=UTC))
+    result = background.run_once(as_of_time=datetime(2026, 6, 19, 1, 30, tzinfo=UTC))
 
     assert result["window"]["window_id"] == "execution"
     assert result["should_run"] is False
@@ -3492,6 +3612,55 @@ def test_background_scheduler_skips_non_trading_day_before_lifecycle_execution(
     assert lifecycle.run_once_calls == []
     assert lifecycle.post_close_calls == []
     assert background.status()["last_result"]["reason"] == "non_trading_day"
+
+
+def test_lifecycle_scheduler_blocks_non_trading_day_before_roll_forward_or_selection() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+
+    class StatusCalendar:
+        def __init__(self) -> None:
+            self.calls: list[date | None] = []
+
+        def status(self, *, as_of_date: date | None = None) -> dict[str, Any]:
+            self.calls.append(as_of_date)
+            return {
+                "ok": True,
+                "as_of_date": "2026-06-20",
+                "is_trading_day": False,
+                "next_trading_day": "2026-06-22",
+            }
+
+    class ExplodingContextProvider:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def load_context(self, **kwargs):
+            self.calls.append(kwargs)
+            raise AssertionError("non-trading day gate must run before LocalSim context loading")
+
+    context_provider = ExplodingContextProvider()
+    calendar = StatusCalendar()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=context_provider,  # type: ignore[arg-type]
+        trading_calendar_service=calendar,
+    )
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        scheduler.run_once(
+            trade_date=date(2026, 6, 20),
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=True,
+        )
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_LIFECYCLE_NON_TRADING_DAY"
+    assert exc_info.value.context["next_trading_day"] == "2026-06-22"
+    assert calendar.calls == [date(2026, 6, 20)]
+    assert context_provider.calls == []
+    assert repo.list_simulation_daily_runs(trade_date=date(2026, 6, 20), limit=10) == []
 
 
 def test_background_scheduler_fails_closed_when_trading_calendar_is_unavailable() -> None:
@@ -3516,7 +3685,7 @@ def test_background_scheduler_fails_closed_when_trading_calendar_is_unavailable(
         trading_calendar_service=MissingCalendar(),
     )
 
-    result = background.run_once(as_of_time=datetime(2026, 6, 19, 9, 30, tzinfo=UTC))
+    result = background.run_once(as_of_time=datetime(2026, 6, 19, 1, 30, tzinfo=UTC))
 
     assert result["should_run"] is False
     assert result["submit"] is False
@@ -3601,7 +3770,7 @@ def test_background_scheduler_runs_post_close_reconcile_without_submit_by_defaul
         trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
     )
 
-    result = background.run_once(as_of_time=datetime(2026, 5, 21, 15, 5, tzinfo=UTC))
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 7, 5, tzinfo=UTC))
     latest = repo.get_simulation_daily_run(run.run_id)
 
     assert result["should_run"] is True
