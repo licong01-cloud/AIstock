@@ -28,10 +28,6 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "previous_scope": [
-        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
-        "tests/aistock_validation/bugs/.bug_id_allocator.json"
-      ],
       "new_scope": [
         "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json",
@@ -40,18 +36,15 @@
         "frontend/src/components/research-assistant/EvidenceCard.tsx"
       ],
       "note": "BUG-402 is a pure frontend Research Assistant UI rendering fix; scope expanded from registry-only triage to the exact card and CSS files identified in the task card/context pack. AssistantShared.tsx and as_of behavior remain out of scope.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
       "timestamp": "2026-06-17T08:30:00Z"
     },
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "previous_scope": [
-        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
-        "tests/aistock_validation/bugs/.bug_id_allocator.json",
-        "frontend/src/app/research-assistant/research-assistant.css",
-        "frontend/src/components/research-assistant/BlockerCard.tsx",
-        "frontend/src/components/research-assistant/EvidenceCard.tsx"
-      ],
       "new_scope": [
         "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json",
@@ -61,6 +54,13 @@
         "frontend/tests/research-assistant/research-assistant.spec.ts"
       ],
       "note": "Updated Phase7 frontend acceptance to match BUG-402: diagnostic raw JSON must be available only after expanding Developer details, not visible in the default main card view.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx"
+      ],
       "timestamp": "2026-06-17T09:10:00Z"
     }
   ],
@@ -68,8 +68,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-17T08:12:13.445098Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4d57a92937ad2876da7b17d3a40076b0d3856dfa",
+  "fixed_at": "2026-06-22T02:09:36.678519Z",
   "github_issue_number": 1206,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1206",
   "last_seen_at": "2026-06-17T08:12:13.445098Z",
@@ -77,6 +77,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1442",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -90,7 +91,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -125,6 +126,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub required checks for PR #1442 -> passed (validation_center_backend and backend matrix green)",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (306 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s ra_phase7_full_accept -> passed (backend 306 passed; phase7 4/4; RA UI 9/9; crosscheck/catalog/ownership passed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
