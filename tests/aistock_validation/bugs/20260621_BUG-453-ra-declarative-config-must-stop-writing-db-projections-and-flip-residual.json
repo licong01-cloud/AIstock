@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-453",
-  "closed_at": null,
+  "closed_at": "2026-06-22T02:38:16Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -47,12 +47,18 @@
       "actor": "codex",
       "note": "Final validation after rebase to origin/main fdc9d020: targeted RA tests 112 passed; l0 passed; research_assistant_backend 308 passed; research_assistant_mcp_contract 38 passed; validation_module_registry_l0 8 passed; ra_phase7_full_accept passed; git diff --check passed; ruff passed. No services 8001/3000/19080 were started or restarted; no production DB or DDL touched.",
       "timestamp": "2026-06-21T21:31:55.282947Z"
+    },
+    {
+      "timestamp": "2026-06-22T02:38:16Z",
+      "actor": "codex",
+      "action": "closed_after_close_sync_pr_merged",
+      "note": "Source PR #1440 merged at 0b31a0ca42132d87f67cff3310a4d52a67f6b1e4; close-sync PR #1448 merged at abf862c655e585cd2079ac010cc772c809c6e9ba; GitHub Issue #1407 is closed with status:fixed. BUG JSON marked closed. No services started, no production DB touched, no DDL executed."
     }
   ],
   "evidence_uris": [],
   "expected": "Research Assistant declarative reads come only from YAML memory authority; sync/seed no longer writes declarative capabilities/prompt_nodes/runtime_config to DB; runtime state writes remain; no manual seed is required.",
   "first_seen_at": "2026-06-21T15:34:36.469567Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-453-ra-declarative-config-must-stop-writing-db-proje-20260621",
   "fix_commit": "0b31a0ca42132d87f67cff3310a4d52a67f6b1e4",
   "fixed_at": "2026-06-22T02:29:47.470305Z",
   "github_issue_number": 1407,
@@ -77,7 +83,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -100,5 +106,8 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "merge_commit": "0b31a0ca42132d87f67cff3310a4d52a67f6b1e4",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1448",
+  "close_sync_commit": "abf862c655e585cd2079ac010cc772c809c6e9ba"
 }
