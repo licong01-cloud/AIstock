@@ -255,3 +255,59 @@ def test_live_dashboard_flags_running_portfolio_without_operable_session() -> No
 
     summary_page = repo.list_running_summaries_page(statuses=["RUNNING"])
     assert summary_page["summaries"][0]["operability"]["no_operable_session"] is True
+
+
+def test_live_dashboard_surfaces_miniqmt_capacity_residual_warning() -> None:
+    repo = InMemoryPaperTradingV2Repository()
+    portfolio, _manifest_sha = _portfolio(repo)
+    session = PaperTradingSession(
+        session_id="psess_capacity_residual_dash",
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        status=PaperSessionStatus.SUCCEEDED,
+        phase=PaperSessionPhase.LIVE_INTRADAY,
+        start_date=date(2024, 1, 3),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    repo.create_session(session)
+    observability = {
+        "schema_version": "miniqmt_capacity_residual_observability_v1",
+        "succeeded_with_capacity_residual": True,
+        "reason": "miniqmt_capacity_residual_skipped_and_reconciled",
+        "source": "simulation_runtime",
+        "capacity_residual_count": 2,
+        "failed_intents": 2,
+        "qmt_batch_id": "batch_dash_capacity",
+        "qmt_batch_status": "PARTIAL",
+    }
+    run = PaperRun(
+        run_id="prun_capacity_residual_dash",
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        status=RunStatus.SUCCEEDED,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"miniqmt_capacity_residual_observability": observability},
+    )
+    repo.create_run(run)
+    repo.save_session_day(
+        PaperSessionDay(
+            session_id=session.session_id,
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=run.trade_date,
+            run_id=run.run_id,
+            status=PaperSessionStatus.SUCCEEDED,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            data_source=MinuteDataSource.TDX_REALTIME,
+        )
+    )
+
+    dashboard = PaperTradingLiveDashboardService(
+        repository=repo,
+        artifact_repository=InMemorySelectionScoreArtifactRepository(),
+    ).get_dashboard(portfolio.portfolio_id)
+
+    assert dashboard["miniqmt_capacity_residual_observability"]["succeeded_with_capacity_residual"] is True
+    assert dashboard["miniqmt_capacity_residual_observability"]["capacity_residual_count"] == 2
+    warning = next(item for item in dashboard["warnings"] if item["code"] == "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL")
+    assert warning["failed_intents"] == 2
