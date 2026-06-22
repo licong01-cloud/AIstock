@@ -49,12 +49,12 @@ def _pool_state(pool: Optional[ThreadedConnectionPool]) -> Dict[str, Any]:
     state: Dict[str, Any] = {"pool_free": None, "pool_used": None, "pool_max": getattr(pool, "maxconn", None)}
     try:
         state["pool_used"] = len(getattr(pool, "_used", {}) or {})
-    except Exception:
-        pass
+    except Exception as exc:
+        state["pool_used_error"] = f"{type(exc).__name__}: {exc}"
     try:
         state["pool_free"] = len(getattr(pool, "_pool", []) or [])
-    except Exception:
-        pass
+    except Exception as exc:
+        state["pool_free_error"] = f"{type(exc).__name__}: {exc}"
     return state
 
 
@@ -105,7 +105,12 @@ def _checked_out_snapshot(limit: int = 5) -> str:
         for _, info in _CHECKED_OUT.items():
             try:
                 held = now - float(info.get("checkout_ts", now))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "DB connection checkout timestamp parse failed; reason_code=AISTOCK_DB_CHECKOUT_TS_PARSE_FAILED error=%s",
+                    f"{type(exc).__name__}: {exc}",
+                    exc_info=True,
+                )
                 held = 0.0
             items.append((held, info))
         items.sort(key=lambda x: x[0], reverse=True)
@@ -144,7 +149,12 @@ def _caller_hint() -> str:
             fn = frame_info.filename.replace("\\", "/")
             if not fn.lower().endswith("/backend/db/pg_pool.py"):
                 return f"{fn}:{frame_info.lineno} in {frame_info.function}"
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "DB caller hint collection failed; reason_code=AISTOCK_DB_CALLER_HINT_FAILED error=%s",
+            f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
         return "<caller unavailable>"
     return "<caller not found>"
 
@@ -172,7 +182,13 @@ def _statement_timeout_ms() -> int:
         ms = int(v)
         if ms < 0:
             return DEFAULT_STATEMENT_TIMEOUT_MS
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Invalid AISTOCK_PG_STATEMENT_TIMEOUT_MS; using default. reason_code=AISTOCK_DB_STATEMENT_TIMEOUT_INVALID value=%r error=%s",
+            v,
+            f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
         return DEFAULT_STATEMENT_TIMEOUT_MS
     return ms
 
@@ -183,7 +199,13 @@ def _apply_statement_timeout(conn: psycopg2.extensions.connection) -> Optional[i
         with conn.cursor() as cur:
             cur.execute(f"SET statement_timeout TO {ms}")
         return ms
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to apply DB statement_timeout; reason_code=AISTOCK_DB_STATEMENT_TIMEOUT_APPLY_FAILED timeout_ms=%s error=%s",
+            ms,
+            f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
         return None
 
 
@@ -213,8 +235,13 @@ def init_db_pool(minconn: int = 1, maxconn: int = 10) -> None:
                 return conn
 
         _DB_POOL = _LoggedThreadedConnectionPool(minconn, maxconn, **cfg)
-    except Exception:
+    except Exception as exc:
         # Fallback: keep _DB_POOL as None so that get_conn() uses direct connections.
+        logger.warning(
+            "DB pool initialization failed; falling back to direct connections. reason_code=AISTOCK_DB_POOL_INIT_FAILED error=%s",
+            f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
         _DB_POOL = None
 
 
@@ -225,13 +252,95 @@ def close_db_pool() -> None:
     if _DB_POOL is not None:
         try:
             _DB_POOL.closeall()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "DB pool closeall failed; reason_code=AISTOCK_DB_POOL_CLOSE_FAILED error=%s",
+                f"{type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
         _DB_POOL = None
 
 
+def _prepare_connection(conn: psycopg2.extensions.connection, *, autocommit: bool) -> Optional[int]:
+    """Apply session options outside the caller transaction, then enter the requested mode."""
+
+    original_autocommit = bool(conn.autocommit)
+    original_status = conn.get_transaction_status()
+    if original_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+        try:
+            conn.rollback()
+        except Exception:
+            conn.autocommit = original_autocommit
+            raise
+    conn.autocommit = True
+    try:
+        statement_timeout_ms = _apply_statement_timeout(conn)
+    except Exception:
+        conn.autocommit = original_autocommit
+        raise
+    conn.autocommit = autocommit
+    return statement_timeout_ms
+
+
+def _configure_checkout_connection(
+    conn: psycopg2.extensions.connection,
+    *,
+    autocommit: bool,
+    manage_transaction: bool,
+) -> Optional[int]:
+    """Keep legacy default checkout behavior; enable transaction prep only on explicit opt-in."""
+
+    if autocommit and not manage_transaction:
+        conn.autocommit = True
+        return _apply_statement_timeout(conn)
+    return _prepare_connection(conn, autocommit=autocommit)
+
+
+def _commit_connection(conn: psycopg2.extensions.connection, *, mode: str, manage_transaction: bool) -> None:
+    if not manage_transaction:
+        return
+    if conn.autocommit:
+        return
+    try:
+        conn.commit()
+    except Exception as exc:
+        _emit_conn_audit_metric(
+            "transaction_commit_failed",
+            mode=mode,
+            error=f"{type(exc).__name__}: {exc}",
+            reason_code="AISTOCK_DB_TRANSACTION_COMMIT_FAILED",
+        )
+        raise
+
+
+def _rollback_connection(
+    conn: psycopg2.extensions.connection,
+    *,
+    mode: str,
+    original_error: BaseException,
+    manage_transaction: bool,
+) -> None:
+    if not manage_transaction:
+        return
+    if conn.autocommit:
+        return
+    try:
+        conn.rollback()
+    except Exception as exc:
+        _emit_conn_audit_metric(
+            "transaction_rollback_failed",
+            mode=mode,
+            error=f"{type(exc).__name__}: {exc}",
+            original_error=f"{type(original_error).__name__}: {original_error}",
+            reason_code="AISTOCK_DB_TRANSACTION_ROLLBACK_FAILED",
+        )
+        raise RuntimeError(
+            "DB transaction rollback failed; reason_code=AISTOCK_DB_TRANSACTION_ROLLBACK_FAILED"
+        ) from exc
+
+
 @contextmanager
-def get_conn():
+def get_conn(*, autocommit: bool = True, manage_transaction: bool = False):
     """Yield a DB connection, using pool when available.
 
     - 优先使用本进程内的连接池，减少建连开销；
@@ -249,8 +358,11 @@ def get_conn():
                     % (os.getpid(), threading.current_thread().name, caller)
                 )
             conn = psycopg2.connect(**_db_cfg())
-            conn.autocommit = True
-            statement_timeout_ms = _apply_statement_timeout(conn)
+            statement_timeout_ms = _configure_checkout_connection(
+                conn,
+                autocommit=autocommit,
+                manage_transaction=manage_transaction,
+            )
             duration = time.time() - start_time
             if duration > 0.1:
                 print(f"DEBUG: Direct DB connection took {duration:.4f}s")
@@ -263,7 +375,17 @@ def get_conn():
                 statement_timeout_ms=statement_timeout_ms,
             )
             try:
-                yield conn
+                try:
+                    yield conn
+                    _commit_connection(conn, mode="direct", manage_transaction=manage_transaction)
+                except Exception as exc:
+                    _rollback_connection(
+                        conn,
+                        mode="direct",
+                        original_error=exc,
+                        manage_transaction=manage_transaction,
+                    )
+                    raise
             finally:
                 conn.close()
         except Exception as e:
@@ -302,30 +424,51 @@ def get_conn():
                 if pool is not None:
                     try:
                         used_n = len(getattr(pool, "_used", {}) or {})
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "DB pool used-count snapshot failed; reason_code=AISTOCK_DB_POOL_USED_SNAPSHOT_FAILED error=%s",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
                         used_n = None
                     try:
                         free_n = len(getattr(pool, "_pool", []) or [])
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "DB pool free-count snapshot failed; reason_code=AISTOCK_DB_POOL_FREE_SNAPSHOT_FAILED error=%s",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
                         free_n = None
                     max_n = getattr(pool, "maxconn", None)
                 print(
                     "DEBUG: Pool state after slow getconn: free=%s used=%s max=%s lock_locked=%s"
                     % (free_n, used_n, max_n, lock_state)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "DB pool slow-checkout diagnostic snapshot failed; reason_code=AISTOCK_DB_POOL_SLOW_DIAGNOSTIC_FAILED error=%s",
+                    f"{type(exc).__name__}: {exc}",
+                    exc_info=True,
+                )
             if _env_truthy("DB_POOL_DEBUG") or _env_truthy("DB_POOL_DEBUG_SNAPSHOT"):
                 try:
                     print(
                         "DEBUG: Pool starvation snapshot\n%s"
                         % _checked_out_snapshot(limit=5)
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "DB pool starvation snapshot failed; reason_code=AISTOCK_DB_POOL_STARVATION_SNAPSHOT_FAILED error=%s",
+                        f"{type(exc).__name__}: {exc}",
+                        exc_info=True,
+                    )
         try:
-            conn.autocommit = True
-            statement_timeout_ms = _apply_statement_timeout(conn)
+            statement_timeout_ms = _configure_checkout_connection(
+                conn,
+                autocommit=autocommit,
+                manage_transaction=manage_transaction,
+            )
             _emit_checkout_audit(
                 mode="pool",
                 duration=duration,
@@ -339,7 +482,17 @@ def get_conn():
                     "thread": threading.current_thread().name,
                     "stack": "".join(traceback.format_stack(limit=12)),
                 }
-            yield conn
+            try:
+                yield conn
+                _commit_connection(conn, mode="pool", manage_transaction=manage_transaction)
+            except Exception as exc:
+                _rollback_connection(
+                    conn,
+                    mode="pool",
+                    original_error=exc,
+                    manage_transaction=manage_transaction,
+                )
+                raise
         finally:
             checkout_info: Optional[Dict[str, Any]] = None
             with _CHECKED_OUT_LOCK:
@@ -362,8 +515,12 @@ def get_conn():
                 # Pool may have been closed during shutdown; do a best-effort close.
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "DB connection close after pool shutdown failed; reason_code=AISTOCK_DB_CONN_CLOSE_FAILED error=%s",
+                        f"{type(exc).__name__}: {exc}",
+                        exc_info=True,
+                    )
             else:
                 pool.putconn(conn)
     except Exception as e:

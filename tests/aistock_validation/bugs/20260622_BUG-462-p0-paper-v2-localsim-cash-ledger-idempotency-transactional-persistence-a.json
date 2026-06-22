@@ -1,0 +1,115 @@
+{
+  "actual": "paper_v2.cash_ledger save_cash_entry (repository.py:2028) is a bare INSERT with no ON CONFLICT and the DDL has no unique on fill_id; the whole repository runs under autocommit (pg_pool.py:252/327) with zero transactions, so retries/restarts double-count cash and multi-write persistence (save_positions DELETE-then-INSERT, per-day snapshot writes) has partial-write windows that corrupt cash/positions on the LocalSim path.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/db/pg_pool.py",
+    "backend/migrations/trading_core_v2_schema.sql",
+    "backend/db/init_trading_core_v2_schema.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "tests/aistock_validation/bugs/20260622_BUG-462-p0-paper-v2-localsim-cash-ledger-idempotency-transactional-persistence-a.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-462-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-462",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T19:09:34.287072Z",
+  "description": "[LocalSim L1 / foundation] (a) paper_v2.cash_ledger save_cash_entry (repository.py:2028) is a bare INSERT with no ON CONFLICT and the DDL (trading_core_v2_schema.sql:878) has no unique on fill_id -> retried/replayed fills double-count cash and load_latest_cash reads a doubled cash_after. (b) The whole repository runs under autocommit (pg_pool.py:252/327) with zero transactions, so multi-write persistence (save_positions DELETE-then-INSERT; per-day snapshot copy in scheduler) has partial-write windows that corrupt cash/positions. FIX: add unique (run_id, fill_id) on paper_v2.cash_ledger + ON CONFLICT DO NOTHING (forward+rollback migration; dev can apply in validation environment; prod applied by user after merge); add an explicit transactional persistence path (disable autocommit / txn context) so each logical unit (one tick / one day snapshot copy) commits atomically incl. the bar-cursor advance. DDL CHANGE: include forward+rollback migration; do not apply to prod. MiniQMT path untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-3b1f4b68b98c",
+      "timestamp": "2026-06-21T19:09:34.287067Z"
+    },
+    {
+      "action": "fix_implemented",
+      "actor": "codex",
+      "note": "Added cash_ledger unique(run_id, fill_id), ON CONFLICT idempotency, explicit transaction handling, and LocalSim regression tests; production DDL not applied by agent.",
+      "timestamp": "2026-06-22T00:00:00+08:00"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Required BUG-462 validation passed; production DDL not applied by agent and remains pending for user/Tier2 after merge.",
+      "timestamp": "2026-06-22T05:05:00+08:00"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex",
+      "note": "Opened PR #1439 for BUG-462; production DDL remains pending and must be applied/verified by user/Tier2 after merge; no services or production DB touched by this lane.",
+      "timestamp": "2026-06-22T05:18:10+08:00"
+    },
+    {
+      "action": "tier2_rework_completed",
+      "actor": "codex",
+      "note": "Restored pg_pool get_conn legacy defaults autocommit=True/manage_transaction=False; limited transaction opt-in to LocalSim repository persistence paths; preserved cash_ledger idempotency DDL/save_cash_entry conflict guard; production DDL remains pending and was not applied.",
+      "timestamp": "2026-06-22T12:17:13.341384+08:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Add unique (run_id, fill_id) on paper_v2.cash_ledger + ON CONFLICT DO NOTHING in save_cash_entry (forward+rollback migration; prod applied by user); add an explicit transactional persistence path (disable autocommit / txn context) so each logical unit (one tick / one day snapshot copy) commits atomically incl. the bar-cursor advance. MiniQMT untouched.",
+  "first_seen_at": "2026-06-21T19:09:34.287072Z",
+  "fix_branch": "bug/BUG-462-p0-paper-v2-localsim-cash-ledger-idempotency-tra-20260622",
+  "fix_commit": "54cbc336c2c8c542b866c8185521ee30b0cfa2e1",
+  "fixed_at": null,
+  "github_issue_number": 1427,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1427",
+  "last_seen_at": "2026-06-21T19:09:34.287072Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect repository.py:2028 save_cash_entry (no ON CONFLICT); pg_pool.py:252/327 autocommit=True; repository.py save_positions DELETE then INSERT.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][LocalSim] cash_ledger idempotency + transactional persistence atomicity",
+  "trigger_condition": {
+    "fingerprint": "3b1f4b68b98c4f598146058c",
+    "source_event_id": "FE-20260622-3b1f4b68b98c"
+  },
+  "verification_run_id": "BUG-462-localsim-ddl-transaction-rework-20260622",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix",
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_day_runner.py -q -> passed (61 passed)",
+    "python -m ruff check backend/db/init_trading_core_v2_schema.py backend/db/pg_pool.py backend/services/paper_trading_v2/repository.py backend/tests/paper_trading_v2/test_day_runner.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed (UI skipped; paper_v2_backend 640 passed, 1 skipped, 1 deselected; legacy paper_v2_ledger_consistency WARN non-blocking)"
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1439",
+  "related_prs": [
+    "https://github.com/licong01-cloud/AIstock/pull/1439"
+  ]
+}

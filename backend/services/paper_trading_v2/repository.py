@@ -1,7 +1,11 @@
-﻿"""Persistence repositories for Paper Trading v2."""
+"""Persistence repositories for Paper Trading v2."""
 
 from __future__ import annotations
 
+import inspect
+import logging
+import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
@@ -40,7 +44,8 @@ from .models import (
 )
 from .symbol_names import PaperV2SymbolNameResolver
 
-ConnFactory = Callable[[], Iterator[Any]]
+ConnFactory = Callable[..., Iterator[Any]]
+logger = logging.getLogger("aistock.paper_v2.repository")
 
 RUNNING_SUMMARY_ACTIVE_STATUSES = (
     PortfolioStatus.RUNNING.value,
@@ -90,6 +95,37 @@ def _terminal_run_status_values() -> tuple[str, ...]:
 
 def _completed_at_for_run_status(status: RunStatus, current_completed_at: datetime | None) -> datetime | None:
     return datetime.now(UTC) if status in TERMINAL_RUN_STATUSES else current_completed_at
+
+
+def _supports_conn_factory_kw(conn_factory: ConnFactory, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(conn_factory)
+    except (TypeError, ValueError):
+        return False
+    parameter = signature.parameters.get(keyword)
+    if parameter is None:
+        return any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    return parameter.kind in {
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }
+
+
+def _commit_if_available(conn: Any) -> None:
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
+
+
+def _rollback_if_available(conn: Any) -> None:
+    rollback = getattr(conn, "rollback", None)
+    if callable(rollback):
+        rollback()
+
+
+def _set_autocommit_if_available(conn: Any, value: bool) -> None:
+    if hasattr(conn, "autocommit"):
+        setattr(conn, "autocommit", value)
 
 
 def _run_status_transition_error(
@@ -196,21 +232,267 @@ class PaperTradingV2Repository:
         *,
         symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
-        self._conn_factory = conn_factory or get_conn
+        self._base_conn_factory = conn_factory or get_conn
+        self._base_conn_factory_accepts_autocommit = _supports_conn_factory_kw(self._base_conn_factory, "autocommit")
+        self._base_conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(
+            self._base_conn_factory,
+            "manage_transaction",
+        )
+        self._transaction_local = threading.local()
+        self._conn_factory = self._default_conn
         self._symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver(self._conn_factory)
+
+    def _active_transaction_conn(self) -> Any | None:
+        return getattr(self._transaction_local, "conn", None)
+
+    def _set_transaction_conn(self, conn: Any) -> None:
+        self._transaction_local.conn = conn
+
+    def _clear_transaction_conn(self) -> None:
+        if hasattr(self._transaction_local, "conn"):
+            del self._transaction_local.conn
+
+    @contextmanager
+    def _default_conn(self) -> Iterator[Any]:
+        active = self._active_transaction_conn()
+        if active is not None:
+            if (
+                sys.exc_info()[0] is not None
+                and getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick"
+                and not bool(getattr(self._transaction_local, "failure_write", False))
+            ):
+                if not bool(getattr(self._transaction_local, "session_tick_rolled_back", False)):
+                    try:
+                        _rollback_if_available(active)
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED error=%s",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED"
+                        ) from exc
+                    self._transaction_local.session_tick_rolled_back = True
+                self._transaction_local.failure_write = True
+                try:
+                    with self._base_conn_factory() as conn:
+                        yield conn
+                except Exception as exc:
+                    self._transaction_local.session_tick_failure_write_failed = True
+                    logger.error(
+                        "LocalSim session failure persistence failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_FAILURE_PERSISTENCE_FAILED error=%s",
+                        f"{type(exc).__name__}: {exc}",
+                        exc_info=True,
+                    )
+                    raise
+                finally:
+                    self._transaction_local.failure_write = False
+            else:
+                yield active
+            return
+        with self._base_conn_factory() as conn:
+            yield conn
+
+    @contextmanager
+    def _conn(self, *, autocommit: bool = True, manage_transaction: bool = False) -> Iterator[Any]:
+        active = self._active_transaction_conn()
+        if active is not None:
+            yield active
+            return
+
+        if self._base_conn_factory_accepts_autocommit:
+            kwargs = {"autocommit": autocommit}
+            if self._base_conn_factory_accepts_manage_transaction:
+                kwargs["manage_transaction"] = manage_transaction
+            with self._base_conn_factory(**kwargs) as conn:
+                yield conn
+            return
+
+        with self._base_conn_factory() as conn:
+            original_autocommit = getattr(conn, "autocommit", None)
+            _set_autocommit_if_available(conn, autocommit)
+            try:
+                yield conn
+                if not autocommit and manage_transaction:
+                    _commit_if_available(conn)
+            except Exception as exc:
+                if not autocommit and manage_transaction:
+                    try:
+                        _rollback_if_available(conn)
+                    except Exception as rollback_exc:
+                        logger.error(
+                            "Paper v2 repository rollback failed; "
+                            "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED error=%s original_error=%s",
+                            f"{type(rollback_exc).__name__}: {rollback_exc}",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            "Paper v2 repository transaction rollback failed; "
+                            "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED"
+                        ) from rollback_exc
+                raise
+            finally:
+                if original_autocommit is not None:
+                    _set_autocommit_if_available(conn, bool(original_autocommit))
+
+    @contextmanager
+    def _write_conn(self) -> Iterator[Any]:
+        conn = self._active_transaction_conn()
+        if conn is not None:
+            yield conn
+            return
+        with self._conn(autocommit=False, manage_transaction=True) as own_conn:
+            yield own_conn
+
+    @contextmanager
+    def local_sim_session_transaction(self, session_id: str) -> Iterator[None]:
+        """Pin one LocalSim live tick to one DB transaction while holding its advisory lock."""
+
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "LocalSim session transaction cannot start inside an existing repository transaction",
+                context={
+                    "session_id": session_id,
+                    "reason_code": "PAPER_V2_LOCAL_SIM_TRANSACTION_CONFLICT",
+                },
+            )
+        with self._conn(autocommit=True, manage_transaction=False) as lock_conn:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                raise SessionLockTimeoutError(
+                    "paper v2 session is already being processed by another backend process",
+                    context={
+                        "session_id": session_id,
+                        "lock_scope": "postgres_advisory_lock",
+                        "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
+                    },
+                )
+            complete_error: BaseException | None = None
+            try:
+                with self._conn(autocommit=False, manage_transaction=True) as txn_conn:
+                    try:
+                        self._set_transaction_conn(txn_conn)
+                        self._transaction_local.transaction_scope = "local_sim_session_tick"
+                        yield
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILED session_id=%s error=%s",
+                            session_id,
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise
+            finally:
+                try:
+                    with lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
+                except Exception as unlock_exc:
+                    logger.error(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED session_id=%s error=%s",
+                        session_id,
+                        f"{type(unlock_exc).__name__}: {unlock_exc}",
+                        exc_info=True,
+                    )
+                    complete_error = RuntimeError(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED"
+                    )
+                    complete_error.__cause__ = unlock_exc
+                finally:
+                    self._clear_transaction_conn()
+                    for attr in (
+                        "transaction_scope",
+                        "session_tick_rolled_back",
+                        "session_tick_failure_write_failed",
+                        "failure_write",
+                    ):
+                        if hasattr(self._transaction_local, attr):
+                            delattr(self._transaction_local, attr)
+                if complete_error is not None:
+                    raise complete_error
+
+    def _session_uses_local_sim_transaction(self, session_id: str) -> bool:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend, s.mode
+                    FROM paper_v2.trade_session s
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = s.portfolio_id
+                    WHERE s.session_id = %s
+                    """,
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return False
+        if isinstance(row, dict):
+            broker_backend = row.get("broker_backend")
+            mode = row.get("mode")
+        else:
+            broker_backend = row[0]
+            mode = row[1] if len(row) > 1 else None
+        return str(broker_backend) == "local_sim" and str(mode or "") != "REPLAY_ONLY"
+
+    def _run_broker_backend(self, run_id: str) -> str | None:
+        if getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick":
+            return "local_sim"
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend
+                    FROM paper_v2.run r
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = r.portfolio_id
+                    WHERE r.run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        if isinstance(row, dict):
+            value = row.get("broker_backend")
+        else:
+            value = row[0]
+        return str(value) if value is not None else None
 
     def _resolve_stock_names(self, symbols: list[str | None] | tuple[str | None, ...]) -> dict[str, str]:
         try:
             return self._symbol_name_resolver.resolve(symbols)
-        except Exception:
+        except Exception as exc:
             # Stock names are display/audit metadata only; trading writes must
             # never fail because a reference-table lookup failed.
+            logger.warning(
+                "Paper v2 stock name resolution failed; reason_code=PAPER_V2_STOCK_NAME_RESOLUTION_FAILED symbols=%s error=%s",
+                list(symbols),
+                f"{type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
             return {}
 
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
         """Hold a PostgreSQL advisory lock so multiple backend processes do not tick one session."""
 
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "Paper v2 session tick cannot start inside an existing repository transaction",
+                context={"session_id": session_id, "reason_code": "PAPER_V2_SESSION_TICK_TRANSACTION_CONFLICT"},
+            )
+        if self._session_uses_local_sim_transaction(session_id):
+            with self.local_sim_session_transaction(session_id):
+                yield
+            return
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
@@ -218,7 +500,11 @@ class PaperTradingV2Repository:
             if not locked:
                 raise SessionLockTimeoutError(
                     "paper v2 session is already being processed by another backend process",
-                    context={"session_id": session_id, "lock_scope": "postgres_advisory_lock"},
+                    context={
+                        "session_id": session_id,
+                        "lock_scope": "postgres_advisory_lock",
+                        "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
+                    },
                 )
             try:
                 yield
@@ -2035,6 +2321,7 @@ class PaperTradingV2Repository:
                         run_id, portfolio_id, fill_id, trade_date, symbol, stock_name, side,
                         notional, fee, cash_delta, cash_after
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(run_id, fill_id) DO NOTHING
                     """,
                     (
                         run_id,
@@ -2056,7 +2343,12 @@ class PaperTradingV2Repository:
         # explicitly via now() so InMemory parity is preserved.
         now = datetime.now(UTC)
         stock_names = self._resolve_stock_names([position.symbol for position in positions])
-        with self._conn_factory() as conn:
+        conn_cm = self._conn_factory()
+        if self._active_transaction_conn() is not None:
+            conn_cm = self._write_conn()
+        elif self._base_conn_factory_accepts_autocommit and self._run_broker_backend(run_id) == "local_sim":
+            conn_cm = self._write_conn()
+        with conn_cm as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
                 for position in positions:
@@ -3497,7 +3789,10 @@ class InMemoryPaperTradingV2Repository:
         return rows[:limit]
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
-        self.cash_entries.setdefault(run_id, []).append(entry)
+        entries = self.cash_entries.setdefault(run_id, [])
+        if any(existing.fill_id == entry.fill_id for existing in entries):
+            return
+        entries.append(entry)
 
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         self.positions[run_id] = positions

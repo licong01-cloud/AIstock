@@ -1132,6 +1132,30 @@ DDL: list[str] = [
     )
     """,
     """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'cash_ledger_run_fill_unique'
+              AND conrelid = 'paper_v2.cash_ledger'::regclass
+        ) THEN
+            IF EXISTS (
+                SELECT 1
+                FROM paper_v2.cash_ledger
+                WHERE fill_id IS NOT NULL
+                GROUP BY run_id, fill_id
+                HAVING COUNT(*) > 1
+            ) THEN
+                RAISE EXCEPTION 'BUG-462 forward migration blocked: duplicate paper_v2.cash_ledger(run_id, fill_id) rows exist; reason_code=PAPER_V2_CASH_LEDGER_DUPLICATE_FILL_ID';
+            END IF;
+            ALTER TABLE paper_v2.cash_ledger
+                ADD CONSTRAINT cash_ledger_run_fill_unique UNIQUE (run_id, fill_id);
+        END IF;
+    END $$
+    """,
+    "COMMENT ON CONSTRAINT cash_ledger_run_fill_unique ON paper_v2.cash_ledger IS 'BUG-462 LocalSim idempotency guard: one cash ledger row per run_id/fill_id so fill replay cannot double-count cash.'",
+    """
     CREATE TABLE IF NOT EXISTS paper_v2.positions (
         position_id BIGSERIAL PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
