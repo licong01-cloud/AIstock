@@ -40,8 +40,8 @@
   "expected": "Define ONE canonical non-terminal(open) vs terminal broker order_status predicate in qmt_strategy_ledger/models.py (pending 48/49/50/51 + partial 52/53/55 = non-terminal; terminal = 54 cancelled / 56 filled / 57 rejected) and use it everywhere: scheduler.py:4703 must count partial-fill(55) as open; qmt_strategy_ledger lifecycle (sync_service) consistent and remaining-qty aware. MiniQMT runtime child-order status must also be reconciled from broker order/trade snapshots (recover/_sync_managed_child_result backfill FILLED/PARTIALLY_FILLED/CANCELLED) so runtime persisted state stops lagging broker truth. No silent fallback. LocalSim untouched.",
   "first_seen_at": "2026-06-22T04:58:40.844697Z",
   "fix_branch": "bug/BUG-470-p0-miniqmt-order-lifecycle-open-terminal-status-20260622",
-  "fix_commit": "55dfc813f5ac4263f9d64ccf63c78cda693d9782",
-  "fixed_at": null,
+  "fix_commit": "a96a48212b816ba3e9e80060839e4ae5b51bbc44",
+  "fixed_at": "2026-06-22T07:12:42.845312Z",
   "github_issue_number": 1453,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1453",
   "last_seen_at": "2026-06-22T04:58:40.844697Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1458",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qmt_strategy_ledger"
   ],
@@ -71,13 +72,7 @@
     "source_event_id": "FE-20260622-a477413bff89"
   },
   "validation_evidence": [
-    "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_sync_service.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/miniqmt_execution_runtime/ -q -> passed (120 passed)",
-    "rtk python -m pytest backend/tests/qmt_strategy_ledger/ backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/miniqmt_execution_runtime/ -q -> failed: 2 unrelated qmt_strategy_ledger tests outside BUG-470 allowed scope (test_order_service_preflight cash-overcommit and test_router_summary V25 MiniQMT preview)",
-    "rtk python -m ruff check changed files -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk cmd /c \"set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3\" -> passed"
+    "gh pr checks 1458 -> 17 passed, 0 failed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
