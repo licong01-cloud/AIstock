@@ -535,7 +535,6 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
           </p>
         </div>
       ) : null}
-      <Link className="ra-chat-admin-link" href="/research-assistant/admin">{chatCopy.rail.adminLink}</Link>
     </aside>
   );
 }

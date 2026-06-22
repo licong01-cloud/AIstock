@@ -464,43 +464,6 @@ export type AssistantApproval = JsonObject & {
   created_at?: string;
 };
 
-export type AssistantIssueCandidate = JsonObject & {
-  candidate_id: string;
-  title?: string;
-  severity?: string;
-  module?: string;
-  module_id?: string;
-  status?: string;
-  problem_statement?: string;
-  summary?: string | null;
-  actual?: string | null;
-  expected?: string | null;
-  reproduce_command?: string | null;
-  source_type?: string | null;
-  source_plan_key?: string | null;
-  active_discovery_reason?: string | null;
-  source_ref?: string | null;
-  source_refs?: string[];
-  source_path?: string | null;
-  source_paths?: string[];
-  quality_gate_state?: string | null;
-  issue_payload_ready?: boolean | null;
-  github_issue_number?: number | null;
-  github_issue_url?: string | null;
-  github_sync_status?: string;
-  github_sync_json?: JsonObject;
-  evidence_refs?: string[];
-  draft_storage_authoritative?: boolean;
-  assistant_draft_storage_notice?: string;
-  retired_draft_tables?: string[];
-  standard_workflow_required?: boolean;
-  storage_performed?: boolean;
-  direct_github_create_performed?: boolean;
-  recommended_tools?: string[];
-  reason?: string;
-  official_submission_required?: string;
-};
-
 export type AssistantWorkbenchDryRunResult = JsonObject & {
   dry_run?: boolean;
   status?: string;
@@ -677,25 +640,6 @@ export type AssistantCatalogReadiness = JsonObject & {
   operator_action?: string | null;
   human_message?: string;
   generated_at?: string;
-};
-
-export type AssistantValidationDiscoverySummary = JsonObject & {
-  latest_reports?: JsonObject[];
-  candidate_issues_needing_review?: AssistantIssueCandidate[];
-  candidate_summary?: JsonObject;
-  data_state?: string;
-  status?: string;
-  source_of_truth?: string;
-  source_of_truth_endpoint?: string;
-  discovery_report_mode?: string;
-  discovery_manifest_api_available?: boolean;
-  discovery_manifest_api_note?: string;
-  reason_codes?: string[];
-  warnings?: string[];
-  draft_storage_authoritative?: boolean;
-  assistant_draft_storage_notice?: string;
-  retired_draft_tables?: string[];
-  official_submission_required?: string;
 };
 
 export class ResearchAssistantApiError extends Error {
@@ -906,17 +850,6 @@ export const researchAssistantApi = {
   reject(approvalId: string): Promise<AssistantApproval> {
     return post<AssistantApproval>(`/research-assistant/approvals/${encodeURIComponent(approvalId)}/reject`, { confirmation_text: "" });
   },
-  issueCandidates(params: { status?: string; module?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantIssueCandidate>> {
-    return unwrap<AssistantPage<AssistantIssueCandidate>>(appendQuery("/research-assistant/issue-candidates", { limit: 50, ...params }));
-  },
-  createIssueCandidate(payload: JsonObject): Promise<AssistantIssueCandidate> {
-    // Retired no-storage compatibility endpoint; standard workflow tools own formal submission.
-    return post<AssistantIssueCandidate>("/research-assistant/issue-candidates", payload);
-  },
-  githubSyncIssueCandidate(candidateId: string, payload: JsonObject): Promise<AssistantIssueCandidate> {
-    // Retired block-only compatibility endpoint; RA never performs GitHub sync directly.
-    return post<AssistantIssueCandidate>(`/research-assistant/issue-candidates/${encodeURIComponent(candidateId)}/github-sync`, payload);
-  },
   modelProfiles(): Promise<AssistantPage<AssistantModelProfile>> {
     return unwrap<AssistantPage<AssistantModelProfile>>("/research-assistant/models/profiles");
   },
@@ -949,8 +882,5 @@ export const researchAssistantApi = {
   },
   agenda(): Promise<AssistantPage<JsonObject>> {
     return unwrap<AssistantPage<JsonObject>>("/research-assistant/agenda");
-  },
-  validationDiscoverySummary(): Promise<AssistantValidationDiscoverySummary> {
-    return unwrap<AssistantValidationDiscoverySummary>("/research-assistant/validation-discovery/summary");
   },
 };
