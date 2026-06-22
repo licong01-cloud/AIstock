@@ -40,7 +40,7 @@
   "expected": "Define ONE canonical non-terminal(open) vs terminal broker order_status predicate in qmt_strategy_ledger/models.py (pending 48/49/50/51 + partial 52/53/55 = non-terminal; terminal = 54 cancelled / 56 filled / 57 rejected) and use it everywhere: scheduler.py:4703 must count partial-fill(55) as open; qmt_strategy_ledger lifecycle (sync_service) consistent and remaining-qty aware. MiniQMT runtime child-order status must also be reconciled from broker order/trade snapshots (recover/_sync_managed_child_result backfill FILLED/PARTIALLY_FILLED/CANCELLED) so runtime persisted state stops lagging broker truth. No silent fallback. LocalSim untouched.",
   "first_seen_at": "2026-06-22T04:58:40.844697Z",
   "fix_branch": "bug/BUG-470-p0-miniqmt-order-lifecycle-open-terminal-status-20260622",
-  "fix_commit": null,
+  "fix_commit": "55dfc813f5ac4263f9d64ccf63c78cda693d9782",
   "fixed_at": null,
   "github_issue_number": 1453,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1453",
