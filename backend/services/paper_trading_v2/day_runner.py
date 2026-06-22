@@ -634,16 +634,43 @@ class PaperTradingDayRunner:
                 package_id=manifest.package_id,
             )
             require_day_features = self._policy_requires_day_features(execution_policy_json)
+            day_feature_excluded_intents: list[dict[str, Any]] = []
 
             for intent in intents:
-                market_input = self.market_data_provider.load_symbol_input(
-                    symbol=intent.symbol,
-                    trade_date=trade_date,
-                    source=portfolio.data_source,
-                    min_bars=required_bars,
-                    require_suspend_status=True,
-                    require_day_features=require_day_features,
-                )
+                try:
+                    market_input = self.market_data_provider.load_symbol_input(
+                        symbol=intent.symbol,
+                        trade_date=trade_date,
+                        source=portfolio.data_source,
+                        min_bars=required_bars,
+                        require_suspend_status=True,
+                        require_day_features=require_day_features,
+                    )
+                except DataUnavailableError as exc:
+                    if not (require_day_features and self._is_v25_day_feature_symbol_exclusion(exc)):
+                        raise
+                    excluded = {
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side.value,
+                        "quantity": intent.quantity,
+                        "reason_code": exc.context.get("reason_code"),
+                        "fail_closed_policy": exc.context.get("fail_closed_policy"),
+                    }
+                    day_feature_excluded_intents.append(excluded)
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type="DAY_FEATURE_SYMBOL_EXCLUDED",
+                        message="V25 day_features unavailable; excluded LocalSim order intent for trade date",
+                        context={
+                            "portfolio_id": portfolio_id,
+                            "trade_date": trade_date.isoformat(),
+                            "data_source": portfolio.data_source.value,
+                            **excluded,
+                            "source_error": exc.to_dict(),
+                        },
+                    )
+                    continue
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
                         "market data provider returned no minute bars",
@@ -721,6 +748,8 @@ class PaperTradingDayRunner:
                         "trade_date": trade_date.isoformat(),
                         "order_count": len(orders),
                         "order_event_count": len(events),
+                        "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
+                        "day_feature_excluded_intents": day_feature_excluded_intents,
                     },
                 )
             missing_snapshot_symbols = [symbol for symbol in ledger.positions if symbol not in snapshot_prices]
@@ -750,7 +779,13 @@ class PaperTradingDayRunner:
                 run_id=run.run_id,
                 trade_date=trade_date,
                 snapshot=account_snapshot,
-                metadata={"position_count": len(position_list), "order_count": len(orders), "fill_count": len(fills)},
+                metadata={
+                    "position_count": len(position_list),
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
+                    "day_feature_excluded_intents": day_feature_excluded_intents,
+                },
             )
             self._assert_orders_terminal_before_success(run, orders)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
@@ -1096,6 +1131,16 @@ class PaperTradingDayRunner:
     @staticmethod
     def _policy_requires_day_features(policy_json: dict[str, Any]) -> bool:
         return str(policy_json.get("algo_code") or "").strip().upper() in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
+
+    @staticmethod
+    def _is_v25_day_feature_symbol_exclusion(exc: DataUnavailableError) -> bool:
+        context = exc.context or {}
+        reason_code = str(context.get("reason_code") or "")
+        return (
+            str(context.get("fail_closed_policy") or "") == "exclude_symbol_for_trade_date"
+            and str(context.get("field") or "") == "turnover_rate_f"
+            and reason_code.startswith("V25_DAY_FEATURE_TURNOVER_RATE_F_")
+        )
 
     @staticmethod
     def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:
