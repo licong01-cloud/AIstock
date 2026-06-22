@@ -12,15 +12,19 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from backend.routers.multi_alpha import CombineBacktestRunRequest
 from backend.services.multi_alpha.combine_backtest import (
     COMBINE_BACKTEST_CONFIRM,
+    COMBINE_BACKTEST_STALE_FAIL_CONFIRM,
+    DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS,
     DEFAULT_WEIGHTING_SCHEMES,
     InMemoryCombineBacktestRepository,
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
     RANK_FUSION_WEIGHTING_SCHEMES,
+    apply_pred_backtest_overrides,
     ShellPredBacktestExecutor,
     maybe_upload_combined_prediction,
     parse_request,
@@ -71,7 +75,7 @@ class FakeExecutor:
                 "name": name,
             }
             with self._lock:
-                self.calls.append({"workspace": workspace, "node_id": node_id, "metrics": metrics})
+                self.calls.append({"workspace": workspace, "node_id": node_id, "metrics": metrics, "backtest_config": dict(backtest_config)})
             (workspace / "qlib_results_enhanced.json").write_text(json.dumps({"absolute_returns": metrics}), encoding="utf-8")
             return metrics
         finally:
@@ -244,6 +248,191 @@ def test_combine_backtest_runs_ic_weighted_and_risk_parity_and_persists(tmp_path
     assert repo.runs[result["run_id"]]["roster_hash"]
 
 
+def test_combine_backtest_heartbeat_updates_phase_and_updated_at(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+
+    result = service.submit_run(_payload(), run_async=False)
+    run = repo.runs[result["run_id"]]
+
+    assert run["status"] == "succeeded"
+    assert run["updated_at"] is not None
+    assert run["reason"] is None
+
+
+def test_async_daemon_exception_is_persisted_as_failed_not_silent(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    payload = _payload()
+    payload["baseline_leg_id"] = "missing_leg"
+    request = parse_request(payload)
+    run_id = "macb_async_failure"
+    repo.create_run(run_id=run_id, request=request, roster_hash="hash")
+
+    service._execute_run_thread(run_id, request)
+
+    run = repo.runs[run_id]
+    assert run["status"] == "failed"
+    assert run["updated_at"] is not None
+    assert run["reason"]["reason_code"] == "baseline_leg_missing"
+    assert run["reason"]["logical_status"] == "failed"
+    assert run["reason"]["run_id"] == run_id
+
+
+def test_unhandled_execute_run_exception_is_persisted_with_explicit_reason(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    request = parse_request(_payload())
+    run_id = "macb_unhandled_failure"
+    repo.create_run(run_id=run_id, request=request, roster_hash="hash")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("unexpected boom")
+
+    service._execute_run = boom  # type: ignore[method-assign]
+
+    service._execute_run_thread(run_id, request)
+
+    run = repo.runs[run_id]
+    assert run["status"] == "failed"
+    assert run["reason"]["reason_code"] == "combine_backtest_unhandled_exception"
+    assert "unexpected boom" in run["reason"]["message"]
+
+
+def test_parse_request_sets_reasonable_timeout_defaults_and_topk(tmp_path: Path) -> None:
+    payload = _payload()
+    payload["topk"] = 50
+
+    request = parse_request(payload)
+
+    assert request.topk == 50
+    assert request.scheme_timeout_seconds == DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS
+    assert request.backtest_config["timeout_seconds"] == DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS
+    assert request.backtest_config["topk"] == 50
+    assert request.run_timeout_seconds is not None
+    assert request.run_timeout_seconds < 6 * 60 * 60
+
+
+def test_topk_reaches_executor_backtest_config(tmp_path: Path) -> None:
+    service, _repo, executor, _checker = _service(tmp_path)
+    payload = _payload()
+    payload["topk"] = 50
+
+    service.submit_run(payload, run_async=False)
+
+    assert executor.calls
+    assert {call["backtest_config"]["topk"] for call in executor.calls} == {50}
+
+
+def test_topk_override_updates_qrun_conf_yaml(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+        },
+    }
+    (workspace / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+
+    apply_pred_backtest_overrides(workspace=workspace, backtest_config={"topk": 100})
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert updated["port_analysis_config"]["strategy"]["kwargs"]["topk"] == 100
+    assert updated["port_analysis_config"]["strategy"]["kwargs"]["n_drop"] == 2
+
+
+def test_async_run_exposes_running_phase_heartbeat(tmp_path: Path) -> None:
+    executor = FakeExecutor(sleep_seconds=0.2)
+    service, repo, _executor, _checker = _service(tmp_path, executor=executor)
+    payload = _payload()
+
+    result = service.submit_run(payload, run_async=True)
+    run_id = result["run_id"]
+
+    deadline = time.time() + 5
+    observed_phase = None
+    while time.time() < deadline:
+        reason = repo.runs[run_id].get("reason") or {}
+        observed_phase = reason.get("phase")
+        if observed_phase in {"backtest_submitted", "backtests_running", "backtest_finished"}:
+            break
+        time.sleep(0.02)
+
+    assert observed_phase in {"backtest_submitted", "backtests_running", "backtest_finished"}
+    assert repo.runs[run_id]["updated_at"] is not None
+    deadline = time.time() + 5
+    while time.time() < deadline and repo.runs[run_id]["status"] == "running":
+        time.sleep(0.02)
+    assert repo.runs[run_id]["status"] == "succeeded"
+
+
+def test_scheme_timeout_fails_run_loud_without_waiting_for_default_six_hours(tmp_path: Path) -> None:
+    executor = FakeExecutor(sleep_seconds=2.0)
+    service, repo, _executor, _checker = _service(tmp_path, executor=executor)
+    payload = _payload()
+    payload["weighting_schemes"] = ["equal"]
+    payload["scheme_timeout_seconds"] = 1
+    payload["run_timeout_seconds"] = 10
+
+    started_at = time.monotonic()
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(payload, run_async=False)
+
+    assert time.monotonic() - started_at < 5
+    assert excinfo.value.reason_code == "combine_backtest_scheme_timeout"
+    run_id = next(iter(repo.runs))
+    run = service.get_run(run_id)
+    assert run["run"]["status"] == "failed"
+    assert run["run"]["reason"]["reason_code"] == "combine_backtest_scheme_timeout"
+    assert run["run"]["reason"]["context"]["child_task"] in {"baseline_leg_a", "combined_equal"}
+    assert run["run"]["reason"]["context"]["scheme_timeout_seconds"] == 1
+
+
+def test_run_timeout_marks_run_failed_loud(tmp_path: Path) -> None:
+    executor = FakeExecutor(sleep_seconds=2.0)
+    service, repo, _executor, _checker = _service(tmp_path, executor=executor)
+    payload = _payload()
+    payload["weighting_schemes"] = ["equal"]
+    payload["scheme_timeout_seconds"] = 30
+    payload["run_timeout_seconds"] = 1
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(payload, run_async=False)
+
+    assert excinfo.value.reason_code == "combine_backtest_run_timeout"
+    run_id = next(iter(repo.runs))
+    run = repo.runs[run_id]
+    assert run["status"] == "failed"
+    assert run["reason"]["reason_code"] == "combine_backtest_run_timeout"
+    assert run["reason"]["logical_status"] == "failed"
+
+
+def test_stale_running_cleanup_is_dry_run_by_default_and_confirmation_gated(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    request = parse_request(_payload())
+    repo.create_run(run_id="macb_stale", request=request, roster_hash="hash")
+    repo.runs["macb_stale"]["updated_at"] = "2026-01-01T00:00:00+00:00"
+
+    preview = service.mark_stale_running_runs_failed(max_age_seconds=1, dry_run=True)
+
+    assert preview["dry_run"] is True
+    assert preview["candidate_count"] == 1
+    assert repo.runs["macb_stale"]["status"] == "running"
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.mark_stale_running_runs_failed(max_age_seconds=1, dry_run=False)
+    assert excinfo.value.reason_code == "stale_cleanup_confirmation_required"
+
+    result = service.mark_stale_running_runs_failed(
+        max_age_seconds=1,
+        dry_run=False,
+        confirmation=COMBINE_BACKTEST_STALE_FAIL_CONFIRM,
+    )
+
+    assert result["updated_count"] == 1
+    assert repo.runs["macb_stale"]["status"] == "failed"
+    assert repo.runs["macb_stale"]["reason"]["reason_code"] == "combine_backtest_stale_timeout"
+
+
 def test_combine_backtest_persists_loo_for_three_or_more_legs(tmp_path: Path) -> None:
     service, _repo, _executor, _checker = _service(tmp_path)
 
@@ -386,6 +575,18 @@ def test_rest_request_model_preserves_rank_fusion_options() -> None:
     request = CombineBacktestRunRequest(**payload)
 
     assert request.model_dump()["rank_fusion"] == {"rrf_k": 42, "leg_weights": {"leg_a": 2.0}}
+
+
+def test_rest_request_model_accepts_timeout_controls() -> None:
+    payload = _payload()
+    payload["scheme_timeout_seconds"] = 1800
+    payload["run_timeout_seconds"] = 7200
+
+    request = CombineBacktestRunRequest(**payload)
+
+    dumped = request.model_dump()
+    assert dumped["scheme_timeout_seconds"] == 1800
+    assert dumped["run_timeout_seconds"] == 7200
 
 
 def test_rank_fusion_rrf_and_borda_run_and_persist_metadata(tmp_path: Path) -> None:
