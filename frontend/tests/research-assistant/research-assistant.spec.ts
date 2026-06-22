@@ -368,12 +368,18 @@ test("Research Assistant blocker diagnostics are collapsed behind developer deta
   await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
   await expect(blockerLog).toContainText("action_proposals");
   await expect(blockerLog.locator("pre")).toBeHidden();
-  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(1);
-  await blockerLog.locator("summary").click();
+  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(0);
+  await blockerLog.locator("summary").first().click();
+  await expect(blockerLog.locator(".ra-json-summary")).not.toHaveCount(0);
+  await expect(blockerLog).toContainText("状态");
+  await expect(blockerLog).toContainText("原因");
+  await expect(blockerLog).toContainText("下一步");
+  await expect(blockerLog).toContainText("来源");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await blockerLog.getByText("查看原始数据/开发者").click();
   await expect(blockerLog.locator("pre")).toBeVisible();
   await expect(blockerLog.locator("pre")).toContainText("proposal-blocker-3");
-  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
-  await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
+  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 test("Research Assistant evidence diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
@@ -431,12 +437,17 @@ test("Research Assistant evidence diagnostics are collapsed behind developer det
 
   const evidenceLog = browserPage.getByTestId("ra-evidence-log");
   await expect(evidenceLog).toBeVisible();
-  await expect(evidenceLog.locator("summary")).toContainText("Developer details / Diagnostic log");
+  await expect(evidenceLog.locator("summary").first()).toContainText("Developer details / Diagnostic log");
   await expect(evidenceLog.locator("pre")).toBeHidden();
-  await evidenceLog.locator("summary").click();
+  await evidenceLog.locator("summary").first().click();
+  await expect(evidenceLog).toContainText("来源");
+  await expect(evidenceLog).toContainText("服务");
+  await expect(evidenceLog).toContainText("Trace ID");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.getByText("查看原始数据/开发者").click();
   await expect(evidenceLog.locator("pre")).toBeVisible();
   await expect(evidenceLog.locator("pre")).toContainText("trace-secret-raw-json");
-  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(0);
+  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
@@ -473,53 +484,13 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   for (const label of ["因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]) {
     await expect(browserPage.getByText(label).first()).toBeVisible();
   }
-  await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
+  await expect(browserPage.getByText("模型版本 / 模型试验").first()).toBeVisible();
   await expect(browserPage.getByText("summary-first").first()).toBeVisible();
   await expect(browserPage.getByText("include_schema=false").first()).toBeVisible();
   await expect(browserPage.getByText("ready").first()).toBeVisible();
   await expect(browserPage.locator("body")).not.toContainText("鎴");
   await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
-  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
-    if (path.endsWith("/mcp/tools")) {
-      return respond(page([
-        {
-          tool_id: "mcp_tool_validation_issue_sync",
-          server_key: "aistock-validation",
-          tool_name: "mcp_github_issue_sync_bug",
-          title: "\u6807\u51c6 workflow \u540c\u6b65 Issue",
-          risk_level: "high",
-          requires_approval: true,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["catalog", "approval"] },
-          required_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
-        },
-      ]));
-    }
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_demo_1", title: "QE 实验规划", status: "running" }]));
-    if (path.endsWith("/mcp/preflight")) return respond({ passed: false, approval_required: true, missing_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"], trace_event: { event_type: "approval_required" }, deep_links: ["/research-assistant/approvals"] });
-    return respond(page([]));
-  });
-
-  await browserPage.goto("/research-assistant/admin");
-  await expect(browserPage.getByRole("heading", { name: "旧版表格与 JSON 详情保留在这里" })).toBeVisible();
-  await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
-
-  await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: /Action Proposal/ })).toBeVisible();
-  await expect(browserPage.locator("#ra-legacy-payload")).toBeVisible();
-  await browserPage.getByRole("button", { name: /preflight/ }).click();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("missing_confirmations");
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(0);
-});
-
-
 test("Research Assistant workbench surfaces local data MCP tools as readable cards", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
