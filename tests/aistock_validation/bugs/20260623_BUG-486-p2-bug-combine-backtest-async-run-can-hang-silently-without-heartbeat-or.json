@@ -29,8 +29,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-22T18:40:08.319709Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "955304d4734583e2be4cefc32a132d2803743dd5",
+  "fixed_at": "2026-06-22T19:46:11.267639Z",
   "github_issue_number": 1497,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1497",
   "last_seen_at": "2026-06-22T18:40:08.319709Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1498",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -58,6 +59,14 @@
     "fingerprint": "6f4294278afe0dd2996a663e",
     "source_event_id": "FE-20260623-6f4294278afe"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_multi_alpha_combine_backtest.py -q -> 33 passed",
+    "python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/routers/multi_alpha.py -> passed",
+    "ruff check backend/services/multi_alpha/combine_backtest.py backend/routers/multi_alpha.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "git diff --check -> passed",
+    "nox -s l0 validation_module_registry_l0 -> passed",
+    "GitHub PR #1498 checks -> all required checks success"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
