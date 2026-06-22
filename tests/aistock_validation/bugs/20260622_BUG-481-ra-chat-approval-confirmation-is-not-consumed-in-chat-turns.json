@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-481",
-  "closed_at": null,
+  "closed_at": "2026-06-22T16:36:30Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,17 +34,24 @@
       "actor": "codex",
       "note": "Implemented chat-bound action proposal approvals: approval_id/exact token card output, explicit confirm_approval_id consumption through _consume_approval_gate, guarded single-pending L1 natural-language mapping, and fail-closed rejection for wrong-token/cross-conversation/multiple-pending/L2/self-approval paths. Validation run locally: l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept, validation_module_registry_l0, new targeted tests, ruff, diff --check.",
       "timestamp": "2026-06-22T14:35:00Z"
+    },
+    {
+      "action": "post_merge_aftercare",
+      "actor": "codex",
+      "note": "Post-merge aftercare: PR #1487 was squash-merged at f71b29f60f016d07eb3a8cfa78b8d30e8fc62673; close-sync PR #1489 was merged at cb85b2d9c8361baf2904a2d3850be3b24e04ce3d; GitHub Issue #1483 is closed with status:fixed; BUG JSON marked closed with closed_at. No services started, no production DB touched, no DDL executed.",
+      "timestamp": "2026-06-22T16:39:42Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Chat turns display approval_id and exact confirmation token for proposed side-effect actions; later chat turns with confirm_approval_id plus exact confirmation_text consume the pending approval via the existing approval gate; narrow natural-language affirmative mapping is allowed only for one safe pending approval and never for L2 production-sensitive actions.",
   "first_seen_at": "2026-06-22T12:13:55.818712Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-481-ra-chat-approval-confirmation-is-not-consumed-in-20260622",
   "fix_commit": "f71b29f60f016d07eb3a8cfa78b8d30e8fc62673",
   "fixed_at": "2026-06-22T16:39:20.466277Z",
   "github_issue_number": 1483,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1483",
   "last_seen_at": "2026-06-22T12:13:55.818712Z",
+  "merge_commit": "f71b29f60f016d07eb3a8cfa78b8d30e8fc62673",
   "module": "research_assistant",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -64,7 +71,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
