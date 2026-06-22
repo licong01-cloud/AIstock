@@ -49,8 +49,8 @@
   "expected": "Move InMemoryLedger cash/notional/fee to Decimal with explicit quantization and drop the 1e-8 epsilon; apply the min commission per ORDER not per fill; enforce 100-share board-lot at apply_fill (odd-lot only for full-position sells), fail loud otherwise. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:11:16.522175Z",
   "fix_branch": "bug/BUG-465-p1-paper-v2-localsim-inmemoryledger-decimal-mone-20260622",
-  "fix_commit": "9432378d5ade5a09c4850a0448e936cc592afb30",
-  "fixed_at": "2026-06-21T21:47:25.587898Z",
+  "fix_commit": "84004919c1521399d9a97ab5e57b036def2db3fd",
+  "fixed_at": "2026-06-22T08:20:41.177552Z",
   "github_issue_number": 1430,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1430",
   "last_seen_at": "2026-06-21T19:11:16.522175Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1443",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -79,6 +80,9 @@
     "fingerprint": "a75fc7b4f7fe15cdc3d89f6d",
     "source_event_id": "FE-20260622-a75fc7b4f7fe"
   },
+  "validation_evidence": [
+    "gh pr checks 1443 -> 17 passed, 0 failed"
+  ],
   "verification_run_id": "BUG-465-20260622-pr-ready",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -91,14 +95,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1443",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py -q -> 27 passed",
-    "rtk python -m ruff check backend/services/trading_core/ledger.py backend/tests/paper_trading_v2/test_localsim_backend.py -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed plus ownership scan mapped=12/unmapped=0/ambiguous=0",
-    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 637 passed, 1 skipped, 1 deselected; data_quality_deep 10 passed, 21 skipped"
-  ]
+  "workflow_gate": "ready_for_fix"
 }
