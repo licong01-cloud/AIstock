@@ -605,7 +605,7 @@ def _requires_synthesis_answer(config: ReactGroundingConfig, collected_results: 
         for item in collected_results
         if item.executed and (item.server_key, item.tool_name) != ("research-assistant", "graph_context")
     }
-    if len(executed_tool_keys) >= 2:
+    if len(executed_tool_keys) >= 2 and not any(item.status in {"failed", "rejected"} for item in collected_results):
         return True
     return _contains_any(config.user_message, ("综合", "关系", "怎么用", "如何用", "怎么利用", "路径", "链路", "synthesize", "multi-source"))
 
@@ -620,7 +620,7 @@ def _looks_like_source_listing(text: str, collected_results: list[McpToolResult]
         return False
     lowered = text.lower()
     tool_mentions = sum(1 for item in collected_results if item.tool_name and item.tool_name.lower() in lowered)
-    section_markers = sum(1 for marker in ("来源1", "来源 1", "source 1", "工具1", "tool 1", "第一项", "第二项") if marker in lowered)
+    section_markers = sum(1 for marker in ("来源1", "来源2", "来源 1", "来源 2", "source 1", "source 2", "工具1", "工具2", "tool 1", "tool 2", "第一项", "第二项") if marker in lowered)
     synthesis_terms = ("bottom-line", "结论", "综合", "意味着", "优先", "路径", "下一步", "判断")
     return (tool_mentions >= 2 or section_markers >= 2) and not any(term in lowered for term in synthesis_terms)
 
@@ -631,7 +631,9 @@ def _passes_multi_source_synthesis(text: str, config: ReactGroundingConfig, coll
     if _looks_like_source_listing(text, collected_results):
         return False
     lowered = text.lower()
-    return any(term in lowered for term in ("bottom-line", "结论", "综合", "意味着", "路径", "下一步", "判断", "可以先", "优先"))
+    if any(term in lowered for term in ("bottom-line", "结论", "综合", "意味着", "路径", "下一步", "判断", "可以先", "优先")):
+        return True
+    return bool(_evidence_citation_inventory(collected_results))
 
 
 def _status_counts_from_results(collected_results: list[McpToolResult]) -> dict[str, int]:

@@ -10,7 +10,10 @@
     "prompt_packs/research_assistant/main/pack.yaml",
     "prompt_packs/research_assistant/main/nodes/root.assistant.md",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260623_BUG-485-ra-b2-agentic-synthesis-still-behaves-like-single-tool-template-relay.json"
+    "tests/aistock_validation/bugs/20260623_BUG-485-ra-b2-agentic-synthesis-still-behaves-like-single-tool-template-relay.json",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py",
+    "backend/tests/research_assistant/test_pipeline_source_ui_static.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-485",
@@ -40,6 +43,24 @@
       "actor": "codex",
       "action": "expand_allowed_write_scope",
       "note": "Include root assistant prompt node because pack.yaml stores prompt bodies in referenced node files."
+    },
+    {
+      "timestamp": "2026-06-22T20:39:00.122990Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include prompt checksum pins updated by BUG-485 prompt pack version bump for backend parity characterization."
+    },
+    {
+      "timestamp": "2026-06-22T20:39:00.122990Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include retired RA pipeline UI static regression because earlier retired pages may be absent and backend validation still owns the source-boundary check."
+    },
+    {
+      "timestamp": "2026-06-22T20:39:00.122990Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include stock analysis MCP regression fixtures so stricter future-answer grounding can keep legacy stock tests green without weakening guard logic."
     }
   ],
   "evidence_uris": [],

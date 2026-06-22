@@ -100,6 +100,7 @@ from .react_grounding import (
     ReactGroundingResult,
     ToolCatalogEntry,
     ToolGateDecision,
+    extract_structured_tool_calls,
     run_react_grounding_loop,
 )
 from .prompt_pack import (
@@ -6035,7 +6036,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         graph_context = self._graph_context_from_context_pack(context_pack)
         if graph_context.get("relation_refs"):
             return True
-        if first_llm_result.tool_calls:
+        if first_llm_result.tool_calls or extract_structured_tool_calls(first_llm_result.content):
             return True
         policy = route.get("agentic_route_policy") if isinstance(route, dict) and isinstance(route.get("agentic_route_policy"), dict) else {}
         if policy.get("allow_multi_tool"):
