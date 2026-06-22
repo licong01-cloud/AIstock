@@ -53,8 +53,8 @@
   "expected": "Validate TDX quote freshness fail-closed (DataUnavailableError when timestamp missing/older than bound vs as_of_time); detect ST/*ST and apply 5% limit (fail-closed if ST status unavailable); block side-appropriate intents at limit-up/limit-down with explicit reason_code. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:11:39.976840Z",
   "fix_branch": "bug/BUG-466-p1-paper-v2-localsim-tdx-realtime-quote-freshnes-20260622",
-  "fix_commit": "100b314f7cee8360d3ddc575a719968e55782ae4",
-  "fixed_at": null,
+  "fix_commit": "6d1bf35dde17a94fb619b9da4fd7ef5f5508b000",
+  "fixed_at": "2026-06-22T10:45:32.350552Z",
   "github_issue_number": 1431,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1431",
   "last_seen_at": "2026-06-21T19:11:39.976840Z",
@@ -75,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -85,12 +85,11 @@
     "source_event_id": "FE-20260622-5f43c5295385"
   },
   "validation_evidence": [
+    "rtk gh pr checks 1438 -> passed 17, failed 0",
     "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py -q -> 29 passed",
-    "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/tests/paper_trading_v2/test_market_data.py -> All checks passed",
-    "rtk git diff --check -> passed",
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 643 passed, 1 skipped, 1 deselected; data quality smoke kept known legacy ledger consistency WARN"
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
   ],
   "verification_run_id": "BUG-466-L5-tier2-st-source-rework-20260622",
   "workflow_efficiency_recommendations": {
