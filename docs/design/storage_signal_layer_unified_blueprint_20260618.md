@@ -398,3 +398,37 @@
 - 落地 B.4.1 正交化层的"输入侧"版本(组合前正交 vs 此处**构造时**正交,二者互补);
 - 吸收 A.4"正交驱动选腿":选腿/选因子准则 = 对已选集的正交贡献,非单腿绝对收益;
 - 默认设计卫生:**今后 QE 实验默认 disable_alpha158=true**(腿只用各自独立因子,不强加共享价量底座)。
+
+## 附录 D — 优化目标转向:IC→top-K 年化收益 + 双优化路线(共用腿,微调)(2026-06-23 用户定调 + 文献)
+
+> 性质:对蓝图 §5.4(每包指标)与"组合/选择依据"的**目标函数级**修正,优先级高于附录 B/C 的方法层。触发:用户明确"IC/RankIC 无实际意义,以回测年化收益为优化目标;模拟盘/实盘同样要求 top25/50 更高收益;荐股要求 top10/20 头部精度" + offline 组合实证(combo rankIC 0.138 > a1 0.120 但 top25 收益持平) + 近期 LTR/top-K 文献。
+
+### D.1 核心结论
+1. **IC/RankIC 降级为纯内部诊断**:orth_IC 仅用于"某腿是否加独立信息"的筛选启发,**不再作为优化目标或验收标尺**。
+2. **优化目标 = 回测年化收益(top-K 篮子)**;**有效性门 = seed 均值 + 多窗/跨 regime 稳定 + 真实换手/净成本**(防单 loop 彩票/过拟合单路径;禁用最佳单 loop)。即"年化收益做目标、鲁棒性做有效性门",非裸 CAGR。
+3. 依据:IC 衡量全截面线性排序,top-K 在分布极端尾部;IC 不直接转化可交易利润、且假设线性会掩盖非单调关系。组合提升全截面 rankIC 不等于提升前 25/20 名收益(已实证)。
+
+### D.2 两条优化路线(共用腿+模型,微调不分叉)
+- **路线 1 — 组合 / 模拟盘 / 实盘**:目标 = top-K 年化收益,K∈{25(1000万),50(1亿)}。
+- **路线 2 — 荐股 / 投顾**:目标 = top-10/20 排名精度(precision@K / 命中率 / 头部名收益),对最前列要求更高;附加可解释性 + 低换手(投顾改单伤信任)。
+- **共享基座**:同一批 alpha 腿(a1_plus3_LSTM + FLOW_ACCEL + FUND_GROWTH)与组合得分;差异仅在**最终选择/排序目标 + K**(共享 score + 两个"目标头"/重排层),非两套架构。对应 screen-then-allocate 两段式与 listwise-loss 按 K 加权。
+
+### D.3 组合器与模型方向(对齐 top-K 目标)
+- **组合器**:线性 equal/IC 加权 → **非线性/stacking(LightGBM 二级组合 over 腿 score)**;按 top-K 回测年化收益选权重,不按 IC。文献:非线性聚合优于线性 IC 加权、回撤更平滑。
+- **模型训练目标**:现 MSE(点式/IC 导向)→ **Learning-to-Rank listwise(ListMLE / ListFold / top-k loss)**,直接优化排序头部;同一 listwise loss 调 K 权重即可同时服务两路线。
+- **腿数**:**2-3 条足够(目标是收益,非架构先进度)**;停止加腿/追广度(Sector-Relative 失败、板块资金流已被 sector_data 99 因子覆盖、概念板块多对多不适用),杠杆转移到目标函数 + 非线性组合。
+
+### D.4 两回测场景(固定)
+- **场景 A**:1000万 / top25(集中,单腿 a1 主导,组合边际收益小)。
+- **场景 B**:1亿 / top50(较宽,多 Alpha + 非线性组合预期更有效;ΔIR 随 K 单调升的微观证据)。
+
+### D.5 文献依据(2026-06-23 联网检索)
+- LTR/listwise:[arXiv 2510.14156](https://arxiv.org/abs/2510.14156)(stock ranking 损失评测);[arXiv 2104.12484](https://arxiv.org/pdf/2104.12484)(ListFold,A 股多空,直接优化排序头尾)。
+- IC≠可交易利润 / 非线性组合:[A 股 LightGBM 多空 Sharpe 1.77](https://www.preprints.org/manuscript/202501.0303/v1);[多因子 + deflated Sharpe 偏差校正](https://arxiv.org/html/2507.07107)。
+- 可微 top-K / 端到端:[NeuralSort 端到端组合](https://arxiv.org/pdf/2111.09170);[可微 Sharpe/CVaR](https://arxiv.org/html/2605.28853);[screen-then-allocate / 大组合协方差清洗](https://arxiv.org/abs/2507.01918);[动态加权选股](https://arxiv.org/html/2508.18592v1)。
+
+### D.6 优先级
+- **P0** 全面改用 top-K 年化收益判腿/判组合(弃 IC 判);**P0** 非线性 LightGBM/stacking 组合器(a1+FLOW+FUND × 两场景)。
+- **P1** 荐股 precision@20 单独立项(自有指标 + 可能独立模型/阈值,共享腿基座)。
+- **P2** LTR listwise loss 改 QE 模型训练目标;**P3** 可微 top-K(NeuralSort)前沿储备。
+- **衔接**:combine-backtest 平台修复(Codex 在途)后,按 top25/top50 两场景跑非线性组合执行层;附录 B 的"鲁棒性/广度 KPI"保留为**年化收益的有效性门**(防过拟合),不再作为独立目标。
