@@ -30,7 +30,7 @@
   "first_seen_at": "2026-06-22T07:31:33.221329Z",
   "fix_branch": null,
   "fix_commit": "d167d8922c023f7a3a3dd2a2873816ffba769aec",
-  "fixed_at": "2026-06-22T10:17:37.982347Z",
+  "fixed_at": "2026-06-22T10:20:47.619440Z",
   "github_issue_number": 1462,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1462",
   "last_seen_at": "2026-06-22T07:31:33.221329Z",
@@ -90,7 +90,7 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "PR #1472 CI all checks passed: pending=0 failed=0"
+    "PR #1472 merged and CI passed: pending=0 failed=0"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
