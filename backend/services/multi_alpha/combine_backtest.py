@@ -17,15 +17,17 @@ import shutil
 import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 import pandas as pd
 from psycopg2.extras import Json, RealDictCursor
 import requests
+import yaml
 
 from backend.db.pg_pool import get_conn
 from backend.services.model_store import ModelStoreService, PredictionStoreError
@@ -35,6 +37,7 @@ from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlp
 
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
+COMBINE_BACKTEST_STALE_FAIL_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_STALE_FAIL"
 DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "risk_parity")
 RANK_FUSION_WEIGHTING_SCHEMES = ("rank_fusion_rrf", "rank_fusion_borda")
 SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES
@@ -44,6 +47,10 @@ PREDICTION_STORE_UPLOAD_URL_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_URL"
 PREDICTION_STORE_UPLOAD_TIMEOUT_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_TIMEOUT_SEC"
 DEFAULT_UPLOAD_TIMEOUT_SEC = 120.0
 ACTIVE_QE_LOOP_STATUSES = ("running", "processing")
+DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
+DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
+DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
+RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
 _NODE_RESERVATIONS: dict[str, int] = {}
 _NODE_RESERVATIONS_LOCK = threading.Lock()
 
@@ -82,6 +89,8 @@ class CombineBacktestRequest:
     topk: int = 20
     min_date_coverage: float = 0.8
     run_async: bool = True
+    scheme_timeout_seconds: int = DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS
+    run_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -222,48 +231,51 @@ class ShellPredBacktestExecutor:
         prepare_pred_backtest_workspace(workspace=workspace, backtest_config=backtest_config)
         command = backtest_config.get("command")
         if command is None:
+            apply_pred_backtest_overrides(workspace=workspace, backtest_config=backtest_config)
+            error_context = _pred_backtest_error_context(workspace=workspace, node_id=node_id, backtest_config=backtest_config)
             qrun = run_command(
                 [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_pkl.name],
                 cwd=workspace,
-                timeout_seconds=int(backtest_config.get("timeout_seconds", 6 * 60 * 60)),
+                timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_qrun",
-                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "qrun"},
+                error_context={**error_context, "stage": "qrun"},
             )
             if qrun.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
                     f"pred-backtest qrun failed with exit_code={qrun.returncode}",
                     reason_code="pred_backtest_failed",
-                    context={"workspace": str(workspace), "node_id": node_id, "stderr_tail": (qrun.stderr or "")[-1000:]},
+                    context={**error_context, "stderr_tail": (qrun.stderr or "")[-1000:]},
                 )
             env = dict(os.environ)
             env["QE_REQUIRE_RECORDER_ID"] = "1"
             read_exp = run_command(
                 [sys.executable, "read_exp_res.py"],
                 cwd=workspace,
-                timeout_seconds=int(backtest_config.get("read_timeout_seconds", 60 * 60)),
+                timeout_seconds=int(backtest_config.get("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_read_exp_res",
                 env=env,
-                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "read_exp_res"},
+                error_context={**error_context, "stage": "read_exp_res"},
             )
             if read_exp.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
                     f"read_exp_res failed with exit_code={read_exp.returncode}",
                     reason_code="pred_backtest_ingest_failed",
-                    context={"workspace": str(workspace), "node_id": node_id, "stderr_tail": (read_exp.stderr or "")[-1000:]},
+                    context={**error_context, "stderr_tail": (read_exp.stderr or "")[-1000:]},
                 )
         else:
+            error_context = _pred_backtest_error_context(workspace=workspace, node_id=node_id, backtest_config=backtest_config)
             completed = run_command(
                 command,
                 cwd=workspace,
-                timeout_seconds=int(backtest_config.get("timeout_seconds", 6 * 60 * 60)),
+                timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest",
-                error_context={"workspace": str(workspace), "node_id": node_id, "backtest_name": workspace.name, "stage": "custom_command"},
+                error_context={**error_context, "stage": "custom_command"},
             )
             if completed.returncode != 0:
                 raise MultiAlphaCombineBacktestError(
                     f"pred-backtest command failed with exit_code={completed.returncode}",
                     reason_code="pred_backtest_failed",
-                    context={"workspace": str(workspace), "node_id": node_id, "stderr_tail": (completed.stderr or "")[-1000:]},
+                    context={**error_context, "stderr_tail": (completed.stderr or "")[-1000:]},
                 )
         return ingest_enhanced_metrics(result_path)
 
@@ -300,6 +312,74 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
             reason_code="pred_backtest_runtime_missing",
             context={"workspace": str(workspace), "missing": missing},
         )
+
+
+def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
+    """Apply explicit runtime overrides before qrun reads conf.yaml."""
+
+    topk = backtest_config.get("topk")
+    if topk is None:
+        return
+    topk_int = _positive_int(topk, field_name="topk")
+    conf_path = workspace / "conf.yaml"
+    try:
+        conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"failed to parse pred-backtest conf.yaml for topk override: {type(exc).__name__}: {exc}",
+            reason_code="pred_backtest_conf_parse_failed",
+            context={"workspace": str(workspace), "conf_path": str(conf_path)},
+        ) from exc
+    if not isinstance(conf, dict):
+        raise MultiAlphaCombineBacktestError(
+            "pred-backtest conf.yaml root must be a mapping before topk override",
+            reason_code="pred_backtest_conf_invalid",
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "root_type": type(conf).__name__},
+        )
+    port_analysis = _require_mapping(conf, "port_analysis_config", conf_path=conf_path)
+    strategy = _require_mapping(port_analysis, "strategy", conf_path=conf_path)
+    kwargs = strategy.get("kwargs")
+    if kwargs is None:
+        kwargs = {}
+        strategy["kwargs"] = kwargs
+    if not isinstance(kwargs, dict):
+        raise MultiAlphaCombineBacktestError(
+            "port_analysis_config.strategy.kwargs must be a mapping before topk override",
+            reason_code="pred_backtest_conf_invalid",
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": "port_analysis_config.strategy.kwargs"},
+        )
+    kwargs["topk"] = topk_int
+    backtest_overrides = backtest_config.get("strategy_kwargs")
+    if isinstance(backtest_overrides, Mapping):
+        for key, value in backtest_overrides.items():
+            kwargs[str(key)] = value
+    conf_path.write_text(yaml.safe_dump(conf, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _require_mapping(payload: Mapping[str, Any], key: str, *, conf_path: Path) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise MultiAlphaCombineBacktestError(
+            f"conf.yaml missing mapping field: {key}",
+            reason_code="pred_backtest_conf_invalid",
+            context={"conf_path": str(conf_path), "field": key},
+        )
+    return value
+
+
+def _pred_backtest_error_context(*, workspace: Path, node_id: str, backtest_config: Mapping[str, Any]) -> dict[str, Any]:
+    context = {
+        "workspace": str(workspace),
+        "node_id": node_id,
+        "backtest_name": str(backtest_config.get("backtest_name") or workspace.name),
+        "timeout_seconds": backtest_config.get("timeout_seconds"),
+        "topk": backtest_config.get("topk"),
+    }
+    if backtest_config.get("weighting_scheme"):
+        context["weighting_scheme"] = backtest_config.get("weighting_scheme")
+    if backtest_config.get("dropped_leg_id"):
+        context["dropped_leg_id"] = backtest_config.get("dropped_leg_id")
+    return context
 
 
 def run_command(
@@ -366,41 +446,111 @@ class MultiAlphaCombineBacktestRepository:
 
     def __init__(self, connection_provider=get_conn) -> None:
         self._connection_provider = connection_provider
+        self._run_has_updated_at_cache: bool | None = None
+
+    def _run_has_updated_at(self, conn: Any) -> bool:
+        if self._run_has_updated_at_cache is not None:
+            return self._run_has_updated_at_cache
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'strategy_pkg'
+                  AND table_name = 'multi_alpha_combine_backtest_run'
+                  AND column_name = 'updated_at'
+                """
+            )
+            self._run_has_updated_at_cache = cur.fetchone() is not None
+        return self._run_has_updated_at_cache
 
     def create_run(self, *, run_id: str, request: CombineBacktestRequest, roster_hash: str) -> None:
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.multi_alpha_combine_backtest_run
-                        (id, roster_hash, roster_json, oos_start, oos_end, normalize_method,
-                         walk_forward_json, backtest_config_json, baseline_leg_id, status, reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', NULL)
-                    """,
-                    (
-                        run_id,
-                        roster_hash,
-                        Json(_roster_payload(request.roster)),
-                        request.oos_start,
-                        request.oos_end,
-                        request.normalize_method,
-                        Json(dict(request.walk_forward)),
-                        Json(dict(request.backtest_config)),
-                        request.baseline_leg_id,
-                    ),
-                )
+                if self._run_has_updated_at(conn):
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.multi_alpha_combine_backtest_run
+                            (id, roster_hash, roster_json, oos_start, oos_end, normalize_method,
+                             walk_forward_json, backtest_config_json, baseline_leg_id, status, reason, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', NULL, NOW())
+                        """,
+                        (
+                            run_id,
+                            roster_hash,
+                            Json(_roster_payload(request.roster)),
+                            request.oos_start,
+                            request.oos_end,
+                            request.normalize_method,
+                            Json(dict(request.walk_forward)),
+                            Json(dict(request.backtest_config)),
+                            request.baseline_leg_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.multi_alpha_combine_backtest_run
+                            (id, roster_hash, roster_json, oos_start, oos_end, normalize_method,
+                             walk_forward_json, backtest_config_json, baseline_leg_id, status, reason)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', NULL)
+                        """,
+                        (
+                            run_id,
+                            roster_hash,
+                            Json(_roster_payload(request.roster)),
+                            request.oos_start,
+                            request.oos_end,
+                            request.normalize_method,
+                            Json(dict(request.walk_forward)),
+                            Json(dict(request.backtest_config)),
+                            request.baseline_leg_id,
+                        ),
+                    )
 
     def update_run_status(self, run_id: str, *, status: str, reason: Mapping[str, Any] | None = None) -> None:
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE strategy_pkg.multi_alpha_combine_backtest_run
-                    SET status = %s, reason = %s
-                    WHERE id = %s
-                    """,
-                    (status, Json(reason) if reason is not None else None, run_id),
-                )
+                if self._run_has_updated_at(conn):
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET status = %s, reason = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, Json(reason) if reason is not None else None, run_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET status = %s, reason = %s
+                        WHERE id = %s
+                        """,
+                        (status, Json(reason) if reason is not None else None, run_id),
+                    )
+
+    def heartbeat_run(self, run_id: str, *, reason: Mapping[str, Any]) -> None:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                if self._run_has_updated_at(conn):
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET reason = %s, updated_at = NOW()
+                        WHERE id = %s AND status = 'running'
+                        """,
+                        (Json(reason), run_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET reason = %s
+                        WHERE id = %s AND status = 'running'
+                        """,
+                        (Json(reason), run_id),
+                    )
 
     def insert_scheme_result(self, run_id: str, row: Mapping[str, Any]) -> None:
         with self._connection_provider() as conn:
@@ -517,6 +667,65 @@ class MultiAlphaCombineBacktestRepository:
             payloads = [row for row in payloads if row.get("status") == status]
         return payloads
 
+    def mark_stale_running_runs_failed(
+        self,
+        *,
+        max_age_seconds: int,
+        dry_run: bool = True,
+        reason_code: str = "combine_backtest_stale_timeout",
+    ) -> dict[str, Any]:
+        if max_age_seconds <= 0:
+            raise MultiAlphaCombineBacktestError(
+                "max_age_seconds must be positive",
+                reason_code="stale_cleanup_invalid_max_age",
+                context={"max_age_seconds": max_age_seconds},
+            )
+        with self._connection_provider() as conn:
+            has_updated_at = self._run_has_updated_at(conn)
+            age_expr = "COALESCE(updated_at, created_at)" if has_updated_at else "created_at"
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, status, reason, created_at{", updated_at" if has_updated_at else ""}
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run
+                    WHERE status = 'running'
+                      AND {age_expr} < NOW() - (%s * INTERVAL '1 second')
+                    ORDER BY {age_expr} ASC
+                    """,
+                    (max_age_seconds,),
+                )
+                candidates = [dict(row) for row in cur.fetchall()]
+                if dry_run or not candidates:
+                    return {"dry_run": dry_run, "max_age_seconds": max_age_seconds, "candidate_count": len(candidates), "runs": candidates}
+                failed_at = utc_now_iso()
+                reason = {
+                    "reason_code": reason_code,
+                    "message": "running combine-backtest run exceeded stale-run cleanup age and was marked failed by explicit operator action",
+                    "max_age_seconds": max_age_seconds,
+                    "failed_at": failed_at,
+                    "logical_status": "failed",
+                }
+                ids = [row["id"] for row in candidates]
+                if has_updated_at:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET status = 'failed', reason = %s, updated_at = NOW()
+                        WHERE id = ANY(%s)
+                        """,
+                        (Json(reason), ids),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                        SET status = 'failed', reason = %s
+                        WHERE id = ANY(%s)
+                        """,
+                        (Json(reason), ids),
+                    )
+        return {"dry_run": False, "max_age_seconds": max_age_seconds, "updated_count": len(candidates), "runs": candidates, "reason": reason}
+
 
 class InMemoryCombineBacktestRepository:
     """Test repository with the same method surface as the PostgreSQL repository."""
@@ -541,12 +750,21 @@ class InMemoryCombineBacktestRepository:
             "status": "running",
             "reason": None,
             "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
         }
 
     def update_run_status(self, run_id: str, *, status: str, reason: Mapping[str, Any] | None = None) -> None:
         with self._lock:
             self.runs[run_id]["status"] = status
             self.runs[run_id]["reason"] = dict(reason or {}) if reason is not None else None
+            self.runs[run_id]["updated_at"] = utc_now_iso()
+
+    def heartbeat_run(self, run_id: str, *, reason: Mapping[str, Any]) -> None:
+        with self._lock:
+            if self.runs[run_id].get("status") != "running":
+                return
+            self.runs[run_id]["reason"] = dict(reason)
+            self.runs[run_id]["updated_at"] = utc_now_iso()
 
     def insert_scheme_result(self, run_id: str, row: Mapping[str, Any]) -> None:
         with self._lock:
@@ -573,6 +791,48 @@ class InMemoryCombineBacktestRepository:
             if status:
                 rows = [row for row in rows if row["status"] == status]
         return rows[:limit]
+
+    def mark_stale_running_runs_failed(
+        self,
+        *,
+        max_age_seconds: int,
+        dry_run: bool = True,
+        reason_code: str = "combine_backtest_stale_timeout",
+    ) -> dict[str, Any]:
+        if max_age_seconds <= 0:
+            raise MultiAlphaCombineBacktestError(
+                "max_age_seconds must be positive",
+                reason_code="stale_cleanup_invalid_max_age",
+                context={"max_age_seconds": max_age_seconds},
+            )
+        cutoff = utc_now() - timedelta(seconds=max_age_seconds)
+        candidates: list[dict[str, Any]] = []
+        with self._lock:
+            for run in self.runs.values():
+                if run.get("status") != "running":
+                    continue
+                heartbeat_raw = run.get("updated_at") or run.get("created_at")
+                heartbeat = datetime.fromisoformat(str(heartbeat_raw))
+                if heartbeat.tzinfo is None:
+                    heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                if heartbeat < cutoff:
+                    candidates.append(dict(run))
+            if dry_run or not candidates:
+                return {"dry_run": dry_run, "max_age_seconds": max_age_seconds, "candidate_count": len(candidates), "runs": candidates}
+            failed_at = utc_now_iso()
+            reason = {
+                "reason_code": reason_code,
+                "message": "running combine-backtest run exceeded stale-run cleanup age and was marked failed by explicit operator action",
+                "max_age_seconds": max_age_seconds,
+                "failed_at": failed_at,
+                "logical_status": "failed",
+            }
+            for candidate in candidates:
+                run = self.runs[candidate["id"]]
+                run["status"] = "failed"
+                run["reason"] = dict(reason)
+                run["updated_at"] = failed_at
+        return {"dry_run": False, "max_age_seconds": max_age_seconds, "updated_count": len(candidates), "runs": candidates, "reason": reason}
 
 
 class MultiAlphaCombineBacktestService:
@@ -605,18 +865,34 @@ class MultiAlphaCombineBacktestService:
         roster_hash = roster_hash_for(request.roster)
         run_id = make_run_id(roster_hash=roster_hash, oos_start=request.oos_start, oos_end=request.oos_end, ts=self._clock())
         self._repository.create_run(run_id=run_id, request=request, roster_hash=roster_hash)
+        self._heartbeat_run(run_id, request, phase="submitted", message="combine-backtest run accepted")
         if request.run_async:
-            thread = threading.Thread(target=self.execute_run, args=(run_id, request), daemon=True)
+            thread = threading.Thread(target=self._execute_run_thread, args=(run_id, request), daemon=True, name=f"macb-run-{run_id[:12]}")
             thread.start()
         else:
             self.execute_run(run_id, request)
         return {"run_id": run_id, "status": self.get_run(run_id)["run"]["status"]}
 
+    def _execute_run_thread(self, run_id: str, request: CombineBacktestRequest) -> None:
+        try:
+            self.execute_run(run_id, request)
+        except Exception as exc:
+            # Daemon threads cannot return errors to the caller, so persist a
+            # terminal reason here as a second line of defense without
+            # overwriting a richer failure already written by execute_run.
+            try:
+                current_status = str((self.get_run(run_id).get("run") or {}).get("status") or "")
+            except Exception:
+                current_status = "running"
+            if current_status == "running":
+                self._repository.update_run_status(run_id, status="failed", reason=terminal_error_payload(exc, run_id=run_id))
+            return
+
     def execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
         try:
             payload = self._execute_run(run_id, request)
         except Exception as exc:
-            reason = error_payload(exc)
+            reason = terminal_error_payload(exc, run_id=run_id)
             self._repository.update_run_status(run_id, status="failed", reason=reason)
             raise
         status = str(payload.get("status") or "succeeded")
@@ -640,9 +916,38 @@ class MultiAlphaCombineBacktestService:
     def list_runs(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         return self._repository.list_runs(status=status, limit=limit)
 
+    def mark_stale_running_runs_failed(
+        self,
+        *,
+        max_age_seconds: int,
+        dry_run: bool = True,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        if not dry_run and confirmation != COMBINE_BACKTEST_STALE_FAIL_CONFIRM:
+            raise MultiAlphaCombineBacktestError(
+                "marking stale combine-backtest runs failed requires explicit confirmation token",
+                reason_code="stale_cleanup_confirmation_required",
+                context={"required_confirmation": COMBINE_BACKTEST_STALE_FAIL_CONFIRM},
+            )
+        if not hasattr(self._repository, "mark_stale_running_runs_failed"):
+            raise MultiAlphaCombineBacktestError(
+                "combine-backtest repository does not support stale-run cleanup",
+                reason_code="stale_cleanup_not_supported",
+            )
+        return self._repository.mark_stale_running_runs_failed(max_age_seconds=max_age_seconds, dry_run=dry_run)
+
     def _execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
+        run_started = time.monotonic()
+        self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="start")
         node_id = str(request.backtest_config.get("node_id") or "wsl2-5080")
         node_parallelism = validate_node_parallelism(node_id=node_id, backtest_config=request.backtest_config)
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="loading_legs",
+            message="loading seed ensemble panels and validating node capacity",
+            progress={"node_id": node_id, "node_parallelism": node_parallelism},
+        )
         needs_panel_metrics = any(not is_rank_fusion_scheme(scheme) for scheme in request.weighting_schemes)
         if needs_panel_metrics:
             panels = self._panel_builder.build_combiner_legs(
@@ -656,6 +961,14 @@ class MultiAlphaCombineBacktestService:
         else:
             panels = self._build_prediction_only_legs(request)
             prediction_legs = panels
+        self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="legs_loaded")
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="legs_loaded",
+            message="leg panels loaded and seed ensembles aligned",
+            progress={"leg_count": len(panels), "needs_panel_metrics": needs_panel_metrics},
+        )
         leg_by_id = {leg.leg_id: leg for leg in panels}
         if request.baseline_leg_id and request.baseline_leg_id not in leg_by_id:
             raise MultiAlphaCombineBacktestError(
@@ -675,9 +988,25 @@ class MultiAlphaCombineBacktestService:
                 )
             )
 
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="combining_scores",
+            message="building combined score frames for requested schemes and LOO tasks",
+            progress={"scheme_count": len(request.weighting_schemes)},
+        )
         for scheme in request.weighting_schemes:
+            self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="combining_scores")
             combine_input = prediction_legs if is_rank_fusion_scheme(scheme) else panels
             result = combine_legs(legs=combine_input, scheme=scheme, request=request)
+            self._heartbeat_run(
+                run_id,
+                request,
+                phase="scheme_combined",
+                message=f"combined score frame ready for scheme={scheme}",
+                scheme=scheme,
+                progress={"task_count": len(task_specs) + 1},
+            )
             task_specs.append(
                 _PredictionTask(
                     name=f"combined_{scheme}",
@@ -705,14 +1034,100 @@ class MultiAlphaCombineBacktestService:
                     )
                 )
 
+        self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="tasks_built")
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="backtests_running",
+            message="starting pred-backtest child tasks",
+            progress={"task_count": len(task_specs), "node_id": node_id, "node_parallelism_limit": node_parallelism[node_id]},
+        )
         outcomes = self._run_prediction_tasks(
             run_id=run_id,
             tasks=task_specs,
             node_id=node_id,
             node_parallelism_limit=node_parallelism[node_id],
-            backtest_config=request.backtest_config,
+            request=request,
+            run_started_monotonic=run_started,
         )
-        return self._persist_task_outcomes(run_id=run_id, outcomes=outcomes)
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="persisting_results",
+            message="pred-backtest child tasks finished; persisting scheme and LOO results",
+            progress={
+                "task_count": len(outcomes),
+                "failed_count": sum(1 for outcome in outcomes if not outcome.succeeded),
+            },
+        )
+        payload = self._persist_task_outcomes(run_id=run_id, outcomes=outcomes)
+        self._heartbeat_run(
+            run_id,
+            request,
+            phase="completed",
+            message=f"combine-backtest execution completed with status={payload.get('status')}",
+            progress={"status": payload.get("status")},
+        )
+        return payload
+
+    def _heartbeat_run(
+        self,
+        run_id: str,
+        request: CombineBacktestRequest,
+        *,
+        phase: str,
+        message: str,
+        scheme: str | None = None,
+        child_task: str | None = None,
+        progress: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        reason: dict[str, Any] = {
+            "reason_code": RUN_HEARTBEAT_REASON_CODE,
+            "phase": phase,
+            "message": message,
+            "heartbeat_at": utc_now_iso(),
+            "run_timeout_seconds": request.run_timeout_seconds,
+            "scheme_timeout_seconds": request.scheme_timeout_seconds,
+            "topk": request.topk,
+        }
+        if scheme:
+            reason["weighting_scheme"] = scheme
+        if child_task:
+            reason["child_task"] = child_task
+        if progress:
+            reason["progress"] = dict(progress)
+        if extra:
+            reason.update(dict(extra))
+        if hasattr(self._repository, "heartbeat_run"):
+            self._repository.heartbeat_run(run_id, reason=reason)
+        else:
+            self._repository.update_run_status(run_id, status="running", reason=reason)
+
+    def _raise_if_run_timed_out(
+        self,
+        *,
+        run_id: str,
+        request: CombineBacktestRequest,
+        started_monotonic: float,
+        phase: str,
+    ) -> None:
+        timeout_seconds = request.run_timeout_seconds
+        if timeout_seconds is None:
+            return
+        elapsed_seconds = time.monotonic() - started_monotonic
+        if elapsed_seconds <= timeout_seconds:
+            return
+        raise MultiAlphaCombineBacktestError(
+            f"combine-backtest run exceeded run_timeout_seconds={timeout_seconds} at phase={phase}",
+            reason_code="combine_backtest_run_timeout",
+            context={
+                "run_id": run_id,
+                "phase": phase,
+                "elapsed_seconds": round(elapsed_seconds, 3),
+                "run_timeout_seconds": timeout_seconds,
+            },
+        )
 
     def _build_prediction_only_legs(self, request: CombineBacktestRequest) -> list[CombinerLeg]:
         legs: list[CombinerLeg] = []
@@ -748,32 +1163,139 @@ class MultiAlphaCombineBacktestService:
         tasks: Sequence[_PredictionTask],
         node_id: str,
         node_parallelism_limit: int,
-        backtest_config: Mapping[str, Any],
+        request: CombineBacktestRequest,
+        run_started_monotonic: float,
     ) -> list[_PredictionTaskOutcome]:
         if not tasks:
             return []
         max_workers = max(1, min(int(node_parallelism_limit), len(tasks)))
         outcomes_by_name: dict[str, _PredictionTaskOutcome] = {}
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="macb-pred") as pool:
-            future_map = {
-                pool.submit(
-                    self._run_prediction,
+        pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="macb-pred")
+        future_map: dict[Future[dict[str, Any]], _PredictionTask] = {}
+        future_started_at: dict[Future[dict[str, Any]], float] = {}
+        pending: set[Future[dict[str, Any]]] = set()
+        submitted = 0
+
+        def submit_next_task() -> None:
+            nonlocal submitted
+            task = tasks[submitted]
+            self._raise_if_run_timed_out(
+                run_id=run_id,
+                request=request,
+                started_monotonic=run_started_monotonic,
+                phase="submitting_backtest_tasks",
+            )
+            future = pool.submit(
+                self._run_prediction,
+                run_id=run_id,
+                name=task.name,
+                frame=task.frame,
+                node_id=node_id,
+                node_parallelism_limit=node_parallelism_limit,
+                backtest_config=runtime_backtest_config(request),
+                task=task,
+            )
+            submitted += 1
+            future_map[future] = task
+            future_started_at[future] = time.monotonic()
+            pending.add(future)
+            self._heartbeat_run(
+                run_id,
+                request,
+                phase="backtest_submitted",
+                message=f"submitted pred-backtest child task {task.name}",
+                scheme=task.scheme,
+                child_task=task.name,
+                progress={"completed": len(outcomes_by_name), "submitted": submitted, "total": len(tasks), "pending": len(pending)},
+            )
+
+        try:
+            while submitted < len(tasks) and len(pending) < max_workers:
+                submit_next_task()
+            while pending:
+                self._raise_if_run_timed_out(
                     run_id=run_id,
-                    name=task.name,
-                    frame=task.frame,
-                    node_id=node_id,
-                    node_parallelism_limit=node_parallelism_limit,
-                    backtest_config=backtest_config,
-                ): task
-                for task in tasks
-            }
-            for future in as_completed(future_map):
-                task = future_map[future]
-                try:
-                    metrics = future.result()
-                    outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, metrics=metrics)
-                except Exception as exc:
-                    outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, error=error_payload(exc))
+                    request=request,
+                    started_monotonic=run_started_monotonic,
+                    phase="waiting_backtest_tasks",
+                )
+                done, _not_done = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                if not done:
+                    for future in list(pending):
+                        elapsed_seconds = time.monotonic() - future_started_at[future]
+                        if elapsed_seconds <= request.scheme_timeout_seconds:
+                            continue
+                        task = future_map[future]
+                        error = {
+                            "reason_code": "combine_backtest_scheme_timeout",
+                            "message": (
+                                "pred-backtest child task exceeded scheme_timeout_seconds; "
+                                "the run is failed loud instead of remaining running forever"
+                            ),
+                            "context": {
+                                "run_id": run_id,
+                                "child_task": task.name,
+                                "weighting_scheme": task.scheme,
+                                "dropped_leg_id": task.dropped_leg_id,
+                                "node_id": node_id,
+                                "scheme_timeout_seconds": request.scheme_timeout_seconds,
+                                "elapsed_seconds": round(elapsed_seconds, 3),
+                            },
+                        }
+                        self._heartbeat_run(
+                            run_id,
+                            request,
+                            phase="backtest_failed",
+                            message=f"pred-backtest child task timed out: {task.name}",
+                            scheme=task.scheme,
+                            child_task=task.name,
+                            progress={"completed": len(outcomes_by_name), "total": len(tasks), "pending": len(pending)},
+                            extra={"error": error},
+                        )
+                        raise MultiAlphaCombineBacktestError(
+                            str(error["message"]),
+                            reason_code=str(error["reason_code"]),
+                            context=dict(error["context"]),
+                        )
+                    self._heartbeat_run(
+                        run_id,
+                        request,
+                        phase="backtests_running",
+                        message="waiting for pred-backtest child tasks",
+                        progress={"completed": len(outcomes_by_name), "total": len(tasks), "pending": len(pending)},
+                    )
+                    continue
+                for future in done:
+                    pending.remove(future)
+                    task = future_map[future]
+                    try:
+                        metrics = future.result()
+                        outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, metrics=metrics)
+                        self._heartbeat_run(
+                            run_id,
+                            request,
+                            phase="backtest_finished",
+                            message=f"pred-backtest child task completed: {task.name}",
+                            scheme=task.scheme,
+                            child_task=task.name,
+                            progress={"completed": len(outcomes_by_name), "total": len(tasks), "pending": len(pending)},
+                        )
+                    except Exception as exc:
+                        outcomes_by_name[task.name] = _PredictionTaskOutcome(task=task, error=error_payload(exc))
+                        self._heartbeat_run(
+                            run_id,
+                            request,
+                            phase="backtest_failed",
+                            message=f"pred-backtest child task failed: {task.name}",
+                            scheme=task.scheme,
+                            child_task=task.name,
+                            progress={"completed": len(outcomes_by_name), "total": len(tasks), "pending": len(pending)},
+                            extra={"error": error_payload(exc)},
+                        )
+                    while submitted < len(tasks) and len(pending) < max_workers:
+                        submit_next_task()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         return [outcomes_by_name[task.name] for task in tasks]
 
     def _persist_task_outcomes(self, *, run_id: str, outcomes: Sequence[_PredictionTaskOutcome]) -> dict[str, Any]:
@@ -873,6 +1395,7 @@ class MultiAlphaCombineBacktestService:
         node_id: str,
         node_parallelism_limit: int,
         backtest_config: Mapping[str, Any],
+        task: _PredictionTask | None = None,
     ) -> dict[str, Any]:
         workspace = self._workspace_root / run_id / name
         workspace.mkdir(parents=True, exist_ok=True)
@@ -889,7 +1412,12 @@ class MultiAlphaCombineBacktestService:
                 workspace=workspace,
                 pred_pkl=pred_pkl,
                 node_id=node_id,
-                backtest_config=backtest_config,
+                backtest_config={
+                    **dict(backtest_config),
+                    "backtest_name": name,
+                    "weighting_scheme": task.scheme if task else None,
+                    "dropped_leg_id": task.dropped_leg_id if task else None,
+                },
             )
         finally:
             self._capacity_checker.release_slot(capacity)
@@ -917,7 +1445,33 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     schemes = tuple(_normalize_scheme(item) for item in (payload.get("weighting_schemes") or DEFAULT_WEIGHTING_SCHEMES))
     if not schemes:
         raise MultiAlphaCombineBacktestError("weighting_schemes cannot be empty", reason_code="scheme_missing")
-    topk = int(payload.get("topk") or payload.get("backtest_config", {}).get("topk") or 20)
+    raw_backtest_config = payload.get("backtest_config") if isinstance(payload.get("backtest_config"), Mapping) else {}
+    topk = _positive_int(payload.get("topk") or raw_backtest_config.get("topk") or 20, field_name="topk")
+    subprocess_timeout_seconds = _positive_int(
+        raw_backtest_config.get("timeout_seconds") or payload.get("scheme_timeout_seconds") or DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS,
+        field_name="timeout_seconds",
+    )
+    scheme_timeout_seconds = _positive_int(
+        payload.get("scheme_timeout_seconds") or raw_backtest_config.get("scheme_timeout_seconds") or DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS,
+        field_name="scheme_timeout_seconds",
+    )
+    raw_run_timeout = payload.get("run_timeout_seconds") or raw_backtest_config.get("run_timeout_seconds")
+    if raw_run_timeout is None:
+        task_count = 1 + len(schemes) + (len(schemes) * len(roster) if len(roster) > 2 else 0)
+        node_id = str(raw_backtest_config.get("node_id") or "wsl2-5080")
+        try:
+            node_parallelism = validate_node_parallelism(node_id=node_id, backtest_config=raw_backtest_config)[node_id]
+        except MultiAlphaCombineBacktestError:
+            node_parallelism = 1
+        waves = max(1, math.ceil(task_count / max(1, node_parallelism)))
+        run_timeout_seconds = (scheme_timeout_seconds * waves) + DEFAULT_RUN_TIMEOUT_GRACE_SECONDS
+    else:
+        run_timeout_seconds = _positive_int(raw_run_timeout, field_name="run_timeout_seconds")
+    backtest_config = dict(raw_backtest_config)
+    backtest_config["topk"] = topk
+    backtest_config["timeout_seconds"] = min(subprocess_timeout_seconds, scheme_timeout_seconds)
+    backtest_config.setdefault("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)
+    backtest_config["run_timeout_seconds"] = run_timeout_seconds
     return CombineBacktestRequest(
         roster=roster,
         oos_start=str(payload.get("oos_start") or ""),
@@ -926,11 +1480,13 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         normalize_method=str(payload.get("normalize_method") or "zscore"),
         walk_forward=dict(payload.get("walk_forward") or {"enabled": True, "window": 60, "min_periods": 2}),
         rank_fusion=dict(payload.get("rank_fusion") or {}),
-        backtest_config=dict(payload.get("backtest_config") or {}),
+        backtest_config=backtest_config,
         baseline_leg_id=str(payload.get("baseline_leg_id") or roster[0].leg_id),
         topk=topk,
         min_date_coverage=float(payload.get("min_date_coverage") or 0.8),
         run_async=bool(payload.get("run_async", True)),
+        scheme_timeout_seconds=scheme_timeout_seconds,
+        run_timeout_seconds=run_timeout_seconds,
     )
 
 
@@ -948,6 +1504,8 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
         "topk": request.topk,
         "min_date_coverage": request.min_date_coverage,
         "run_async": request.run_async,
+        "scheme_timeout_seconds": request.scheme_timeout_seconds,
+        "run_timeout_seconds": request.run_timeout_seconds,
     }
     data.update(updates)
     return CombineBacktestRequest(**data)
@@ -964,6 +1522,24 @@ def _coerce_panel_spec(item: Mapping[str, Any]) -> PanelLegSpec:
         raise MultiAlphaCombineBacktestError("roster item missing seed_run_ids", leg_id=leg_id, reason_code="seed_run_ids_missing")
     metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
     return PanelLegSpec(leg_id=leg_id, seed_run_ids=seed_run_ids, metadata=metadata)
+
+
+def _positive_int(value: Any, *, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must be an integer",
+            reason_code=f"{field_name}_invalid",
+            context={field_name: value},
+        ) from exc
+    if parsed <= 0:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must be positive",
+            reason_code=f"{field_name}_invalid",
+            context={field_name: value},
+        )
+    return parsed
 
 
 def seed_ensemble_prediction_only(frames: Sequence[pd.DataFrame], *, leg_id: str) -> pd.DataFrame:
@@ -1151,6 +1727,15 @@ def per_window_weights_payload(result: Any, *, scheme: str) -> list[dict[str, An
     ]
 
 
+def runtime_backtest_config(request: CombineBacktestRequest) -> dict[str, Any]:
+    config = dict(request.backtest_config)
+    config["topk"] = request.topk
+    config.setdefault("timeout_seconds", request.scheme_timeout_seconds)
+    config.setdefault("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)
+    config["run_timeout_seconds"] = request.run_timeout_seconds
+    return config
+
+
 def write_qlib_prediction(frame: pd.DataFrame, path: Path) -> None:
     if frame.empty:
         raise MultiAlphaCombineBacktestError("combined prediction frame is empty", reason_code="combined_prediction_empty")
@@ -1259,6 +1844,18 @@ def _with_logical_status(row: dict[str, Any]) -> dict[str, Any]:
     if isinstance(reason, Mapping) and reason.get("logical_status") == LOGICAL_PARTIAL_FAILED_STATUS:
         row["status"] = LOGICAL_PARTIAL_FAILED_STATUS
     return row
+
+
+def terminal_error_payload(exc: Exception, *, run_id: str) -> dict[str, Any]:
+    payload = error_payload(exc)
+    reason_code = payload.get("reason_code")
+    if not isinstance(exc, (MultiAlphaCombineBacktestError, MultiAlphaPanelError)):
+        reason_code = "combine_backtest_unhandled_exception"
+    payload["reason_code"] = reason_code
+    payload["run_id"] = run_id
+    payload["failed_at"] = utc_now_iso()
+    payload["logical_status"] = "failed"
+    return payload
 
 
 def maybe_upload_combined_prediction(
