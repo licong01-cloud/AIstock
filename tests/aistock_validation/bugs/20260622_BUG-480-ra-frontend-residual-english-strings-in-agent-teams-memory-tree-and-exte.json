@@ -1,0 +1,106 @@
+{
+  "actual": "Several visible labels/titles remain English in those isolated frontend files.",
+  "allowed_write_scope": [
+    "frontend/src/components/research-assistant/AgentTeamsRunView.tsx",
+    "frontend/src/components/research-assistant/MemoryTreeView.tsx",
+    "frontend/src/app/research-assistant/external-agents/page.tsx",
+    "tests/aistock_validation/bugs/20260622_BUG-480-ra-frontend-residual-english-strings-in-agent-teams-memory-tree-and-exte.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-480",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T08:32:26.239813Z",
+  "description": "Several visible labels/titles remain English in those isolated frontend files.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-d60903753569",
+      "timestamp": "2026-06-22T08:32:26.239809Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "AgentTeamsRunView, MemoryTreeView, and external-agents page visible labels/titles are Chinese.",
+  "first_seen_at": "2026-06-22T08:32:26.239813Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1471,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1471",
+  "last_seen_at": "2026-06-22T08:32:26.239813Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "cd frontend && npm exec tsc --noEmit --incremental false && npm run lint && npm run build",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA frontend residual English strings in agent teams, memory tree, and external agents pages",
+  "trigger_condition": {
+    "fingerprint": "d6090375356980445ea86a94",
+    "source_event_id": "FE-20260622-d60903753569"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/components/research-assistant/AgentTeamsRunView.tsx",
+      "frontend/src/components/research-assistant/MemoryTreeView.tsx",
+      "frontend/src/app/research-assistant/external-agents/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/components/research-assistant/AgentTeamsRunView.tsx",
+    "ui_routes": [
+      "/src/components/research-assistant/AgentTeamsRunView.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
