@@ -41,9 +41,13 @@ class ResearchAssistantExecutionMixin:
     """Capability sync, Action Proposal, and execution gateway behavior."""
 
     def _normalize_capability_catalog(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+        if hasattr(self, "_manifest_mcp_catalog_records"):
+            tool_records = self._manifest_mcp_catalog_records()
+        else:
+            tool_records = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
         approved_tools = {
             (str(tool.get("server_key")), str(tool.get("tool_name"))): tool
-            for tool in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            for tool in tool_records
             if include_disabled or str(tool.get("status")) in {"enabled", "approved", "ready"}
         }
         approved_skills = {
@@ -53,7 +57,8 @@ class ResearchAssistantExecutionMixin:
         }
         now = utc_now().isoformat()
         capabilities: list[dict[str, Any]] = []
-        for item in self.default_workflow_capabilities():
+        source_capabilities = self._workflow_capabilities() if hasattr(self, "_workflow_capabilities") else self.default_workflow_capabilities()
+        for item in source_capabilities:
             mcp_refs = list(item.get("mcp_tool_refs") or [])
             skill_refs = [str(ref) for ref in item.get("skill_refs") or []]
             missing_refs = [ref for ref in mcp_refs if (str(ref.get("server_key")), str(ref.get("tool_name"))) not in approved_tools]
@@ -90,47 +95,35 @@ class ResearchAssistantExecutionMixin:
         max_tools = int(sync_cfg["max_tools_per_server"])
         if len(capabilities) > max_tools:
             raise ValueError(f"capability sync exceeded runtime limit: {max_tools}")
-        existing = self.repository.list_records("capabilities", limit=self.configured_limit("api_list_capabilities"))["items"]
-        existing_by_key = {str(item.get("capability_key")): item for item in existing}
-        diff: list[dict[str, Any]] = []
-        applied_count = 0
-        for capability in capabilities:
-            current = existing_by_key.get(str(capability["capability_key"]))
-            change = (
-                "create"
-                if not current
-                else "unchanged"
-                if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"]
-                else "update"
-            )
-            diff.append(
-                {
-                    "capability_key": capability["capability_key"],
-                    "change": change,
-                    "status": capability["status"],
-                    "risk_level": capability["risk_level"],
-                    "side_effect_level": capability["side_effect_level"],
-                    "checksum": capability["checksum"],
-                }
-            )
-            if data.apply and change in {"create", "update"}:
-                self.repository.create_record("capabilities", capability)
-                applied_count += 1
+        diff = [
+            {
+                "capability_key": capability["capability_key"],
+                "change": "retired_db_projection",
+                "status": capability["status"],
+                "risk_level": capability["risk_level"],
+                "side_effect_level": capability["side_effect_level"],
+                "checksum": capability["checksum"],
+                "reason": "yaml_memory_authority_no_db_write",
+            }
+            for capability in capabilities
+        ]
         self.create_trace_event(
             TraceEventCreate(
                 event_type="capability_sync",
                 component="research_assistant.capability_sync",
-                status="applied" if data.apply else "dry_run",
-                payload_json={"source_count": len(capabilities), "applied_count": applied_count, "diff": diff[:20]},
+                status="retired_noop",
+                payload_json={"source_count": len(capabilities), "applied_count": 0, "db_projection_retired": True, "diff": diff[:20]},
             )
         )
         return {
             "dry_run": not data.apply,
             "requested_by": data.requested_by,
             "source_count": len(capabilities),
-            "applied_count": applied_count,
+            "applied_count": 0,
             "diff": diff,
             "blocked_or_disabled_excluded": not data.include_disabled,
+            "db_projection_retired": True,
+            "declarative_authority": "yaml_memory",
             "runtime_config": {
                 "max_tools_per_server": max_tools,
                 "timeout_seconds": sync_cfg["timeout_seconds"],
@@ -201,7 +194,8 @@ class ResearchAssistantExecutionMixin:
                 allowed = ", ".join(f"{ref['server_key']}/{ref['tool_name']}" for ref in refs[:20])
                 raise ValueError(f"selected MCP tool is not allowed by capability: {requested}; allowed={allowed}")
         ref = selected_ref or refs[0]
-        return self.repository.find_one("mcp_tools", {"server_key": ref["server_key"], "tool_name": ref["tool_name"]})
+        tool, _server = self._resolve_mcp_catalog_tool(ref["server_key"], ref["tool_name"])
+        return tool
 
     def _effective_action_profile(self, capability: dict[str, Any], tool: dict[str, Any] | None = None) -> dict[str, Any]:
         use_tool_profile = bool(tool) and str(capability.get("capability_key") or "").endswith(".mcp_orchestration")

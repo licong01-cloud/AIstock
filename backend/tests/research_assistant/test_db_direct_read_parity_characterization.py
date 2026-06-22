@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from types import MethodType
-from typing import Any
-
 import pytest
 
 from backend.services.research_assistant.react_grounding import McpToolCall
@@ -90,63 +87,29 @@ SELECTED_TOOL_ROUTES = {
 def _service() -> ResearchAssistantService:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=object())
     seeded = svc.seed_catalogs()
-    assert seeded["seeded"]["runtime_config_activations"] == 1
-    assert seeded["seeded"]["capabilities"] == 27
+    assert seeded["seeded"]["runtime_config_activations"] == 0
+    assert seeded["seeded"]["capabilities"] == 0
+    assert seeded["seeded"]["prompt_nodes"] == 0
+    assert seeded["seeded"]["prompt_activations"] == 0
     assert seeded["seeded"]["mcp_tools"] == 378
-    assert seeded["seeded"]["prompt_nodes"] == 39
+    assert svc.repository.list_records("capabilities", limit=500)["total"] == 0
+    assert svc.repository.list_records("prompt_nodes", limit=500)["total"] == 0
+    assert svc.repository.list_records("runtime_config_activations", limit=10)["total"] == 0
     return svc
 
 
-def _snapshot_capabilities_by_key(svc: ResearchAssistantService) -> dict[str, dict[str, Any]]:
+def _snapshot_capabilities_by_key(svc: ResearchAssistantService) -> dict[str, dict[str, object]]:
     return {str(item["capability_key"]): item for item in svc._workflow_capabilities()}
 
 
-def _seeded_db_capabilities_by_key(svc: ResearchAssistantService) -> dict[str, dict[str, Any]]:
-    page = svc.repository.list_records("capabilities", filters={"status": "approved"}, limit=500)
-    return {str(item["capability_key"]): item for item in page["items"]}
-
-
-def _db_backed_capability_lookup_service() -> ResearchAssistantService:
-    svc = _service()
-    db_by_key = _seeded_db_capabilities_by_key(svc)
-
-    def workflow_capability_by_key(
-        self: ResearchAssistantService,
-        capability_key: str,
-        *,
-        approved_only: bool = True,
-    ) -> dict[str, Any] | None:
-        del self
-        capability = db_by_key.get(capability_key)
-        if not capability:
-            return None
-        if approved_only and str(capability.get("status") or "approved") != "approved":
-            return None
-        return dict(capability)
-
-    def approved_workflow_capabilities(self: ResearchAssistantService) -> list[dict[str, Any]]:
-        del self
-        return [
-            dict(item)
-            for item in db_by_key.values()
-            if str(item.get("status") or "approved") == "approved"
-        ]
-
-    svc._workflow_capability_by_key = MethodType(workflow_capability_by_key, svc)
-    svc._approved_workflow_capabilities = MethodType(approved_workflow_capabilities, svc)
-    return svc
-
-
-def _cards_by_key(cards: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _cards_by_key(cards: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     return {str(item["capability_key"]): item for item in cards}
 
 
-def test_tool_lookup_cards_and_prompt_text_match_seeded_db_projection() -> None:
-    snapshot_svc = _service()
-    db_lookup_svc = _db_backed_capability_lookup_service()
-    snapshot_by_key = _snapshot_capabilities_by_key(snapshot_svc)
-    db_by_key = _seeded_db_capabilities_by_key(snapshot_svc)
-    assert set(snapshot_by_key) == set(db_by_key)
+def test_tool_lookup_cards_and_prompt_text_match_yaml_pins_after_db_projection_retired() -> None:
+    svc = _service()
+    snapshot_by_key = _snapshot_capabilities_by_key(svc)
+    assert len(snapshot_by_key) == 27
     assert "issue.create_candidate" not in snapshot_by_key
 
     tool_cases = [
@@ -164,8 +127,7 @@ def test_tool_lookup_cards_and_prompt_text_match_seeded_db_projection() -> None:
     ]
     for server_key, tool_name, route, expected_capability_key in tool_cases:
         call = McpToolCall(server_key=server_key, tool_name=tool_name, payload_json={})
-        assert snapshot_svc._capability_key_for_tool(call, route=dict(route) if route else None) == expected_capability_key
-        assert db_lookup_svc._capability_key_for_tool(call, route=dict(route) if route else None) == expected_capability_key
+        assert svc._capability_key_for_tool(call, route=dict(route) if route else None) == expected_capability_key
 
     has_tool_ref_cases = [
         ("stock_analysis.mcp_orchestration", "aistock-stock-analysis", "stock_analysis_get_quote", True),
@@ -174,15 +136,12 @@ def test_tool_lookup_cards_and_prompt_text_match_seeded_db_projection() -> None:
         ("external_research.mcp_orchestration", "aistock-external-research", "external_research_save_evidence", True),
     ]
     for capability_key, server_key, tool_name, expected in has_tool_ref_cases:
-        assert snapshot_svc._capability_has_tool_ref(snapshot_by_key[capability_key], server_key, tool_name) is expected
-        assert snapshot_svc._capability_has_tool_ref(db_by_key[capability_key], server_key, tool_name) is expected
+        assert svc._capability_has_tool_ref(snapshot_by_key[capability_key], server_key, tool_name) is expected
 
     card_keys = set(EXPECTED_CAPABILITY_CARD_PROFILES)
-    snapshot_cards = _cards_by_key(snapshot_svc._capability_cards(list(snapshot_by_key.values()), card_keys))
-    db_cards = _cards_by_key(snapshot_svc._capability_cards(list(db_by_key.values()), card_keys))
-    assert snapshot_cards == db_cards
+    cards = _cards_by_key(svc._capability_cards(list(snapshot_by_key.values()), card_keys))
     for capability_key, expected in EXPECTED_CAPABILITY_CARD_PROFILES.items():
-        card = snapshot_cards[capability_key]
+        card = cards[capability_key]
         assert card["status"] == "available"
         assert card["title"]
         assert card["risk"] == expected["risk"]
@@ -190,45 +149,36 @@ def test_tool_lookup_cards_and_prompt_text_match_seeded_db_projection() -> None:
         assert card["required_confirmations"] == expected["required_confirmations"]
 
     for prompt_key, expected_checksum in PROMPT_CHECKSUMS.items():
-        snapshot_node = snapshot_svc.declarative_config.prompt_node(prompt_key)
-        db_node = snapshot_svc.repository.find_one("prompt_nodes", {"prompt_key": prompt_key})
+        snapshot_node = svc.declarative_config.prompt_node(prompt_key)
         assert snapshot_node is not None
-        assert db_node is not None
         assert snapshot_node["checksum"] == expected_checksum
-        assert db_node["checksum"] == expected_checksum
-        assert snapshot_svc._prompt_text(prompt_key) == db_node["prompt_text"]
-        assert snapshot_svc._prompt_text_for_key(prompt_key) == db_node["prompt_text"]
+        assert svc._prompt_text(prompt_key) == snapshot_node["prompt_text"]
+        assert svc._prompt_text_for_key(prompt_key) == snapshot_node["prompt_text"]
 
 
-def test_execution_profiles_digests_and_confirmation_tokens_match_seeded_db_projection() -> None:
+def test_execution_profiles_digests_and_confirmation_tokens_match_yaml_pins() -> None:
     svc = _service()
     snapshot_by_key = _snapshot_capabilities_by_key(svc)
-    db_by_key = _seeded_db_capabilities_by_key(svc)
 
     for capability_key, selected_tool in SELECTED_TOOL_ROUTES.items():
-        snapshot_capability = snapshot_by_key[capability_key]
-        db_capability = db_by_key[capability_key]
-        assert svc._capability_tool_refs(snapshot_capability) == svc._capability_tool_refs(db_capability)
+        capability = snapshot_by_key[capability_key]
+        assert svc._capability_tool_refs(capability)
 
-        snapshot_tool = svc._resolve_capability_tool(snapshot_capability, payload=selected_tool)
-        db_tool = svc._resolve_capability_tool(db_capability, payload=selected_tool)
-        assert snapshot_tool is not None
-        assert db_tool is not None
-        assert (snapshot_tool["server_key"], snapshot_tool["tool_name"]) == (db_tool["server_key"], db_tool["tool_name"])
+        tool = svc._resolve_capability_tool(capability, payload=selected_tool)
+        assert tool is not None
+        assert (tool["server_key"], tool["tool_name"]) == (selected_tool["server_key"], selected_tool["tool_name"])
 
-        assert svc._effective_action_profile(snapshot_capability) == svc._effective_action_profile(db_capability)
-        selected_profile = svc._effective_action_profile(snapshot_capability, snapshot_tool)
-        assert selected_profile == svc._effective_action_profile(db_capability, db_tool)
+        selected_profile = svc._effective_action_profile(capability, tool)
         assert selected_profile == EXPECTED_TOOL_PROFILE_BY_SELECTED_TOOL[capability_key]
 
-        input_json = {"selected_tool": selected_tool, "fixture": "db_direct_read_parity"}
+        input_json = {"selected_tool": selected_tool, "fixture": "yaml_authority_pins"}
         assert svc._proposal_digest(
-            snapshot_capability,
+            capability,
             input_json,
             prompt_bundle_signature="prompt-signature",
             runtime_config_activation_id="runtime-activation",
         ) == svc._proposal_digest(
-            db_capability,
+            snapshot_by_key[capability_key],
             input_json,
             prompt_bundle_signature="prompt-signature",
             runtime_config_activation_id="runtime-activation",

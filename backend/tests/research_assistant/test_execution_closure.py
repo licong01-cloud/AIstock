@@ -67,12 +67,17 @@ def test_capability_sync_dry_run_and_apply_excludes_blocked_catalog_entries() ->
     assert dry_run["source_count"] >= 10
     assert dry_run["applied_count"] == 0
     assert all(item["status"] == "approved" for item in dry_run["diff"])
+    assert dry_run["db_projection_retired"] is True
+    assert all(item["change"] == "retired_db_projection" for item in dry_run["diff"])
 
     applied = svc.sync_capabilities(CapabilitySyncRequest(apply=True))
     assert applied["applied_count"] == 0
+    assert applied["db_projection_retired"] is True
+    assert svc.repository.list_records("capabilities", limit=500)["total"] == 0
     capabilities = svc.list_records("capabilities", filters={"status": "approved"})
     assert capabilities["total"] >= 10
-    qe_draft = svc.repository.find_one("capabilities", {"capability_key": "qe.create_experiment_draft"})
+    assert capabilities["declarative_authority"] == "yaml_memory"
+    qe_draft = svc._workflow_capability_by_key("qe.create_experiment_draft")
     assert qe_draft is not None
     assert qe_draft["checksum"]
     assert qe_draft["risk_level"] == "medium"

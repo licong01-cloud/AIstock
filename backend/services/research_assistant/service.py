@@ -59,7 +59,6 @@ from .models import (
     MemoryCreate,
     ModelRouteRequest,
     PromptBundleBuildRequest,
-    PromptNodeCreate,
     TaskCreate,
     SkillUsageCreate,
     TaskEventCreate,
@@ -2099,6 +2098,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 ]
                 present = len(records)
                 source = "gateway_manifest_derived_catalog"
+            elif (declarative_records := self._declarative_records_for_kind(catalog)) is not None:
+                records = [
+                    item
+                    for item in declarative_records
+                    if all(value in {None, ""} or item.get(key) == value for key, value in filters.items())
+                ]
+                present = len(records)
+                source = "yaml_memory_authority"
             else:
                 page = self.repository.list_records(
                     catalog,
@@ -2257,8 +2264,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "reports": 0,
             "notifications": 0,
         }
-        runtime_config = load_runtime_config(environment=self.environment)
-        self._seed_runtime_config(runtime_config, seeded)
         for item in DEFAULT_SKILLS:
             payload = {
                 "skill_id": f"skill_{item['skill_key']}",
@@ -2317,10 +2322,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             policy["fallback_profile_id"] = policy.get("fallback_json", {}).get("fallback_profile_id")
             self.repository.create_record("routing_policies", policy)
             seeded["routing_policies"] += 1
-        prompt_pack = load_prompt_pack(DEFAULT_PROMPT_PACK_PATH)
-        self._seed_prompt_pack(prompt_pack, seeded)
-        capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
-        seeded["capabilities"] += int(capability_sync["applied_count"])
         self._seed_default_memory_graph(seeded)
         self._ensure_default_reports_and_notifications(seeded)
         return {"seeded": seeded, "catalog_version": "research_assistant_gateway_manifest_20260604"}
@@ -2420,48 +2421,27 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         max_tools = int(sync_cfg["max_tools_per_server"])
         if len(capabilities) > max_tools:
             raise ValueError(f"capability sync exceeded runtime limit: {max_tools}")
-        existing_page = self.repository.list_records("capabilities", limit=self.configured_limit("api_list_capabilities"))
-        existing_by_key = {str(item.get("capability_key")): item for item in existing_page["items"]}
-        diff: list[dict[str, Any]] = []
-        applied_count = 0
-        for capability in capabilities:
-            current = existing_by_key.get(str(capability["capability_key"]))
-            change_reason = None
-            if not current:
-                change = "create"
-            else:
-                self._assert_existing_capability_ref_shapes_repairable_for_sync(current)
-                refs_match = (
-                    current.get("mcp_tool_refs") == capability.get("mcp_tool_refs")
-                    and current.get("skill_refs") == capability.get("skill_refs")
-                )
-                if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"] and refs_match:
-                    change = "unchanged"
-                else:
-                    change = "update"
-                    if not refs_match:
-                        change_reason = "capability_ref_shape_or_value_changed"
-            diff.append(
-                {
-                    "capability_key": capability["capability_key"],
-                    "change": change,
-                    "status": capability["status"],
-                    "risk_level": capability["risk_level"],
-                    "side_effect_level": capability["side_effect_level"],
-                    "checksum": capability["checksum"],
-                    "reason": change_reason,
-                }
-            )
-            if data.apply and change in {"create", "update"}:
-                self.repository.create_record("capabilities", capability)
-                applied_count += 1
+        diff = [
+            {
+                "capability_key": capability["capability_key"],
+                "change": "retired_db_projection",
+                "status": capability["status"],
+                "risk_level": capability["risk_level"],
+                "side_effect_level": capability["side_effect_level"],
+                "checksum": capability["checksum"],
+                "reason": "yaml_memory_authority_no_db_write",
+            }
+            for capability in capabilities
+        ]
         result = {
             "dry_run": not data.apply,
             "requested_by": data.requested_by,
             "source_count": len(capabilities),
-            "applied_count": applied_count,
+            "applied_count": 0,
             "diff": diff,
             "blocked_or_disabled_excluded": not data.include_disabled,
+            "db_projection_retired": True,
+            "declarative_authority": "yaml_memory",
             "runtime_config": {
                 "max_tools_per_server": max_tools,
                 "timeout_seconds": sync_cfg["timeout_seconds"],
@@ -2472,134 +2452,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             TraceEventCreate(
                 event_type="capability_sync",
                 component="research_assistant.capability_sync",
-                status="applied" if data.apply else "dry_run",
-                payload_json={"source_count": len(capabilities), "applied_count": applied_count, "diff": diff[:20]},
+                status="retired_noop",
+                payload_json={"source_count": len(capabilities), "applied_count": 0, "db_projection_retired": True, "diff": diff[:20]},
             )
         )
         return result
 
     def _seed_prompt_pack(self, prompt_pack: PromptPackSnapshot, seeded: dict[str, int]) -> None:
-        active = self.repository.list_records(
-            "prompt_activations",
-            filters={"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
-            limit=self.configured_limit("api_list_prompt_activations"),
-        )["items"]
-        for item in active:
-            if item.get("activation_id") != prompt_pack.activation_id:
-                self.repository.update_record("prompt_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
-        source = self.repository.create_record(
-            "prompt_sources",
-            {
-                "source_id": prompt_pack.source_id,
-                "pack_key": prompt_pack.pack_key,
-                "pack_version": prompt_pack.pack_version,
-                "source_path": prompt_pack.source_path,
-                "source_sha256": prompt_pack.source_sha256,
-                "status": "approved",
-                "metadata_json": {"schema": "aistock_prompt_pack_v1"},
-                "imported_by": "seed_catalogs",
-            },
-        )
-        version_refs: list[dict[str, Any]] = []
-        for item in prompt_pack.nodes:
-            prompt = PromptNodeCreate(**{k: v for k, v in item.items() if k != "checksum"})
-            payload = prompt.model_dump()
-            payload["prompt_node_id"] = f"prompt_{prompt.prompt_key.replace('.', '_')}"
-            payload["checksum"] = item.get("checksum") or sha256_json({"prompt_key": prompt.prompt_key, "version": prompt.version, "prompt_text": prompt.prompt_text})
-            self.repository.create_record("prompt_nodes", payload)
-            seeded["prompt_nodes"] += 1
-            version_id = f"prompt_version_{prompt.prompt_key.replace('.', '_')}_{payload['checksum'][:16]}"
-            version = self.repository.create_record(
-                "prompt_node_versions",
-                {
-                    "version_id": version_id,
-                    "source_id": source["source_id"],
-                    "pack_key": prompt_pack.pack_key,
-                    "pack_version": prompt_pack.pack_version,
-                    "prompt_key": prompt.prompt_key,
-                    "prompt_node_id": payload["prompt_node_id"],
-                    "title": prompt.title,
-                    "category": prompt.category,
-                    "tree_path": prompt.tree_path,
-                    "parent_key": prompt.parent_key,
-                    "phase": prompt.phase,
-                    "trigger_json": prompt.trigger_json,
-                    "prompt_text": prompt.prompt_text,
-                    "risk_level": prompt.risk_level,
-                    "source_ref": prompt.source_ref or item.get("source_ref") or prompt_pack.source_path,
-                    "checksum": payload["checksum"],
-                    "status": "approved",
-                    "metadata_json": {"source_path": prompt_pack.source_path},
-                },
-            )
-            version_refs.append({"prompt_key": prompt.prompt_key, "version_id": version["version_id"], "checksum": payload["checksum"]})
-            seeded["prompt_node_versions"] += 1
-        self.repository.create_record(
-            "prompt_activations",
-            {
-                "activation_id": prompt_pack.activation_id,
-                "assistant_key": "research_assistant",
-                "environment": self.environment,
-                "pack_key": prompt_pack.pack_key,
-                "pack_version": prompt_pack.pack_version,
-                "source_id": source["source_id"],
-                "version_refs": version_refs,
-                "bundle_signature": sha256_json(version_refs),
-                "status": "active",
-                "activated_by": "seed_catalogs",
-                "activation_metadata_json": {"source_sha256": prompt_pack.source_sha256},
-            },
-        )
-        self.repository.create_record(
-            "prompt_activation_events",
-            {
-                "event_id": new_id("pactevt"),
-                "activation_id": prompt_pack.activation_id,
-                "event_type": "seed_or_refresh",
-                "actor": "seed_catalogs",
-                "event_json": {"pack_key": prompt_pack.pack_key, "pack_version": prompt_pack.pack_version},
-            },
-        )
-        seeded["prompt_activations"] += 1
+        del prompt_pack, seeded
+        logger.warning("RA prompt-pack DB projection seeding is retired; YAML memory authority is used directly.")
 
     def _seed_runtime_config(self, runtime_config: RuntimeConfigSnapshot, seeded: dict[str, int]) -> None:
-        active = self.repository.list_records(
-            "runtime_config_activations",
-            filters={"config_key": runtime_config.config_key, "environment": runtime_config.environment, "status": "active"},
-            limit=int(runtime_config.config["query_limits"]["api_list_runtime_config_activations"]),
-        )["items"]
-        for item in active:
-            if item.get("activation_id") != runtime_config.activation_id:
-                self.repository.update_record("runtime_config_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
-        source = self.repository.create_record(
-            "runtime_config_sources",
-            {
-                "source_id": runtime_config.source_id,
-                "config_key": runtime_config.config_key,
-                "config_version": runtime_config.config_version,
-                "source_path": runtime_config.source_path,
-                "source_sha256": runtime_config.source_sha256,
-                "config_json": runtime_config.config,
-                "status": "approved",
-                "metadata_json": {"schema": runtime_config.config.get("schema_version")},
-                "imported_by": "seed_catalogs",
-            },
-        )
-        self.repository.create_record(
-            "runtime_config_activations",
-            {
-                "activation_id": runtime_config.activation_id,
-                "config_key": runtime_config.config_key,
-                "config_version": runtime_config.config_version,
-                "environment": runtime_config.environment,
-                "source_id": source["source_id"],
-                "config_json": runtime_config.config,
-                "status": "active",
-                "activated_by": "seed_catalogs",
-                "activation_metadata_json": {"source_sha256": runtime_config.source_sha256},
-            },
-        )
-        seeded["runtime_config_activations"] += 1
+        del runtime_config, seeded
+        logger.warning("RA runtime-config DB projection seeding is retired; YAML memory authority is used directly.")
 
     def list_records(
         self,
@@ -4296,65 +4161,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise ResearchAssistantRuntimeConfigInvalidError(error)
 
     def _repair_empty_capability_ref_shapes(self, capabilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        repaired: list[dict[str, Any]] = []
-        for capability in capabilities:
-            updates: dict[str, Any] = {}
-            for field in ("mcp_tool_refs", "skill_refs"):
-                if self._empty_capability_ref_shape(capability.get(field)):
-                    updates[field] = []
-            if not updates:
-                continue
-            capability_key = str(capability.get("capability_key") or "")
-            capability_id = str(capability.get("capability_id") or "")
-            logger.warning(
-                "research assistant capability registry empty ref shape repaired: capability_key=%s capability_id=%s fields=%s",
-                capability_key,
-                capability_id,
-                sorted(updates),
-            )
-            try:
-                if not capability_id:
-                    raise ValueError("capability_id is required for registry repair")
-                row = self.repository.update_record("capabilities", capability_id, updates)
-            except Exception as exc:
-                logger.exception(
-                    "research assistant capability registry repair failed: capability_key=%s capability_id=%s fields=%s",
-                    capability_key,
-                    capability_id,
-                    sorted(updates),
-                )
-                raise ResearchAssistantRuntimeConfigInvalidError(
-                    self._payload_for_capability_registry_repair_error(
-                        capability_key=capability_key,
-                        capability_id=capability_id,
-                        exc=exc,
-                    )
-                ) from exc
-            repaired.append({"capability_key": capability_key, "capability_id": capability_id, "fields": sorted(updates)})
-            capability.update(row)
-        if repaired:
-            try:
-                self.create_trace_event(
-                    TraceEventCreate(
-                        event_type="capability_registry_repaired",
-                        component="research_assistant.capability_registry",
-                        status="repaired",
-                        payload_json={"repaired": repaired[:50], "repaired_count": len(repaired)},
-                    )
-                )
-            except Exception:  # noqa: BLE001 - repair succeeded; trace persistence must not mask it.
-                logger.exception("failed to persist capability registry repair trace")
-        return repaired
+        del capabilities
+        logger.warning("RA capability registry DB repair is retired; YAML memory authority is used directly.")
+        return []
 
     def _align_capability_registry_ref_shapes_for_catalog_ready(self) -> list[dict[str, Any]]:
-        capabilities = [
-            dict(item)
-            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
-            if str(item.get("status") or "") == "approved"
-        ]
-        for capability in capabilities:
-            self._assert_existing_capability_ref_shapes_repairable_for_sync(capability)
-        return self._repair_empty_capability_ref_shapes(capabilities)
+        logger.warning("RA capability registry alignment is retired; YAML memory authority is used directly.")
+        return []
 
     def _approved_capability_mcp_tool_refs(self) -> set[tuple[str, str]]:
         capabilities = [
@@ -5389,25 +5202,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         tool_name: str,
         capability_key: str | None = None,
     ) -> dict[str, Any] | None:
-        candidate_keys: list[str] = []
-        for item in self._workflow_capabilities():
-            candidate = self._canonicalize_capability_mcp_refs(dict(item), source="capability_tool_lookup_self_heal")
-            key = str(candidate.get("capability_key") or "")
-            if capability_key and key != capability_key:
-                continue
-            if key and self._capability_has_tool_ref(candidate, server_key, tool_name):
-                candidate_keys.append(key)
-        if not candidate_keys:
-            return None
-        try:
-            self.sync_capabilities({"apply": True, "requested_by": "capability_tool_lookup_self_heal"})
-        except Exception:  # noqa: BLE001
-            logger.exception("failed to refresh capability cache for %s/%s", server_key, tool_name)
-            return None
-        for key in candidate_keys:
-            capability = self.repository.find_one("capabilities", {"capability_key": key, "status": "approved"})
-            if capability and self._capability_has_tool_ref(capability, server_key, tool_name):
-                return capability
+        del server_key, tool_name, capability_key
+        logger.warning("RA capability DB cache refresh is retired; YAML memory authority is used directly.")
         return None
 
     def _capability_key_for_tool(self, call: McpToolCall, route: dict[str, Any] | None = None) -> str:

@@ -82,8 +82,8 @@ EXPECTED_MODE_CONFIGS = {
 def _service() -> ResearchAssistantService:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=object())
     seeded = svc.seed_catalogs()
-    assert seeded["seeded"]["runtime_config_activations"] == 1
-    assert seeded["seeded"]["capabilities"] == 27
+    assert seeded["seeded"]["runtime_config_activations"] == 0
+    assert seeded["seeded"]["capabilities"] == 0
     assert seeded["seeded"]["mcp_tools"] == 378
     return svc
 

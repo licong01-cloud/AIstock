@@ -1,0 +1,110 @@
+{
+  "actual": "Some service/execution paths and seed/sync still use or write declarative DB projections, so drift remains possible despite B1-P1.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/repository.py",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py",
+    "backend/tests/research_assistant/test_config_authority_characterization.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_execution_closure.py",
+    "tests/aistock_validation/bugs/20260621_BUG-453-ra-declarative-config-must-stop-writing-db-projections-and-flip-residual.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-453",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T15:34:36.469567Z",
+  "description": "Some service/execution paths and seed/sync still use or write declarative DB projections, so drift remains possible despite B1-P1.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-14e2c01ed8f6",
+      "timestamp": "2026-06-21T15:34:36.469563Z"
+    },
+    {
+      "timestamp": "2026-06-21T18:53:40.283386Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Expanded allowed_write_scope to backend/tests/research_assistant/test_api.py and test_mcp_catalog_sync.py after research_assistant_backend exposed stale declarative DB projection expectations; expectation-only test updates."
+    },
+    {
+      "timestamp": "2026-06-21T18:53:40.283386Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Implemented YAML memory authority P2: seed/sync no longer write declarative capability/prompt/runtime DB projections; former direct-read sites use declarative config/manifest helpers; tests updated/added for no DB projection, dirty DB invariance, YAML reload coverage. Validation: targeted RA tests 106 passed; l0 passed; research_assistant_backend 302 passed; research_assistant_mcp_contract 38 passed; validation_module_registry_l0 8 passed; ra_phase7_full_accept passed; git diff --check passed; ruff passed."
+    },
+    {
+      "timestamp": "2026-06-21T21:31:55.282947Z",
+      "actor": "codex",
+      "action": "validation",
+      "note": "Final validation after rebase to origin/main fdc9d020: targeted RA tests 112 passed; l0 passed; research_assistant_backend 308 passed; research_assistant_mcp_contract 38 passed; validation_module_registry_l0 8 passed; ra_phase7_full_accept passed; git diff --check passed; ruff passed. No services 8001/3000/19080 were started or restarted; no production DB or DDL touched."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant declarative reads come only from YAML memory authority; sync/seed no longer writes declarative capabilities/prompt_nodes/runtime_config to DB; runtime state writes remain; no manual seed is required.",
+  "first_seen_at": "2026-06-21T15:34:36.469567Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1407,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1407",
+  "last_seen_at": "2026-06-21T15:34:36.469567Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA declarative config must stop writing DB projections and flip residual DB reads to YAML authority",
+  "trigger_condition": {
+    "fingerprint": "14e2c01ed8f62b0cd1ed69c5",
+    "source_event_id": "FE-20260621-14e2c01ed8f6"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "validation_evidence": [
+    "targeted RA config authority/parity/execution/service/api/catalog tests -> 112 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_backend -> 308 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s ra_phase7_full_accept -> passed (backend 308 passed, frontend lint/build passed, Playwright Phase7 4 passed + RA UI 8 passed, crosscheck passed)",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "git diff --check -> passed",
+    "ruff check changed Python files -> passed"
+  ]
+}

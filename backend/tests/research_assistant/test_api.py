@@ -40,7 +40,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert health["status"] == "catalog_not_ready"
     assert health["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert health["catalog_readiness"]["ready"] is False
-    assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
+    assert "skills" in health["catalog_readiness"]["missing_catalogs"]
 
     readiness = client.get("/api/v1/research-assistant/catalogs/readiness").json()["data"]
     assert readiness["operator_action"] == "POST /api/v1/research-assistant/catalogs/seed"
@@ -55,7 +55,8 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert detail["readiness"]["ready"] is False
 
     seed_result = client.post("/api/v1/research-assistant/catalogs/seed").json()["data"]
-    assert seed_result["seeded"]["prompt_nodes"] >= 1
+    assert seed_result["seeded"]["prompt_nodes"] == 0
+    assert seed_result["seeded"]["skills"] >= 1
     seeded_health = client.get("/api/v1/research-assistant/health").json()["data"]
     assert seeded_health["status"] == "ok"
     assert seeded_health["runtime_code"]["current_repo_git_commit_short"]
