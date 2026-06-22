@@ -1,0 +1,74 @@
+{
+  "actual": "FactorMetricsScheduler.submit_job 仍创建 task_type=official_evaluation payload，可能触发 WSL runner 的 legacy _compute_local 分支。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/factor_metrics_scheduler.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/routers/dispatch.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "tests/aistock_validation/bugs/20260622_BUG-476-legacy-official-evaluation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-476",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T07:35:52.316714Z",
+  "description": "FactorMetricsScheduler.submit_job 仍创建 task_type=official_evaluation payload，可能触发 WSL runner 的 legacy _compute_local 分支。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-b40ff5166e56",
+      "timestamp": "2026-06-22T07:35:52.316711Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "因子指标调度和 MCP 提交链路统一 dispatch official_factor_full_compute，显式传入官方缓存窗口、QE factor_data_dir/qlib 路径，并由同一官方缓存产生独立指标。",
+  "first_seen_at": "2026-06-22T07:35:52.316714Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1465,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1465",
+  "last_seen_at": "2026-06-22T07:35:52.316714Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "因子指标调度仍可能走 legacy official_evaluation 本地指标路径",
+  "trigger_condition": {
+    "fingerprint": "b40ff5166e564c002ec0ee4d",
+    "source_event_id": "FE-20260622-b40ff5166e56"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
