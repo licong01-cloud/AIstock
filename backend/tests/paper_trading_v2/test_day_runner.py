@@ -354,6 +354,56 @@ class FakeDbMinuteProvider:
         )
 
 
+class FakeDayFeatureExcludingMinuteProvider(FakeDbMinuteProvider):
+    def __init__(self, excluded_symbol: str) -> None:
+        super().__init__()
+        self.excluded_symbol = excluded_symbol
+
+    def load_symbol_input(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        min_bars: int,
+        require_suspend_status: bool = False,
+        require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        if require_day_features and symbol == self.excluded_symbol:
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    "source": source,
+                    "min_bars": min_bars,
+                    "require_suspend_status": require_suspend_status,
+                    "require_day_features": require_day_features,
+                    "excluded": True,
+                }
+            )
+            raise DataUnavailableError(
+                "V25 day_features turnover_rate_f is missing",
+                context={
+                    "call": "DbV25DayFeatureProvider._free_float_turnover_rate",
+                    "dataset": "market.daily_basic",
+                    "field": "turnover_rate_f",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "reason_code": "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING",
+                    "fail_closed_policy": "exclude_symbol_for_trade_date",
+                    "forbidden_fallback": "turnover_rate",
+                },
+            )
+        return super().load_symbol_input(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            min_bars=min_bars,
+            require_suspend_status=require_suspend_status,
+            require_day_features=require_day_features,
+        )
+
+
 class FakePartialExecutionEngine:
     def execute_order(self, *, order: Order, minute_bars: list[MinuteBar], **_kwargs):
         fill = Fill(
@@ -382,13 +432,42 @@ class FakePartialExecutionEngine:
         return final_order, [fill], [event]
 
 
+class FakeFullExecutionEngine:
+    def execute_order(self, *, order: Order, minute_bars: list[MinuteBar], **_kwargs):
+        fill = Fill(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=order.quantity,
+            price=minute_bars[0].close,
+            trade_time=minute_bars[0].bar_time,
+            bar_time=minute_bars[0].bar_time,
+            reason="unit full fill",
+        )
+        final_order = order.model_copy(
+            update={
+                "status": OrderStatus.FILLED,
+                "filled_quantity": order.quantity,
+                "avg_fill_price": fill.price,
+            }
+        )
+        event = OrderEvent(
+            order_id=order.order_id,
+            event_type=OrderEventType.FILLED,
+            fill=fill,
+            reason=fill.reason,
+        )
+        return final_order, [fill], [event]
+
+
 def make_paper_enabled_manifest(
     *,
     topk: int = 50,
     n_drop: int = 5,
+    algo_code: str = "TWAP",
     custom_params: dict | None = None,
 ):
-    base = make_manifest()
+    base = make_manifest(algo_code=algo_code)
     strategy_config = dict(base.strategy_config)
     if custom_params is not None:
         strategy_config["custom_params"] = custom_params
@@ -1131,6 +1210,59 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
         item["event_type"] == "CURRENT_POSITION_PRICES_LOADED"
         for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
     )
+
+
+def test_day_runner_excludes_symbol_with_missing_v25_turnover_rate_f_and_continues() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP", topk=2, n_drop=0)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="v25 exclude missing turnover",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    provider = FakeDayFeatureExcludingMinuteProvider(excluded_symbol="000001.SZ")
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,  # type: ignore[arg-type]
+        execution_engine=FakeFullExecutionEngine(),
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            rows=[
+                {"symbol": "000001.SZ", "score": 0.91, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+                {"symbol": "000002.SZ", "score": 0.89, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+            ],
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=RecordingRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+    )
+
+    assert result.run.status == RunStatus.SUCCEEDED
+    assert [order.symbol for order in result.orders] == ["000002.SZ"]
+    assert [fill.symbol for fill in result.fills] == ["000002.SZ"]
+    assert any(call["symbol"] == "000001.SZ" and call["require_day_features"] for call in provider.calls)
+    assert any(call["symbol"] == "000002.SZ" and call["require_day_features"] for call in provider.calls)
+    assert not any(order.symbol == "000001.SZ" for order in paper_repo.orders[result.run.run_id])
+
+    events = paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+    exclusion = next(item for item in events if item["event_type"] == "DAY_FEATURE_SYMBOL_EXCLUDED")
+    assert exclusion["context"]["symbol"] == "000001.SZ"
+    assert exclusion["context"]["reason_code"] == "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING"
+    assert exclusion["context"]["fail_closed_policy"] == "exclude_symbol_for_trade_date"
+    assert exclusion["context"]["source_error"]["error_code"] == "DATA_UNAVAILABLE"
+    assert exclusion["context"]["source_error"]["context"]["forbidden_fallback"] == "turnover_rate"
 
 
 def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -> None:

@@ -47,3 +47,17 @@ no-silent-fallback 约束。
 - production_backend_dependency_gate: noop
 - production_frontend_dependency_gate: noop
 - 不需要、也未授权启动/重启/停止任何服务；合并后如运行中服务需使用新代码，需要用户自行重启。
+
+## 2026-06-22 Tier2 返工结论
+
+原修复已经让 DbV25DayFeatureProvider fail-closed，但 LocalSim 日运行调用方仍把该 DataUnavailableError 当作整日运行失败处理。Issue 的 expected 要求该策略应排除对应标的当日交易，因此本次把 scope 扩展到 LocalSim day-run 调用方和对应回归测试。
+
+返工实现：
+
+1. day_runner.py 不改变 day_features.py 的 fail-closed 语义。
+2. 仅 LocalSim per-intent market-data load 捕获明确的 ail_closed_policy=exclude_symbol_for_trade_date、ield=turnover_rate_f、V25_DAY_FEATURE_TURNOVER_RATE_F_* 错误。
+3. 被排除的 intent 不进入 OMS/execution，并写入 loud DAY_FEATURE_SYMBOL_EXCLUDED run event，保留原始 source_error。
+4. 其他 DataUnavailableError 仍继续向上抛出并使 run 失败，不做 silent fallback。
+5. MiniQMT 路径未触碰。
+
+新增回归证明：V25 run 有两个候选 intent 时，缺失 	urnover_rate_f 的标的被单独剔除，另一个有效标的继续执行并使 run 成功。

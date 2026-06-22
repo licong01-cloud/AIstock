@@ -5,7 +5,9 @@
     "backend/tests/paper_trading_v2/test_v25_day_features.py",
     "tests/aistock_validation/bugs/20260622_BUG-467-p1-paper-v2-localsim-day-features-turnover-rate-f-fail-closed-no-fabrica.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "docs/handoff/BUG-467-analysis.md"
+    "docs/handoff/BUG-467-analysis.md",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py"
   ],
   "assigned_agent": "agent-teams-lane-L6",
   "bug_id": "BUG-467",
@@ -35,6 +37,18 @@
       "actor": "codex-agent-teams-l6",
       "note": "Opened PR #1435 for BUG-467. Issue remains open and will be closed by PR merge/close-sync; no services restarted and no production DB/DDL touched.",
       "timestamp": "2026-06-21T19:50:00Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded scope to wire fail_closed_policy=exclude_symbol_for_trade_date at the LocalSim day-run per-symbol market-data caller; day_features remains fail-closed and MiniQMT remains untouched.",
+      "timestamp": "2026-06-22T09:29:16.137765Z"
+    },
+    {
+      "action": "tier2_rework_ready_for_review",
+      "actor": "codex",
+      "note": "Wired LocalSim day-run per-symbol exclusion for V25 turnover_rate_f fail_closed_policy and added run-level regression. PR remains open for Tier2; no services or production DB touched.",
+      "timestamp": "2026-06-22T09:47:22.751512Z"
     }
   ],
   "evidence_uris": [],
@@ -85,13 +99,12 @@
   },
   "workflow_gate": "ready_for_fix",
   "validation_evidence": [
-    "rtk python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 11 passed",
-    "rtk python -m ruff check backend/services/paper_trading_v2/day_features.py backend/tests/paper_trading_v2/test_v25_day_features.py -> passed",
-    "rtk cmd /c python -m json.tool BUG-467 JSON and allocator JSON -> passed",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py backend/tests/paper_trading_v2/test_day_runner.py -q -> 50 passed",
+    "rtk python -m ruff check backend/services/paper_trading_v2/day_features.py backend/tests/paper_trading_v2/test_v25_day_features.py backend/services/paper_trading_v2/day_runner.py backend/tests/paper_trading_v2/test_day_runner.py -> passed",
     "rtk git diff --check -> passed",
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed (633 passed, 1 skipped, 1 deselected; data quality smoke WARN legacy ledger consistency only)"
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed"
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1435"
 }
