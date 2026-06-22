@@ -40,8 +40,8 @@
   "expected": "Persist so the cursor advance commits atomically with the cash/position effect (use L1 transaction); model a no-fill/no-actionable-intent day as SUCCEEDED/NO_REBALANCE (do not fail the portfolio); on terminal TDX tick failure mark the run FAILED before propagating + add a LocalSim post-cutoff terminalizer. Depends on L1. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:10:19.305860Z",
   "fix_branch": "bug/BUG-464-p0-paper-v2-localsim-live-tick-persist-ordering-20260622",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a72b2f548351e300a40fbe35a4a2eaef3a08f315",
+  "fixed_at": "2026-06-22T12:19:16.743714Z",
   "github_issue_number": 1429,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1429",
   "last_seen_at": "2026-06-21T19:10:19.305860Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1481",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -70,6 +71,15 @@
     "fingerprint": "c91192787253fa2599f8e8a8",
     "source_event_id": "FE-20260622-c91192787253"
   },
+  "validation_evidence": [
+    "rtk gh pr checks 1481 -> 17 passed, 0 failed",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_live_session.py -q -> 28 passed",
+    "rtk python -m ruff check backend/services/paper_trading_v2/live_session.py backend/tests/paper_trading_v2/test_live_session.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": "BUG-464-L3-local-20260622",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -82,13 +92,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "validation_passed",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/paper_trading_v2/test_live_session.py -q -> 28 passed",
-    "rtk python -m ruff check backend/services/paper_trading_v2/live_session.py backend/tests/paper_trading_v2/test_live_session.py -> All checks passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 659 passed, 1 skipped, 1 deselected; data_quality_deep 10 passed, 21 skipped; legacy ledger consistency WARN only"
-  ]
+  "workflow_gate": "validation_passed"
 }
