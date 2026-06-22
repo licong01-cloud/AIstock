@@ -4,10 +4,9 @@ These tests instantiate ``DaemonEventLog`` with a dev-DB-backed
 ``pg_conn_provider`` (same lazy provider pattern that the in-process
 sim uses) and verify:
 
-  INT-5a paper.daemon.* events land in qe_archive.outbox_event with the
-         canonical event-id shape and idempotency semantics.
-  INT-5b telemetry routing_class is set to 'telemetry' in payload (xfail
-         until T13 lands payload-based routing_class in daemon emit).
+  INT-5a paper.daemon.* events are local-only by default and land in
+         qe_archive.outbox_event only when the debug PG sink flag is enabled.
+  INT-5b debug-sink telemetry routing_class is set to 'telemetry' in payload.
 
 REV-1 P1.2 note: dw-foundation T14a routing_class is **payload-based**, NOT
 a column on qe_archive.outbox_event. The schema has no routing_class column
@@ -34,11 +33,13 @@ import pytest
 from backend.services.paper_trading_v2.daemon.event_log import (
     DaemonEventLog,
     DaemonEventType,
+    PAPER_DAEMON_TELEMETRY_PG_SINK_ENV,
 )
 from backend.tests.paper_trading_v2.fixtures_dev_db import (
-    dev_db_conn,  # noqa: F401  re-exported as a fixture
     _dev_dsn,
 )
+
+pytest_plugins = ("backend.tests.paper_trading_v2.fixtures_dev_db",)
 
 
 def _make_dev_pg_provider():
@@ -98,17 +99,40 @@ def event_log(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# INT-5a — emit hits PG outbox; rows are idempotent on replay
+# INT-5a: telemetry is local-only by default; debug sink can hit PG outbox.
 # ---------------------------------------------------------------------------
 
 
-def test_daemon_emits_paper_daemon_event(event_log) -> None:
+def test_daemon_telemetry_default_is_local_only_no_dev_pg_outbox(dev_db_conn, event_log) -> None:
+    """Default daemon telemetry must not pollute qe_archive.outbox_event."""
+
+    event_log.record(DaemonEventType.RUN_STARTED, {"mode": "local_only"})
+
+    with dev_db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM qe_archive.outbox_event
+            WHERE source_system = 'paper_v2.daemon'
+              AND source_id = %s
+            """,
+            (event_log.run_id,),
+        )
+        count = cur.fetchone()[0]
+
+    assert count == 0
+    assert event_log.count() == 1
+    assert event_log.count_unsynced() == 0
+
+
+def test_daemon_debug_sink_emits_paper_daemon_event(event_log, monkeypatch) -> None:
     """Three distinct event types emitted -> three outbox rows with the
     canonical paper.daemon.* event_type and qear_evt_<24-hex> event_id.
 
     Then re-emit the same events: ON CONFLICT (event_id) DO NOTHING means
     the count must remain 3 (idempotent per (run_id, event_seq) fingerprint).
     """
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     # Phase 1 — emit 3 events (note: event_seq is allocated internally, so
     # we cannot pre-compute event_ids; we query by source_id afterwards).
     types_to_emit = [
@@ -212,7 +236,7 @@ def test_daemon_emits_paper_daemon_event(event_log) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
+def test_daemon_routing_class_telemetry(dev_db_conn, event_log, monkeypatch) -> None:
     """paper.daemon.* events should carry payload.routing_class='telemetry'.
 
     REV-1 P1.2: dw-foundation T14a routing_class is **payload-based**, NOT
@@ -223,6 +247,7 @@ def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
     the outbox payload for all paper.daemon.* event types. This test now
     PASSES end-to-end against dev DB.
     """
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     event_log.record(DaemonEventType.RUN_STARTED, {})
 
     with dev_db_conn.cursor() as cur:

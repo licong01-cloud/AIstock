@@ -1,0 +1,96 @@
+{
+  "actual": "paper_v2 daemon telemetry events are written into qe_archive.outbox_event with routing_class=telemetry, but the production QE archive worker only claims archive QE event types. After BUG-471 isolates archive routing, these telemetry rows remain a silent durable blackhole with 21k pending rows; low-frequency paper archive events are also not registered in the live worker. Need plan-first fix covering scoped cleanup SQL, telemetry routing/reaper decision, explicit skip/audit for unprocessable paper events, and no DB writes until user approval.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260622_BUG-473-qe-archive-outbox-telemetry-blackhole-and-paper-telemetry-queue-pollutio.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/qe_archive_outbox_telemetry_blackhole_plan_20260622.md",
+    "docs/analysis/qe_archive_paper_telemetry_outbox_cleanup_20260622.sql",
+    "backend/services/paper_trading_v2/daemon/event_log.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/worker.py",
+    "backend/tests/paper_trading_v2/test_daemon_pg_outbox.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/paper_trading_v2/test_daemon_outbox_dev_db.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-473",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T07:22:37.811347Z",
+  "description": "paper_v2 daemon telemetry events are written into qe_archive.outbox_event with routing_class=telemetry, but the production QE archive worker only claims archive QE event types. After BUG-471 isolates archive routing, these telemetry rows remain a silent durable blackhole with 21k pending rows; low-frequency paper archive events are also not registered in the live worker. Need plan-first fix covering scoped cleanup SQL, telemetry routing/reaper decision, explicit skip/audit for unprocessable paper events, and no DB writes until user approval.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-1743ae07ad8b",
+      "timestamp": "2026-06-22T07:22:37.811343Z"
+    },
+    {
+      "action": "plan_scope_expanded",
+      "actor": "codex",
+      "note": "Plan-only scope expanded for BUG-473 design document and gated paper telemetry cleanup SQL; no implementation or production DML executed.",
+      "timestamp": "2026-06-22T07:45:00Z"
+    },
+    {
+      "action": "implementation_scope_expanded",
+      "actor": "codex",
+      "note": "Tier2 approved BUG-473 design; scope expanded for telemetry PG suppression, outbox skip terminal state, and targeted tests.",
+      "timestamp": "2026-06-22T08:20:00Z"
+    },
+    {
+      "action": "implementation_scope_expanded",
+      "actor": "codex",
+      "note": "Added dev-DB daemon outbox integration test to keep the opt-in debug PG telemetry sink contract explicit after default telemetry suppression.",
+      "timestamp": "2026-06-22T09:15:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-22T07:22:37.811347Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1461,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1461",
+  "last_seen_at": "2026-06-22T07:22:37.811347Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE Archive outbox telemetry blackhole and paper telemetry queue pollution",
+  "trigger_condition": {
+    "fingerprint": "1743ae07ad8b8af6cb95a8cf",
+    "source_event_id": "FE-20260622-1743ae07ad8b"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "implementation_in_progress"
+}
