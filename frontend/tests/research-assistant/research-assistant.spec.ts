@@ -368,12 +368,18 @@ test("Research Assistant blocker diagnostics are collapsed behind developer deta
   await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
   await expect(blockerLog).toContainText("action_proposals");
   await expect(blockerLog.locator("pre")).toBeHidden();
-  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(1);
-  await blockerLog.locator("summary").click();
+  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(0);
+  await blockerLog.locator("summary").first().click();
+  await expect(blockerLog.locator(".ra-json-summary")).not.toHaveCount(0);
+  await expect(blockerLog).toContainText("状态");
+  await expect(blockerLog).toContainText("原因");
+  await expect(blockerLog).toContainText("下一步");
+  await expect(blockerLog).toContainText("来源");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await blockerLog.getByText("查看原始数据/开发者").click();
   await expect(blockerLog.locator("pre")).toBeVisible();
   await expect(blockerLog.locator("pre")).toContainText("proposal-blocker-3");
-  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
-  await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
+  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 test("Research Assistant evidence diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
@@ -431,12 +437,17 @@ test("Research Assistant evidence diagnostics are collapsed behind developer det
 
   const evidenceLog = browserPage.getByTestId("ra-evidence-log");
   await expect(evidenceLog).toBeVisible();
-  await expect(evidenceLog.locator("summary")).toContainText("Developer details / Diagnostic log");
+  await expect(evidenceLog.locator("summary").first()).toContainText("Developer details / Diagnostic log");
   await expect(evidenceLog.locator("pre")).toBeHidden();
-  await evidenceLog.locator("summary").click();
+  await evidenceLog.locator("summary").first().click();
+  await expect(evidenceLog).toContainText("来源");
+  await expect(evidenceLog).toContainText("服务");
+  await expect(evidenceLog).toContainText("Trace ID");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.getByText("查看原始数据/开发者").click();
   await expect(evidenceLog.locator("pre")).toBeVisible();
   await expect(evidenceLog.locator("pre")).toContainText("trace-secret-raw-json");
-  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(0);
+  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
@@ -473,7 +484,7 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   for (const label of ["因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]) {
     await expect(browserPage.getByText(label).first()).toBeVisible();
   }
-  await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
+  await expect(browserPage.getByText("模型版本 / 模型试验").first()).toBeVisible();
   await expect(browserPage.getByText("summary-first").first()).toBeVisible();
   await expect(browserPage.getByText("include_schema=false").first()).toBeVisible();
   await expect(browserPage.getByText("ready").first()).toBeVisible();
@@ -515,8 +526,9 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
   await expect(browserPage.locator("#ra-legacy-payload")).toBeVisible();
   await browserPage.getByRole("button", { name: /preflight/ }).click();
   await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("missing_confirmations");
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(0);
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("缺少确认");
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("pre")).toBeHidden();
+  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 

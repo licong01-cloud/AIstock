@@ -4,7 +4,8 @@
     "frontend/src/components/research-assistant/AssistantShared.tsx",
     "frontend/tests/research-assistant/research-assistant.spec.ts",
     "tests/aistock_validation/bugs/20260622_BUG-472-humanize-research-assistant-shared-json-detail-renderers.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-472",
@@ -22,6 +23,30 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-9b61188bc45a",
       "timestamp": "2026-06-22T06:00:01.191562Z"
+    },
+    {
+      "timestamp": "2026-06-22T07:04:42.342636Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Implemented shared RA humanized detail rendering in AssistantShared; raw JSON is default-collapsed under developer details; updated frontend tests. Validation passed: tsc, lint, build, focused Playwright, l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept, validation_module_registry_l0, git diff --check."
+    },
+    {
+      "timestamp": "2026-06-22T07:07:49.133225Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Expanded frontend-only scope to mcp-tools page after scoped grep found a direct JSON.stringify display helper outside AssistantShared; no backend/DB/service scope added."
+    },
+    {
+      "timestamp": "2026-06-22T07:11:56.961543Z",
+      "actor": "codex",
+      "action": "implementation_update",
+      "note": "Also removed direct object JSON.stringify display from scoped mcp-tools helper; focused MCP tools Playwright check, tsc, lint, diff-check, and pr-check passed after scope expansion."
+    },
+    {
+      "timestamp": "2026-06-22T07:15:13.545531Z",
+      "actor": "codex",
+      "action": "validation_update",
+      "note": "After scope expansion for mcp-tools direct JSON helper, re-ran tsc, lint, build, focused MCP tools Playwright, git diff --check, and pr-check successfully."
     }
   ],
   "evidence_uris": [],

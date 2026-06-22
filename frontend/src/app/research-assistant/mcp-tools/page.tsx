@@ -99,7 +99,7 @@ function stringifyValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "yes" : "no";
   if (Array.isArray(value)) return value.length ? value.map((item) => stringifyValue(item)).join(" / ") : "-";
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object") return `${Object.keys(value as Record<string, unknown>).length} fields`;
   return String(value);
 }
 
