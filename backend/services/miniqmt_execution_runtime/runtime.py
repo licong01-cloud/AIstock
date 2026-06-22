@@ -96,6 +96,9 @@ class MiniQMTExecutionRuntime:
         self.oms = MiniQMTOmsLedger(repository)
         self._vnpy_cores: dict[str, VnpyAlgoTemplate] = {}
         self._vnpy_random_volume_providers: dict[str, Callable[[int, int], float]] = {}
+        event_sink_binder = getattr(gateway, "bind_event_sink", None)
+        if callable(event_sink_binder):
+            event_sink_binder(self)
 
     def start(self) -> MiniQMTExecutionRuntimeRecord:
         runtime = self.repository.get_runtime(self.config.runtime_id)
@@ -533,8 +536,15 @@ class MiniQMTExecutionRuntime:
         )
         child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
         if child is not None:
+            broker_status_payload = {**dict(payload or {}), "order_status": status}
+            broker_status_payload.setdefault("status", status)
+            child_status = _child_status_from_broker_order_snapshot(
+                broker_status_payload,
+                child_quantity=child.quantity,
+                broker_trades=[],
+            )
             child = self.oms.record_child_order(
-                child.model_copy(update={"status": _child_status_from_broker_status(status)})
+                child.model_copy(update={"status": child_status})
             )
             instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
             if instance is not None and self._is_vnpy_instance(instance):
@@ -542,7 +552,7 @@ class MiniQMTExecutionRuntime:
                 actions = core.update_order(
                     VnpyOrderUpdate(
                         vt_orderid=str(child.metadata.get("vnpy_vt_orderid") or child.child_order_id),
-                        active=_broker_status_is_active(status),
+                        active=child_status not in _TERMINAL_CHILD_ORDER_STATUSES,
                         traded=int((payload or {}).get("traded") or (payload or {}).get("filled_quantity") or 0),
                         price=_optional_float((payload or {}).get("price") or child.price),
                         raw_status=str(status),
@@ -624,6 +634,48 @@ class MiniQMTExecutionRuntime:
                     child.algo_instance_id,
                     reason=f"broker_trade_{child.status.value.lower()}",
                 )
+        return event
+
+    def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent:
+        runtime = self._require_runtime()
+        return self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=MiniQMTExecutionEventType.ACCOUNT_EVENT,
+            source="gateway",
+            payload=dict(payload),
+        )
+
+    def record_disconnect_event(
+        self,
+        *,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> MiniQMTExecutionEvent:
+        runtime = self._require_runtime()
+        event_payload = {
+            "reason_code": "MINIQMT_GATEWAY_DISCONNECTED",
+            "reason": reason,
+            **dict(payload or {}),
+        }
+        event = self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=MiniQMTExecutionEventType.GATEWAY_DISCONNECTED,
+            source="gateway",
+            payload=event_payload,
+        )
+        self.repository.upsert_runtime(
+            runtime.model_copy(
+                update={
+                    "event_loop_state": MiniQMTExecutionRuntimeState.PAUSED,
+                    "gateway_state": MiniQMTGatewayState.DISCONNECTED,
+                    "metadata": {
+                        **dict(runtime.metadata),
+                        "last_disconnect_reason_code": event_payload["reason_code"],
+                        "last_disconnect_reason": reason,
+                    },
+                }
+            )
+        )
         return event
 
     def _reconcile_child_orders_from_broker_snapshot(
@@ -1514,10 +1566,6 @@ class MiniQMTExecutionRuntime:
         return children
 
 
-def _broker_status_is_active(status: str) -> bool:
-    return str(status or "").strip().upper() in {"PENDING", "SUBMITTED", "PARTIALLY_FILLED", "ACTIVE", "ACCEPTED"}
-
-
 _TERMINAL_CHILD_ORDER_STATUSES = frozenset(
     {
         MiniQMTChildOrderStatus.FILLED,
@@ -1534,19 +1582,6 @@ def _algo_terminal_status_from_child_orders(children: list[MiniQMTChildOrder]) -
     if MiniQMTChildOrderStatus.REJECTED in statuses:
         return MiniQMTAlgoInstanceStatus.FAILED
     return MiniQMTAlgoInstanceStatus.CANCELLED
-
-
-def _child_status_from_broker_status(status: str) -> MiniQMTChildOrderStatus:
-    normalized = str(status or "").strip().upper()
-    if normalized in {"FILLED", "ALL_TRADED"}:
-        return MiniQMTChildOrderStatus.FILLED
-    if normalized in {"PARTIALLY_FILLED", "PARTIAL_FILLED", "PART_TRADED"}:
-        return MiniQMTChildOrderStatus.PARTIALLY_FILLED
-    if normalized in {"CANCELLED", "CANCELED"}:
-        return MiniQMTChildOrderStatus.CANCELLED
-    if normalized in {"REJECTED", "BROKER_REJECTED"}:
-        return MiniQMTChildOrderStatus.REJECTED
-    return MiniQMTChildOrderStatus.SUBMITTED
 
 
 def _child_status_from_broker_status_strict(status: str, *, broker_order_id: str | None) -> MiniQMTChildOrderStatus:

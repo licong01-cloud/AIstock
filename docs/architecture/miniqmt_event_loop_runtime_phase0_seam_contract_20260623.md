@@ -49,7 +49,7 @@ submit_child_order(order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck
 cancel_child_order(order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck
 ```
 
-Phase 1 在该接口上追加真实事件源方法，不改变既有 B 调用签名：
+Phase 1 在 `backend/services/miniqmt_execution_runtime/gateway.py::MiniQMTGatewayEventSource` 上追加真实事件源方法，不改变既有 B 调用签名：
 
 ```python
 on_order(raw_order: dict[str, Any]) -> MiniQMTExecutionEvent
@@ -112,4 +112,3 @@ backend/services/miniqmt_execution_runtime/
 - Flag inert evidence:
   - 未设置 `MINIQMT_EXECUTION_RUNTIME` 时 `get_miniqmt_execution_runtime_kind({}) == compiler`
   - 非法值 loud fail，`reason_code=MINIQMT_EXECUTION_RUNTIME_UNSUPPORTED`
-

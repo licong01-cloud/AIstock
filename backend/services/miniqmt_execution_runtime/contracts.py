@@ -25,7 +25,7 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccount,
 )
 
-from .gateway import MiniQMTGateway
+from .gateway import MiniQMTGateway, MiniQMTGatewayEventSource
 
 
 @runtime_checkable
@@ -91,10 +91,11 @@ class MiniQMTStrategyLedgerOmsContract(Protocol):
 
 
 MiniQMTGatewayContract = MiniQMTGateway
+MiniQMTGatewayEventSourceContract = MiniQMTGatewayEventSource
 
 __all__ = [
+    "MiniQMTGatewayEventSourceContract",
     "MiniQMTGatewayContract",
     "MiniQMTStrategyLedgerOmsContract",
     "MiniQMTVnpyAlgoCoreContract",
 ]
-

@@ -14,12 +14,21 @@ from .config import (
     MiniQMTExecutionRuntimeKind,
     get_miniqmt_execution_runtime_kind,
 )
-from .contracts import MiniQMTGatewayContract, MiniQMTStrategyLedgerOmsContract, MiniQMTVnpyAlgoCoreContract
+from .contracts import (
+    MiniQMTGatewayContract,
+    MiniQMTGatewayEventSourceContract,
+    MiniQMTStrategyLedgerOmsContract,
+    MiniQMTVnpyAlgoCoreContract,
+)
 from .gateway import (
     FakeMiniQMTGateway,
     MiniQMTGateway,
     MiniQMTGatewayCancelAck,
+    MiniQMTGatewayEventSource,
+    MiniQMTGatewayEventSourceError,
+    MiniQMTGatewayEventSink,
     MiniQMTGatewayOrderAck,
+    QmtClientMiniQMTEventLoopGateway,
     QmtClientMiniQMTGateway,
 )
 from .models import (
@@ -58,6 +67,7 @@ __all__ = [
     "MINIQMT_EXECUTION_RUNTIME_ENV",
     "MiniQMTExecutionRuntimeKind",
     "MiniQMTGatewayContract",
+    "MiniQMTGatewayEventSourceContract",
     "MiniQMTStrategyLedgerOmsContract",
     "MiniQMTVnpyAlgoCoreContract",
     "FakeMiniQMTGateway",
@@ -79,6 +89,9 @@ __all__ = [
     "MiniQMTExecutionRuntimeState",
     "MiniQMTGateway",
     "MiniQMTGatewayCancelAck",
+    "MiniQMTGatewayEventSink",
+    "MiniQMTGatewayEventSource",
+    "MiniQMTGatewayEventSourceError",
     "MiniQMTGatewayOrderAck",
     "MiniQMTGatewayState",
     "MiniQMTOmsLedger",
@@ -87,5 +100,6 @@ __all__ = [
     "MiniQMTOperatorCommandResult",
     "MiniQMTOperatorCommandStatus",
     "MiniQMTRuntimeRecoverySnapshot",
+    "QmtClientMiniQMTEventLoopGateway",
     "QmtClientMiniQMTGateway",
 ]
