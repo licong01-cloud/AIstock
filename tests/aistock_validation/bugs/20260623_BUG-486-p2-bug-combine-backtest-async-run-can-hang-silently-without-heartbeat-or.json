@@ -2,7 +2,10 @@
   "actual": "combine-backtest run_async spawns a daemon execute_run thread; when qrun/subprocess hangs or execute_run raises, the run can remain running forever without updated_at heartbeat, failed status, or loud reason. Need run-level heartbeat, top-level exception persistence, configurable run/scheme timeout, subprocess timeout propagation, stale-run cleanup path, and topk propagation verification.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260623_BUG-486-p2-bug-combine-backtest-async-run-can-hang-silently-without-heartbeat-or.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/routers/multi_alpha.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-486",
@@ -40,7 +43,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -66,5 +70,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
