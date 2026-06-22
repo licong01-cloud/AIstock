@@ -9,11 +9,8 @@ import "./research-assistant.css";
 const TABS = [
   { href: "/research-assistant", label: "对话", exact: true },
   { href: "/research-assistant/chat", label: "对话窗口" },
-  { href: "/research-assistant/admin", label: "后台管理" },
   { href: "/research-assistant/workbench", label: "工作台" },
   { href: "/research-assistant/tasks", label: "任务" },
-  { href: "/research-assistant/streams", label: "发现流" },
-  { href: "/research-assistant/issue-candidates", label: "候选 Issue" },
   { href: "/research-assistant/memory", label: "记忆" },
   { href: "/research-assistant/graph", label: "图谱" },
   { href: "/research-assistant/mcp-tools", label: "MCP 工具" },

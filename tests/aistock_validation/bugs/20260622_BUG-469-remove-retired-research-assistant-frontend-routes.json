@@ -6,7 +6,9 @@
     "frontend/src/app/research-assistant/streams/page.tsx",
     "frontend/src/app/research-assistant/issue-candidates/page.tsx",
     "tests/aistock_validation/bugs/20260622_BUG-469-remove-retired-research-assistant-frontend-routes.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/lib/research-assistant/api.ts"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-469",
@@ -24,6 +26,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-ad52399ecc4c",
       "timestamp": "2026-06-22T04:57:26.883840Z"
+    },
+    {
+      "timestamp": "2026-06-22T05:10:00Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Scoped frontend grep found retired route references in chat rail and retired issue-candidates API client methods; expanded scope to remove dangling frontend references without touching backend."
+    },
+    {
+      "timestamp": "2026-06-22T05:18:01Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Removed RA admin/streams/issue-candidates frontend routes, removed nav/admin chat link and retired RA issue-candidate/discovery frontend API client surface. Validation: route grep clean; directories absent; git diff --check passed; PR scope check passed; frontend npm run lint passed; frontend npm run build passed."
     }
   ],
   "evidence_uris": [],
