@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,8 +21,11 @@ from backend.services.qmt_strategy_ledger.models import (
     OrderLedgerRecord,
     PositionLotRecord,
     SELL_ORDER_TYPE,
+    STATUS_CANCELLED,
     STATUS_FILLED,
     STATUS_OPEN_LIKE,
+    STATUS_PART_SUCC,
+    STATUS_REJECTED,
     VirtualAccount,
     VirtualAccountStatus,
 )
@@ -1905,13 +1909,13 @@ def test_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_rema
             symbol=accepted_intent.symbol,
             order_type=accepted_intent.order_type,
             order_volume=accepted_intent.quantity,
-            traded_volume=0,
-            order_status=STATUS_OPEN_LIKE,
+            traded_volume=max(int(accepted_intent.quantity) - 20, 0),
+            order_status=STATUS_PART_SUCC,
             account_id=accepted_intent.account_id,
             trade_date=accepted_intent.trade_date,
             price_type=accepted_intent.price_type,
             price=Decimal("8.0"),
-            status_msg="accepted but still open at close",
+            status_msg="partially filled but still open at close",
             order_remark=accepted_intent.order_remark,
         )
     )
@@ -1932,7 +1936,7 @@ def test_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_rema
     assert reconciliation["submit_result_gate"]["reason"] == "miniqmt_open_orders_pending_after_reconciliation"
     assert reconciliation["submit_result_gate"]["pending_open_orders"] is True
     assert reconciliation["open_order_evidence"]["open_order_count"] == 1
-    assert reconciliation["open_order_evidence"]["open_orders"][0]["order_status"] == STATUS_OPEN_LIKE
+    assert reconciliation["open_order_evidence"]["open_orders"][0]["order_status"] == STATUS_PART_SUCC
     assert len(broker.place_order_payloads) == 1
 
     polled = scheduler.run_once(
@@ -1946,6 +1950,38 @@ def test_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_rema
     assert polled.results[0].status == "RECONCILIATION_PENDING_OPEN_ORDERS"
     assert still_pending.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert len(broker.place_order_payloads) == 1
+
+
+def test_scheduler_miniqmt_open_order_evidence_excludes_terminal_xtquant_statuses() -> None:
+    _release, _, qmt_binding, _repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    for status in (STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED):
+        qmt_repo.upsert_order_ledger(
+            OrderLedgerRecord(
+                intent_id=f"intent_terminal_{status}",
+                strategy_id=qmt_binding.strategy_id,
+                strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+                qmt_order_id=f"terminal_{status}",
+                symbol="000003.SZ",
+                order_type=SELL_ORDER_TYPE,
+                order_volume=100,
+                traded_volume=50 if status != STATUS_FILLED else 100,
+                order_status=status,
+                account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+                trade_date=TRADE_DATE,
+                status_msg=f"terminal xtquant status {status}",
+                order_remark=f"remark_terminal_{status}",
+            )
+        )
+
+    evidence = SimulationLifecycleScheduler._miniqmt_open_order_evidence(
+        binding=qmt_binding,
+        run=SimpleNamespace(trade_date=TRADE_DATE, run_payload_json={}),
+        context=SimulationRunContext(current_positions={}, qmt_ledger_repository=qmt_repo),
+    )
+
+    assert evidence["open_order_count"] == 0
+    assert evidence["open_orders"] == []
 
 
 def test_scheduler_post_close_terminalizes_miniqmt_capacity_residual_without_fake_success() -> None:

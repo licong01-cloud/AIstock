@@ -11,9 +11,18 @@ from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
     STATUS_CANCELLED,
+    STATUS_FILLED,
     STATUS_OPEN_LIKE,
+    STATUS_PART_CANCEL,
+    STATUS_PART_SUCC,
+    STATUS_PARTSUCC_CANCEL,
+    STATUS_REJECTED,
+    STATUS_REPORTED_CANCEL,
+    STATUS_UNREPORTED,
+    STATUS_WAIT_REPORTING,
     CashEntryType,
     IntentSubmitStatus,
+    OrderLifecycle,
     OrderIntentRecord,
     OrderLedgerRecord,
     PositionLotRecord,
@@ -22,6 +31,10 @@ from backend.services.qmt_strategy_ledger.models import (
     UnattributedTradeRecord,
     VirtualAccount,
     VirtualAccountStatus,
+    classify_order_lifecycle,
+    is_open_like_order_status,
+    is_partial_order_status,
+    is_terminal_order_status,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
@@ -31,6 +44,33 @@ ACCOUNT_ID = "62266303"
 TRADE_DATE = date(2026, 5, 18)
 NEXT_TRADE_DATE = date(2026, 5, 19)
 CALENDAR = StaticTradingCalendarProvider([TRADE_DATE, NEXT_TRADE_DATE])
+
+
+def test_xtquant_order_status_predicates_treat_partial_fill_as_open_like() -> None:
+    open_like_statuses = {
+        STATUS_UNREPORTED,
+        STATUS_WAIT_REPORTING,
+        STATUS_OPEN_LIKE,
+        STATUS_REPORTED_CANCEL,
+        STATUS_PARTSUCC_CANCEL,
+        STATUS_PART_CANCEL,
+        STATUS_PART_SUCC,
+    }
+    terminal_statuses = {STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED}
+
+    for status in open_like_statuses:
+        assert is_open_like_order_status(status)
+        assert classify_order_lifecycle(str(status)) == OrderLifecycle.OPEN
+    for status in {STATUS_PARTSUCC_CANCEL, STATUS_PART_CANCEL, STATUS_PART_SUCC}:
+        assert is_partial_order_status(status)
+    for status in terminal_statuses:
+        assert is_terminal_order_status(status)
+        assert not is_open_like_order_status(status)
+
+    assert classify_order_lifecycle(STATUS_CANCELLED) == OrderLifecycle.CANCELLED
+    assert classify_order_lifecycle(STATUS_FILLED) == OrderLifecycle.FILLED
+    assert classify_order_lifecycle(STATUS_REJECTED) == OrderLifecycle.REJECTED
+    assert classify_order_lifecycle(255) == OrderLifecycle.UNKNOWN
 
 
 class FakeReadOnlyQmtClient:

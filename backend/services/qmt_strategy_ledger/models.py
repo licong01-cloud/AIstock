@@ -16,9 +16,27 @@ from uuid import uuid4
 BUY_ORDER_TYPE = 23
 SELL_ORDER_TYPE = 24
 STATUS_OPEN_LIKE = 50
+STATUS_UNREPORTED = 48
+STATUS_WAIT_REPORTING = 49
+STATUS_REPORTED_CANCEL = 51
+STATUS_PARTSUCC_CANCEL = 52
+STATUS_PART_CANCEL = 53
+STATUS_PART_SUCC = 55
 STATUS_CANCELLED = 54
 STATUS_FILLED = 56
 STATUS_REJECTED = 57
+ORDER_STATUS_PENDING = frozenset(
+    {
+        STATUS_UNREPORTED,
+        STATUS_WAIT_REPORTING,
+        STATUS_OPEN_LIKE,
+        STATUS_REPORTED_CANCEL,
+    }
+)
+ORDER_STATUS_PARTIAL = frozenset({STATUS_PARTSUCC_CANCEL, STATUS_PART_CANCEL, STATUS_PART_SUCC})
+ORDER_STATUS_OPEN_LIKE = frozenset(ORDER_STATUS_PENDING | ORDER_STATUS_PARTIAL)
+ORDER_STATUS_TERMINAL = frozenset({STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED})
+ORDER_STATUS_KNOWN = frozenset(ORDER_STATUS_OPEN_LIKE | ORDER_STATUS_TERMINAL)
 MINIQMT_ACCOUNT_GROUP_ALLOCATION_MODE = "account_group_slots"
 MINIQMT_LEGACY_EXCLUSIVE_ALLOCATION_MODE = "exclusive_account"
 MINIQMT_ACCOUNT_GROUP_METADATA_KEY = "miniqmt_account_group"
@@ -786,14 +804,38 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+def _normalize_order_status(order_status: Any) -> int | None:
+    if order_status is None or order_status == "":
+        return None
+    try:
+        return int(order_status)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_open_like_order_status(order_status: Any) -> bool:
+    """Return True for xtquant statuses that still require broker follow-up."""
+
+    return _normalize_order_status(order_status) in ORDER_STATUS_OPEN_LIKE
+
+
+def is_terminal_order_status(order_status: Any) -> bool:
+    return _normalize_order_status(order_status) in ORDER_STATUS_TERMINAL
+
+
+def is_partial_order_status(order_status: Any) -> bool:
+    return _normalize_order_status(order_status) in ORDER_STATUS_PARTIAL
+
+
 def classify_order_lifecycle(order_status: int | None) -> OrderLifecycle:
-    if order_status == STATUS_OPEN_LIKE:
+    status = _normalize_order_status(order_status)
+    if is_open_like_order_status(status):
         return OrderLifecycle.OPEN
-    if order_status == STATUS_CANCELLED:
+    if status == STATUS_CANCELLED:
         return OrderLifecycle.CANCELLED
-    if order_status == STATUS_FILLED:
+    if status == STATUS_FILLED:
         return OrderLifecycle.FILLED
-    if order_status == STATUS_REJECTED:
+    if status == STATUS_REJECTED:
         return OrderLifecycle.REJECTED
     return OrderLifecycle.UNKNOWN
 
