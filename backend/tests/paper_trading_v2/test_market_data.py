@@ -7,6 +7,7 @@ import pytest
 from backend.services.paper_trading_v2.market_data import (
     DailySuspendStatus,
     DailyStStatus,
+    DbStStatusProvider,
     DbSuspendStatusProvider,
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
@@ -103,6 +104,7 @@ class MissingStStatusProvider:
 class FakeCursor:
     def __init__(self, row):
         self.row = row
+        self.params_sql = None
         self.params = None
 
     def __enter__(self):
@@ -111,7 +113,8 @@ class FakeCursor:
     def __exit__(self, *_exc):
         return False
 
-    def execute(self, _sql, params):
+    def execute(self, sql, params):
+        self.params_sql = sql
         self.params = params
 
     def fetchone(self):
@@ -189,6 +192,15 @@ def pre_trade_provider(quote: dict, *, is_st: bool = False) -> PreTradeTradabili
     )
 
 
+def pre_trade_provider_with_st_source(quote: dict, st_status_provider) -> PreTradeTradabilityProvider:
+    return PreTradeTradabilityProvider(
+        suspend_status_provider=FakeSuspendProvider(),
+        realtime_quote_fetcher=lambda _symbols: {"000001.SZ": quote},
+        realtime_quote_source="TDX_REALTIME.batch_quote",
+        st_status_provider=st_status_provider,
+    )
+
+
 def test_tdx_market_data_provider_builds_minute_input_with_observed_context() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=FakeLimitProvider(),
@@ -254,6 +266,47 @@ def test_db_suspend_status_provider_treats_no_suspend_row_as_active() -> None:
 
     assert status.is_suspended is False
     assert status.suspend_type is None
+
+
+def test_db_st_status_provider_uses_latest_daily_snapshot_not_old_rows() -> None:
+    conn = FakeConn((None, None, None, date(2026, 6, 22)))
+    provider = DbStStatusProvider(conn_factory=lambda: conn)
+
+    status = provider.get_st_status("000001.SZ", date(2026, 6, 22))
+
+    assert status.is_st is False
+    assert "latest_stock_st_snapshot" in conn.cursor_obj.params_sql
+    assert "ann_date = latest.latest_ann_date" in conn.cursor_obj.params_sql
+    assert conn.cursor_obj.params == (
+        date(2026, 6, 22),
+        "000001.SZ",
+        date(2026, 6, 22),
+        date(2026, 6, 22),
+    )
+
+
+def test_db_st_status_provider_fails_loud_when_source_snapshot_is_empty() -> None:
+    provider = DbStStatusProvider(conn_factory=lambda: FakeConn((None, None, None, None)))
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.get_st_status("000001.SZ", date(2026, 6, 22))
+
+    assert exc_info.value.context["reason_code"] == "ST_STATUS_SOURCE_EMPTY"
+    assert exc_info.value.context["table"] == "market.stock_st"
+
+
+def test_db_st_status_provider_fails_loud_when_source_query_fails() -> None:
+    def failing_conn_factory():
+        raise RuntimeError("undefined_table market.stock_st")
+
+    provider = DbStStatusProvider(conn_factory=failing_conn_factory)
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.get_st_status("000001.SZ", date(2026, 6, 22))
+
+    assert exc_info.value.context["reason_code"] == "ST_STATUS_QUERY_FAILED"
+    assert exc_info.value.context["table"] == "market.stock_st"
+    assert "undefined_table" in str(exc_info.value.__cause__)
 
 
 def test_tdx_market_data_provider_fails_when_31_bars_are_required_but_missing() -> None:
@@ -623,6 +676,24 @@ def test_pre_trade_tdx_quote_fails_closed_when_timestamp_is_stale() -> None:
 
     assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_STALE"
     assert exc_info.value.context["quote_age_seconds"] == pytest.approx(360.0)
+
+
+def test_pre_trade_tdx_quote_fails_closed_when_st_source_is_unavailable() -> None:
+    provider = pre_trade_provider_with_st_source(
+        make_tdx_quote(server_time="2026-06-16 09:34:00"),
+        MissingStStatusProvider(),
+    )
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.get_statuses(
+            ["000001.SZ"],
+            date(2026, 6, 16),
+            require_realtime_quote=True,
+            as_of_time=datetime(2026, 6, 16, 9, 34, 30),
+        )
+
+    assert exc_info.value.context["reason_code"] == "ST_STATUS_UNAVAILABLE"
+    assert exc_info.value.context["source"] == "test.stock_st"
 
 
 def test_pre_trade_tdx_quote_blocks_buy_at_limit_up_with_reason_code() -> None:

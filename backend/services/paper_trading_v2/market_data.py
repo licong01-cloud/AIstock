@@ -269,18 +269,50 @@ class DbStStatusProvider:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT start_date, end_date
-                        FROM market.stock_st
-                        WHERE ts_code = %s
-                          AND COALESCE(start_date, ann_date) <= %s
-                          AND (end_date IS NULL OR end_date >= %s)
-                        ORDER BY COALESCE(start_date, ann_date) DESC, ann_date DESC
-                        LIMIT 1
+                        WITH latest_stock_st_snapshot AS (
+                            SELECT max(ann_date) AS latest_ann_date
+                            FROM market.stock_st
+                            WHERE ann_date <= %s
+                        )
+                        SELECT s.ts_code, s.start_date, s.end_date, latest.latest_ann_date
+                        FROM latest_stock_st_snapshot latest
+                        LEFT JOIN LATERAL (
+                            SELECT ts_code, start_date, end_date, ann_date
+                            FROM market.stock_st
+                            WHERE ts_code = %s
+                              AND (
+                                (start_date IS NULL AND end_date IS NULL AND ann_date = latest.latest_ann_date)
+                                OR (
+                                  (start_date IS NOT NULL OR end_date IS NOT NULL)
+                                  AND COALESCE(start_date, ann_date) <= %s
+                                  AND (end_date IS NULL OR end_date >= %s)
+                                )
+                              )
+                            ORDER BY
+                              CASE
+                                WHEN start_date IS NULL AND end_date IS NULL THEN ann_date
+                                ELSE COALESCE(start_date, ann_date)
+                              END DESC,
+                              ann_date DESC
+                            LIMIT 1
+                        ) s ON TRUE
                         """,
-                        (normalized_symbol, trade_date, trade_date),
+                        (trade_date, normalized_symbol, trade_date, trade_date),
                     )
                     row = cur.fetchone()
+                    if row is not None and row[3] is None:
+                        raise DataUnavailableError(
+                            "ST status source has no snapshot on or before trade_date",
+                            context={
+                                "reason_code": "ST_STATUS_SOURCE_EMPTY",
+                                "symbol": normalized_symbol,
+                                "trade_date": trade_date.isoformat(),
+                                "table": "market.stock_st",
+                            },
+                        )
         except Exception as exc:
+            if isinstance(exc, DataUnavailableError):
+                raise
             raise DataUnavailableError(
                 "ST status query failed",
                 context={
@@ -290,14 +322,15 @@ class DbStStatusProvider:
                     "table": "market.stock_st",
                 },
             ) from exc
-        if row is None:
+        if row is None or row[0] is None:
             return DailyStStatus(symbol=normalized_symbol, trade_date=trade_date, is_st=False)
         return DailyStStatus(
             symbol=normalized_symbol,
             trade_date=trade_date,
             is_st=True,
-            start_date=row[0],
-            end_date=row[1],
+            source=f"market.stock_st.latest_ann_date:{row[3].isoformat()}",
+            start_date=row[1],
+            end_date=row[2],
         )
 
 

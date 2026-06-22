@@ -41,6 +41,12 @@
       "actor": "codex-l5",
       "note": "Opened PR #1438 for BUG-466; merge/production restart left to Tier2/user.",
       "timestamp": "2026-06-21T21:04:26.971337Z"
+    },
+    {
+      "action": "tier2_rework_st_source_verified",
+      "actor": "codex-l5",
+      "note": "Verified runtime market.stock_st exists and is daily snapshot semantics; adjusted DbStStatusProvider to use latest ann_date snapshot and loud-fail empty/query errors; PR #1438 updated pending Tier2.",
+      "timestamp": "2026-06-22T10:22:11Z"
     }
   ],
   "evidence_uris": [],
@@ -79,14 +85,14 @@
     "source_event_id": "FE-20260622-5f43c5295385"
   },
   "validation_evidence": [
-    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py -q -> 25 passed",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py -q -> 29 passed",
     "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/tests/paper_trading_v2/test_market_data.py -> All checks passed",
     "rtk git diff --check -> passed",
     "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "rtk cmd /c AISTOCK_HOSTED_CI=1 PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> paper_v2_backend 639 passed, 1 skipped, 1 deselected; data_quality_deep 10 passed, 21 skipped"
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed; paper_v2_backend 643 passed, 1 skipped, 1 deselected; data quality smoke kept known legacy ledger consistency WARN"
   ],
-  "verification_run_id": "BUG-466-L5-local-20260622",
+  "verification_run_id": "BUG-466-L5-tier2-st-source-rework-20260622",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
