@@ -155,3 +155,11 @@ def test_factor_transformation_frontend_does_not_expose_realtime_dto_names() -> 
     assert "non_official_code_path" in source
     assert "transformed_code_text" in source
 
+
+
+def test_deterministic_v2_backfill_entry_is_removed() -> None:
+    source = Path("backend/services/quantevolver/factor_analyst.py").read_text(encoding="utf-8")
+
+    assert not Path("scripts/_backfill_v2_deterministic.py").exists()
+    assert "backfill_deterministic_v2" not in source
+    assert "batch_backfill_deterministic_v2" not in source

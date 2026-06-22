@@ -4,10 +4,10 @@ process_names:
     cmdline:
       - 'uvicorn\s+backend\.main'
 
-  # AIstock backfill 脚本
-  - name: "aistock_backfill"
+  # AIstock official factor full-compute worker
+  - name: "aistock_official_factor_compute"
     cmdline:
-      - 'backfill_factor_cache'
+      - 'run_official_factor_full_compute_wsl|run_official_evaluation_wsl|official_factor_full_compute'
 
   # AIstock 因子计算子进程 (factor_value_pipeline 的 multiprocessing 子进程)
   - name: "aistock_factor_worker"

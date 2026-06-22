@@ -51,6 +51,9 @@ from ..services.quantevolver.node_execution import (
 from ..services.strategy_package.promotion_review import PromotionReviewService
 from ..services.trading_core.errors import TradingCoreError
 
+OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
+OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
+
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
 RDAGENT_QE_TIMEOUT = 30.0
@@ -3817,6 +3820,8 @@ class FactorMetricsScheduleRequest(BaseModel):
     at: Optional[str] = Field("18:30", description="每日运行时间 HH:MM")
     day_of_week: Optional[str] = Field("sunday", description="周几运行（weekly 时有效）")
     data_date: Optional[str] = Field(None, description="数据快照日期 YYYYMMDD，留空用最新")
+    start_date: str = Field(OFFICIAL_FACTOR_WINDOW_START, description="Official factor cache window start date YYYY-MM-DD")
+    end_date: str = Field(OFFICIAL_FACTOR_WINDOW_END, description="Official factor cache window end date YYYY-MM-DD")
     workers: int = Field(4, description="并行度 1-8")
     one_shot: bool = Field(False, description="单次任务（执行完自动禁用）")
     enabled: bool = Field(True, description="是否启用")
@@ -3871,6 +3876,8 @@ def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
     options = {
         "include_disabled": req.include_disabled,
         "data_date": req.data_date,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
         "workers": max(1, min(8, req.workers)),
         "timeout_per_factor": 600,
         "one_shot": req.one_shot,

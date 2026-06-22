@@ -25,6 +25,8 @@ import schedule
 from ...db.pg_pool import get_conn
 from ...ingestion.tdx_scheduler import _build_frequency_job, _FutureTracker
 from ..dispatch_service import DispatchService
+OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
+OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
 
 logger = logging.getLogger("aistock.factor_metrics_scheduler")
 
@@ -206,23 +208,23 @@ class FactorMetricsScheduler:
         elif isinstance(raw_factor_names, list):
             factor_names = [str(name).strip() for name in raw_factor_names if str(name).strip()] or None
 
-        payload = {
-            "factor_names": factor_names,
-            "data_date": options.get("data_date"),
-            "include_disabled": bool(options.get("include_disabled", False)),
-            "max_workers": max_workers,
-            "timeout_per_factor": timeout_per_factor,
-        }
+        payload = self._build_official_full_compute_payload(
+            factor_names=factor_names,
+            options=options,
+            max_workers=max_workers,
+            timeout_per_factor=timeout_per_factor,
+        )
 
         try:
             created = asyncio.run(self._dispatch_service.create_and_submit_task({
-                "task_name": f"official_evaluation_{payload.get('data_date') or 'latest'}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                "task_type": "official_evaluation",
+                "task_name": f"official_factor_full_compute_{payload['end_date']}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "task_type": "official_factor_full_compute",
                 "node_id": node_id,
                 "payload": payload,
+                "all_duration": options.get("all_duration") or "72:00:00",
             }))
         except Exception as exc:
-            logger.error("提交 official evaluation dispatch 任务失败: %s", exc, exc_info=True)
+            logger.error("submit official factor full-compute dispatch task failed: %s", exc, exc_info=True)
             self._update_job_status(str(job_id), "failed", {
                 "error": str(exc),
                 "node_id": node_id,
@@ -269,6 +271,69 @@ class FactorMetricsScheduler:
             job_id, dispatch_task_id, dataset, node_id,
         )
         return job_id
+
+    def _build_official_full_compute_payload(
+        self,
+        *,
+        factor_names: Optional[List[str]],
+        options: Dict[str, Any],
+        max_workers: int,
+        timeout_per_factor: int,
+    ) -> Dict[str, Any]:
+        """Build the only supported scheduler payload for official metrics jobs."""
+        from .config_composer import ConfigComposer
+
+        start_date = self._normalize_window_date(
+            options.get("start_date") or options.get("window_train_start") or OFFICIAL_FACTOR_WINDOW_START
+        )
+        end_date = self._normalize_window_date(
+            options.get("end_date")
+            or options.get("window_backtest_end")
+            or options.get("data_date")
+            or OFFICIAL_FACTOR_WINDOW_END
+        )
+        if start_date > end_date:
+            raise ValueError(f"invalid official factor cache window: {start_date} > {end_date}")
+
+        requested_node_id = str(options.get("node_id") or "").strip() or None
+        cfg = ConfigComposer()._fetch_workspace_config(requested_node_id)
+        factor_data_dir = str(options.get("factor_data_dir") or cfg.get("factor_data_dir") or "").strip()
+        if not factor_data_dir:
+            raise ValueError("failed to resolve QE factor_data_dir for official full compute")
+        qlib_bin_path = options.get("qlib_bin_path") or cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+
+        return {
+            "task_type": "official_factor_full_compute",
+            "handler_task_type": "official_factor_full_compute",
+            "factor_names": factor_names or [],
+            "factor_data_dir": factor_data_dir,
+            "start_date": start_date,
+            "end_date": end_date,
+            "window_train_start": start_date,
+            "window_backtest_end": end_date,
+            "include_disabled": bool(options.get("include_disabled", False)),
+            "batch_size": max(1, min(int(max_workers or 1) * 4, 32)),
+            "workers": max_workers,
+            "max_workers": max_workers,
+            "timeout_per_factor": timeout_per_factor,
+            "force": bool(options.get("force", False)),
+            "qlib_bin_path": str(qlib_bin_path) if qlib_bin_path else None,
+            "cache_source": "official_offline_backtest_factor_data",
+            "code_source": "code_text",
+        }
+
+    @staticmethod
+    def _normalize_window_date(value: Any) -> str:
+        raw = str(value or "").strip()
+        if len(raw) == 8 and raw.isdigit():
+            return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+        if not raw:
+            raise ValueError("official factor cache window date is required")
+        try:
+            dt.datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(f"official factor cache window date must be YYYY-MM-DD: {raw}") from exc
+        return raw
 
     def _monitor_dispatch_task(
         self,
@@ -345,6 +410,10 @@ class FactorMetricsScheduler:
             "snapshot_date": latest_result.get("snapshot_date"),
             "pipeline_version": latest_result.get("pipeline_version"),
             "code_source": latest_result.get("code_source"),
+            "cache_source": latest_result.get("cache_source"),
+            "data_start": latest_result.get("data_start"),
+            "data_end": latest_result.get("data_end"),
+            "factor_data_dir": latest_result.get("factor_data_dir"),
             "counters": FactorMetricsScheduler._build_counters(local_status, progress),
         }
         if db_result is not None:

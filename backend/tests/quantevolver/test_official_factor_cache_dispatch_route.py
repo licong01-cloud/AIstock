@@ -75,6 +75,9 @@ class _NoopConn:
     def cursor(self):
         return _NoopCursor()
 
+    def commit(self):
+        return None
+
 
 def test_factor_cache_compute_submits_official_dispatch(monkeypatch):
     captured = {}
@@ -211,6 +214,58 @@ def test_official_evaluation_wsl_runner_delegates_full_compute_payload(monkeypat
     assert emitted["type"] == "result"
     assert emitted["data"]["success"] is True
     assert captured["payload"] == payload
+
+
+def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeypatch):
+    from backend.services.quantevolver import factor_metrics_scheduler as scheduler_mod
+
+    captured = {}
+
+    class _FakeDispatchService:
+        async def create_and_submit_task(self, data):
+            captured["dispatch"] = data
+            return {"task_id": "dispatch-factor-metrics", "status": "failed"}
+
+    monkeypatch.setattr(scheduler_mod, "DispatchService", lambda: _FakeDispatchService())
+    monkeypatch.setattr(scheduler_mod, "get_conn", lambda: _NoopConn())
+    monkeypatch.setattr("backend.services.quantevolver.config_composer.ConfigComposer", _FakeComposer)
+
+    scheduler = scheduler_mod.FactorMetricsScheduler()
+    try:
+        job_id = scheduler.submit_job(
+            None,
+            "factor_metrics_compute",
+            {
+                "factor_names": ["factor_a"],
+                "include_disabled": True,
+                "start_date": "2018-08-01",
+                "end_date": "2026-04-30",
+                "workers": 2,
+                "timeout_per_factor": 900,
+                "node_id": "node-a",
+            },
+            triggered_by="manual",
+        )
+    finally:
+        scheduler.shutdown(wait=False)
+
+    assert str(job_id)
+    dispatch = captured["dispatch"]
+    assert dispatch["task_type"] == "official_factor_full_compute"
+    assert dispatch["task_name"].startswith("official_factor_full_compute_2026-04-30_")
+    payload = dispatch["payload"]
+    assert payload["task_type"] == "official_factor_full_compute"
+    assert payload["handler_task_type"] == "official_factor_full_compute"
+    assert payload["factor_names"] == ["factor_a"]
+    assert payload["factor_data_dir"] == "/mnt/f/factor_data"
+    assert payload["qlib_bin_path"] == "/mnt/f/qlib_bin"
+    assert payload["start_date"] == "2018-08-01"
+    assert payload["end_date"] == "2026-04-30"
+    assert payload["include_disabled"] is True
+    assert payload["workers"] == 2
+    assert payload["max_workers"] == 2
+    assert payload["batch_size"] == 8
+    assert payload["cache_source"] == "official_offline_backtest_factor_data"
 
 
 def test_factor_cache_compute_explicit_factors_can_include_disabled(monkeypatch):
@@ -479,6 +534,21 @@ def test_factor_list_metric_buttons_submit_official_cache_compute():
     assert "official-evaluation/compute" not in task_metrics
     assert "activeSnapshot" not in batch_metrics
     assert "activeSnapshot" not in task_metrics
+
+
+def test_factor_list_shows_single_official_cache_timestamp_column():
+    source = Path("frontend/src/app/quantevolver/components/FactorList.tsx").read_text(encoding="utf-8")
+
+    assert "\u5b98\u65b9\u66f4\u65b0\u65f6\u95f4" in source
+    assert "\u6307\u6807\u8ba1\u7b97{getSortIndicator" not in source
+    assert "\u7f13\u5b58\u5f00\u59cb{getSortIndicator" not in source
+    assert "\u7f13\u5b58\u7ed3\u675f{getSortIndicator" not in source
+    assert "\u7f13\u5b58\u8ba1\u7b97{getSortIndicator" not in source
+    assert "\u5b98\u65b9\u7f13\u5b58\u8282\u70b9" in source
+    assert "WSL\u7f13\u5b58" not in source
+    compute_panel = Path("frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx").read_text(encoding="utf-8")
+    assert "\u5168\u91cf\u8ba1\u7b97" not in compute_panel
+    assert "\u5168\u91cf\u91cd\u7b97\u76f8\u5173\u6027" in compute_panel
 
 
 def test_factor_transformation_status_exposes_non_official_fields(monkeypatch):

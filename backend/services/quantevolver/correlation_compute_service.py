@@ -558,7 +558,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                         "status": "failed",
                         "error": _error_msg,
                         "missing_factors": missing_factors,
-                        "hint": "run_offline_factor_cache_backfill_first",
+                        "hint": "run_official_factor_full_compute_first",
                         "cache_source": CORRELATION_FACTOR_VALUE_CACHE_SOURCE,
                         "cache_root": str(CORRELATION_FACTOR_VALUE_CACHE_DIR),
                     }

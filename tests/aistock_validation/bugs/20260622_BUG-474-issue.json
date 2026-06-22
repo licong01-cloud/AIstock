@@ -1,0 +1,104 @@
+{
+  "actual": "FactorList 仍有指标计算/缓存开始/缓存结束/缓存计算多列，ComputePanel/page 仍出现全量计算提示，用户容易误解为旧独立回测缓存或多套缓存。",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/page.tsx",
+    "tests/aistock_validation/bugs/20260622_BUG-474-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-474",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T07:31:33.221329Z",
+  "description": "FactorList 仍有指标计算/缓存开始/缓存结束/缓存计算多列，ComputePanel/page 仍出现全量计算提示，用户容易误解为旧独立回测缓存或多套缓存。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-459b43f0760f",
+      "timestamp": "2026-06-22T07:31:33.221326Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "UI 仅表达一套官方共用因子值缓存；相关性计算入口明确为全量重算相关性，不暗示生成因子值缓存；缓存窗口/计算时间不重复误导。",
+  "first_seen_at": "2026-06-22T07:31:33.221329Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1462,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1462",
+  "last_seen_at": "2026-06-22T07:31:33.221329Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "因子库官方缓存列与相关性计算文案仍易误导",
+  "trigger_condition": {
+    "fingerprint": "459b43f0760f9559a4eb0145",
+    "source_event_id": "FE-20260622-459b43f0760f"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/components/FactorList.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+      "frontend/src/app/quantevolver/factor-correlation/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/quantevolver/components/FactorList.tsx",
+    "ui_routes": [
+      "/src/app/quantevolver/components/FactorList.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
