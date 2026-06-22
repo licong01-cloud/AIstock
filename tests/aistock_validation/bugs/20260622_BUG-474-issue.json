@@ -29,8 +29,8 @@
   "expected": "UI 仅表达一套官方共用因子值缓存；相关性计算入口明确为全量重算相关性，不暗示生成因子值缓存；缓存窗口/计算时间不重复误导。",
   "first_seen_at": "2026-06-22T07:31:33.221329Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d167d8922c023f7a3a3dd2a2873816ffba769aec",
+  "fixed_at": "2026-06-22T10:20:47.619440Z",
   "github_issue_number": 1462,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1462",
   "last_seen_at": "2026-06-22T07:31:33.221329Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1472",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -88,6 +89,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1472 merged and CI passed: pending=0 failed=0"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
