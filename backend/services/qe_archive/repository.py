@@ -42,6 +42,26 @@ from .models import (
 ConnectionProvider = Callable[[], Any]
 
 ARCHIVE_ROUTING_CLASS = "archive"
+PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS = ("paper_v2.daemon", "paper_v2")
+PAPER_DAEMON_EVENT_TYPES = (
+    "paper.daemon.run_started",
+    "paper.daemon.intent_created",
+    "paper.daemon.order_submitted",
+    "paper.daemon.fill_received",
+    "paper.daemon.order_rejected",
+    "paper.daemon.order_cancelled",
+    "paper.daemon.position_updated",
+    "paper.daemon.run_completed",
+    "paper.daemon.run_failed",
+)
+PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES = (
+    "paper.portfolio_run.completed",
+    "paper.daily_snapshot.captured",
+    "paper.config.changed",
+)
+PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED = "paper_daemon_telemetry_not_archived"
+PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY = "paper_v2_archive_deferred_throwaway"
+UNSUPPORTED_OUTBOX_EVENT_TYPE = "unsupported_outbox_event_type"
 
 
 RUN_COLUMNS = (
@@ -830,6 +850,7 @@ class QEArchiveRepository:
         worker_id: str,
         limit: int = 10,
         event_types: Sequence[str] | None = None,
+        source_systems: Sequence[str] | None = None,
         routing_class: str | None = ARCHIVE_ROUTING_CLASS,
         allow_missing_routing_class: bool = True,
     ) -> list[ClaimedOutboxEvent]:
@@ -841,6 +862,10 @@ class QEArchiveRepository:
         if event_types:
             event_filter = "AND event_type = ANY(%s)"
             params.append(list(event_types))
+        source_filter = ""
+        if source_systems:
+            source_filter = "AND source_system = ANY(%s)"
+            params.append(list(source_systems))
         routing_filter = ""
         if routing_class is not None:
             if allow_missing_routing_class:
@@ -857,6 +882,7 @@ class QEArchiveRepository:
                 WHERE status = 'pending'
                   AND next_retry_at <= NOW()
                   {event_filter}
+                  {source_filter}
                   {routing_filter}
                 ORDER BY next_retry_at ASC, created_at ASC
                 LIMIT %s
@@ -911,6 +937,113 @@ class QEArchiveRepository:
                     """,
                     (event_id,),
                 )
+
+    def skip_outbox_event(
+        self,
+        event: ClaimedOutboxEvent,
+        *,
+        reason_code: str,
+        trigger_reason: str = "realtime",
+    ) -> None:
+        """Mark an unprocessable outbox event as an explicit audited skip.
+
+        ``skipped`` is an honest terminal state: it is not ``completed`` (not
+        archived) and not ``failed`` (not retryable). The status change and
+        skip/ingest audit rows share one DB transaction.
+        """
+
+        if trigger_reason not in {"realtime", "manual"}:
+            raise ValueError(
+                "skip_outbox_event trigger_reason must be 'realtime' or 'manual', "
+                f"got {trigger_reason!r}"
+            )
+        if not reason_code:
+            raise ValueError("skip_outbox_event requires a non-empty reason_code")
+
+        payload = dict(event.payload or {})
+        source_type = _policy_skip_source_type(event.event_type)
+        payload_sha256 = sha256_json(payload) if payload else None
+        stats = {
+            "reason_code": reason_code,
+            "event_type": event.event_type,
+            "routing_class": payload.get("routing_class"),
+            "event_id": event.event_id,
+        }
+        skip_record = SkipRegistryRecord(
+            source_system=event.source_system,
+            source_type=source_type,
+            source_id=event.source_id,
+            source_sub_id=event.source_sub_id,
+            event_type=event.event_type,
+            archive_policy="SKIP",
+            archive_policy_source="paper_v2_throwaway_policy",
+            skip_reason=reason_code,
+            trigger_reason=trigger_reason,
+            payload_sha256=payload_sha256,
+            created_by="qe_archive_worker",
+            metadata=stats,
+        )
+        history_record = IngestHistoryRecord(
+            source_system=event.source_system,
+            source_type=source_type,
+            source_id=event.source_id,
+            source_sub_id=event.source_sub_id,
+            trigger_reason=trigger_reason,
+            archive_policy="SKIP",
+            ingest_status="skipped",
+            event_id=event.event_id,
+            payload_sha256=payload_sha256,
+            stats=stats,
+            error_message=reason_code,
+            created_by="qe_archive_worker",
+        )
+        skip_row = self._prepare_record(skip_record, SKIP_REGISTRY_COLUMNS)
+        history_row = self._prepare_record(history_record, INGEST_HISTORY_COLUMNS)
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                self._assert_skip_audit_schema(cur, trigger_reason=trigger_reason)
+                skip_columns = list(skip_row.keys())
+                skip_assignments = ", ".join(
+                    f"{column} = EXCLUDED.{column}"
+                    for column in skip_columns
+                    if column not in {"skip_id", "created_by"}
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO qe_archive.skip_registry ({", ".join(skip_columns)})
+                    VALUES ({", ".join(["%s"] * len(skip_columns))})
+                    ON CONFLICT (source_system, source_type, source_id, (COALESCE(source_sub_id, ''))) DO UPDATE SET
+                        {skip_assignments},
+                        last_seen_at = NOW()
+                    """,
+                    [self._adapt_value(col, skip_row.get(col)) for col in skip_columns],
+                )
+                history_columns = list(history_row.keys())
+                cur.execute(
+                    f"""
+                    INSERT INTO qe_archive.ingest_history ({", ".join(history_columns)})
+                    VALUES ({", ".join(["%s"] * len(history_columns))})
+                    """,
+                    [self._adapt_value(col, history_row.get(col)) for col in history_columns],
+                )
+                cur.execute(
+                    """
+                    UPDATE qe_archive.outbox_event
+                    SET status = 'skipped',
+                        locked_by = NULL,
+                        locked_at = NULL,
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE event_id = %s
+                    """,
+                    (reason_code, event.event_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "skip_outbox_event expected to update exactly one outbox_event "
+                        f"for event_id={event.event_id!r}; updated={cur.rowcount}"
+                    )
 
     def fail_outbox_event(
         self,
@@ -2647,6 +2780,79 @@ class QEArchiveRepository:
             return Json(normalize_json(value), dumps=canonical_json_dumps)
         return value
 
+    def _assert_skip_audit_schema(self, cur: Any, *, trigger_reason: str) -> None:
+        required_by_table = {
+            "skip_registry": {
+                "source_system",
+                "source_type",
+                "source_id",
+                "source_sub_id",
+                "event_type",
+                "archive_policy",
+                "archive_policy_source",
+                "skip_reason",
+                "trigger_reason",
+                "metadata",
+            },
+            "ingest_history": {
+                "source_system",
+                "source_type",
+                "source_id",
+                "source_sub_id",
+                "trigger_reason",
+                "archive_policy",
+                "ingest_status",
+                "stats",
+                "error_message",
+            },
+            "outbox_event": {"event_id", "status", "error_message", "locked_by", "locked_at"},
+        }
+        cur.execute(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'qe_archive'
+              AND table_name = ANY(%s)
+            """,
+            (list(required_by_table),),
+        )
+        observed: dict[str, set[str]] = {table: set() for table in required_by_table}
+        for row in cur.fetchall():
+            table = str(row["table_name"] if isinstance(row, Mapping) else row[0])
+            column = str(row["column_name"] if isinstance(row, Mapping) else row[1])
+            observed.setdefault(table, set()).add(column)
+        missing = {
+            table: sorted(required - observed.get(table, set()))
+            for table, required in required_by_table.items()
+            if required - observed.get(table, set())
+        }
+        if missing:
+            raise RuntimeError(f"qe_archive skip audit schema missing required columns: {missing}")
+
+        cur.execute(
+            """
+            SELECT pg_get_constraintdef(c.oid) AS constraint_def
+            FROM pg_constraint c
+            JOIN pg_namespace n ON n.oid = c.connamespace
+            JOIN pg_class rel ON rel.oid = c.conrelid
+            WHERE n.nspname = 'qe_archive'
+              AND rel.relname = 'ingest_history'
+              AND c.conname = 'ck_qear_ingest_trigger'
+            """
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise RuntimeError("qe_archive.ingest_history constraint ck_qear_ingest_trigger is missing")
+        constraint_text = "\n".join(
+            str(row["constraint_def"] if isinstance(row, Mapping) else row[0])
+            for row in rows
+        )
+        if f"'{trigger_reason}'" not in constraint_text:
+            raise RuntimeError(
+                "qe_archive.ingest_history trigger_reason CHECK does not allow "
+                f"{trigger_reason!r}: {constraint_text}"
+            )
+
     @staticmethod
     def _fetch_dicts(cur: Any) -> list[dict[str, Any]]:
         rows = cur.fetchall()
@@ -2676,6 +2882,7 @@ class QEArchiveRepository:
             if key in seen:
                 continue
             seen.add(key)
+
             cur.execute(
                 """
                 DELETE FROM qe_archive.run_metric
@@ -2690,3 +2897,14 @@ class QEArchiveRepository:
                 """,
                 key,
             )
+
+def _policy_skip_source_type(event_type: str) -> str:
+    if event_type.startswith("paper.daemon."):
+        return "paper_daemon_telemetry"
+    if event_type == "paper.portfolio_run.completed":
+        return "paper_portfolio_run"
+    if event_type == "paper.daily_snapshot.captured":
+        return "paper_daily_snapshot"
+    if event_type == "paper.config.changed":
+        return "paper_config_change"
+    return "outbox_event"

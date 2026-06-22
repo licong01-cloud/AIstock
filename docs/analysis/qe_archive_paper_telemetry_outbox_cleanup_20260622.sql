@@ -1,6 +1,12 @@
 -- BUG-473 manual stop-bleeding cleanup for paper_v2 daemon telemetry outbox rows.
 --
 -- DO NOT run from Codex. This is a production-gated manual DML script for the operator.
+-- DO NOT paste and execute this entire file. Run it statement-by-statement only:
+--   (a) run pre-count/pre-breakdown/safety checks;
+--   (b) type BEGIN manually;
+--   (c) run the DELETE ... RETURNING SELECT and stop;
+--   (d) verify deleted_count/time bounds;
+--   (e) manually type either COMMIT or ROLLBACK.
 -- Scope: qe_archive.outbox_event rows only; no qe.* research events and no paper_v2 source tables.
 -- Incident predicate is intentionally narrow:
 --   source_system = 'paper_v2.daemon'
@@ -54,8 +60,9 @@ WHERE status = 'pending'
   AND event_type NOT LIKE 'paper.daemon.%'
 GROUP BY event_type, source_system, payload->>'routing_class', status;
 
--- 4) Forward cleanup. Review the returned deleted_count/time bounds before COMMIT.
-BEGIN;
+-- 4) Forward cleanup. Manual transaction only. Type BEGIN yourself, then run the
+-- DELETE statement below and STOP before manually typing COMMIT or ROLLBACK.
+-- BEGIN;
 
 WITH deleted AS (
     DELETE FROM qe_archive.outbox_event AS outbox
@@ -76,9 +83,10 @@ SELECT
     MAX(created_at) AS newest_deleted_created_at
 FROM deleted;
 
--- If the deleted_count is unexpected, run ROLLBACK here instead of COMMIT.
+-- STOP HERE. If the deleted_count is unexpected, manually type ROLLBACK.
+-- If the deleted_count is expected, manually type COMMIT.
 -- ROLLBACK;
-COMMIT;
+-- COMMIT;
 
 -- 5) Post-verify: must be zero after COMMIT.
 SELECT

@@ -8,7 +8,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .models import ArchiveJobRecord, ClaimedOutboxEvent
-from .repository import QEArchiveRepository
+from .repository import (
+    PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED,
+    PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY,
+    PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES,
+    PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS,
+    UNSUPPORTED_OUTBOX_EVENT_TYPE,
+    QEArchiveRepository,
+)
 
 
 QE_ARCHIVE_WORKER_ENABLED_ENV = "QE_ARCHIVE_WORKER_ENABLED"
@@ -31,6 +38,7 @@ class ArchiveWorkerRunResult:
     claimed: int = 0
     completed: int = 0
     failed: int = 0
+    skipped: int = 0
     skipped_reason: str | None = None
 
 
@@ -134,15 +142,24 @@ class QEArchiveWorker:
         )
         completed = 0
         failed = 0
+        skipped = 0
         for event in events:
             if self._process_event(event):
                 completed += 1
             else:
                 failed += 1
+
+        policy_events = self._claim_policy_skip_events(limit=max(0, limit - len(events)))
+        for event in policy_events:
+            if self._skip_policy_event(event):
+                skipped += 1
+            else:
+                failed += 1
         return ArchiveWorkerRunResult(
-            claimed=len(events),
+            claimed=len(events) + len(policy_events),
             completed=completed,
             failed=failed,
+            skipped=skipped,
         )
 
     def _process_event(self, event: ClaimedOutboxEvent) -> bool:
@@ -180,3 +197,39 @@ class QEArchiveWorker:
             max_retries=self._max_retries,
         )
         return False
+
+    def _claim_policy_skip_events(self, *, limit: int) -> list[ClaimedOutboxEvent]:
+        if limit <= 0 or not hasattr(self._repository, "skip_outbox_event"):
+            return []
+        # PaperV2 archive ingestion is intentionally deferred for this
+        # throwaway/debug data source; claim these rows only to make that policy
+        # explicit and terminal instead of leaving them pending forever.
+        return self._repository.claim_outbox_events(
+            worker_id=f"{self._worker_id}:policy_skip",
+            limit=limit,
+            source_systems=PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS,
+            routing_class=None,
+            allow_missing_routing_class=False,
+        )
+
+    def _skip_policy_event(self, event: ClaimedOutboxEvent) -> bool:
+        reason_code = _paper_policy_skip_reason(event)
+        self._repository.skip_outbox_event(
+            event,
+            reason_code=reason_code,
+            trigger_reason="realtime",
+        )
+        return True
+
+
+def _paper_policy_skip_reason(event: ClaimedOutboxEvent) -> str:
+    """Return the explicit policy-skip reason for paper outbox rows."""
+
+    routing_class = (event.payload or {}).get("routing_class")
+    if event.event_type.startswith("paper.daemon.") or (
+        event.source_system == "paper_v2.daemon" and routing_class == "telemetry"
+    ):
+        return PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED
+    if event.event_type in PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES:
+        return PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY
+    return UNSUPPORTED_OUTBOX_EVENT_TYPE

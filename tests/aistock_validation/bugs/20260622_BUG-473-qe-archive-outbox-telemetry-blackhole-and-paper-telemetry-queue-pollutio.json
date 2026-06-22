@@ -4,7 +4,13 @@
     "tests/aistock_validation/bugs/20260622_BUG-473-qe-archive-outbox-telemetry-blackhole-and-paper-telemetry-queue-pollutio.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "docs/analysis/qe_archive_outbox_telemetry_blackhole_plan_20260622.md",
-    "docs/analysis/qe_archive_paper_telemetry_outbox_cleanup_20260622.sql"
+    "docs/analysis/qe_archive_paper_telemetry_outbox_cleanup_20260622.sql",
+    "backend/services/paper_trading_v2/daemon/event_log.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/worker.py",
+    "backend/tests/paper_trading_v2/test_daemon_pg_outbox.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/paper_trading_v2/test_daemon_outbox_dev_db.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-473",
@@ -24,10 +30,22 @@
       "timestamp": "2026-06-22T07:22:37.811343Z"
     },
     {
-      "timestamp": "2026-06-22T07:45:00Z",
-      "actor": "codex",
       "action": "plan_scope_expanded",
-      "note": "Plan-only scope expanded for BUG-473 design document and gated paper telemetry cleanup SQL; no implementation or production DML executed."
+      "actor": "codex",
+      "note": "Plan-only scope expanded for BUG-473 design document and gated paper telemetry cleanup SQL; no implementation or production DML executed.",
+      "timestamp": "2026-06-22T07:45:00Z"
+    },
+    {
+      "action": "implementation_scope_expanded",
+      "actor": "codex",
+      "note": "Tier2 approved BUG-473 design; scope expanded for telemetry PG suppression, outbox skip terminal state, and targeted tests.",
+      "timestamp": "2026-06-22T08:20:00Z"
+    },
+    {
+      "action": "implementation_scope_expanded",
+      "actor": "codex",
+      "note": "Added dev-DB daemon outbox integration test to keep the opt-in debug PG telemetry sink contract explicit after default telemetry suppression.",
+      "timestamp": "2026-06-22T09:15:00Z"
     }
   ],
   "evidence_uris": [],
@@ -74,5 +92,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "plan_only_until_tier2_design_review"
+  "workflow_gate": "implementation_in_progress"
 }

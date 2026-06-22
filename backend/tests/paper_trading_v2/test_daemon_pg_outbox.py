@@ -9,13 +9,13 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from backend.services.paper_trading_v2.daemon.event_log import (
     ARCHIVE_EVENTS,
     DAEMON_EVENTS,
+    PAPER_DAEMON_TELEMETRY_PG_SINK_ENV,
     PAPER_DAEMON_EVENT_TYPE_NAMES,
     PAPER_DAEMON_SOURCE_SYSTEM,
     DaemonEventLog,
@@ -86,7 +86,31 @@ def _make_pg_provider(
 # ---------------------------------------------------------------------------
 
 
-def test_emit_writes_pg_outbox_when_available(tmp_path) -> None:
+def test_emit_telemetry_default_is_local_only_no_pg_outbox(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, raising=False)
+    executions: list[tuple[str, tuple]] = []
+    provider, state = _make_pg_provider(executions)
+
+    log = DaemonEventLog(
+        db_path=tmp_path / "events.db",
+        portfolio_id="pf_x",
+        package_id="pkg_x",
+        run_id="run_t1",
+        pg_conn_provider=provider,
+    )
+
+    sample_payload = {"k": "v"}
+    for event_type in DaemonEventType:
+        log.record(event_type, sample_payload)
+
+    assert state["calls"] == 0
+    assert executions == []
+    assert log.count() == 9
+    assert log.count_unsynced() == 0
+
+
+def test_emit_writes_pg_outbox_only_when_debug_sink_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     executions: list[tuple[str, tuple]] = []
     provider, state = _make_pg_provider(executions)
 
@@ -105,7 +129,7 @@ def test_emit_writes_pg_outbox_when_available(tmp_path) -> None:
     assert state["calls"] == 9, "expected one PG insert per of 9 event types"
     assert len(executions) == 9
 
-    # Each insert must hit qe_archive.outbox_event with the canonical name.
+    # Each debug-sink insert must hit qe_archive.outbox_event with the canonical name.
     for sql, params in executions:
         assert "INSERT INTO qe_archive.outbox_event" in sql
         assert "ON CONFLICT (event_id) DO NOTHING" in sql
@@ -130,7 +154,8 @@ def test_emit_writes_pg_outbox_when_available(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_emit_falls_back_to_sqlite_when_pg_unavailable(tmp_path, caplog) -> None:
+def test_emit_falls_back_to_sqlite_when_pg_unavailable(tmp_path, caplog, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     provider, _state = _make_pg_provider(
         executions=[],
         raise_on_call=RuntimeError("PG down"),
@@ -161,6 +186,7 @@ def test_emit_falls_back_to_sqlite_when_pg_unavailable(tmp_path, caplog) -> None
 
 
 def test_emit_propagates_when_both_pg_and_sqlite_fail(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     provider, _state = _make_pg_provider(
         executions=[],
         raise_on_call=RuntimeError("PG dead"),
@@ -192,7 +218,8 @@ def test_emit_propagates_when_both_pg_and_sqlite_fail(tmp_path, monkeypatch) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_replay_unsynced_on_startup_pushes_to_pg(tmp_path) -> None:
+def test_replay_unsynced_on_startup_pushes_to_pg_when_debug_sink_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     # Phase 1: emit 3 events with PG broken — they all land in SQLite unsynced.
     broken_provider, _ = _make_pg_provider(
         executions=[],
@@ -218,9 +245,41 @@ def test_replay_unsynced_on_startup_pushes_to_pg(tmp_path) -> None:
 
     counters = log.replay_unsynced_on_startup()
 
-    assert counters == {"pushed": 3, "skipped": 0, "scanned": 3}
+    assert counters == {"pushed": 3, "skipped": 0, "scanned": 3, "telemetry_skipped": 0}
     assert state["calls"] == 3
     assert len(executions) == 3
+    assert log.count_unsynced() == 0
+
+
+def test_replay_does_not_backfill_legacy_unsynced_telemetry(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
+    broken_provider, _ = _make_pg_provider(
+        executions=[],
+        raise_on_call=RuntimeError("PG initially down"),
+    )
+    log = DaemonEventLog(
+        db_path=tmp_path / "events.db",
+        portfolio_id="pf",
+        package_id="pkg",
+        run_id="run_t4b",
+        pg_conn_provider=broken_provider,
+    )
+    log.record(DaemonEventType.RUN_STARTED, {})
+    log.record(DaemonEventType.INTENT_CREATED, {})
+    log.record(DaemonEventType.RUN_COMPLETED, {})
+    assert log.count_unsynced() == 3
+
+    executions: list[tuple[str, tuple]] = []
+    healthy_provider, state = _make_pg_provider(executions)
+    log._pg_conn_provider = healthy_provider  # type: ignore[attr-defined]
+    log._pg_disabled_reason = None
+    monkeypatch.delenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, raising=False)
+
+    counters = log.replay_unsynced_on_startup()
+
+    assert counters == {"pushed": 0, "skipped": 3, "scanned": 3, "telemetry_skipped": 3}
+    assert state["calls"] == 0
+    assert executions == []
     assert log.count_unsynced() == 0
 
 
@@ -229,7 +288,8 @@ def test_replay_unsynced_on_startup_pushes_to_pg(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_replay_skips_individual_pg_failures(tmp_path) -> None:
+def test_replay_skips_individual_pg_failures(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     broken_provider, _ = _make_pg_provider(
         executions=[],
         raise_on_call=RuntimeError("PG initially down"),
@@ -338,11 +398,12 @@ def test_archive_events_get_routing_class_archive() -> None:
         assert _routing_class_for(et) == "archive"
 
 
-def test_emit_daemon_event_has_routing_class_telemetry(tmp_path) -> None:
+def test_emit_daemon_event_has_routing_class_telemetry(tmp_path, monkeypatch) -> None:
     """A single paper.daemon.* emit must stamp routing_class='telemetry' in
     the outbox payload (top-level, matching INT-5b's payload->>'routing_class'
     query shape).
     """
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     executions: list[tuple[str, tuple]] = []
     provider, _state = _make_pg_provider(executions)
 
@@ -363,10 +424,11 @@ def test_emit_daemon_event_has_routing_class_telemetry(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("event_type", list(DaemonEventType))
-def test_emit_all_9_daemon_events_get_telemetry(tmp_path, event_type) -> None:
+def test_emit_all_9_daemon_events_get_telemetry(tmp_path, event_type, monkeypatch) -> None:
     """Every one of the 9 canonical paper.daemon.* event types must stamp
     routing_class='telemetry'.
     """
+    monkeypatch.setenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV, "1")
     executions: list[tuple[str, tuple]] = []
     provider, _state = _make_pg_provider(executions)
 

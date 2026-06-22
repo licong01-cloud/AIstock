@@ -136,6 +136,7 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "claim_outbox_events",
         "complete_outbox_event",
         "fail_outbox_event",
+        "skip_outbox_event",
         "create_archive_job",
         "complete_archive_job",
         "fail_archive_job",
@@ -1810,6 +1811,233 @@ def test_repository_claim_outbox_events_filters_archive_routing_class() -> None:
     assert "AND event_type = ANY(%s)" in sql
     assert "payload->>'routing_class' = %s OR NOT (payload ? 'routing_class')" in sql
     assert params == [["qe.loop.completed"], "archive", 3, "worker_1"]
+
+
+def test_repository_claim_outbox_events_can_filter_source_systems() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.claim_outbox_events(
+        worker_id="worker_1",
+        limit=5,
+        source_systems=("paper_v2.daemon", "paper_v2"),
+        routing_class=None,
+    )
+
+    sql, params = executed[-1]
+    assert "AND source_system = ANY(%s)" in sql
+    assert "payload->>'routing_class' = %s" not in sql
+    assert params == [["paper_v2.daemon", "paper_v2"], 5, "worker_1"]
+
+
+def test_outbox_skipped_status_is_not_claimed_or_counted_as_active() -> None:
+    claim_source = inspect.getsource(QEArchiveRepository.claim_outbox_events)
+    summary_source = inspect.getsource(QEArchiveRepository.get_archive_summary)
+
+    assert "WHERE status = 'pending'" in claim_source
+    assert "status = 'pending'" in summary_source
+    assert "status IN ('pending', 'processing')" in summary_source
+    assert "status = 'skipped'" not in claim_source
+    assert "status IN ('pending', 'processing', 'skipped')" not in summary_source
+
+
+def test_worker_skips_paper_v2_archive_events_with_audit_reason() -> None:
+    """PaperV2 archive handler registration is deferred because paper_v2 is
+    throwaway debug data; those archive rows must become audited skips instead
+    of permanent pending blackholes.
+    """
+
+    event = ClaimedOutboxEvent(
+        event_id="evt_paper",
+        event_type="paper.portfolio_run.completed",
+        source_system="paper_v2",
+        source_id="prun_1",
+        source_sub_id="prun_1",
+        payload={"routing_class": "archive", "run_id": "prun_1"},
+    )
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.claims: list[dict] = []
+            self.skipped: list[tuple[ClaimedOutboxEvent, str, str]] = []
+
+        def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.claims.append(dict(kwargs))
+            if kwargs.get("source_systems") == ("paper_v2.daemon", "paper_v2"):
+                return [event]
+            return []
+
+        def skip_outbox_event(self, event, *, reason_code, trigger_reason="realtime"):  # type: ignore[no-untyped-def]
+            self.skipped.append((event, reason_code, trigger_reason))
+
+    repository = FakeRepository()
+    worker = QEArchiveWorker(
+        repository=repository,  # type: ignore[arg-type]
+        enabled=True,
+        handlers={"qe.loop.completed": lambda item: ArchiveWorkerEventResult(success=True)},
+    )
+
+    result = worker.run_once(limit=2)
+
+    assert result.claimed == 1
+    assert result.completed == 0
+    assert result.failed == 0
+    assert result.skipped == 1
+    assert repository.claims[1]["routing_class"] is None
+    assert repository.claims[1]["source_systems"] == ("paper_v2.daemon", "paper_v2")
+    assert repository.skipped == [(event, "paper_v2_archive_deferred_throwaway", "realtime")]
+
+
+def test_worker_skips_unsupported_paper_outbox_events_loudly() -> None:
+    event = ClaimedOutboxEvent(
+        event_id="evt_unknown",
+        event_type="paper_v2.coldstart_sentinel",
+        source_system="paper_v2",
+        source_id="run_1",
+        source_sub_id="fill_1",
+        payload={"routing_class": "telemetry"},
+    )
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.skipped: list[tuple[str, str]] = []
+
+        def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            if kwargs.get("source_systems") == ("paper_v2.daemon", "paper_v2"):
+                return [event]
+            return []
+
+        def skip_outbox_event(self, event, *, reason_code, trigger_reason="realtime"):  # type: ignore[no-untyped-def]
+            self.skipped.append((event.event_id, reason_code))
+
+    repository = FakeRepository()
+    result = QEArchiveWorker(
+        repository=repository,  # type: ignore[arg-type]
+        enabled=True,
+        handlers={"qe.loop.completed": lambda item: ArchiveWorkerEventResult(success=True)},
+    ).run_once(limit=1)
+
+    assert result.skipped == 1
+    assert repository.skipped == [("evt_unknown", "unsupported_outbox_event_type")]
+
+
+def test_repository_skip_outbox_event_writes_skip_history_and_terminal_status() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class FakeCursor:
+        description = [("table_name",), ("column_name",)]
+        rowcount = 1
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+            if "UPDATE qe_archive.outbox_event" in sql:
+                self.rowcount = 1
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            last_sql = executed[-1][0]
+            if "information_schema.columns" in last_sql:
+                return [
+                    ("skip_registry", "source_system"),
+                    ("skip_registry", "source_type"),
+                    ("skip_registry", "source_id"),
+                    ("skip_registry", "source_sub_id"),
+                    ("skip_registry", "event_type"),
+                    ("skip_registry", "archive_policy"),
+                    ("skip_registry", "archive_policy_source"),
+                    ("skip_registry", "skip_reason"),
+                    ("skip_registry", "trigger_reason"),
+                    ("skip_registry", "metadata"),
+                    ("ingest_history", "source_system"),
+                    ("ingest_history", "source_type"),
+                    ("ingest_history", "source_id"),
+                    ("ingest_history", "source_sub_id"),
+                    ("ingest_history", "trigger_reason"),
+                    ("ingest_history", "archive_policy"),
+                    ("ingest_history", "ingest_status"),
+                    ("ingest_history", "stats"),
+                    ("ingest_history", "error_message"),
+                    ("outbox_event", "event_id"),
+                    ("outbox_event", "status"),
+                    ("outbox_event", "error_message"),
+                    ("outbox_event", "locked_by"),
+                    ("outbox_event", "locked_at"),
+                ]
+            if "ck_qear_ingest_trigger" in last_sql:
+                return [
+                    (
+                        "CHECK ((trigger_reason = ANY (ARRAY['realtime'::text, "
+                        "'backfill'::text, 'retry'::text, 'manual'::text, "
+                        "'rebootstrap'::text])))",
+                    )
+                ]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    event = ClaimedOutboxEvent(
+        event_id="evt_paper",
+        event_type="paper.portfolio_run.completed",
+        source_system="paper_v2",
+        source_id="prun_1",
+        source_sub_id="prun_1",
+        payload={"routing_class": "archive"},
+    )
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+
+    repository.skip_outbox_event(
+        event,
+        reason_code="paper_v2_archive_deferred_throwaway",
+        trigger_reason="realtime",
+    )
+
+    sql_text = "\n".join(sql for sql, _ in executed)
+    assert "INSERT INTO qe_archive.skip_registry" in sql_text
+    assert "INSERT INTO qe_archive.ingest_history" in sql_text
+    assert "UPDATE qe_archive.outbox_event" in sql_text
+    assert "SET status = 'skipped'" in sql_text
+    flattened_params = repr([params for _, params in executed])
+    assert "paper_v2_throwaway_policy" in flattened_params
+    assert "paper_v2_archive_deferred_throwaway" in flattened_params
+    assert "skipped" in flattened_params
 
 
 def test_worker_service_archives_loop_outbox_event_through_backfill_handler() -> None:
