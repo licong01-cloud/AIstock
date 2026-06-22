@@ -31,7 +31,7 @@ const FIELD_LABELS: Record<string, string> = {
   source_ref: "来源引用",
   server: "服务",
   status: "状态",
-  task_id: "任务",
+  task_id: "Task Id",
   title: "标题",
   tool: "工具",
   tool_name: "工具",
