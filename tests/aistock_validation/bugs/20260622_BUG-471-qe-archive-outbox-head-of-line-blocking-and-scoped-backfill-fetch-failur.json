@@ -1,6 +1,13 @@
 {
   "actual": "Unified qe_archive outbox has 21k pending paper_v2 telemetry events and worker is not draining; QE loop archive events are blocked; UI archive request fails at fetch/network layer; selection preview returns unscoped global candidates despite task_ids input.",
   "allowed_write_scope": [
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/services/qe_archive/event_capture.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/worker.py",
+    "backend/tests/qe_archive/test_manual_ingestion_selection.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "frontend/src/lib/qe-archive/api.ts",
     "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +27,27 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-ff5d9d147d1c",
       "timestamp": "2026-06-22T05:09:22.221861Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "timestamp": "2026-06-22T05:33:48Z",
+      "old_scope": [
+        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "new_scope": [
+        "backend/services/qe_archive/backfill_service.py",
+        "backend/services/qe_archive/event_capture.py",
+        "backend/services/qe_archive/repository.py",
+        "backend/services/qe_archive/worker.py",
+        "backend/tests/qe_archive/test_manual_ingestion_selection.py",
+        "backend/tests/test_qe_archive_repository_static.py",
+        "frontend/src/lib/qe-archive/api.ts",
+        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "note": "Targeted read-only evidence narrowed BUG-471 fix to qe_archive scoped-selection fallback, outbox archive-routing claim/health observability, and QE Archive frontend API error reporting; no RA/QE training scope."
     }
   ],
   "evidence_uris": [],

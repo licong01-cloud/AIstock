@@ -370,6 +370,7 @@ class QEArchiveBackfillService:
     def _build_candidates(self, options: QEArchiveBackfillOptions, *, source: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         seen_sources: set[tuple[str, str | None, str | None]] = set()
+        has_explicit_scope = _has_explicit_selection(options)
 
         def append_candidate(candidate: dict[str, Any]) -> None:
             payload = dict(candidate.get("payload") or {})
@@ -430,6 +431,9 @@ class QEArchiveBackfillService:
             for missing_index in requested_indices:
                 if missing_index not in found_indices:
                     append_candidate(_missing_loop_candidate(options.task_id, missing_index))
+
+        if has_explicit_scope:
+            return candidates
 
         if candidates:
             return candidates
@@ -694,6 +698,17 @@ def _dedupe_non_empty(values: Sequence[str]) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def _has_explicit_selection(options: QEArchiveBackfillOptions) -> bool:
+    return bool(
+        _dedupe_non_empty(options.experiment_ids)
+        or _dedupe_non_empty(options.task_ids)
+        or _dedupe_non_empty(options.loop_ids)
+        or str(options.task_id or "").strip()
+        or options.loop_index is not None
+        or _dedupe_positive_ints(options.loop_indices or ())
+    )
 
 
 def _int_or_none(value: Any) -> int | None:

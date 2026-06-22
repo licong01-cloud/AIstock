@@ -7,12 +7,25 @@ const QE_ARCHIVE_BACKFILL_CONFIRM_TEXT = "QE_ARCHIVE_BACKFILL";
 export class QEArchiveApiError extends Error {
   status: number;
   raw: unknown;
+  endpoint?: string;
+  method?: string;
+  elapsedMs?: number;
+  reasonCode?: string;
 
-  constructor(message: string, status: number, raw: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    raw: unknown,
+    context: { endpoint?: string; method?: string; elapsedMs?: number; reasonCode?: string } = {},
+  ) {
     super(message);
     this.name = "QEArchiveApiError";
     this.status = status;
     this.raw = raw;
+    this.endpoint = context.endpoint;
+    this.method = context.method;
+    this.elapsedMs = context.elapsedMs;
+    this.reasonCode = context.reasonCode;
   }
 }
 
@@ -20,7 +33,30 @@ export type ArchiveSummary = {
   run_count?: number;
   research_valid_counts?: Record<string, number>;
   pending_outbox_count?: number;
+  pending_archive_outbox_count?: number;
+  pending_unrouted_outbox_count?: number;
   outbox_status_counts?: Record<string, number>;
+  outbox_source_routing_counts?: Array<{
+    source_system?: string | null;
+    routing_class?: string | null;
+    status?: string | null;
+    count?: number | null;
+    oldest_created_at?: string | null;
+  }>;
+  outbox_oldest_pending?: Array<{
+    event_id?: string | null;
+    event_type?: string | null;
+    source_system?: string | null;
+    source_id?: string | null;
+    source_sub_id?: string | null;
+    routing_class?: string | null;
+    status?: string | null;
+    next_retry_at?: string | null;
+    created_at?: string | null;
+    locked_by?: string | null;
+    locked_at?: string | null;
+    error_message?: string | null;
+  }>;
   archive_job_status_counts?: Record<string, number>;
   latest_archived_at?: string | null;
 };
@@ -392,17 +428,64 @@ function errorMessage(payload: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
+function reasonCode(payload: unknown): string | undefined {
+  if (!isObject(payload)) return undefined;
+  if (typeof payload.reason_code === "string") return payload.reason_code;
+  if (isObject(payload.detail) && typeof payload.detail.reason_code === "string") return payload.detail.reason_code;
+  if (isObject(payload.error) && typeof payload.error.reason_code === "string") return payload.error.reason_code;
+  return undefined;
+}
+
+function endpointErrorMessage(path: string, method: string, elapsedMs: number, message: string, code?: string): string {
+  const reason = code ? ` reason_code=${code}` : "";
+  return `${method} ${API_BASE}${path} failed after ${elapsedMs}ms${reason}: ${message}`;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-  });
+  const method = String(init?.method || "GET").toUpperCase();
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
+  } catch (error) {
+    const elapsedMs = Date.now() - startedAt;
+    const message = error instanceof Error ? error.message : String(error || "network_error");
+    throw new QEArchiveApiError(
+      endpointErrorMessage(path, method, elapsedMs, message, "fetch_failed"),
+      0,
+      { reason_code: "fetch_failed", error: message },
+      { endpoint: `${API_BASE}${path}`, method, elapsedMs, reasonCode: "fetch_failed" },
+    );
+  }
+  const elapsedMs = Date.now() - startedAt;
   const text = await response.text();
-  const payload = text ? JSON.parse(text) as unknown : {};
-  if (!response.ok) throw new QEArchiveApiError(errorMessage(payload, response.status), response.status, payload);
+  let payload: unknown = {};
+  try {
+    payload = text ? JSON.parse(text) as unknown : {};
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "invalid_json");
+    throw new QEArchiveApiError(
+      endpointErrorMessage(path, method, elapsedMs, message, "invalid_json"),
+      response.status,
+      { reason_code: "invalid_json", raw_text: text },
+      { endpoint: `${API_BASE}${path}`, method, elapsedMs, reasonCode: "invalid_json" },
+    );
+  }
+  if (!response.ok) {
+    const code = reasonCode(payload);
+    throw new QEArchiveApiError(
+      endpointErrorMessage(path, method, elapsedMs, errorMessage(payload, response.status), code),
+      response.status,
+      payload,
+      { endpoint: `${API_BASE}${path}`, method, elapsedMs, reasonCode: code },
+    );
+  }
   return payload as T;
 }
 

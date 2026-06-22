@@ -72,6 +72,7 @@ class QEArchiveEventCapture:
         event_payload = dict(payload or {})
         event_payload.setdefault("task_id", task_id)
         event_payload.setdefault("loop_id", loop_id)
+        event_payload.setdefault("routing_class", "archive")
         event_payload.setdefault("archive_policy", archive_policy)
         event_payload.setdefault("archive_policy_source", archive_policy_source)
         event_payload.setdefault("trigger_reason", trigger_reason)
@@ -115,6 +116,7 @@ class QEArchiveEventCapture:
     ) -> dict[str, Any]:
         event_payload = dict(payload or {})
         event_payload.setdefault("experiment_id", experiment_id)
+        event_payload.setdefault("routing_class", "archive")
         event_payload.setdefault("archive_policy", archive_policy)
         event_payload.setdefault("archive_policy_source", archive_policy_source)
         event_payload.setdefault("trigger_reason", trigger_reason)
