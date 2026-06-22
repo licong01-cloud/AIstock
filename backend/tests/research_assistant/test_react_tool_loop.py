@@ -129,6 +129,107 @@ def test_litellm_compatible_messages_wrap_legacy_tool_messages() -> None:
     assert all(item["role"] != "tool" or item.get("tool_call_id") for item in messages)
 
 
+class _SeededMultiToolProvider:
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        payloads = {
+            "qe_archive_query_promotion_candidates": {
+                "response_mode": "qe_warehouse_business_summary",
+                "source": "qe_archive_read_adapter",
+                "as_of": "2026-06-17",
+                "items": [{"factor_set_hash": "fs_qe_promoted", "passes_gate": True}],
+            },
+            "strategy_governance_list_packages": {
+                "response_mode": "summary",
+                "source": "research_assistant_catalog_summary_adapter",
+                "as_of": "2026-06-17",
+                "items": [{"package_id": "pkg_qe"}],
+            },
+            "strategy_governance_get_paper_readiness": {
+                "response_mode": "summary",
+                "source": "research_assistant_catalog_summary_adapter",
+                "as_of": "2026-06-17",
+                "items": [{"package_id": "pkg_qe", "paper_ready": True}],
+            },
+        }
+        payload = payloads[call.tool_name]
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="succeeded",
+            payload_json=payload,
+            source_refs=[str(payload["source"])],
+            as_of=str(payload["as_of"]),
+            executed=True,
+        )
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("seeded read-only route candidates must not request preflight")
+
+
+class _SeededMultiToolSynthesisLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls += 1
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        assert "graph_context" in joined
+        assert "qe_archive_query_promotion_candidates" in joined
+        assert "strategy_governance_list_packages" in joined
+        assert "strategy_governance_get_paper_readiness" in joined
+        return ModelTurn(
+            content=(
+                "Bottom-line：QE 候选可以先沉淀成策略包，再进入 Paper v2 验证；"
+                "综合看应先核对 passes_gate 和 paper_ready。"
+                "来源 graph_context，截至 LIVE；来源 qe_archive_read_adapter，截至 2026-06-17；"
+                "来源 research_assistant_catalog_summary_adapter，截至 2026-06-17。"
+            ),
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_seeded_route_candidates_execute_multiple_tools_and_synthesize_with_graph_context() -> None:
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "QE成果怎么利用"}],
+        model_complete=_SeededMultiToolSynthesisLlm().complete,
+        mcp_provider=_SeededMultiToolProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(server_key="aistock-qe", tool_name="qe_archive_query_promotion_candidates", status="enabled"),
+            ToolCatalogEntry(server_key="aistock-trading-ops", tool_name="strategy_governance_list_packages", status="enabled"),
+            ToolCatalogEntry(server_key="aistock-trading-ops", tool_name="strategy_governance_get_paper_readiness", status="enabled"),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=6, user_message="QE成果怎么利用"),
+        seeded_tool_calls=[
+            McpToolCall(server_key="aistock-qe", tool_name="qe_archive_query_promotion_candidates", stable_call_id="route:qe"),
+            McpToolCall(server_key="aistock-trading-ops", tool_name="strategy_governance_list_packages", stable_call_id="route:packages"),
+            McpToolCall(server_key="aistock-trading-ops", tool_name="strategy_governance_get_paper_readiness", stable_call_id="route:paper"),
+        ],
+        initial_tool_results=[
+            McpToolResult(
+                server_key="research-assistant",
+                tool_name="graph_context",
+                status="succeeded",
+                payload_json={"response_mode": "graph_context", "graph_context": {"relation_refs": [{"relation_type": "promotes_to"}]}, "as_of": "LIVE"},
+                source_refs=["graph_context"],
+                as_of="LIVE",
+                executed=True,
+            )
+        ],
+    )
+
+    assert result.stopped_reason == "final_answer"
+    assert result.evidence_guard.allowed is True
+    assert len(result.tool_calls) == 3
+    assert len(result.tool_results) == 4
+    assert "Bottom-line" in result.final_text
+    assert any(step.get("preloaded_tool_result_count") == 1 for step in result.trace_steps)
+
+
 class _SectionOnlyStockProvider:
     result = McpToolResult(
         server_key="aistock-stock-analysis",
@@ -206,7 +307,7 @@ class _Bug413RegeneratingLlm:
         return ModelTurn(
             content=(
                 "国城矿业综合分析：基本情况和近期走势只能基于已返回行情、资金流证据谨慎判断；"
-                "未来趋势需继续跟踪基本面和资金变化。"
+                "未来趋势只给驱动、情景和风险，不预测方向，也不构成投资建议。"
                 "来源 stock-ref:quote:000688，截至 2026-06-16；"
                 "来源 stock-ref:fund_flow:000688，截至 2026-06-16。"
             ),

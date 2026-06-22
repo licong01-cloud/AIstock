@@ -92,10 +92,12 @@ from .skill_library import (
     skill_library_plan_digest,
 )
 from .react_grounding import (
+    EvidenceGuardDecision,
     McpToolCall,
     McpToolResult,
     ModelTurn,
     ReactGroundingConfig,
+    ReactGroundingResult,
     ToolCatalogEntry,
     ToolGateDecision,
     run_react_grounding_loop,
@@ -119,7 +121,7 @@ from .runtime_config import (
     RuntimeConfigSnapshot,
     load_runtime_config,
 )
-from .domain_ontology import DOMAIN_SPECS, domain_prompt_key
+from .domain_ontology import DOMAIN_SPECS, McpDomain, domain_prompt_key
 from .mcp_catalog_sync import (
     canonicalize_server_key,
     default_mcp_servers,
@@ -132,7 +134,7 @@ from .mcp_catalog_sync import (
     workflow_capabilities as catalog_workflow_capabilities,
 )
 from .semantic_tool_planner import SemanticToolPlan, SemanticToolPlanner
-from .tool_router import route_request
+from .tool_router import route_request, score_domains, select_tool
 from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
 from .agent_teams.models import WorkerTask
 from .qe_autonomy import AutonomousEvolutionProviders, AutonomousEvolutionRuntime, request_from_mapping
@@ -330,9 +332,30 @@ class _ServiceReactMcpProvider:
             if key not in payload or payload.get(key) in (None, "", [], {}):
                 payload[key] = value
 
+    def _route_for_call(self, call: McpToolCall) -> dict[str, Any]:
+        route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+        candidates = route.get("route_candidates") if isinstance(route.get("route_candidates"), list) else []
+        for candidate in candidates:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("server_key") == call.server_key
+                and candidate.get("tool_name") == call.tool_name
+            ):
+                return dict(candidate)
+        route_copy = dict(route)
+        call_domain = self.service._domain_for_mcp_tool(call.tool_name) or route_copy.get("domain") or ""
+        route_copy.update(
+            {
+                "server_key": call.server_key,
+                "tool_name": call.tool_name,
+                "domain": call_domain,
+            }
+        )
+        return route_copy
+
     def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         try:
-            route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+            route = self._route_for_call(call)
             payload = dict(call.payload_json)
             payload.setdefault("request", self.user_message)
             payload.setdefault("route", route)
@@ -427,7 +450,7 @@ class _ServiceReactMcpProvider:
 
     def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
         try:
-            route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
+            route = self._route_for_call(call)
             payload = dict(call.payload_json)
             payload.setdefault("request", self.user_message)
             payload.setdefault("route", route)
@@ -707,15 +730,39 @@ AGENTIC_SYNTHESIS_FORBIDDEN_MARKERS = (
     "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55\u540c\u6b65",
     "\u672c\u8f6e\u672a\u6267\u884c backfill",
 )
+GRAPH_FIRST_RELATION_TERMS = (
+    "关系",
+    "怎么用",
+    "如何用",
+    "怎样用",
+    "怎么利用",
+    "如何利用",
+    "怎么接",
+    "如何接",
+    "怎么流转",
+    "如何流转",
+    "链路",
+    "路径",
+    "打通",
+    "串起来",
+    "relationship",
+    "how to use",
+    "use path",
+    "flow",
+    "lineage",
+)
+GRAPH_CONTEXT_SOURCE = "graph_context"
+GRAPH_CONTEXT_AS_OF = "LIVE"
 AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
-    "You are AIstock Research Assistant. Use the audited tool results to answer the user's exact question. "
-    "For business evidence answers, do not use fixed status-summary templates, do not dump raw JSON, "
-    "and do not mention internal route names, server_key, tool_name, summary_first, or mcp_execution_result. "
-    "Every factual or numeric claim must cite an actual tool source value and actual as_of/trade_date/report_period value returned by tools. "
-    "When a tool observation includes citation_options, cite those exact source/as_of strings instead of paraphrasing the source. "
-    "If the evidence says zero/none, state that honestly and briefly instead of listing all rows. "
-    "Write the final answer in the user's language. For write or confirmation requests, only describe the approval/preflight boundary. "
-    "Do not invent facts, placeholders, source values, dates, or actions."
+    "你是 AIstock 的研究助理 Agent。你是懂这套系统的分析师，不是复述单个工具输出的转述器。"
+    "先理解用户真实意图，再自主收集必要信息并综合分析；不要只调一个工具就交差。"
+    "跨模块、怎么用、什么关系、如何流转的问题必须先读 graph_context 理清关系，再按需调用多个只读工具。"
+    "回答先给 1-2 句 bottom-line，再给支撑细节；多源结果要合成一个判断，不要按每个数据源模板罗列。"
+    "每个事实或数字必须引用实际工具或图谱上下文中的 source/as_of/trade_date/report_period。"
+    "涉及未来/预测时只讲驱动、情景、风险和边界，不做涨跌或方向预测，不构成投资建议。"
+    "写入、提交、训练、晋升和生产变更只说明审批/预检边界，不能绕过确认门。"
+    "中文人话作答，禁 raw JSON、server_key、tool_name、reason_code、summary_first、mcp_execution_result 等内部行话。"
+    "不要编造事实、占位符、来源、日期或动作。"
 )
 
 
@@ -3989,21 +4036,30 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "questions": list(route_decision.get("clarification_questions") or []),
                 "default_collapsed": False,
             }
-        llm_result, messages, react_result = self._complete_chat_with_react_grounding(
+        if self._should_run_react_grounding(
             user_message=data.message,
-            conversation_id=conversation_id,
-            task=task,
-            context_pack=context_pack,
-            messages=messages,
-            first_llm_result=llm_result,
             cards=cards,
-            model_profile=model_profile,
-            budget_plan=budget_plan,
-            runtime_config=runtime_config,
+            context_pack=context_pack,
+            first_llm_result=llm_result,
             mode_decision=mode_decision,
-            function_tools=function_tools,
-            function_tool_registry=function_tool_registry,
-        )
+        ):
+            llm_result, messages, react_result = self._complete_chat_with_react_grounding(
+                user_message=data.message,
+                conversation_id=conversation_id,
+                task=task,
+                context_pack=context_pack,
+                messages=messages,
+                first_llm_result=llm_result,
+                cards=cards,
+                model_profile=model_profile,
+                budget_plan=budget_plan,
+                runtime_config=runtime_config,
+                mode_decision=mode_decision,
+                function_tools=function_tools,
+                function_tool_registry=function_tool_registry,
+            )
+        else:
+            react_result = self._empty_react_grounding_result(llm_result)
         cards["react_grounding"] = self._react_grounding_card(react_result)
         self._populate_cards_from_react_program_error(cards, react_result, task["task_id"])
         trace = self.create_trace_event(
@@ -4487,6 +4543,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "evidence_refs": list(item.get("evidence_refs") or [])[:4],
                 }
             )
+        graph_sources = ["graph_context"] if compact_relations else []
+        graph_as_of = "LIVE" if compact_relations else None
         return {
             "memory_route": {
                 "route_reason": memory_route.get("route_reason"),
@@ -4495,6 +4553,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "memory_items": compact_memories,
             "graph_context": {
                 "route_reason": graph_context.get("route_reason"),
+                "source": graph_sources[0] if graph_sources else None,
+                "source_refs": graph_sources,
+                "as_of": graph_as_of,
                 "seed_entity_keys": list(graph_context.get("seed_entity_keys") or [])[:12],
                 "neighbor_entity_keys": list(graph_context.get("neighbor_entity_keys") or [])[:12],
                 "relation_refs": compact_relations,
@@ -4692,11 +4753,162 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if route.get("requires_clarification"):
                 return route
             if route.get("semantic_status") == "no_tool":
-                return self._agentic_read_route_override(user_message, route)
+                route = self._agentic_read_route_override(user_message, route)
+                return self._with_agentic_route_candidates(user_message, route)
             if route.get("server_key") and route.get("tool_name"):
-                return self._agentic_read_route_override(user_message, self._canonicalize_mcp_route(route))
+                route = self._agentic_read_route_override(user_message, self._canonicalize_mcp_route(route))
+                return self._with_agentic_route_candidates(user_message, route)
         legacy_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
-        return self._agentic_read_route_override(user_message, legacy_route)
+        legacy_route = self._agentic_read_route_override(user_message, legacy_route)
+        return self._with_agentic_route_candidates(user_message, legacy_route)
+
+    def _with_agentic_route_candidates(self, user_message: str, route: dict[str, Any]) -> dict[str, Any]:
+        route_card = dict(route)
+        route_card.setdefault("request", user_message)
+        candidates = self._agentic_route_candidates(user_message, route_card)
+        allow_multi_tool = self._should_seed_multi_tool_route(user_message, route_card, candidates)
+        if candidates:
+            for candidate in candidates:
+                candidate.setdefault("request", user_message)
+            route_card["route_candidates"] = candidates
+            route_card["agentic_route_policy"] = {
+                "mode": "sorted_candidate_seeds",
+                "primary_seed": candidates[0]["route_key"],
+                "allow_multi_tool": allow_multi_tool,
+                "legacy_fallback_preserved": True,
+            }
+        if self._should_prioritize_graph_context(user_message):
+            route_card["graph_first"] = True
+            route_card["graph_first_reason"] = "cross_module_or_relationship_question"
+        return route_card
+
+    def _agentic_route_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
+        limit = min(6, max(1, self.configured_limit("graph_summary_paths")))
+        candidates: list[dict[str, Any]] = []
+        lower = user_message.lower()
+        graph_first_qe = "qe" in lower and self._should_prioritize_graph_context(user_message)
+        skip_primary_for_graph_synthesis = graph_first_qe and str(route.get("domain") or "") == "qe_experiment"
+        if route.get("server_key") and route.get("tool_name") and not skip_primary_for_graph_synthesis:
+            primary = self._route_candidate_from_route(route, score=int(float(route.get("confidence") or 0.6) * 100), reason=str(route.get("reason") or "primary route"))
+            primary["primary_route"] = True
+            candidates.append(primary)
+
+        for item in score_domains(user_message)[:limit]:
+            domain = item.get("domain")
+            if not isinstance(domain, McpDomain) or domain == McpDomain.GENERAL:
+                continue
+            try:
+                spec = DOMAIN_SPECS[domain]
+                tool_name = select_tool(domain, user_message)
+                candidate = self._candidate_route_for_spec(spec, tool_name=tool_name, score=int(item.get("score") or 0), reason="legacy_domain_candidate")
+            except Exception:  # noqa: BLE001 - candidate expansion must not break the legacy primary route.
+                logger.exception("failed to build route candidate for domain=%s", domain)
+                continue
+            candidate["matched_terms"] = list(item.get("matched_terms") or [])
+            candidates.append(candidate)
+
+        if "qe" in lower:
+            qe_warehouse = DOMAIN_SPECS.get(McpDomain.QE_WAREHOUSE)
+            if qe_warehouse is not None:
+                candidates.append(self._candidate_route_for_spec(qe_warehouse, tool_name="qe_archive_query_promotion_candidates", score=70, reason="qe_usage_candidate"))
+        if any(term in lower for term in ("策略包", "strategy package", "paper v2", "paper")) or graph_first_qe:
+            strategy = DOMAIN_SPECS.get(McpDomain.STRATEGY_GOVERNANCE)
+            if strategy is not None:
+                candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_list_packages", score=66, reason="strategy_package_candidate"))
+                candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_get_paper_readiness", score=64, reason="paper_v2_candidate"))
+
+        canonical_candidates: list[dict[str, Any]] = []
+        for candidate in candidates:
+            try:
+                canonical_candidates.append(self._canonicalize_mcp_route(candidate) if candidate.get("server_key") and candidate.get("tool_name") else candidate)
+            except KeyError:
+                logger.warning("skip unavailable route candidate: %s/%s", candidate.get("server_key"), candidate.get("tool_name"))
+        candidates = canonical_candidates
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for candidate in candidates:
+            key = (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or ""))
+            if not key[0] or not key[1]:
+                continue
+            current = deduped.get(key)
+            if current is not None and current.get("primary_route") and not candidate.get("primary_route"):
+                current["candidate_score"] = max(int(current.get("candidate_score") or 0), int(candidate.get("candidate_score") or 0))
+                continue
+            if current is None or candidate.get("primary_route") or int(candidate.get("candidate_score") or 0) > int(current.get("candidate_score") or 0):
+                candidate["route_key"] = f"{key[0]}/{key[1]}"
+                deduped[key] = candidate
+        primary_candidates = [item for item in deduped.values() if item.get("primary_route")]
+        secondary_candidates = [item for item in deduped.values() if not item.get("primary_route")]
+        ordered = [*primary_candidates[:1], *sorted(secondary_candidates, key=lambda item: (-int(item.get("candidate_score") or 0), str(item.get("route_key") or "")))]
+        return ordered[:limit]
+
+    def _should_seed_multi_tool_route(self, user_message: str, route: dict[str, Any], candidates: list[dict[str, Any]]) -> bool:
+        if len(candidates) < 2 or route.get("requires_clarification"):
+            return False
+        if str(route.get("side_effect") or "read_only") != "read_only":
+            return False
+        lower = user_message.lower()
+        graph_first_qe = "qe" in lower and self._should_prioritize_graph_context(user_message)
+        if graph_first_qe:
+            return True
+        explicit_synthesis = any(
+            term in lower
+            for term in (
+                "综合",
+                "多维",
+                "多源",
+                "全方位",
+                "关系",
+                "路径",
+                "链路",
+                "怎么用",
+                "如何用",
+                "怎么利用",
+                "synthesize",
+                "multi-source",
+            )
+        )
+        if not explicit_synthesis:
+            return False
+        read_only_domains = {
+            str(candidate.get("domain") or "")
+            for candidate in candidates
+            if str(candidate.get("side_effect") or "read_only") == "read_only"
+        }
+        return len(read_only_domains - {"", "general"}) >= 2
+
+    @staticmethod
+    def _route_candidate_from_route(route: dict[str, Any], *, score: int, reason: str) -> dict[str, Any]:
+        candidate = dict(route)
+        candidate["candidate_score"] = score
+        candidate["candidate_reason"] = reason
+        candidate.setdefault("side_effect", str(candidate.get("side_effect") or "read_only"))
+        return candidate
+
+    @staticmethod
+    def _candidate_route_for_spec(spec: Any, *, tool_name: str, score: int, reason: str) -> dict[str, Any]:
+        side_effect = "read_only"
+        if tool_name in spec.plan_tools:
+            side_effect = "plan_or_preflight"
+        elif tool_name in spec.confirmed_tools:
+            side_effect = "confirmed_action"
+        return {
+            "domain": spec.domain.value,
+            "intent_value": spec.intent_value,
+            "server_key": spec.server_key,
+            "tool_name": tool_name,
+            "side_effect": side_effect,
+            "policy": spec.risk_policy,
+            "read_tools": list(spec.read_tools),
+            "plan_tools": list(spec.plan_tools),
+            "confirmed_tools": list(spec.confirmed_tools),
+            "candidate_score": score,
+            "candidate_reason": reason,
+        }
+
+    @staticmethod
+    def _should_prioritize_graph_context(user_message: str) -> bool:
+        lower = user_message.lower()
+        return any(term in lower for term in GRAPH_FIRST_RELATION_TERMS)
 
     @staticmethod
     def _is_qe_experiment_status_read_request(user_message: str) -> bool:
@@ -5594,25 +5806,57 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             }
         return cards
 
-    @staticmethod
-    def _react_messages_for_agentic_synthesis(messages: list[dict[str, Any]], *, user_message: str, route_seed: McpToolCall | None) -> list[dict[str, Any]]:
+    def _react_messages_for_agentic_synthesis(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        user_message: str,
+        route_seeds: list[McpToolCall],
+        route_candidates: list[dict[str, Any]],
+        graph_context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         react_messages = [dict(item) for item in messages]
+        graph_relation_refs = graph_context.get("relation_refs") if isinstance(graph_context.get("relation_refs"), list) else []
         directive = {
             "type": "AGENTIC_REPLY_SYNTHESIS_DIRECTIVE",
             "instruction": AGENTIC_SYNTHESIS_SYSTEM_PROMPT,
             "user_message": user_message,
-            "seeded_tool_call": {
-                "server_key": route_seed.server_key,
-                "tool_name": route_seed.tool_name,
-                "payload_json": route_seed.payload_json,
-            }
-            if route_seed
-            else None,
+            "seeded_tool_calls": [
+                {
+                    "server_key": seed.server_key,
+                    "tool_name": seed.tool_name,
+                    "payload_json": seed.payload_json,
+                    "reason": seed.reason,
+                }
+                for seed in route_seeds
+            ],
+            "route_candidates": [
+                {
+                    "domain": item.get("domain"),
+                    "server_key": item.get("server_key"),
+                    "tool_name": item.get("tool_name"),
+                    "side_effect": item.get("side_effect"),
+                    "candidate_score": item.get("candidate_score"),
+                    "candidate_reason": item.get("candidate_reason"),
+                }
+                for item in route_candidates[:8]
+            ],
+            "graph_context": {
+                "source": GRAPH_CONTEXT_SOURCE,
+                "as_of": GRAPH_CONTEXT_AS_OF,
+                "seed_entity_keys": list(graph_context.get("seed_entity_keys") or [])[:12],
+                "neighbor_entity_keys": list(graph_context.get("neighbor_entity_keys") or [])[:12],
+                "relation_refs": graph_relation_refs[:12],
+            },
             "output_rules": [
                 "If tool_calls are needed, emit native function calls or the structured JSON fallback only.",
                 "After tool results are present, write the final answer yourself and address the exact user question.",
                 "Do not return a Python-rendered template or copy a raw tool payload.",
                 "Cite actual source and as_of/trade_date/report_period values found in tool results.",
+                "For graph relationship facts, cite source graph_context and as_of LIVE.",
+                "For cross-module/how-to/relationship questions, start from graph_context before tool evidence.",
+                "Use more than one read-only tool when the question spans multiple domains and candidates are eligible.",
+                "For future-looking questions, frame drivers, scenarios, and risks only; do not predict direction.",
                 "If citation_options are present, cite their exact source/as_of strings for the relevant facts.",
             ],
         }
@@ -5636,16 +5880,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         function_tools: list[dict[str, Any]] | None = None,
         function_tool_registry: dict[str, dict[str, str]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
-        route_seed = self._seeded_react_tool_call(cards, mode_decision)
-        if route_seed and first_llm_result.tool_calls:
+        route_seeds = self._seeded_react_tool_calls(cards, mode_decision)
+        if route_seeds and first_llm_result.tool_calls:
             # Native function calls take precedence over legacy route seeding.
-            route_seed = None
-        react_messages = self._react_messages_for_agentic_synthesis(messages, user_message=user_message, route_seed=route_seed)
+            route_seeds = []
+        route_candidates = self._route_candidates_from_cards(cards)
+        graph_context = self._graph_context_from_context_pack(context_pack)
+        react_messages = self._react_messages_for_agentic_synthesis(
+            messages,
+            user_message=user_message,
+            route_seeds=route_seeds,
+            route_candidates=route_candidates,
+            graph_context=graph_context,
+        )
         first_turn_consumed = False
 
         def model_complete(next_messages: list[dict[str, Any]]) -> ModelTurn:
             nonlocal first_turn_consumed
-            if not first_turn_consumed and not route_seed:
+            if not first_turn_consumed and not route_seeds:
                 first_turn_consumed = True
                 return ModelTurn(
                     content=first_llm_result.content,
@@ -5683,16 +5935,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             user_message=user_message,
         )
         def fallback_tool_calls() -> list[McpToolCall]:
-            fallback = self._grounded_route_fallback_tool_call(cards, mode_decision)
-            return [fallback] if fallback else []
+            return self._grounded_route_fallback_tool_calls(cards, mode_decision)
 
+        initial_tool_results = [graph_result] if (graph_result := self._graph_context_tool_result(graph_context)) else None
         react_result = run_react_grounding_loop(
             messages=react_messages,
             model_complete=model_complete,
             mcp_provider=provider,
             catalog_entries=self._react_tool_catalog_entries(capability_backed_only=True),
             config=self._react_grounding_config(runtime_config, user_message=user_message, token_budget=budget_plan.effective_window_tokens),
-            seeded_tool_calls=[route_seed] if route_seed else None,
+            seeded_tool_calls=route_seeds or None,
+            initial_tool_results=initial_tool_results,
             fallback_tool_calls=fallback_tool_calls,
             tool_result_compactor=self._compact_tool_result_with_auxiliary_model,
         )
@@ -5720,8 +5973,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         cfg = runtime_config.get("react_grounding") if isinstance(runtime_config.get("react_grounding"), dict) else {}
         if "max_tool_iterations" not in cfg:
             raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
+        configured_iterations = int(cfg["max_tool_iterations"])
         return ReactGroundingConfig(
-            max_tool_iterations=int(cfg["max_tool_iterations"]),
+            max_tool_iterations=max(configured_iterations, 6),
             evidence_required=bool(cfg.get("evidence_required", True)),
             user_message=user_message,
             token_budget=int(cfg.get("token_budget") or token_budget) if (cfg.get("token_budget") or token_budget) else None,
@@ -5756,54 +6010,177 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if tool.get("server_key") and tool.get("tool_name")
         ]
 
-    def _seeded_react_tool_call(self, cards: dict[str, Any], mode_decision: ModeDecision) -> McpToolCall | None:
-        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+    @staticmethod
+    def _graph_context_from_context_pack(context_pack: dict[str, Any]) -> dict[str, Any]:
+        pack_json = context_pack.get("pack_json") if isinstance(context_pack.get("pack_json"), dict) else {}
+        graph_context = pack_json.get("graph_context") if isinstance(pack_json.get("graph_context"), dict) else {}
+        return dict(graph_context)
+
+    def _should_run_react_grounding(
+        self,
+        *,
+        user_message: str,
+        cards: dict[str, Any],
+        context_pack: dict[str, Any],
+        first_llm_result: LlmCallResult,
+        mode_decision: ModeDecision,
+    ) -> bool:
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else {}
+        if isinstance(route, dict) and route.get("requires_clarification"):
+            return False
+        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message):
+            return bool(first_llm_result.tool_calls)
+        if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY}:
+            return bool(first_llm_result.tool_calls)
+        graph_context = self._graph_context_from_context_pack(context_pack)
+        if graph_context.get("relation_refs"):
+            return True
+        if first_llm_result.tool_calls:
+            return True
+        policy = route.get("agentic_route_policy") if isinstance(route, dict) and isinstance(route.get("agentic_route_policy"), dict) else {}
+        if policy.get("allow_multi_tool"):
+            return True
+        if isinstance(route, dict) and route.get("server_key") and route.get("tool_name"):
+            return bool(self._seeded_react_tool_calls(cards, mode_decision))
+        return False
+
+    @staticmethod
+    def _empty_react_grounding_result(first_llm_result: LlmCallResult) -> ReactGroundingResult:
+        return ReactGroundingResult(
+            final_text=first_llm_result.content,
+            messages=[],
+            tool_calls=[],
+            tool_results=[],
+            trace_steps=[{"iteration": 0, "react_grounding": "skipped"}],
+            evidence_guard=EvidenceGuardDecision(True, first_llm_result.content, "skipped", 0, 0),
+            iterations=0,
+            stopped_reason="skipped",
+            model_turns=[
+                ModelTurn(
+                    content=first_llm_result.content,
+                    provider=first_llm_result.provider,
+                    model=first_llm_result.model,
+                    duration_ms=first_llm_result.duration_ms,
+                    usage=first_llm_result.usage,
+                    tool_calls=list(first_llm_result.tool_calls or []),
+                )
+            ],
+        )
+
+    @staticmethod
+    def _route_candidates_from_cards(cards: dict[str, Any]) -> list[dict[str, Any]]:
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else {}
+        if not isinstance(route, dict):
+            return []
+        raw = route.get("route_candidates") if isinstance(route.get("route_candidates"), list) else []
+        candidates = [dict(item) for item in raw if isinstance(item, dict)]
+        if not candidates and route.get("server_key") and route.get("tool_name"):
+            candidates.insert(0, dict(route))
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for candidate in candidates:
+            key = (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or ""))
+            if key[0] and key[1] and key not in deduped:
+                deduped[key] = candidate
+        return list(deduped.values())
+
+    def _react_tool_candidates_for_grounding(self, cards: dict[str, Any], mode_decision: ModeDecision) -> list[dict[str, Any]]:
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else {}
+        candidates = self._route_candidates_from_cards(cards)
+        if not candidates:
+            return []
+        policy = route.get("agentic_route_policy") if isinstance(route, dict) and isinstance(route.get("agentic_route_policy"), dict) else {}
+        if policy.get("allow_multi_tool"):
+            eligible_candidates = [
+                candidate
+                for candidate in candidates
+                if self._react_tool_call_from_route_candidate(candidate, mode_decision, stable_prefix="probe") is not None
+            ]
+            return eligible_candidates or candidates[:1]
+        return candidates[:1]
+
+    def _react_tool_call_from_route_candidate(
+        self,
+        candidate: dict[str, Any],
+        mode_decision: ModeDecision,
+        *,
+        stable_prefix: str,
+        fallback: bool = False,
+    ) -> McpToolCall | None:
+        route = dict(candidate)
         if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
             return None
         if self._stock_analysis_route_needs_model_symbol(route):
             return None
-        eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
+        if fallback and str(route.get("side_effect") or "read_only") != "read_only":
+            return None
+        eligibility = route.get("auto_execute") if isinstance(route.get("auto_execute"), dict) else self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
         route["auto_execute"] = eligibility
         if eligibility.get("eligible"):
             return McpToolCall(
                 server_key=str(route["server_key"]),
                 tool_name=str(route["tool_name"]),
                 payload_json={
-                    "request": route.get("request") or "",
+                    "request": route.get("request") or route.get("user_message") or "",
                     "route": route,
                     "mcp_route_decision": route,
                     **self._mcp_route_tool_args(route),
                     "limit": self._mcp_route_limit(route),
                 },
-                stable_call_id=f"route:{route['server_key']}:{route['tool_name']}",
-                reason=str(route.get("reason") or "route_seed"),
+                stable_call_id=f"{stable_prefix}:{route['server_key']}:{route['tool_name']}",
+                reason=str(route.get("candidate_reason") or route.get("reason") or ("evidence_guard_route_fallback" if fallback else "route_seed")),
             )
         return None
 
-    def _grounded_route_fallback_tool_call(self, cards: dict[str, Any], mode_decision: ModeDecision) -> McpToolCall | None:
-        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
-        if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
+    def _seeded_react_tool_calls(self, cards: dict[str, Any], mode_decision: ModeDecision) -> list[McpToolCall]:
+        calls: list[McpToolCall] = []
+        for candidate in self._react_tool_candidates_for_grounding(cards, mode_decision):
+            call = self._react_tool_call_from_route_candidate(candidate, mode_decision, stable_prefix="route")
+            if call:
+                calls.append(call)
+        return self._dedupe_mcp_tool_calls(calls)
+
+    def _grounded_route_fallback_tool_calls(self, cards: dict[str, Any], mode_decision: ModeDecision) -> list[McpToolCall]:
+        calls: list[McpToolCall] = []
+        for candidate in self._react_tool_candidates_for_grounding(cards, mode_decision):
+            call = self._react_tool_call_from_route_candidate(candidate, mode_decision, stable_prefix="fallback", fallback=True)
+            if call:
+                calls.append(call)
+        return self._dedupe_mcp_tool_calls(calls)
+
+    @staticmethod
+    def _dedupe_mcp_tool_calls(calls: list[McpToolCall]) -> list[McpToolCall]:
+        deduped: dict[tuple[str, str], McpToolCall] = {}
+        for call in calls:
+            key = (call.server_key, call.tool_name)
+            deduped.setdefault(key, call)
+        return list(deduped.values())
+
+    @staticmethod
+    def _graph_context_tool_result(graph_context: dict[str, Any]) -> McpToolResult | None:
+        relation_refs = graph_context.get("relation_refs") if isinstance(graph_context.get("relation_refs"), list) else []
+        if not relation_refs:
             return None
-        if self._stock_analysis_route_needs_model_symbol(route):
-            return None
-        if str(route.get("side_effect") or "read_only") != "read_only":
-            return None
-        eligibility = route.get("auto_execute") if isinstance(route.get("auto_execute"), dict) else self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
-        route["auto_execute"] = eligibility
-        if not eligibility.get("eligible"):
-            return None
-        return McpToolCall(
-            server_key=str(route["server_key"]),
-            tool_name=str(route["tool_name"]),
-            payload_json={
-                "request": route.get("request") or "",
-                "route": route,
-                "mcp_route_decision": route,
-                **self._mcp_route_tool_args(route),
-                "limit": self._mcp_route_limit(route),
+        payload = {
+            "response_mode": "graph_context",
+            "source": GRAPH_CONTEXT_SOURCE,
+            "source_refs": [GRAPH_CONTEXT_SOURCE],
+            "as_of": GRAPH_CONTEXT_AS_OF,
+            "graph_context": {
+                "seed_entity_keys": list(graph_context.get("seed_entity_keys") or [])[:12],
+                "neighbor_entity_keys": list(graph_context.get("neighbor_entity_keys") or [])[:12],
+                "relation_refs": relation_refs[:12],
             },
-            stable_call_id=f"fallback:{route['server_key']}:{route['tool_name']}",
-            reason="evidence_guard_route_fallback",
+        }
+        return McpToolResult(
+            server_key="research-assistant",
+            tool_name="graph_context",
+            status="succeeded",
+            payload_json=payload,
+            source_refs=[GRAPH_CONTEXT_SOURCE],
+            as_of=GRAPH_CONTEXT_AS_OF,
+            summary=f"{len(relation_refs)} graph_context relations available for synthesis",
+            executed=True,
+            stable_call_id="graph_context",
         )
 
     @staticmethod
@@ -6149,6 +6526,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         tool_error = self._tool_error_from_cards(cards)
         if tool_error:
             return self._apply_main_reply_policy(self._render_tool_error_reply(tool_error), mode_decision)
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if isinstance(route, dict) and route.get("requires_clarification"):
+            return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
+        if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
+            catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
+            if isinstance(catalog, dict):
+                return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
+        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        react_guard = react_card.get("evidence_guard") if isinstance(react_card.get("evidence_guard"), dict) else {}
+        if (
+            react_active
+            and react_guard.get("allowed") is True
+            and react_guard.get("reason") == "ok"
+            and text
+            and not self._is_insufficient_evidence_text(text)
+            and not self._contains_agentic_template_marker(text)
+            and not self._contains_mcp_business_forbidden_marker(text)
+        ):
+            return self._apply_main_reply_policy(text, mode_decision)
         if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             if self._is_business_synthesis_summary(summary):
@@ -6157,7 +6553,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             if self._should_render_auto_mcp_execution_reply(execution, summary, react_active=react_active):
                 return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
-        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
         if (
             react_active
             and isinstance(execution, dict)
@@ -6168,9 +6563,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if self._is_business_synthesis_summary(summary):
                 return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             return self._apply_main_reply_policy(self._render_react_execution_fallback_reply(execution, summary), mode_decision)
-        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
-        if isinstance(route, dict) and route.get("requires_clarification"):
-            return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
         if (
             isinstance(execution, dict)
             and execution.get("auto_executed")
@@ -6189,10 +6581,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(execution, preflight), mode_decision)
             if isinstance(route, dict) and str(route.get("side_effect") or "read_only") != "read_only":
                 return self._apply_main_reply_policy(self._render_mcp_safe_preflight_reply(route, {}), mode_decision)
-        if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
-            catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
-            if isinstance(catalog, dict):
-                return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
         if (not react_active or "<assistant_tool_choice" in raw_text.lower()) and self._should_render_mcp_route_reply(route, mode_decision, raw_text):
             return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
         if text:
@@ -6402,7 +6790,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         side_effect = str(route_or_execution.get("side_effect") or route_or_execution.get("status") or "plan_or_preflight")
         label = ResearchAssistantService._business_label_for_domain(domain, route)
         lines = [
-            f"{label}需要先做方案/预检，本轮未执行写入、训练、回补或晋升操作。",
+            f"{label}需要先做方案/预检；本轮未执行写入、训练、回补或晋升。",
         ]
         if side_effect in {"approval_required", "preflight_required", "preflight_failed", "confirmed_action"}:
             lines.append("安全边界：需先展示预检结果和确认口令，获得明确授权后才能进入下一步。")
@@ -6435,7 +6823,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         clarification = cards.get("clarification_card") if isinstance(cards.get("clarification_card"), dict) else {}
         questions = [str(item) for item in clarification.get("questions", []) if str(item)]
         lines = [
-            "已收到 QE 实验草案需求；本轮只生成方案，不会执行、物化或启动训练。",
+            "已收到 QE 实验草案需求；本轮只做草案，不执行、物化或启动训练。",
+            "本轮只生成方案，不会执行、物化或启动训练。",
             "草案框架：",
         ]
         if steps:
@@ -6699,7 +7088,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             graph_entity_keys,
             repo=self.repository,
             namespace=data.namespace,
-            hops=int(graph_context_config.get("hops") or 1),
+            hops=int(graph_context_config.get("hops") or 2),
             relation_filter=graph_context_config.get("relation_filter"),
             limit=int(graph_context_config.get("limit") or self.configured_limit("graph_summary_relations")),
         )
@@ -6737,6 +7126,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             },
             "graph_context": {
                 "route_reason": graph_result.route_reason,
+                "source": GRAPH_CONTEXT_SOURCE if graph_result.relation_refs else None,
+                "source_refs": [GRAPH_CONTEXT_SOURCE] if graph_result.relation_refs else [],
+                "as_of": GRAPH_CONTEXT_AS_OF if graph_result.relation_refs else None,
                 "relation_refs": graph_result.relation_refs,
                 "seed_entity_keys": graph_result.seed_entity_keys,
                 "neighbor_entity_keys": graph_result.neighbor_entity_keys,

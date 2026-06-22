@@ -7,6 +7,8 @@
     "backend/tests/research_assistant/test_react_tool_loop.py",
     "backend/tests/research_assistant/test_graph_injected_into_context.py",
     "backend/tests/research_assistant/test_react_grounding.py",
+    "prompt_packs/research_assistant/main/pack.yaml",
+    "prompt_packs/research_assistant/main/nodes/root.assistant.md",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "tests/aistock_validation/bugs/20260623_BUG-485-ra-b2-agentic-synthesis-still-behaves-like-single-tool-template-relay.json"
   ],
@@ -26,6 +28,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260623-6448bbc4ec9c",
       "timestamp": "2026-06-22T17:45:00.684407Z"
+    },
+    {
+      "timestamp": "2026-06-22T17:49:09.416946Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include RA prompt pack YAML required by BUG-485 B2 design scope."
+    },
+    {
+      "timestamp": "2026-06-22T18:23:52.447047Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include root assistant prompt node because pack.yaml stores prompt bodies in referenced node files."
     }
   ],
   "evidence_uris": [],
