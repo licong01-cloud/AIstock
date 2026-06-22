@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-402",
-  "closed_at": null,
+  "closed_at": "2026-06-22T02:16:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -62,12 +62,18 @@
         "frontend/src/components/research-assistant/EvidenceCard.tsx"
       ],
       "timestamp": "2026-06-17T09:10:00Z"
+    },
+    {
+      "timestamp": "2026-06-22T02:16:22Z",
+      "actor": "codex",
+      "action": "final_close_sync_metadata",
+      "note": "Post-merge aftercare: PR #1442 and close-sync PR #1445 merged; GitHub Issue #1206 is closed with status:fixed; BUG JSON marked closed with closed_at. No services started, no production DB touched, no DDL executed."
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-17T08:12:13.445098Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-402-ra-phase7-card-render-main-20260622",
   "fix_commit": "4d57a92937ad2876da7b17d3a40076b0d3856dfa",
   "fixed_at": "2026-06-22T02:09:36.678519Z",
   "github_issue_number": 1206,
@@ -91,7 +97,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -147,5 +153,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "fix_ready"
+  "workflow_gate": "fix_ready",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1445",
+  "close_sync_commit": "342a6bacaf445a7698fd0739b7d65ba55fdaf0a2"
 }
