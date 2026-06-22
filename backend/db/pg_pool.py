@@ -282,6 +282,20 @@ def _prepare_connection(conn: psycopg2.extensions.connection, *, autocommit: boo
     return statement_timeout_ms
 
 
+def _configure_checkout_connection(
+    conn: psycopg2.extensions.connection,
+    *,
+    autocommit: bool,
+    manage_transaction: bool,
+) -> Optional[int]:
+    """Keep legacy default checkout behavior; enable transaction prep only on explicit opt-in."""
+
+    if autocommit and not manage_transaction:
+        conn.autocommit = True
+        return _apply_statement_timeout(conn)
+    return _prepare_connection(conn, autocommit=autocommit)
+
+
 def _commit_connection(conn: psycopg2.extensions.connection, *, mode: str, manage_transaction: bool) -> None:
     if not manage_transaction:
         return
@@ -326,7 +340,7 @@ def _rollback_connection(
 
 
 @contextmanager
-def get_conn(*, autocommit: bool = False, manage_transaction: bool = True):
+def get_conn(*, autocommit: bool = True, manage_transaction: bool = False):
     """Yield a DB connection, using pool when available.
 
     - 优先使用本进程内的连接池，减少建连开销；
@@ -344,7 +358,11 @@ def get_conn(*, autocommit: bool = False, manage_transaction: bool = True):
                     % (os.getpid(), threading.current_thread().name, caller)
                 )
             conn = psycopg2.connect(**_db_cfg())
-            statement_timeout_ms = _prepare_connection(conn, autocommit=autocommit)
+            statement_timeout_ms = _configure_checkout_connection(
+                conn,
+                autocommit=autocommit,
+                manage_transaction=manage_transaction,
+            )
             duration = time.time() - start_time
             if duration > 0.1:
                 print(f"DEBUG: Direct DB connection took {duration:.4f}s")
@@ -446,7 +464,11 @@ def get_conn(*, autocommit: bool = False, manage_transaction: bool = True):
                         exc_info=True,
                     )
         try:
-            statement_timeout_ms = _prepare_connection(conn, autocommit=autocommit)
+            statement_timeout_ms = _configure_checkout_connection(
+                conn,
+                autocommit=autocommit,
+                manage_transaction=manage_transaction,
+            )
             _emit_checkout_audit(
                 mode="pool",
                 duration=duration,

@@ -9,7 +9,6 @@ import threading
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
-from functools import wraps
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -129,46 +128,6 @@ def _set_autocommit_if_available(conn: Any, value: bool) -> None:
         setattr(conn, "autocommit", value)
 
 
-def transactional_write(fn: Callable[..., Any]) -> Callable[..., Any]:
-    @wraps(fn)
-    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        transaction = getattr(self, "transaction", None)
-        active_transaction_conn = getattr(self, "_active_transaction_conn", None)
-        active_conn = active_transaction_conn() if callable(active_transaction_conn) else getattr(self, "_transaction_conn", None)
-        if (
-            active_conn is not None
-            and sys.exc_info()[0] is not None
-            and bool(getattr(getattr(self, "_transaction_local", None), "session_tick_lock", False))
-            and not bool(getattr(getattr(self, "_transaction_local", None), "failure_write", False))
-        ):
-            rollback_active = getattr(self, "_rollback_active_session_tick_transaction", None)
-            if callable(rollback_active):
-                if not bool(getattr(self._transaction_local, "session_tick_rolled_back", False)):
-                    rollback_active()
-                self._transaction_local.failure_write = True
-                try:
-                    return fn(self, *args, **kwargs)
-                except Exception as exc:
-                    _rollback_if_available(active_conn)
-                    self._transaction_local.session_tick_failure_write_failed = True
-                    logger.error(
-                        "Paper v2 session-tick failure persistence failed; reason_code=PAPER_V2_SESSION_TICK_FAILURE_WRITE_FAILED "
-                        "method=%s error=%s",
-                        fn.__qualname__,
-                        f"{type(exc).__name__}: {exc}",
-                        exc_info=True,
-                    )
-                    raise
-                finally:
-                    self._transaction_local.failure_write = False
-        if transaction is None or active_conn is not None:
-            return fn(self, *args, **kwargs)
-        with transaction():
-            return fn(self, *args, **kwargs)
-
-    return wrapper
-
-
 def _run_status_transition_error(
     *,
     run_id: str,
@@ -273,13 +232,14 @@ class PaperTradingV2Repository:
         *,
         symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
-        self._conn_factory = conn_factory or get_conn
-        self._conn_factory_accepts_autocommit = _supports_conn_factory_kw(self._conn_factory, "autocommit")
-        self._conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(
-            self._conn_factory,
+        self._base_conn_factory = conn_factory or get_conn
+        self._base_conn_factory_accepts_autocommit = _supports_conn_factory_kw(self._base_conn_factory, "autocommit")
+        self._base_conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(
+            self._base_conn_factory,
             "manage_transaction",
         )
         self._transaction_local = threading.local()
+        self._conn_factory = self._default_conn
         self._symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver(self._conn_factory)
 
     def _active_transaction_conn(self) -> Any | None:
@@ -292,43 +252,67 @@ class PaperTradingV2Repository:
         if hasattr(self._transaction_local, "conn"):
             del self._transaction_local.conn
 
-    def _rollback_active_session_tick_transaction(self) -> None:
-        conn = self._active_transaction_conn()
-        if conn is not None:
-            try:
-                _rollback_if_available(conn)
-            except Exception as exc:
-                logger.error(
-                    "Paper v2 session tick rollback failed; reason_code=PAPER_V2_SESSION_TICK_ROLLBACK_FAILED error=%s",
-                    f"{type(exc).__name__}: {exc}",
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    "Paper v2 session tick rollback failed; reason_code=PAPER_V2_SESSION_TICK_ROLLBACK_FAILED"
-                ) from exc
-        self._transaction_local.session_tick_rolled_back = True
-
     @contextmanager
-    def _conn(self, *, autocommit: bool = False, manage_transaction: bool = True) -> Iterator[Any]:
+    def _default_conn(self) -> Iterator[Any]:
         active = self._active_transaction_conn()
         if active is not None:
-            if autocommit:
-                raise InvalidStateTransitionError(
-                    "autocommit connection requested inside Paper v2 repository transaction",
-                    context={"reason_code": "PAPER_V2_REPOSITORY_TRANSACTION_AUTOCOMMIT_CONFLICT"},
-                )
+            if (
+                sys.exc_info()[0] is not None
+                and getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick"
+                and not bool(getattr(self._transaction_local, "failure_write", False))
+            ):
+                if not bool(getattr(self._transaction_local, "session_tick_rolled_back", False)):
+                    try:
+                        _rollback_if_available(active)
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED error=%s",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED"
+                        ) from exc
+                    self._transaction_local.session_tick_rolled_back = True
+                self._transaction_local.failure_write = True
+                try:
+                    with self._base_conn_factory() as conn:
+                        yield conn
+                except Exception as exc:
+                    self._transaction_local.session_tick_failure_write_failed = True
+                    logger.error(
+                        "LocalSim session failure persistence failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_FAILURE_PERSISTENCE_FAILED error=%s",
+                        f"{type(exc).__name__}: {exc}",
+                        exc_info=True,
+                    )
+                    raise
+                finally:
+                    self._transaction_local.failure_write = False
+            else:
+                yield active
+            return
+        with self._base_conn_factory() as conn:
+            yield conn
+
+    @contextmanager
+    def _conn(self, *, autocommit: bool = True, manage_transaction: bool = False) -> Iterator[Any]:
+        active = self._active_transaction_conn()
+        if active is not None:
             yield active
             return
 
-        if self._conn_factory_accepts_autocommit:
+        if self._base_conn_factory_accepts_autocommit:
             kwargs = {"autocommit": autocommit}
-            if self._conn_factory_accepts_manage_transaction:
+            if self._base_conn_factory_accepts_manage_transaction:
                 kwargs["manage_transaction"] = manage_transaction
-            with self._conn_factory(**kwargs) as conn:
+            with self._base_conn_factory(**kwargs) as conn:
                 yield conn
             return
 
-        with self._conn_factory() as conn:
+        with self._base_conn_factory() as conn:
             original_autocommit = getattr(conn, "autocommit", None)
             _set_autocommit_if_available(conn, autocommit)
             try:
@@ -341,7 +325,7 @@ class PaperTradingV2Repository:
                         _rollback_if_available(conn)
                     except Exception as rollback_exc:
                         logger.error(
-                            "Paper v2 repository rollback failed after transaction error; "
+                            "Paper v2 repository rollback failed; "
                             "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED error=%s original_error=%s",
                             f"{type(rollback_exc).__name__}: {rollback_exc}",
                             f"{type(exc).__name__}: {exc}",
@@ -351,32 +335,10 @@ class PaperTradingV2Repository:
                             "Paper v2 repository transaction rollback failed; "
                             "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED"
                         ) from rollback_exc
-                logger.error(
-                    "Paper v2 repository transaction failed and was rolled back; "
-                    "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK method=_conn error=%s",
-                    f"{type(exc).__name__}: {exc}",
-                    exc_info=True,
-                )
                 raise
             finally:
                 if original_autocommit is not None:
                     _set_autocommit_if_available(conn, bool(original_autocommit))
-
-    @contextmanager
-    def transaction(self) -> Iterator[None]:
-        """Pin repository writes in this block to one explicit DB transaction."""
-
-        if self._active_transaction_conn() is not None:
-            raise InvalidStateTransitionError(
-                "nested Paper v2 repository transactions are not supported",
-                context={"reason_code": "PAPER_V2_REPOSITORY_NESTED_TRANSACTION"},
-            )
-        with self._conn(autocommit=False) as conn:
-            self._set_transaction_conn(conn)
-            try:
-                yield
-            finally:
-                self._clear_transaction_conn()
 
     @contextmanager
     def _write_conn(self) -> Iterator[Any]:
@@ -384,8 +346,125 @@ class PaperTradingV2Repository:
         if conn is not None:
             yield conn
             return
-        with self._conn(autocommit=False) as own_conn:
+        with self._conn(autocommit=False, manage_transaction=True) as own_conn:
             yield own_conn
+
+    @contextmanager
+    def local_sim_session_transaction(self, session_id: str) -> Iterator[None]:
+        """Pin one LocalSim live tick to one DB transaction while holding its advisory lock."""
+
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "LocalSim session transaction cannot start inside an existing repository transaction",
+                context={
+                    "session_id": session_id,
+                    "reason_code": "PAPER_V2_LOCAL_SIM_TRANSACTION_CONFLICT",
+                },
+            )
+        with self._conn(autocommit=True, manage_transaction=False) as lock_conn:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                raise SessionLockTimeoutError(
+                    "paper v2 session is already being processed by another backend process",
+                    context={
+                        "session_id": session_id,
+                        "lock_scope": "postgres_advisory_lock",
+                        "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
+                    },
+                )
+            complete_error: BaseException | None = None
+            try:
+                with self._conn(autocommit=False, manage_transaction=True) as txn_conn:
+                    try:
+                        self._set_transaction_conn(txn_conn)
+                        self._transaction_local.transaction_scope = "local_sim_session_tick"
+                        yield
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILED session_id=%s error=%s",
+                            session_id,
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise
+            finally:
+                try:
+                    with lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
+                except Exception as unlock_exc:
+                    logger.error(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED session_id=%s error=%s",
+                        session_id,
+                        f"{type(unlock_exc).__name__}: {unlock_exc}",
+                        exc_info=True,
+                    )
+                    complete_error = RuntimeError(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED"
+                    )
+                    complete_error.__cause__ = unlock_exc
+                finally:
+                    self._clear_transaction_conn()
+                    for attr in (
+                        "transaction_scope",
+                        "session_tick_rolled_back",
+                        "session_tick_failure_write_failed",
+                        "failure_write",
+                    ):
+                        if hasattr(self._transaction_local, attr):
+                            delattr(self._transaction_local, attr)
+                if complete_error is not None:
+                    raise complete_error
+
+    def _session_uses_local_sim_transaction(self, session_id: str) -> bool:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend, s.mode
+                    FROM paper_v2.trade_session s
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = s.portfolio_id
+                    WHERE s.session_id = %s
+                    """,
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return False
+        if isinstance(row, dict):
+            broker_backend = row.get("broker_backend")
+            mode = row.get("mode")
+        else:
+            broker_backend = row[0]
+            mode = row[1] if len(row) > 1 else None
+        return str(broker_backend) == "local_sim" and str(mode or "") != "REPLAY_ONLY"
+
+    def _run_broker_backend(self, run_id: str) -> str | None:
+        if getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick":
+            return "local_sim"
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend
+                    FROM paper_v2.run r
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = r.portfolio_id
+                    WHERE r.run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        if isinstance(row, dict):
+            value = row.get("broker_backend")
+        else:
+            value = row[0]
+        return str(value) if value is not None else None
 
     def _resolve_stock_names(self, symbols: list[str | None] | tuple[str | None, ...]) -> dict[str, str]:
         try:
@@ -410,7 +489,11 @@ class PaperTradingV2Repository:
                 "Paper v2 session tick cannot start inside an existing repository transaction",
                 context={"session_id": session_id, "reason_code": "PAPER_V2_SESSION_TICK_TRANSACTION_CONFLICT"},
             )
-        with self._conn(autocommit=True, manage_transaction=False) as conn:
+        if self._session_uses_local_sim_transaction(session_id):
+            with self.local_sim_session_transaction(session_id):
+                yield
+            return
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
                 locked = bool(cur.fetchone()[0])
@@ -423,79 +506,14 @@ class PaperTradingV2Repository:
                         "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
                     },
                 )
-            _set_autocommit_if_available(conn, False)
-            self._set_transaction_conn(conn)
-            self._transaction_local.session_tick_lock = True
             try:
                 yield
             finally:
-                complete_error: BaseException | None = None
-                try:
-                    if sys.exc_info()[0] is not None and not bool(
-                        getattr(self._transaction_local, "session_tick_rolled_back", False)
-                    ):
-                        _rollback_if_available(conn)
-                    elif not bool(getattr(self._transaction_local, "session_tick_failure_write_failed", False)):
-                        _commit_if_available(conn)
-                    else:
-                        _rollback_if_available(conn)
-                except Exception as exc:
-                    logger.error(
-                        "Paper v2 session tick transaction completion failed; "
-                        "reason_code=PAPER_V2_SESSION_TICK_TRANSACTION_COMPLETION_FAILED error=%s",
-                        f"{type(exc).__name__}: {exc}",
-                        exc_info=True,
-                    )
-                    complete_error = RuntimeError(
-                        "Paper v2 session tick transaction completion failed; "
-                        "reason_code=PAPER_V2_SESSION_TICK_TRANSACTION_COMPLETION_FAILED"
-                    )
-                    complete_error.__cause__ = exc
-                    try:
-                        _rollback_if_available(conn)
-                    except Exception as rollback_exc:
-                        logger.error(
-                            "Paper v2 session tick rollback after completion failure failed; "
-                            "reason_code=PAPER_V2_SESSION_TICK_TRANSACTION_COMPLETION_ROLLBACK_FAILED error=%s",
-                            f"{type(rollback_exc).__name__}: {rollback_exc}",
-                            exc_info=True,
-                        )
-                        complete_error = RuntimeError(
-                            "Paper v2 session tick transaction completion failed; "
-                            "reason_code=PAPER_V2_SESSION_TICK_TRANSACTION_COMPLETION_ROLLBACK_FAILED"
-                        )
-                        complete_error.__cause__ = rollback_exc
-                try:
-                    _set_autocommit_if_available(conn, True)
-                    try:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
-                    except Exception as unlock_exc:
-                        logger.error(
-                            "Paper v2 session advisory lock release failed; "
-                            "reason_code=PAPER_V2_SESSION_ADVISORY_LOCK_RELEASE_FAILED session_id=%s error=%s",
-                            session_id,
-                            f"{type(unlock_exc).__name__}: {unlock_exc}",
-                            exc_info=True,
-                        )
-                        raise RuntimeError(
-                            "Paper v2 session advisory lock release failed; "
-                            "reason_code=PAPER_V2_SESSION_ADVISORY_LOCK_RELEASE_FAILED"
-                        ) from unlock_exc
-                finally:
-                    self._clear_transaction_conn()
-                    if hasattr(self._transaction_local, "session_tick_lock"):
-                        del self._transaction_local.session_tick_lock
-                    if hasattr(self._transaction_local, "session_tick_rolled_back"):
-                        del self._transaction_local.session_tick_rolled_back
-                    if hasattr(self._transaction_local, "session_tick_failure_write_failed"):
-                        del self._transaction_local.session_tick_failure_write_failed
-                if complete_error is not None:
-                    raise complete_error
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
 
-    @transactional_write
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -533,7 +551,7 @@ class PaperTradingV2Repository:
         return portfolio
 
     def get_portfolio(self, portfolio_id: str) -> PaperPortfolio:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT * FROM paper_v2.portfolio WHERE portfolio_id = %s", (portfolio_id,))
                 row = cur.fetchone()
@@ -542,7 +560,7 @@ class PaperTradingV2Repository:
         return self._portfolio_from_row(dict(row))
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT portfolio_id FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
                 ids = [row["portfolio_id"] for row in cur.fetchall()]
@@ -694,7 +712,7 @@ class PaperTradingV2Repository:
         """
         sort_column = RUNNING_SUMMARY_SORT_COLUMNS[normalized_sort_by]
         offset = (page - 1) * page_size
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     f"{filtered_cte} SELECT COUNT(*) AS total FROM filtered",
@@ -911,9 +929,8 @@ class PaperTradingV2Repository:
             },
         }
 
-    @transactional_write
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE paper_v2.portfolio SET status = %s, updated_at = NOW() WHERE portfolio_id = %s",
@@ -923,7 +940,6 @@ class PaperTradingV2Repository:
                     raise DataUnavailableError("paper v2 portfolio does not exist", context={"portfolio_id": portfolio_id})
         return self.get_portfolio(portfolio_id)
 
-    @transactional_write
     def update_portfolio_auto_run(
         self,
         portfolio_id: str,
@@ -933,7 +949,7 @@ class PaperTradingV2Repository:
         config_sha256: str,
         updated_by: str | None = None,
     ) -> PaperPortfolio:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -972,9 +988,8 @@ class PaperTradingV2Repository:
         )
         return [self._portfolio_from_row(row) for row in rows]
 
-    @transactional_write
     def create_broker_account_binding(self, binding: PaperBrokerAccountBinding) -> PaperBrokerAccountBinding:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 try:
                     cur.execute(
@@ -1098,7 +1113,7 @@ class PaperTradingV2Repository:
         binding_id: str,
         status: BrokerAccountBindingStatus,
     ) -> PaperBrokerAccountBinding:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1143,7 +1158,7 @@ class PaperTradingV2Repository:
             "run": 0,
             "portfolio": 0,
         }
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s", (portfolio_id,))
                 run_ids = [row[0] for row in cur.fetchall()]
@@ -1199,9 +1214,8 @@ class PaperTradingV2Repository:
                 counts["portfolio"] = cur.rowcount
         return counts
 
-    @transactional_write
     def create_run(self, run: PaperRun) -> PaperRun:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1226,7 +1240,6 @@ class PaperTradingV2Repository:
                 )
         return run
 
-    @transactional_write
     def update_run_model_params_origin(
         self, run: PaperRun, model_params_origin: str
     ) -> PaperRun:
@@ -1246,7 +1259,7 @@ class PaperTradingV2Repository:
                 },
             )
         updated = run.model_copy(update={"model_params_origin": model_params_origin})
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE paper_v2.run SET model_params_origin = %s WHERE run_id = %s",
@@ -1260,7 +1273,7 @@ class PaperTradingV2Repository:
         return updated
 
     def get_run_by_portfolio_date(self, portfolio_id: str, trade_date: date) -> PaperRun | None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -1289,7 +1302,7 @@ class PaperTradingV2Repository:
         )
 
     def get_run(self, run_id: str) -> PaperRun:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -1317,12 +1330,11 @@ class PaperTradingV2Repository:
             model_params_origin=row["model_params_origin"],
         )
 
-    @transactional_write
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
         updated = run.model_copy(
             update={"status": status, "error": error, "completed_at": _completed_at_for_run_status(status, run.completed_at)}
         )
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1353,10 +1365,9 @@ class PaperTradingV2Repository:
                     )
         return updated
 
-    @transactional_write
     def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
         updated = run.model_copy(update={"runtime_config": runtime_config})
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE paper_v2.run SET runtime_config = %s WHERE run_id = %s",
@@ -1366,9 +1377,8 @@ class PaperTradingV2Repository:
                     raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id})
         return updated
 
-    @transactional_write
     def create_session(self, session: PaperTradingSession) -> PaperTradingSession:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1403,7 +1413,7 @@ class PaperTradingV2Repository:
         return session
 
     def get_session(self, session_id: str) -> PaperTradingSession:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT * FROM paper_v2.trade_session WHERE session_id = %s", (session_id,))
                 row = cur.fetchone()
@@ -1458,7 +1468,6 @@ class PaperTradingV2Repository:
         )
         return [self._session_from_row(row) for row in rows]
 
-    @transactional_write
     def update_session_status(
         self,
         session_id: str,
@@ -1480,7 +1489,7 @@ class PaperTradingV2Repository:
                 "updated_at": datetime.now(UTC),
             }
         )
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1503,9 +1512,8 @@ class PaperTradingV2Repository:
                     raise DataUnavailableError("paper v2 trade session does not exist", context={"session_id": session_id})
         return updated
 
-    @transactional_write
     def save_session_day(self, day: PaperSessionDay) -> PaperSessionDay:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1557,7 +1565,6 @@ class PaperTradingV2Repository:
         )
         return [self._session_day_from_row(row) for row in rows]
 
-    @transactional_write
     def save_session_event(
         self,
         *,
@@ -1567,7 +1574,7 @@ class PaperTradingV2Repository:
         run_id: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1595,9 +1602,8 @@ class PaperTradingV2Repository:
             (session_id, limit),
         )
 
-    @transactional_write
     def save_order_execution_state(self, state: OrderExecutionState) -> OrderExecutionState:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1660,9 +1666,8 @@ class PaperTradingV2Repository:
         )
         return [self._order_execution_state_from_row(row) for row in rows]
 
-    @transactional_write
     def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1735,7 +1740,7 @@ class PaperTradingV2Repository:
         activation: PaperExecutionPolicyActivation,
     ) -> PaperExecutionPolicyActivation:
         self.get_portfolio(activation.portfolio_id)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1774,7 +1779,7 @@ class PaperTradingV2Repository:
         portfolio_id: str,
         trade_date: date,
     ) -> PaperExecutionPolicyActivation | None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -1789,14 +1794,13 @@ class PaperTradingV2Repository:
                 row = cur.fetchone()
         return self._execution_policy_activation_from_row(dict(row)) if row else None
 
-    @transactional_write
     def supersede_execution_policy_activation(
         self,
         *,
         portfolio_id: str,
         trade_date: date,
     ) -> int:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1829,7 +1833,7 @@ class PaperTradingV2Repository:
 
     def save_runtime_profile(self, profile: PaperRuntimeProfile) -> PaperRuntimeProfile:
         self.get_portfolio(profile.portfolio_id)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1858,7 +1862,7 @@ class PaperTradingV2Repository:
         profile_id: str,
         current_version_id: str,
     ) -> PaperRuntimeProfile:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1897,7 +1901,7 @@ class PaperTradingV2Repository:
         version: PaperRuntimeProfileVersion,
     ) -> PaperRuntimeProfileVersion:
         self.get_runtime_profile(version.profile_id)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1960,7 +1964,7 @@ class PaperTradingV2Repository:
     ) -> PaperRuntimeConfigActivation:
         self.get_portfolio(activation.portfolio_id)
         self.get_runtime_profile_version(activation.profile_version_id)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2008,14 +2012,13 @@ class PaperTradingV2Repository:
         )
         return self._runtime_config_activation_from_row(rows[0]) if rows else None
 
-    @transactional_write
     def supersede_runtime_config_activation(
         self,
         *,
         portfolio_id: str,
         trade_date: date,
     ) -> int:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2046,9 +2049,8 @@ class PaperTradingV2Repository:
         )
         return [self._runtime_config_activation_from_row(row) for row in rows]
 
-    @transactional_write
     def save_config_change_audit(self, audit: PaperConfigChangeAudit) -> PaperConfigChangeAudit:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -2129,10 +2131,9 @@ class PaperTradingV2Repository:
             superseded_at=row["superseded_at"],
         )
 
-    @transactional_write
     def save_order(self, run_id: str, order: Order) -> None:
         stock_name = self._resolve_stock_names([order.symbol]).get(order.symbol)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2191,7 +2192,6 @@ class PaperTradingV2Repository:
         )
         return [self._order_from_row(row) for row in rows]
 
-    @transactional_write
     def save_fill(
         self,
         run_id: str,
@@ -2221,7 +2221,7 @@ class PaperTradingV2Repository:
                 fill_market_context = fill.metadata.get("fill_market_context")
         stock_name = self._resolve_stock_names([fill.symbol]).get(fill.symbol)
         now = datetime.now(UTC)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2288,9 +2288,8 @@ class PaperTradingV2Repository:
         )
 
 
-    @transactional_write
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2312,10 +2311,9 @@ class PaperTradingV2Repository:
                     ),
                 )
 
-    @transactional_write
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
         stock_name = self._resolve_stock_names([entry.symbol]).get(entry.symbol)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2340,13 +2338,17 @@ class PaperTradingV2Repository:
                     ),
                 )
 
-    @transactional_write
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         # T5: created_at / updated_at watermark fields for DW ETL. Passed
         # explicitly via now() so InMemory parity is preserved.
         now = datetime.now(UTC)
         stock_names = self._resolve_stock_names([position.symbol for position in positions])
-        with self._conn() as conn:
+        conn_cm = self._conn_factory()
+        if self._active_transaction_conn() is not None:
+            conn_cm = self._write_conn()
+        elif self._base_conn_factory_accepts_autocommit and self._run_broker_backend(run_id) == "local_sim":
+            conn_cm = self._write_conn()
+        with conn_cm as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
                 for position in positions:
@@ -2376,14 +2378,13 @@ class PaperTradingV2Repository:
                         ),
                     )
 
-    @transactional_write
     def save_daily_snapshot(self, *, run_id: str, trade_date: date, snapshot: AccountSnapshot, metadata: dict[str, Any] | None = None) -> None:
         metadata = metadata or {}
         # T5: created_at / updated_at watermark fields for DW ETL. updated_at
         # is bumped on every upsert (ON CONFLICT path); created_at is set on
         # INSERT only and preserved on conflict.
         now = datetime.now(UTC)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2417,18 +2418,16 @@ class PaperTradingV2Repository:
                     ),
                 )
 
-    @transactional_write
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict[str, Any] | None = None) -> None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO paper_v2.run_events (run_id, event_type, message, context) VALUES (%s, %s, %s, %s)",
                     (run_id, event_type, message, psycopg2.extras.Json(context or {})),
                 )
 
-    @transactional_write
     def save_error(self, *, run_id: str | None, portfolio_id: str | None, error: dict[str, Any]) -> None:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2444,7 +2443,6 @@ class PaperTradingV2Repository:
                     ),
                 )
 
-    @transactional_write
     def reset_portfolio_runs(
         self,
         *,
@@ -2461,7 +2459,7 @@ class PaperTradingV2Repository:
         if end_date is not None:
             date_filter += " AND trade_date <= %s"
             params.append(end_date)
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s{date_filter}", tuple(params))
                 run_ids = [row[0] for row in cur.fetchall()]
@@ -2513,7 +2511,7 @@ class PaperTradingV2Repository:
         status: str,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -2570,7 +2568,7 @@ class PaperTradingV2Repository:
         )
 
     def load_latest_positions(self, portfolio_id: str, before_or_on: date) -> dict[str, PositionLot]:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -2597,7 +2595,7 @@ class PaperTradingV2Repository:
         }
 
     def load_latest_cash(self, portfolio: PaperPortfolio, before_or_on: date) -> float:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -2877,7 +2875,7 @@ class PaperTradingV2Repository:
         )
 
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
-        with self._conn() as conn:
+        with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, params)
                 return [dict(row) for row in cur.fetchall()]
@@ -2924,7 +2922,6 @@ class InMemoryPaperTradingV2Repository:
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
         yield
 
-    @transactional_write
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
         self.portfolios[portfolio.portfolio_id] = portfolio
         return portfolio
@@ -3084,14 +3081,12 @@ class InMemoryPaperTradingV2Repository:
             },
         }
 
-    @transactional_write
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
         portfolio = self.get_portfolio(portfolio_id)
         updated = portfolio.model_copy(update={"status": status, "updated_at": datetime.now(UTC)})
         self.portfolios[portfolio_id] = updated
         return updated
 
-    @transactional_write
     def update_portfolio_auto_run(
         self,
         portfolio_id: str,
@@ -3124,7 +3119,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: item.auto_run_updated_at or item.updated_at, reverse=True)
         return rows[:limit]
 
-    @transactional_write
     def create_broker_account_binding(self, binding: PaperBrokerAccountBinding) -> PaperBrokerAccountBinding:
         for existing in self.list_active_broker_account_bindings(binding.portfolio_id):
             if existing.binding_id != binding.binding_id:
@@ -3284,7 +3278,6 @@ class InMemoryPaperTradingV2Repository:
         self.portfolios.pop(portfolio_id, None)
         return counts
 
-    @transactional_write
     def create_run(self, run: PaperRun) -> PaperRun:
         self.runs[run.run_id] = run
         return run
@@ -3301,7 +3294,6 @@ class InMemoryPaperTradingV2Repository:
         except KeyError as exc:
             raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run_id}) from exc
 
-    @transactional_write
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
         try:
             current = self.runs[run.run_id]
@@ -3320,13 +3312,11 @@ class InMemoryPaperTradingV2Repository:
         self.runs[run.run_id] = updated
         return updated
 
-    @transactional_write
     def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
         updated = run.model_copy(update={"runtime_config": runtime_config})
         self.runs[run.run_id] = updated
         return updated
 
-    @transactional_write
     def update_run_model_params_origin(
         self, run: PaperRun, model_params_origin: str
     ) -> PaperRun:
@@ -3342,7 +3332,6 @@ class InMemoryPaperTradingV2Repository:
         self.runs[run.run_id] = updated
         return updated
 
-    @transactional_write
     def create_session(self, session: PaperTradingSession) -> PaperTradingSession:
         self.get_portfolio(session.portfolio_id)
         self.sessions[session.session_id] = session
@@ -3378,7 +3367,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: (item.updated_at, item.created_at))
         return rows[:limit]
 
-    @transactional_write
     def update_session_status(
         self,
         session_id: str,
@@ -3403,7 +3391,6 @@ class InMemoryPaperTradingV2Repository:
         self.sessions[session_id] = updated
         return updated
 
-    @transactional_write
     def save_session_day(self, day: PaperSessionDay) -> PaperSessionDay:
         key = (day.session_id, day.trade_date)
         existing = self.session_days.get(key)
@@ -3418,7 +3405,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: item.trade_date)
         return rows
 
-    @transactional_write
     def save_session_event(
         self,
         *,
@@ -3443,7 +3429,6 @@ class InMemoryPaperTradingV2Repository:
     def list_session_events(self, session_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
         return [dict(item) for item in self.session_events if item.get("session_id") == session_id][:limit]
 
-    @transactional_write
     def save_order_execution_state(self, state: OrderExecutionState) -> OrderExecutionState:
         self.order_execution_states[state.order_id] = state
         return state
@@ -3462,7 +3447,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: (item.created_at, item.order_id))
         return rows
 
-    @transactional_write
     def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
         key = (snapshot.run_id, snapshot.snapshot_time)
         self.intraday_snapshots.setdefault(key, snapshot)
@@ -3528,7 +3512,6 @@ class InMemoryPaperTradingV2Repository:
         active.sort(key=lambda item: item.activated_at, reverse=True)
         return active[0] if active else None
 
-    @transactional_write
     def supersede_execution_policy_activation(
         self,
         *,
@@ -3670,7 +3653,6 @@ class InMemoryPaperTradingV2Repository:
         active.sort(key=lambda item: item.activated_at, reverse=True)
         return active[0] if active else None
 
-    @transactional_write
     def supersede_runtime_config_activation(
         self,
         *,
@@ -3708,7 +3690,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: (item.trade_date, item.activated_at), reverse=True)
         return rows[:limit]
 
-    @transactional_write
     def save_config_change_audit(self, audit: PaperConfigChangeAudit) -> PaperConfigChangeAudit:
         saved = audit.model_copy(update={"audit_id": len(self.config_change_audits) + 1})
         self.config_change_audits.append(saved)
@@ -3734,7 +3715,6 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: (item["trade_date"], item["started_at"]), reverse=True)
         return rows[:limit]
 
-    @transactional_write
     def save_order(self, run_id: str, order: Order) -> None:
         existing = [item for item in self.orders.get(run_id, []) if item.order_id != order.order_id]
         existing.append(order)
@@ -3750,7 +3730,6 @@ class InMemoryPaperTradingV2Repository:
     def list_orders_for_run(self, run_id: str) -> list[Order]:
         return list(self.orders.get(run_id, []))
 
-    @transactional_write
     def save_fill(
         self,
         run_id: str,
@@ -3777,7 +3756,6 @@ class InMemoryPaperTradingV2Repository:
     def list_fills_for_run(self, run_id: str) -> list[dict[str, Any]]:
         return [fill.model_dump(mode="json") for fill in self.fills.get(run_id, [])]
 
-    @transactional_write
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
         existing = self.events.setdefault(run_id, [])
         if not any(item.event_id == event.event_id for item in existing):
@@ -3810,14 +3788,12 @@ class InMemoryPaperTradingV2Repository:
         rows.sort(key=lambda item: str(item.get("event_time") or ""), reverse=True)
         return rows[:limit]
 
-    @transactional_write
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
         entries = self.cash_entries.setdefault(run_id, [])
         if any(existing.fill_id == entry.fill_id for existing in entries):
             return
         entries.append(entry)
 
-    @transactional_write
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         self.positions[run_id] = positions
         # T5 watermark: save_positions deletes-and-inserts at the PG level
@@ -3826,7 +3802,6 @@ class InMemoryPaperTradingV2Repository:
         now = datetime.now(UTC)
         self.position_capture[run_id] = {"created_at": now, "updated_at": now}
 
-    @transactional_write
     def save_daily_snapshot(self, *, run_id: str, trade_date: date, snapshot: AccountSnapshot, metadata: dict[str, Any] | None = None) -> None:
         self.snapshots[run_id] = snapshot
         # T5 watermark: PG path is upsert keyed by (portfolio_id, trade_date),
@@ -3841,11 +3816,9 @@ class InMemoryPaperTradingV2Repository:
         else:
             existing["updated_at"] = now
 
-    @transactional_write
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict[str, Any] | None = None) -> None:
         self.run_events.append({"run_id": run_id, "event_type": event_type, "message": message, "context": context or {}})
 
-    @transactional_write
     def save_error(self, *, run_id: str | None, portfolio_id: str | None, error: dict[str, Any]) -> None:
         self.errors.append({"run_id": run_id, "portfolio_id": portfolio_id, "error": error})
 
@@ -3864,7 +3837,6 @@ class InMemoryPaperTradingV2Repository:
     def list_errors(self, portfolio_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
         return [dict(item) for item in self.errors if item.get("portfolio_id") == portfolio_id][:limit]
 
-    @transactional_write
     def reset_portfolio_runs(
         self,
         *,
