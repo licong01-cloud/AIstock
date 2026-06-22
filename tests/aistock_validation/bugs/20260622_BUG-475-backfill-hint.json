@@ -2,6 +2,7 @@
   "actual": "monitoring/process-exporter/config.yml 仍匹配 backfill_factor_cache；correlation_compute_service 缺缓存 hint 仍使用 backfill 命名。",
   "allowed_write_scope": [
     "backend/services/quantevolver/correlation_compute_service.py",
+    "monitoring/process-exporter/config.yml",
     "tests/aistock_validation/bugs/20260622_BUG-475-backfill-hint.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -21,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-e7ada547a757",
       "timestamp": "2026-06-22T07:33:24.907385Z"
+    },
+    {
+      "timestamp": "2026-06-22T07:58:00Z",
+      "actor": "codex",
+      "action": "scope_expand",
+      "note": "Add process-exporter config because BUG actual/expected explicitly cites retired backfill_factor_cache monitoring."
     }
   ],
   "evidence_uris": [],

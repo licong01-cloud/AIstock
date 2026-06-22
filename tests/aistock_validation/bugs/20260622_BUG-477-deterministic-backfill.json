@@ -1,5 +1,5 @@
 {
-  "actual": "旧 backfill CLI 和 FactorAnalyst backfill 方法仍保留，虽然当前使用 source=single，但命名和入口会误导后续使用。",
+  "actual": "scripts/_backfill_v2_deterministic.py and FactorAnalyst.backfill_deterministic_v2/batch_backfill_deterministic_v2 still expose an old manual backfill entry, which conflicts with the single official full-compute cache path.",
   "allowed_write_scope": [
     "backend/services/quantevolver/factor_analyst.py",
     "scripts/_backfill_v2_deterministic.py",
@@ -16,17 +16,23 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-22T07:44:12.644945Z",
-  "description": "旧 backfill CLI 和 FactorAnalyst backfill 方法仍保留，虽然当前使用 source=single，但命名和入口会误导后续使用。",
+  "description": "scripts/_backfill_v2_deterministic.py and FactorAnalyst.backfill_deterministic_v2/batch_backfill_deterministic_v2 still expose an old manual backfill entry, which conflicts with the single official full-compute cache path.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-8249b355c8bb",
       "timestamp": "2026-06-22T07:44:12.644940Z"
+    },
+    {
+      "timestamp": "2026-06-22T07:55:00Z",
+      "actor": "codex",
+      "action": "severity_align_for_batch",
+      "note": "Scope is same quantevolver official cache cleanup lane; align to P2 so BUG-474..477 can share one fix/validation PR."
     }
   ],
   "evidence_uris": [],
-  "expected": "因子库仅保留官方权威的因子值缓存/独立指标计算链路；旧 deterministic backfill 操作入口如无消费端应删除或明确退役，避免与官方 full compute 链路并存。",
+  "expected": "Keep only the authoritative official factor-value cache and independent-metrics path; remove retired deterministic backfill entry points when no active consumer exists.",
   "first_seen_at": "2026-06-22T07:44:12.644945Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -48,12 +54,12 @@
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P3",
+  "severity": "P2",
   "status": "open",
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "因子分类 deterministic backfill 旧回填入口仍残留",
+  "title": "Retired deterministic backfill entry remains in factor classification path",
   "trigger_condition": {
     "fingerprint": "8249b355c8bb6004015f884a",
     "source_event_id": "FE-20260622-8249b355c8bb"
