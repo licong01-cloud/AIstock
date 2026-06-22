@@ -14,7 +14,12 @@ from backend.services.miniqmt_execution_runtime import (
     JsonFileMiniQMTExecutionRuntimeRepository,
     MiniQMTExecutionRuntimeClient,
     MiniQMTOperatorCommandStatus,
+    QmtClientMiniQMTEventLoopGateway,
     QmtClientMiniQMTGateway,
+)
+from backend.services.miniqmt_execution_runtime.config import (
+    MiniQMTExecutionRuntimeKind,
+    get_miniqmt_execution_runtime_kind,
 )
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
@@ -41,7 +46,12 @@ def get_miniqmt_runtime_client() -> MiniQMTExecutionRuntimeClient:
 
 
 def get_miniqmt_gateway() -> QmtClientMiniQMTGateway:
-    return QmtClientMiniQMTGateway(
+    gateway_cls = (
+        QmtClientMiniQMTEventLoopGateway
+        if get_miniqmt_execution_runtime_kind(os.environ) == MiniQMTExecutionRuntimeKind.EVENT_LOOP
+        else QmtClientMiniQMTGateway
+    )
+    return gateway_cls(
         qmt_client=get_qmt_client_singleton(),
         order_remark_prefix="simrt-opcmd",
     )

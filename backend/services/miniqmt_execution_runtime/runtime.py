@@ -88,12 +88,19 @@ class MiniQMTExecutionRuntime:
         config: MiniQMTExecutionRuntimeConfig,
         repository: MiniQMTExecutionRuntimeRepository,
         gateway: MiniQMTGateway,
+        strategy_ledger_repository: Any | None = None,
+        account_id: str | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
         self.gateway = gateway
         self.events = MiniQMTExecutionEventLoop(repository=repository)
-        self.oms = MiniQMTOmsLedger(repository)
+        self.oms = MiniQMTOmsLedger(
+            repository,
+            strategy_ledger_repository=strategy_ledger_repository,
+            account_id=account_id or config.account_group_id,
+            trade_date=config.trade_date,
+        )
         self._vnpy_cores: dict[str, VnpyAlgoTemplate] = {}
         self._vnpy_random_volume_providers: dict[str, Callable[[int, int], float]] = {}
         event_sink_binder = getattr(gateway, "bind_event_sink", None)
@@ -164,6 +171,7 @@ class MiniQMTExecutionRuntime:
                 "sync_before_new_orders": True,
             },
         )
+        self.oms.reconcile_child_orders_from_ledger(runtime.runtime_id)
         self._reconcile_child_orders_from_broker_snapshot(
             runtime.runtime_id,
             broker_orders=broker_orders,
@@ -543,8 +551,13 @@ class MiniQMTExecutionRuntime:
                 child_quantity=child.quantity,
                 broker_trades=[],
             )
+            child_metadata = {
+                **dict(child.metadata),
+                "status_msg": str((payload or {}).get("status_msg") or child.metadata.get("status_msg") or ""),
+                "broker_order_event": dict(payload or {}),
+            }
             child = self.oms.record_child_order(
-                child.model_copy(update={"status": child_status})
+                child.model_copy(update={"status": child_status, "metadata": child_metadata})
             )
             instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
             if instance is not None and self._is_vnpy_instance(instance):
@@ -590,15 +603,26 @@ class MiniQMTExecutionRuntime:
             cumulative_quantity = int(
                 (payload or {}).get("cumulative_quantity") or (payload or {}).get("filled_quantity") or quantity
             )
-            child = self.oms.record_child_order(
-                child.model_copy(
-                    update={
-                        "status": MiniQMTChildOrderStatus.FILLED
-                        if cumulative_quantity >= child.quantity
-                        else MiniQMTChildOrderStatus.PARTIALLY_FILLED
-                    }
-                )
+            updated_child = child.model_copy(
+                update={
+                    "status": MiniQMTChildOrderStatus.FILLED
+                    if cumulative_quantity >= child.quantity
+                    else MiniQMTChildOrderStatus.PARTIALLY_FILLED,
+                    "metadata": {
+                        **dict(child.metadata),
+                        "last_trade_event": {
+                            "broker_order_id": broker_order_id,
+                            "quantity": quantity,
+                            "price": price,
+                            **dict(payload or {}),
+                        },
+                        "last_trade_price": price,
+                        "cumulative_quantity": cumulative_quantity,
+                    },
+                }
             )
+            self.oms.record_trade_fill(updated_child, quantity=quantity, price=price, payload=payload)
+            child = self.oms.record_child_order(updated_child)
             instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
             if instance is not None and self._is_vnpy_instance(instance):
                 core = self._ensure_vnpy_core(instance)
