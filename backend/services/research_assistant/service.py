@@ -465,37 +465,111 @@ class _ServiceReactMcpProvider:
                 ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
             )
         except Exception as exc:
-            error_payload = self.service._tool_error_payload(call, exc, stage="preflight")
-            logger.exception(
-                "research assistant MCP preflight failed: reason_code=%s tool=%s/%s",
-                error_payload["reason_code"],
-                call.server_key,
-                call.tool_name,
-            )
-            preflight = {
-                "proposal": proposal,
-                "preflight": {
-                    "passed": False,
-                    "approval_required": True,
-                    "failed_checks": [{"check": "preflight", "detail": error_payload["message"], "reason_code": error_payload["reason_code"]}],
-                    "error": error_payload,
-                },
-            }
+            if "proposal must be confirmed before preflight" in str(exc):
+                preflight_payload = self.service.preflight_mcp_tool(
+                    McpPreflightRequest(
+                        task_id=proposal["task_id"],
+                        server_key=call.server_key,
+                        tool_name=call.tool_name,
+                        payload_json=payload,
+                        idempotency_key=proposal["idempotency_key"],
+                    )
+                )
+                if preflight_payload.get("tool_event_id"):
+                    self.service.repository.update_record(
+                        "mcp_tool_events",
+                        preflight_payload["tool_event_id"],
+                        {
+                            "action_proposal_id": proposal["action_proposal_id"],
+                            "plan_digest": proposal["plan_digest"],
+                            "transport": "research_assistant_chat_preflight",
+                            "response_json": preflight_payload,
+                        },
+                    )
+                next_status = "preflight_failed" if preflight_payload.get("failed_checks") else "approval_required" if preflight_payload.get("approval_required") else "preflight_passed"
+                proposal = self.service.repository.update_record("action_proposals", proposal["action_proposal_id"], {"status": next_status})
+                preflight = {"proposal": proposal, "preflight": preflight_payload}
+            else:
+                error_payload = self.service._tool_error_payload(call, exc, stage="preflight")
+                logger.exception(
+                    "research assistant MCP preflight failed: reason_code=%s tool=%s/%s",
+                    error_payload["reason_code"],
+                    call.server_key,
+                    call.tool_name,
+                )
+                preflight = {
+                    "proposal": proposal,
+                    "preflight": {
+                        "passed": False,
+                        "approval_required": True,
+                        "failed_checks": [{"check": "preflight", "detail": error_payload["message"], "reason_code": error_payload["reason_code"]}],
+                        "error": error_payload,
+                    },
+                }
         proposal_state = preflight.get("proposal") if isinstance(preflight.get("proposal"), dict) else proposal
         preflight_payload = preflight.get("preflight") if isinstance(preflight.get("preflight"), dict) else {}
         status = str(proposal_state.get("status") or "preflight_required")
+        approval = None
+        if status == "approval_required":
+            try:
+                approval = self.service._ensure_action_proposal_chat_approval(
+                    proposal_state,
+                    preflight_payload=preflight_payload,
+                    decision=decision,
+                    call=call,
+                )
+                proposal_state = self.service.repository.get_record("action_proposals", proposal["action_proposal_id"]) or proposal_state
+                preflight_payload = dict(preflight_payload)
+                preflight_payload["approval_id"] = approval["approval_id"]
+                preflight_payload["required_confirmation_text"] = approval["required_confirmation_text"]
+                preflight_payload["approval_type"] = approval["approval_type"]
+            except Exception as exc:
+                reason_code = "approval_confirmation_token_config_missing" if "missing configured required_confirmations" in str(exc) else "approval_setup_failed"
+                error_payload = {
+                    "reason_code": reason_code,
+                    "code": reason_code,
+                    "stage": "approval_setup",
+                    "server_key": call.server_key,
+                    "tool_name": call.tool_name,
+                    "action_proposal_id": proposal.get("action_proposal_id"),
+                    "capability_key": proposal.get("capability_key"),
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                logger.exception(
+                    "research assistant approval setup failed: reason_code=%s proposal=%s tool=%s/%s",
+                    reason_code,
+                    proposal.get("action_proposal_id"),
+                    call.server_key,
+                    call.tool_name,
+                )
+                preflight_payload = dict(preflight_payload)
+                preflight_payload["approval_required"] = True
+                preflight_payload["passed"] = False
+                preflight_payload["error"] = error_payload
+                failed_checks = list(preflight_payload.get("failed_checks") or [])
+                failed_checks.append({"check": "approval_setup", "detail": str(exc), "reason_code": reason_code})
+                preflight_payload["failed_checks"] = failed_checks
         self.cards.setdefault("action_proposals", [])
-        self.cards["action_proposals"].append(
-            {
-                "title": proposal["title"],
-                "risk": decision.risk_level,
-                "approval_required": True,
-                "status": status,
-                "action_proposal_id": proposal["action_proposal_id"],
-                "route": f"{call.server_key}/{call.tool_name}",
-                "required_confirmations": (decision.catalog_entry.required_confirmations if decision.catalog_entry else ()),
-            }
-        )
+        proposal_card = {
+            "title": proposal["title"],
+            "risk": decision.risk_level,
+            "approval_required": True,
+            "status": status,
+            "action_proposal_id": proposal["action_proposal_id"],
+            "route": f"{call.server_key}/{call.tool_name}",
+            "required_confirmations": (decision.catalog_entry.required_confirmations if decision.catalog_entry else ()),
+        }
+        if approval:
+            proposal_card.update(
+                {
+                    "approval_id": approval["approval_id"],
+                    "approval_type": approval["approval_type"],
+                    "required_confirmation_text": approval["required_confirmation_text"],
+                    "approval_status": approval["status"],
+                }
+            )
+        self.cards["action_proposals"].append(proposal_card)
         self.cards["mcp_execution_result"] = {
             "auto_executed": False,
             "executed": False,
@@ -507,6 +581,15 @@ class _ServiceReactMcpProvider:
             "preflight": preflight_payload,
             "summary_first": True,
         }
+        if approval:
+            self.cards["mcp_execution_result"].update(
+                {
+                    "approval_id": approval["approval_id"],
+                    "approval_type": approval["approval_type"],
+                    "required_confirmation_text": approval["required_confirmation_text"],
+                    "approval_status": approval["status"],
+                }
+            )
         self.cards["mcp_preflight_result"] = preflight_payload
         return McpToolResult(
             server_key=call.server_key,
@@ -532,6 +615,7 @@ class _ServiceReactMcpProvider:
 logger = logging.getLogger("aistock.research_assistant.service")
 
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
+ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE = "action_proposal.execute"
 PIPELINE_ISSUE_FACT_SOURCE_UNAVAILABLE = "validation_issue_fact_source_unavailable"
 PIPELINE_ISSUE_SOURCE_OF_TRUTH = "validation_pipeline_issue_candidates"
 RA_DRAFT_STORAGE_NOTICE = "\u975e\u6743\u5a01\u5bf9\u8bdd\u8349\u7a3f/\u89e3\u91ca\u7f13\u5b58\uff0c\u5df2\u9000\u573a\uff1b\u6b63\u5f0f\u4e8b\u5b9e\u6e90=Validation/Nightly/issue workflow"
@@ -2372,6 +2456,522 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             decided_by="research_assistant_gate",
         )
 
+    @staticmethod
+    def _approval_context(approval: dict[str, Any]) -> dict[str, Any]:
+        context = approval.get("approval_context_json")
+        return dict(context) if isinstance(context, dict) else {}
+
+    def _action_proposal_for_approval(self, approval: dict[str, Any]) -> dict[str, Any] | None:
+        context = self._approval_context(approval)
+        action_proposal_id = str(context.get("action_proposal_id") or "")
+        proposal = self.repository.get_record("action_proposals", action_proposal_id) if action_proposal_id else None
+        if proposal:
+            return proposal
+        if approval.get("approval_id"):
+            return self.repository.find_one("action_proposals", {"approval_id": str(approval["approval_id"])})
+        return None
+
+    @staticmethod
+    def _approval_requires_explicit_token(approval: dict[str, Any], proposal: dict[str, Any] | None) -> bool:
+        context = ResearchAssistantService._approval_context(approval)
+        if str(context.get("required_approval_level") or "").upper() == "L2":
+            return True
+        risk = str((proposal or {}).get("risk_level") or approval.get("risk_level") or context.get("risk_level") or "")
+        side_effect = str((proposal or {}).get("side_effect_level") or context.get("side_effect_level") or "")
+        return "production_sensitive" in {risk, side_effect}
+
+    @staticmethod
+    def _message_is_clear_approval_affirmation(message: str) -> bool:
+        text = message.strip()
+        if not text:
+            return False
+        lower = text.lower()
+        negative_terms = ("不同意", "不确认", "不要", "别", "拒绝", "取消", "否", "no", "reject", "cancel")
+        if any(term in lower for term in negative_terms):
+            return False
+        direct = {"同意", "确认", "批准", "确认执行", "同意执行", "可以执行", "继续执行", "approve", "approved", "yes"}
+        if lower in direct:
+            return True
+        affirmative_terms = ("同意", "确认", "批准", "approve", "yes")
+        reference_terms = ("执行", "审批", "批准", "这个", "该操作", "上一步", "上一轮", "继续", "确认它")
+        return any(term in lower for term in affirmative_terms) and any(term in lower for term in reference_terms)
+
+    @staticmethod
+    def _approval_confirmation_reason(exc: BaseException) -> str:
+        message = str(exc).lower()
+        if isinstance(exc, KeyError) or "not found" in message:
+            return "approval_confirmation_approval_not_found"
+        if "confirmation_text" in message:
+            return "approval_confirmation_text_mismatch"
+        if "not pending" in message:
+            return "approval_confirmation_not_pending"
+        if "approval_type" in message:
+            return "approval_confirmation_type_mismatch"
+        return "approval_confirmation_rejected"
+
+    @staticmethod
+    def _approval_confirmation_error(
+        *,
+        reason_code: str,
+        message: str,
+        approval_id: str | None = None,
+        action_proposal_id: str | None = None,
+        expected_confirmation_text: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": "chat_approval_confirmation",
+            "approval_id": approval_id,
+            "action_proposal_id": action_proposal_id,
+            "message": message,
+            "expected_confirmation_text": expected_confirmation_text,
+            "operator_action": "请在同一对话中显式提供 confirm_approval_id，并让 confirmation_text 完全等于审批卡片上的确认口令。",
+        }
+
+    def _required_confirmation_text_for_chat_approval(
+        self,
+        proposal: dict[str, Any],
+        *,
+        preflight_payload: dict[str, Any],
+        decision: ToolGateDecision,
+        call: McpToolCall,
+    ) -> str:
+        candidates: list[str] = []
+        for item in preflight_payload.get("missing_confirmations") or []:
+            if str(item):
+                candidates.append(str(item))
+        if decision.catalog_entry:
+            candidates.extend(str(item) for item in decision.catalog_entry.required_confirmations if str(item))
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
+        if not capability:
+            raise KeyError(f"approved capability not found: {proposal['capability_key']}")
+        tool = self._resolve_capability_tool(capability, proposal)
+        effective_profile = self._effective_action_profile(capability, tool)
+        candidates.extend(str(item) for item in effective_profile.get("required_confirmations", []) if str(item))
+        if not candidates:
+            raise ValueError(
+                "action proposal approval is missing configured required_confirmations: "
+                f"action_proposal_id={proposal.get('action_proposal_id')} "
+                f"capability_key={proposal.get('capability_key')} tool={call.server_key}/{call.tool_name}"
+            )
+        return candidates[0]
+
+    def _ensure_action_proposal_chat_approval(
+        self,
+        proposal: dict[str, Any],
+        *,
+        preflight_payload: dict[str, Any],
+        decision: ToolGateDecision,
+        call: McpToolCall,
+    ) -> dict[str, Any]:
+        existing_approval_id = str(proposal.get("approval_id") or "")
+        if existing_approval_id:
+            approval = self.repository.get_record("approvals", existing_approval_id)
+            if not approval:
+                raise KeyError(f"action proposal references missing approval: {existing_approval_id}")
+            if approval.get("approval_type") != ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE:
+                raise ValueError(
+                    "action proposal approval_type mismatch: "
+                    f"approval_id={existing_approval_id} expected={ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE} actual={approval.get('approval_type')}"
+                )
+            if approval.get("status") != "pending":
+                raise ValueError(f"action proposal approval is not pending: approval_id={existing_approval_id} status={approval.get('status')}")
+            return approval
+
+        required_confirmation_text = self._required_confirmation_text_for_chat_approval(
+            proposal,
+            preflight_payload=preflight_payload,
+            decision=decision,
+            call=call,
+        )
+        required_approval_level = "L2" if "production_sensitive" in {str(proposal.get("risk_level") or ""), str(proposal.get("side_effect_level") or "")} else "L1"
+        approval = self.create_approval(
+            ApprovalCreate(
+                task_id=proposal["task_id"],
+                approval_type=ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE,
+                risk_level=str(proposal.get("risk_level") or decision.risk_level),
+                plan_digest=str(proposal["plan_digest"]),
+                config_version_id=proposal.get("runtime_config_activation_id"),
+                summary=(
+                    f"Execute action proposal {proposal['action_proposal_id']} "
+                    f"for {proposal.get('capability_key')} via {call.server_key}/{call.tool_name}"
+                ),
+                required_confirmation_text=required_confirmation_text,
+                created_by="research_assistant_chat_gate",
+            )
+        )
+        context = {
+            "conversation_id": proposal.get("conversation_id"),
+            "action_proposal_id": proposal["action_proposal_id"],
+            "capability_key": proposal.get("capability_key"),
+            "server_key": call.server_key,
+            "tool_name": call.tool_name,
+            "risk_level": proposal.get("risk_level"),
+            "side_effect_level": proposal.get("side_effect_level"),
+            "required_approval_level": required_approval_level,
+            "source": "chat_preflight_confirmation_card",
+        }
+        approval = self.repository.update_record("approvals", approval["approval_id"], {"approval_context_json": context})
+        self.repository.update_record("action_proposals", proposal["action_proposal_id"], {"approval_id": approval["approval_id"]})
+        return approval
+
+    def _pending_chat_action_approvals(self, conversation_id: str, *, last_assistant_only: bool) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        approval_page = self.repository.list_records("approvals", filters={"status": "pending"}, limit=self.configured_limit("api_list_approvals"))
+        last_ids = self._last_assistant_pending_approval_ids(conversation_id) if last_assistant_only else None
+        matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for approval in approval_page["items"]:
+            if approval.get("approval_type") != ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE:
+                continue
+            proposal = self._action_proposal_for_approval(approval)
+            if not proposal or proposal.get("conversation_id") != conversation_id:
+                continue
+            if last_ids is not None and approval.get("approval_id") not in last_ids:
+                continue
+            matches.append((approval, proposal))
+        return matches
+
+    def _last_assistant_pending_approval_ids(self, conversation_id: str) -> set[str]:
+        messages = self.repository.list_records(
+            "conversation_messages",
+            filters={"conversation_id": conversation_id},
+            limit=self.configured_limit("conversation_messages_full"),
+        )["items"]
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            content_json = message.get("content_json") if isinstance(message.get("content_json"), dict) else {}
+            cards = content_json.get("cards") if isinstance(content_json.get("cards"), dict) else {}
+            ids: set[str] = set()
+            for proposal in cards.get("action_proposals") or []:
+                if not isinstance(proposal, dict):
+                    continue
+                if proposal.get("approval_id") and proposal.get("approval_required"):
+                    ids.add(str(proposal["approval_id"]))
+            execution = cards.get("mcp_execution_result") if isinstance(cards.get("mcp_execution_result"), dict) else {}
+            if execution.get("approval_id") and execution.get("status") == "approval_required":
+                ids.add(str(execution["approval_id"]))
+            return ids
+        return set()
+
+    def _chat_action_approval_context(self, approval_id: str, conversation_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+        approval = self.repository.get_record("approvals", approval_id)
+        if not approval:
+            return None, None, self._approval_confirmation_error(
+                reason_code="approval_confirmation_approval_not_found",
+                message=f"approval_id 不存在：{approval_id}",
+                approval_id=approval_id,
+            )
+        if approval.get("approval_type") != ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE:
+            return approval, None, self._approval_confirmation_error(
+                reason_code="approval_confirmation_type_mismatch",
+                message=f"approval_type 不匹配：expected={ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE}, actual={approval.get('approval_type')}",
+                approval_id=approval_id,
+            )
+        proposal = self._action_proposal_for_approval(approval)
+        if not proposal:
+            return approval, None, self._approval_confirmation_error(
+                reason_code="approval_confirmation_action_proposal_missing",
+                message=f"approval_id 未绑定 action_proposal：{approval_id}",
+                approval_id=approval_id,
+            )
+        if proposal.get("conversation_id") != conversation_id:
+            return approval, proposal, self._approval_confirmation_error(
+                reason_code="approval_confirmation_cross_conversation",
+                message=f"approval_id 不属于当前对话：approval_id={approval_id}",
+                approval_id=approval_id,
+                action_proposal_id=str(proposal.get("action_proposal_id") or ""),
+                expected_confirmation_text=str(approval.get("required_confirmation_text") or ""),
+            )
+        return approval, proposal, None
+
+    def _maybe_handle_chat_approval_confirmation(
+        self,
+        *,
+        data: ChatTurnRequest,
+        conversation_id: str,
+        task: dict[str, Any],
+        user_message: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+    ) -> dict[str, Any] | None:
+        if data.confirm_approval_id or data.confirmation_text:
+            if data.created_by != "user":
+                error = self._approval_confirmation_error(
+                    reason_code="approval_confirmation_requires_user_message",
+                    message=f"审批确认只能来自用户消息，created_by={data.created_by}",
+                    approval_id=data.confirm_approval_id,
+                )
+                return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+            if data.confirm_approval_id:
+                approval, proposal, error = self._chat_action_approval_context(data.confirm_approval_id, conversation_id)
+                if error:
+                    return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+            else:
+                pending = self._pending_chat_action_approvals(conversation_id, last_assistant_only=True)
+                if len(pending) != 1:
+                    error = self._approval_confirmation_error(
+                        reason_code="approval_confirmation_ambiguous_pending_approval",
+                        message=f"当前对话上一轮 pending approval 数量为 {len(pending)}；请显式提供 confirm_approval_id。",
+                    )
+                    return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+                approval, proposal = pending[0]
+            if not data.confirmation_text:
+                error = self._approval_confirmation_error(
+                    reason_code="approval_confirmation_text_required",
+                    message="缺少 confirmation_text；必须完全等于审批卡片上的确认口令。",
+                    approval_id=str((approval or {}).get("approval_id") or data.confirm_approval_id or ""),
+                    action_proposal_id=str((proposal or {}).get("action_proposal_id") or ""),
+                    expected_confirmation_text=str((approval or {}).get("required_confirmation_text") or ""),
+                )
+                return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+            return self._consume_and_execute_chat_approval(
+                data,
+                conversation_id,
+                task,
+                user_message,
+                dialogue_intent,
+                mode_decision,
+                approval=approval,
+                proposal=proposal,
+                confirmation_text=data.confirmation_text,
+                confirmation_source="explicit_request_field",
+            )
+
+        if not self._message_is_clear_approval_affirmation(data.message):
+            return None
+        pending = self._pending_chat_action_approvals(conversation_id, last_assistant_only=True)
+        if not pending:
+            return None
+        if data.created_by != "user":
+            error = self._approval_confirmation_error(
+                reason_code="approval_confirmation_requires_user_message",
+                message=f"审批确认只能来自用户消息，created_by={data.created_by}",
+            )
+            return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+        if len(pending) != 1:
+            error = self._approval_confirmation_error(
+                reason_code="approval_confirmation_ambiguous_pending_approval",
+                message=f"当前对话上一轮有 {len(pending)} 个 pending approval；“同意/确认”存在歧义，请显式提供 approval_id 和确认口令。",
+            )
+            return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+        approval, proposal = pending[0]
+        if self._approval_requires_explicit_token(approval, proposal):
+            error = self._approval_confirmation_error(
+                reason_code="approval_confirmation_l2_requires_explicit_token",
+                message="该审批为 L2/production_sensitive，裸“同意/确认”不能映射为确认口令；必须显式回填确认口令。",
+                approval_id=str(approval.get("approval_id") or ""),
+                action_proposal_id=str(proposal.get("action_proposal_id") or ""),
+                expected_confirmation_text=str(approval.get("required_confirmation_text") or ""),
+            )
+            return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+        return self._consume_and_execute_chat_approval(
+            data,
+            conversation_id,
+            task,
+            user_message,
+            dialogue_intent,
+            mode_decision,
+            approval=approval,
+            proposal=proposal,
+            confirmation_text=str(approval.get("required_confirmation_text") or ""),
+            confirmation_source="user_natural_language_affirmation",
+        )
+
+    def _consume_and_execute_chat_approval(
+        self,
+        data: ChatTurnRequest,
+        conversation_id: str,
+        task: dict[str, Any],
+        user_message: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+        *,
+        approval: dict[str, Any],
+        proposal: dict[str, Any],
+        confirmation_text: str,
+        confirmation_source: str,
+    ) -> dict[str, Any]:
+        approval_id = str(approval.get("approval_id") or "")
+        action_proposal_id = str(proposal.get("action_proposal_id") or "")
+        try:
+            consumed = self._consume_approval_gate(
+                approval_id=approval_id,
+                confirmation_text=confirmation_text,
+                approval_type=ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE,
+                required_summary_fragment=action_proposal_id,
+            )
+        except (KeyError, ValueError) as exc:
+            error = self._approval_confirmation_error(
+                reason_code=self._approval_confirmation_reason(exc),
+                message=str(exc),
+                approval_id=approval_id,
+                action_proposal_id=action_proposal_id,
+                expected_confirmation_text=str(approval.get("required_confirmation_text") or ""),
+            )
+            return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+        proposal = self.repository.update_record("action_proposals", action_proposal_id, {"status": "approved", "approval_id": approval_id})
+        executed = self.execute_action_proposal(
+            action_proposal_id,
+            ActionProposalExecuteRequest(
+                payload_json=dict(proposal.get("input_json") or {}),
+                idempotency_key=proposal.get("idempotency_key"),
+            ),
+        )
+        return self._chat_approval_response(
+            data,
+            conversation_id,
+            task,
+            user_message,
+            dialogue_intent,
+            mode_decision,
+            approval=consumed,
+            proposal=proposal,
+            executed=executed,
+            confirmation_source=confirmation_source,
+        )
+
+    def _chat_approval_response(
+        self,
+        data: ChatTurnRequest,
+        conversation_id: str,
+        task: dict[str, Any],
+        user_message: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+        *,
+        approval: dict[str, Any] | None = None,
+        proposal: dict[str, Any] | None = None,
+        executed: dict[str, Any] | None = None,
+        confirmation_source: str | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        mode_decision_json = mode_decision.as_dict()
+        cards: dict[str, Any] = {
+            "intent_type": "approval_confirmation",
+            "dialogue_mode": mode_decision.mode.value,
+            "mode_decision": mode_decision_json,
+            "status_rail": [{"label": "审批确认", "status": "failed" if error else "done"}],
+            "action_proposals": [],
+            "safety": {
+                "no_silent_error": True,
+                "fail_closed": bool(error),
+                "confirmation_text_exact_match": error is None,
+                "agent_self_approval_prevented": True,
+            },
+        }
+        if error:
+            assistant_text = (
+                "审批确认未执行："
+                f"reason_code={error['reason_code']}; "
+                f"approval_id={error.get('approval_id')}; "
+                f"action_proposal_id={error.get('action_proposal_id')}; "
+                f"message={error.get('message')}; "
+                f"operator_action={error.get('operator_action')}"
+            )
+            cards["approval_confirmation"] = {"status": "blocked", **error}
+            cards["mcp_execution_result"] = {"auto_executed": False, "executed": False, "status": "blocked", "error": error}
+            trace_status = "blocked"
+        else:
+            if approval is None or proposal is None or executed is None:
+                raise ValueError(
+                    "chat approval response requires approval, proposal, and execution result when no error is present; "
+                    f"approval_present={approval is not None} proposal_present={proposal is not None} executed_present={executed is not None}"
+                )
+            tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+            payload = dict(proposal.get("input_json") or {})
+            server_key = str(tool_event.get("server_key") or payload.get("server_key") or "")
+            tool_name = str(tool_event.get("tool_name") or payload.get("tool_name") or "")
+            result = McpToolResult(
+                server_key=server_key,
+                tool_name=tool_name,
+                status=str(executed.get("status") or "unknown"),
+                payload_json=tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {},
+                source_refs=self._mcp_result_source_refs(tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}, tool_event),
+                as_of=self._mcp_result_as_of(tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}),
+                action_proposal_id=str(proposal["action_proposal_id"]),
+                executed=bool(executed.get("executed")),
+                error_json=dict(executed.get("error") or {}),
+            )
+            self._populate_cards_from_tool_execution(cards, proposal, executed, result)
+            cards["mcp_execution_result"]["auto_executed"] = False
+            cards["mcp_execution_result"]["triggered_by_approval"] = True
+            cards["mcp_execution_result"]["approval_id"] = approval["approval_id"]
+            cards["approval_confirmation"] = {
+                "status": "executed" if executed.get("executed") else "execution_failed",
+                "approval_id": approval["approval_id"],
+                "approval_type": approval.get("approval_type"),
+                "action_proposal_id": proposal["action_proposal_id"],
+                "confirmation_source": confirmation_source,
+                "proposal_status": (executed.get("proposal") or {}).get("status") if isinstance(executed.get("proposal"), dict) else proposal.get("status"),
+            }
+            assistant_text = (
+                "已在对话内完成审批确认"
+                f"（approval_id={approval['approval_id']}，action_proposal_id={proposal['action_proposal_id']}）。"
+            )
+            if executed.get("executed"):
+                assistant_text += " 工具执行已完成。"
+                trace_status = "ok"
+            else:
+                error_payload = dict(executed.get("error") or {})
+                assistant_text += (
+                    " 但执行被安全门拦截或失败："
+                    f"reason_code={error_payload.get('code') or error_payload.get('reason_code')}; "
+                    f"message={error_payload.get('human_reason') or error_payload.get('message') or ''}"
+                )
+                trace_status = "failed"
+        trace = self.create_trace_event(
+            TraceEventCreate(
+                task_id=task["task_id"],
+                event_type="chat_approval_confirmation",
+                component="research_assistant.chat_turn.approval_gate",
+                status=trace_status,
+                payload_json={"approval_confirmation": cards.get("approval_confirmation"), "error": error},
+            )
+        )
+        assistant_message = self.add_conversation_message(
+            ConversationMessageCreate(
+                conversation_id=conversation_id,
+                role="assistant",
+                content_text=assistant_text,
+                content_json={
+                    "cards": cards,
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                    "audit_summary": {"approval_confirmation": cards.get("approval_confirmation")},
+                },
+                task_id=task["task_id"],
+                trace_id=trace["trace_id"],
+                is_visible=True,
+            )
+        )
+        followup_event_type = "rejected" if error else "mcp_done" if executed and executed.get("executed") else "mcp_failed"
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type=followup_event_type,
+                severity="warning" if error else "info",
+                message=assistant_text,
+                payload_json={"approval_confirmation": cards.get("approval_confirmation"), "trace_id": trace["trace_id"]},
+            ),
+        )
+        task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
+        return {
+            "conversation": self._public_conversation(self.repository.get_record("conversations", conversation_id)),
+            "user_message": self._public_conversation_message(user_message),
+            "assistant_message": self._public_conversation_message(assistant_message),
+            "task": self._public_task(self.repository.get_record("tasks", task["task_id"])),
+            "task_events": self._public_task_events(task_events),
+            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{task['task_id']}/events", "default_limit": self.configured_limit("task_events_detail")},
+            "prompt_bundle": None,
+            "context_pack": None,
+            "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
+            "mode_decision": mode_decision_json,
+            "context_health": {"show_badge": False},
+            "cards": self._public_chat_cards(cards),
+        }
+
     def seed_catalogs(self) -> dict[str, Any]:
         seeded = {
             "skills": 0,
@@ -3231,6 +3831,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "dialogue_intent": dialogue_intent.value,
                     "dialogue_mode": mode_decision.mode.value,
                     "mode_decision": mode_decision_json,
+                    "confirm_approval_id": data.confirm_approval_id,
+                    "confirmation_text_present": bool(data.confirmation_text),
                 },
                 created_by=data.created_by,
             )
@@ -3241,7 +3843,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 role="user",
                 content_text=data.message,
                 task_id=task["task_id"],
-                content_json={"phase": data.phase, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
+                content_json={
+                    "phase": data.phase,
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                    "confirm_approval_id": data.confirm_approval_id,
+                    "confirmation_text_present": bool(data.confirmation_text),
+                },
             )
         )
         self.add_task_event(
@@ -3252,6 +3861,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 payload_json={"conversation_id": conversation_id, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
             ),
         )
+        approval_response = self._maybe_handle_chat_approval_confirmation(
+            data=data,
+            conversation_id=conversation_id,
+            task=task,
+            user_message=user_message,
+            dialogue_intent=dialogue_intent,
+            mode_decision=mode_decision,
+        )
+        if approval_response is not None:
+            return approval_response
 
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
@@ -3743,6 +4362,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "react_grounding",
             "tool_errors",
             "error_card",
+            "approval_confirmation",
         }
         public = {key: value for key, value in cards.items() if key in public_keys}
         if isinstance(public.get("mcp_summary_result"), dict):
@@ -5799,6 +6419,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         missing = preflight.get("missing_confirmations") if isinstance(preflight.get("missing_confirmations"), list) else []
         if missing:
             lines.append("需要确认：" + "，".join(str(item) for item in missing[:3]) + "。")
+        approval_id = str(route_or_execution.get("approval_id") or preflight.get("approval_id") or "")
+        required_confirmation = str(route_or_execution.get("required_confirmation_text") or preflight.get("required_confirmation_text") or "")
+        if approval_id and required_confirmation:
+            lines.append(f"审批 ID：{approval_id}")
+            lines.append(f"确认口令：{required_confirmation}")
+            lines.append("如需在对话内执行，请回填该 approval_id，并让 confirmation_text 与确认口令完全一致。")
         lines.append("下一步：请先补充必要 ID/参数，或明确说“先给预检”、“我确认执行”等边界。")
         return "\n".join(lines)
 
