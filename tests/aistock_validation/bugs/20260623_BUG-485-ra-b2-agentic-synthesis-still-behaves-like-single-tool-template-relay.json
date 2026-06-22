@@ -1,0 +1,82 @@
+{
+  "actual": "RA can stop after one semantic route/tool, return process-heavy/template-like summaries, miss QE-to-strategy-to-Paper-v2 graph relationships, and answer future-style questions without enforcing driver/scenario/risk framing.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "backend/tests/research_assistant/test_graph_injected_into_context.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260623_BUG-485-ra-b2-agentic-synthesis-still-behaves-like-single-tool-template-relay.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-485",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T17:45:00.684410Z",
+  "description": "RA can stop after one semantic route/tool, return process-heavy/template-like summaries, miss QE-to-strategy-to-Paper-v2 graph relationships, and answer future-style questions without enforcing driver/scenario/risk framing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-6448bbc4ec9c",
+      "timestamp": "2026-06-22T17:45:00.684407Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "RA chat behaves like an analyst: selects multiple read-only tools when needed, checks graph_context first for cross-module relationship questions, synthesizes bottom-line answers in natural Chinese with inline sources/as_of and future-answer boundaries, while write actions still require approval.",
+  "first_seen_at": "2026-06-22T17:45:00.684410Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1494,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1494",
+  "last_seen_at": "2026-06-22T17:45:00.684410Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask RA: QE成果怎么利用; compare with a multi-dimensional stock question and a future-style question.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "ra_phase2_graph_context"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA B2 agentic synthesis still behaves like single-tool template relay",
+  "trigger_condition": {
+    "fingerprint": "6448bbc4ec9ca741b75976e3",
+    "source_event_id": "FE-20260623-6448bbc4ec9c"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
