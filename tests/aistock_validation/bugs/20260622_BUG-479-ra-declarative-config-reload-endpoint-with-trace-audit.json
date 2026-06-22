@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-479",
-  "closed_at": null,
+  "closed_at": "2026-06-22T10:33:16Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,10 +28,10 @@
       "timestamp": "2026-06-22T07:46:47.053840Z"
     },
     {
-      "timestamp": "2026-06-22T09:12:40.530904+00:00",
-      "actor": "codex",
       "action": "implementation",
+      "actor": "codex",
       "note": "Implemented authorized POST /api/v1/research-assistant/config/reload backed by reload_declarative_config_with_audit(), append-only assistant_trace_events audit for success/failure, last-good preservation on invalid YAML, constant-time operator token check, singleton in-process service for reload effectiveness, and offline tests. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-06-22T09:12:40.530904+00:00",
       "validation": [
         "rtk proxy python -m pytest backend/tests/research_assistant/test_declarative_config_reload.py -q -> 4 passed",
         "rtk proxy python -m pytest backend/tests/research_assistant/test_api.py -q -> 9 passed",
@@ -43,14 +43,20 @@
         "rtk proxy ruff check backend/services/research_assistant/service.py backend/routers/research_assistant.py backend/tests/research_assistant/test_declarative_config_reload.py -> passed",
         "rtk proxy git diff --check -> passed"
       ]
+    },
+    {
+      "timestamp": "2026-06-22T10:37:16Z",
+      "actor": "codex",
+      "action": "final_close_sync_metadata",
+      "note": "Post-merge aftercare: PR #1475 was squash-merged at e3f8064433ef7f9ee1767cb20c9a724465db3e18; GitHub Issue #1468 is closed with status:fixed; BUG JSON marked closed with closed_at in the same close-sync PR. No services started, no production DB touched, no DDL executed."
     }
   ],
   "evidence_uris": [],
   "expected": "Authorized operator reload updates the in-process declarative config snapshot immediately, returns source path/sha/count status and multi-worker note, writes success/failure audit events to existing trace_events, keeps last-good on invalid YAML with structured error, is not exposed to chat agent/tool loops, and adds offline tests with no DDL/service/production DB changes.",
   "first_seen_at": "2026-06-22T07:46:47.053843Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-479-ra-declarative-config-reload-endpoint-with-trace-20260622",
+  "fix_commit": "e3f8064433ef7f9ee1767cb20c9a724465db3e18",
+  "fixed_at": "2026-06-22T10:33:15Z",
   "github_issue_number": 1468,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1468",
   "last_seen_at": "2026-06-22T07:46:47.053843Z",
@@ -58,6 +64,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1475",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -71,7 +78,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -80,6 +87,9 @@
     "fingerprint": "b38c08f8bc4f59f32facd3f2",
     "source_event_id": "FE-20260622-b38c08f8bc4f"
   },
+  "validation_evidence": [
+    "GitHub PR #1475 required checks all success after rebase to origin/main; squash merge completed at e3f8064433ef7f9ee1767cb20c9a724465db3e18"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -91,5 +101,6 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "merge_commit": "e3f8064433ef7f9ee1767cb20c9a724465db3e18"
 }
