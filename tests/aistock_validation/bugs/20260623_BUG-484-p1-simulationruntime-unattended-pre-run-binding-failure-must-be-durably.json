@@ -30,8 +30,8 @@
   "expected": "An unattended binding pre-run failure must be durably recorded (persist a FAILED run row, or a durable run-event/error row with reason_code + binding_id + strategy_id + trade_date) that is visible via API/UI/monitoring, so operators can see WHY a binding did not trade. Keep per-binding isolation (one binding failure must not abort the whole tick) but make the failure durably auditable, not transient-only. Covers both LocalSim and MiniQMT bindings (shared run_once loop). No silent skip.",
   "first_seen_at": "2026-06-22T17:14:04.443866Z",
   "fix_branch": "bug/BUG-484-p1-simulationruntime-unattended-pre-run-binding-20260623",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fa891f2a6c6d47d7fe7130cfe96f302dac1c3209",
+  "fixed_at": "2026-06-22T18:36:00.455022Z",
   "github_issue_number": 1490,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1490",
   "last_seen_at": "2026-06-22T17:14:04.443866Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1495",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "e8cc1fa53fdb3693abc242f3",
     "source_event_id": "FE-20260623-e8cc1fa53fdb"
   },
+  "validation_evidence": [
+    "gh pr checks 1495 -> 17 passed, 0 failed; local validations from PR: test_lifecycle_scheduler 75 passed, ruff passed, git diff --check passed, nox l0 passed, validation_module_registry_l0 passed, paper_v2_l3 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
