@@ -42,10 +42,13 @@ from backend.services.simulation_runtime import (
     SimulationBrokerBackend,
     SimulationLifecycleBackgroundScheduler,
     SimulationDailyRunStatus,
+    SimulationDailyRun,
     SimulationLifecycleScheduler,
     SimulationRunContext,
     SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
+    SimulationSchedulerBindingResult,
+    SimulationSchedulerRunOnceResult,
     StrategyPackageSelectionResult,
     StrategyPackageSelectionService,
     StrategyRuntimeReleaseService,
@@ -1652,6 +1655,9 @@ def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() 
     assert submitted.results[0].sync_result["positions_seen"] == 1
     latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
     assert latest_run.run_payload_json["strategy_performance"]["broker_backend"] == "minqmt_sim"
+    assert "succeeded_with_capacity_residual" not in latest_run.run_payload_json
+    assert "miniqmt_capacity_residual_observability" not in latest_run.run_payload_json
+    assert "succeeded_with_capacity_residual" not in latest_run.run_payload_json["strategy_performance"]
     assert {
         position["symbol"]
         for position in latest_run.run_payload_json["strategy_performance"]["positions"]
@@ -1843,7 +1849,21 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     reconciliation = failed_run.run_payload_json["reconcile_after_submit"]
     assert reconciliation["submit_result_gate"]["status"] == "SUCCEEDED"
     assert reconciliation["submit_result_gate"]["reason"] == "miniqmt_capacity_residual_skipped_and_reconciled"
+    assert reconciliation["submit_result_gate"]["succeeded_with_capacity_residual"] is True
     assert reconciliation["qmt_batch_residual_summary"]["capacity_residual_count"] == 1
+    observability = failed_run.run_payload_json["miniqmt_capacity_residual_observability"]
+    assert failed_run.run_payload_json["succeeded_with_capacity_residual"] is True
+    assert failed_run.run_payload_json["capacity_residual_count"] == 1
+    assert failed_run.run_payload_json["capacity_residual_failed_intents"] == 1
+    assert observability["succeeded_with_capacity_residual"] is True
+    assert observability["failed_intents"] == 1
+    assert observability["capacity_residual_count"] == 1
+    assert observability["alert"]["reason_code"] == "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL"
+    assert failed_run.run_payload_json["simulation_alerts"][0]["reason_code"] == "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL"
+    performance = failed_run.run_payload_json["strategy_performance"]
+    assert performance["succeeded_with_capacity_residual"] is True
+    assert performance["capacity_residual_count"] == 1
+    assert performance["capacity_residual_failed_intents"] == 1
     assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
 
     account = qmt_repo.get_virtual_account(qmt_binding.strategy_id)
@@ -1859,6 +1879,7 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     assert recovered.results[0].status == "REUSED_EXISTING_PLAN"
     assert recovered_run.status == SimulationDailyRunStatus.SUCCEEDED
     assert recovered_run.run_payload_json["qmt_batch_status"] == OrderBatchStatus.PARTIAL.value
+    assert recovered_run.run_payload_json["succeeded_with_capacity_residual"] is True
     assert len(broker.place_order_payloads) == 1
     assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
 
@@ -2109,6 +2130,12 @@ def test_scheduler_post_close_terminalizes_miniqmt_capacity_residual_without_fak
     assert terminalization["audit_state"] == "succeeded_with_capacity_residual"
     assert terminalization["reason"] == "miniqmt_post_close_capacity_residual_skipped"
     assert terminalization["residual_summary"]["capacity_residual_count"] == 1
+    assert terminalization["miniqmt_capacity_residual_observability"]["succeeded_with_capacity_residual"] is True
+    assert latest.run_payload_json["succeeded_with_capacity_residual"] is True
+    assert latest.run_payload_json["capacity_residual_count"] == 1
+    assert latest.run_payload_json["capacity_residual_failed_intents"] == 1
+    assert post_close.stale_run_results[0]["succeeded_with_capacity_residual"] is True
+    assert post_close.stale_run_results[0]["alert"]["reason_code"] == "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL"
     assert latest.run_payload_json["qmt_batch_status"] == OrderBatchStatus.PARTIAL.value
     assert len(broker.place_order_payloads) == 1
 
@@ -3554,6 +3581,103 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert result["summary"]["planned_count"] == 2
     assert background.status()["default_submit"] is False
     assert background.status()["last_result"]["summary"]["total_bindings"] == 2
+
+
+def test_background_scheduler_result_surfaces_miniqmt_capacity_residual_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ResidualLifecycleScheduler:
+        def status(self) -> dict[str, Any]:
+            return {"ok": True, "scheduler": "residual_lifecycle_scheduler"}
+
+        def run_once(self, **kwargs: Any) -> SimulationSchedulerRunOnceResult:
+            run = SimulationDailyRun(
+                run_id="simrun_background_capacity_residual",
+                trade_date=TRADE_DATE,
+                strategy_id="strategy_background_qmt",
+                broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+                package_id="pkg_background",
+                manifest_sha256="manifest_background",
+                release_id="srr_background",
+                release_hash="release_hash_background",
+                binding_id="simbind_background",
+                binding_hash="binding_hash_background",
+                account_group_id="ag_background",
+                strategy_slot_id="slot_background",
+                status=SimulationDailyRunStatus.SUCCEEDED,
+                run_payload_json={
+                    "last_stage": "SUCCEEDED",
+                    "broker_called": True,
+                    "failed_intents": 3,
+                    "qmt_batch_id": "batch_background_capacity",
+                    "qmt_batch_status": "PARTIAL",
+                    "qmt_batch_result": {
+                        "batch_status": "PARTIAL",
+                        "failed": 3,
+                        "results": [
+                            {
+                                "success": False,
+                                "broker_called": False,
+                                "preflight": {
+                                    "primary_error_code": "SKIPPED_INSUFFICIENT_CAPITAL",
+                                    "primary_error": {"message": "capacity residual"},
+                                    "errors": [
+                                        {
+                                            "code": "SKIPPED_INSUFFICIENT_CAPITAL",
+                                            "message": "capacity residual",
+                                            "context": {},
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                    "reconcile_after_submit": {
+                        "submit_result_gate": {
+                            "schema_version": "miniqmt_reconcile_submit_result_gate_v2",
+                            "status": "SUCCEEDED",
+                            "reason": "miniqmt_capacity_residual_skipped_and_reconciled",
+                            "terminal_capacity_residual": True,
+                        }
+                    },
+                },
+            )
+            return SimulationSchedulerRunOnceResult(
+                trade_date=TRADE_DATE,
+                data_source="DB_HISTORICAL",
+                submit=True,
+                total_bindings=1,
+                results=(
+                    SimulationSchedulerBindingResult(
+                        binding_id=run.binding_id,
+                        strategy_id=run.strategy_id,
+                        broker_backend=run.broker_backend,
+                        status="RECONCILED",
+                        run=run,
+                        data_source="MINIQMT_REALTIME",
+                    ),
+                ),
+                as_of_time=kwargs.get("as_of_time"),
+            )
+
+        def post_close_reconcile_once(self, **kwargs: Any) -> SimulationSchedulerRunOnceResult:
+            raise AssertionError("execution window should call run_once")
+
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "true")
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=ResidualLifecycleScheduler(),  # type: ignore[arg-type]
+        trading_calendar_service=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 2, 0, tzinfo=UTC))
+
+    assert result["submit"] is True
+    assert result["summary"]["succeeded_with_capacity_residual_count"] == 1
+    assert result["summary"]["capacity_residual_count"] == 1
+    assert result["summary"]["capacity_residual_failed_intents"] == 3
+    assert result["processed"][0]["succeeded_with_capacity_residual"] is True
+    assert result["processed"][0]["capacity_residual_failed_intents"] == 3
+    assert result["alerts"][0]["reason_code"] == "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL"
 
 
 def test_background_scheduler_skips_non_trading_day_before_lifecycle_execution(

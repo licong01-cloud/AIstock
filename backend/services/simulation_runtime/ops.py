@@ -196,6 +196,15 @@ class SimulationRuntimeOpsService:
         by_account_group = Counter(run.account_group_id for run in runs if run.account_group_id)
         by_strategy_slot = Counter(run.strategy_slot_id for run in runs if run.strategy_slot_id)
         active = sum(1 for run in runs if run.status not in TERMINAL_RUN_STATUSES)
+        capacity_residual = [
+            observability
+            for observability in (
+                SimulationLifecycleScheduler._miniqmt_capacity_residual_observability(run.run_payload_json)
+                for run in runs
+                if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            )
+            if observability
+        ]
         return {
             "run_count": len(runs),
             "active_run_count": active,
@@ -204,13 +213,21 @@ class SimulationRuntimeOpsService:
             "by_broker_backend": dict(sorted(by_backend.items())),
             "by_account_group": dict(sorted(by_account_group.items())),
             "by_strategy_slot": dict(sorted(by_strategy_slot.items())),
+            "succeeded_with_capacity_residual_count": len(capacity_residual),
+            "capacity_residual_count": sum(int(item.get("capacity_residual_count") or 0) for item in capacity_residual),
+            "capacity_residual_failed_intents": sum(int(item.get("failed_intents") or 0) for item in capacity_residual),
         }
 
     def _run_summary(self, run: SimulationDailyRun) -> dict[str, Any]:
         stage_counts = self._stage_counts(run.run_payload_json)
         broker_context = self._broker_context(run)
         reconciliation_context = self._reconciliation_context(run)
-        return {
+        capacity_residual_observability = None
+        if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            capacity_residual_observability = SimulationLifecycleScheduler._miniqmt_capacity_residual_observability(
+                run.run_payload_json
+            )
+        payload = {
             "run_id": run.run_id,
             "trade_date": run.trade_date.isoformat(),
             "strategy_id": run.strategy_id,
@@ -247,6 +264,21 @@ class SimulationRuntimeOpsService:
                 "created_by": run.run_payload_json.get("created_by"),
             },
         }
+        if capacity_residual_observability:
+            payload.update(
+                {
+                    "succeeded_with_capacity_residual": True,
+                    "capacity_residual_count": int(
+                        capacity_residual_observability.get("capacity_residual_count") or 0
+                    ),
+                    "capacity_residual_failed_intents": int(
+                        capacity_residual_observability.get("failed_intents") or 0
+                    ),
+                    "miniqmt_capacity_residual_observability": capacity_residual_observability,
+                    "alerts": [capacity_residual_observability["alert"]],
+                }
+            )
+        return payload
 
     @staticmethod
     def _require_successful_run_for_live_evidence(

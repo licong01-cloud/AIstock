@@ -67,7 +67,10 @@ from .models import (
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
-from .performance import StrategyPerformanceProjectionService
+from .performance import (
+    StrategyPerformanceProjectionService,
+    with_miniqmt_capacity_residual_observability,
+)
 from .tail import TailHandlingPolicyService
 
 
@@ -2602,6 +2605,11 @@ class SimulationLifecycleScheduler:
         if terminal_status is None:
             return None
         summary = self._mini_qmt_batch_residual_summary(fresh_payload)
+        capacity_residual_observability = self._miniqmt_capacity_residual_observability(
+            fresh_payload,
+            reason=reason,
+            source="post_close_terminalization",
+        )
         evidence = {
             "schema_version": "miniqmt_post_close_terminalization_v1",
             "reason": reason,
@@ -2619,13 +2627,17 @@ class SimulationLifecycleScheduler:
             "submit_result_gate": self._latest_miniqmt_payload_evidence(fresh_payload, "submit_result_gate"),
             "audit_state": self._miniqmt_post_close_audit_state(terminal_status, reason),
         }
+        if capacity_residual_observability:
+            evidence["miniqmt_capacity_residual_observability"] = capacity_residual_observability
+        payload_patch = {
+            "last_stage": terminal_status.value,
+            "miniqmt_post_close_terminalization": evidence,
+        }
+        payload_patch.update(self._miniqmt_capacity_residual_payload_patch(capacity_residual_observability))
         updated = self.repository.update_simulation_daily_run(
             run.run_id,
             status=terminal_status,
-            payload_patch={
-                "last_stage": terminal_status.value,
-                "miniqmt_post_close_terminalization": evidence,
-            },
+            payload_patch=payload_patch,
             payload_unset=("submit_failure",) if terminal_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return {
@@ -2636,6 +2648,7 @@ class SimulationLifecycleScheduler:
             "status": updated.status.value,
             "reason": reason,
             "post_close_terminalization": True,
+            **self._miniqmt_capacity_residual_result_fields(updated),
         }
 
     def _fresh_miniqmt_post_close_payload(
@@ -4325,6 +4338,12 @@ class SimulationLifecycleScheduler:
                 marks=marks,
             )
         payload = projection.to_dict()
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            latest_payload = self.repository.get_simulation_daily_run(run.run_id).run_payload_json
+            payload = with_miniqmt_capacity_residual_observability(
+                payload,
+                self._miniqmt_capacity_residual_observability(latest_payload),
+            )
         self.repository.update_simulation_daily_run(
             run.run_id,
             payload_patch={
@@ -4931,6 +4950,114 @@ class SimulationLifecycleScheduler:
         )
 
     @staticmethod
+    def _miniqmt_capacity_residual_observability(
+        payload: dict[str, Any],
+        *,
+        reason: str | None = None,
+        source: str | None = None,
+    ) -> dict[str, Any] | None:
+        summary = SimulationLifecycleScheduler._mini_qmt_batch_residual_summary(payload)
+        capacity_residual_count = int(summary.get("capacity_residual_count") or 0)
+        if (
+            not bool(summary.get("noncompensating_residual"))
+            or capacity_residual_count <= 0
+            or int(summary.get("dependent_buy_count") or 0) > 0
+        ):
+            return None
+        submit_gate = SimulationLifecycleScheduler._latest_miniqmt_payload_evidence(payload, "submit_result_gate")
+        terminalization = payload.get("miniqmt_post_close_terminalization")
+        if not isinstance(terminalization, dict):
+            terminalization = {}
+        gate_reason = str(submit_gate.get("reason") or "")
+        terminal_reason = str(terminalization.get("reason") or "")
+        is_succeeded_capacity_residual = (
+            bool(submit_gate.get("terminal_capacity_residual"))
+            and str(submit_gate.get("status") or "").upper() == "SUCCEEDED"
+        ) or terminalization.get("audit_state") == "succeeded_with_capacity_residual"
+        if not is_succeeded_capacity_residual and reason not in {
+            "miniqmt_capacity_residual_skipped_and_reconciled",
+            "miniqmt_post_close_capacity_residual_skipped",
+        }:
+            return None
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        failed_intents_raw = payload.get("failed_intents", batch.get("failed", 0))
+        try:
+            failed_intents = max(int(failed_intents_raw or 0), 0)
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "MiniQMT capacity residual observability found invalid failed_intents",
+                context={
+                    "reason_code": "MINIQMT_CAPACITY_RESIDUAL_FAILED_INTENTS_INVALID",
+                    "failed_intents": failed_intents_raw,
+                    "qmt_batch_id": payload.get("qmt_batch_id"),
+                    "qmt_batch_status": payload.get("qmt_batch_status") or batch.get("batch_status"),
+                },
+            ) from exc
+        alert = {
+            "schema_version": "simulation_runtime_alert_v1",
+            "severity": "warning",
+            "reason_code": "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL",
+            "message": "MiniQMT run succeeded with capacity residual; monitoring must not treat it as clean success",
+            "capacity_residual_count": capacity_residual_count,
+            "failed_intents": failed_intents,
+            "qmt_batch_id": payload.get("qmt_batch_id"),
+            "qmt_batch_status": payload.get("qmt_batch_status") or batch.get("batch_status"),
+        }
+        return {
+            "schema_version": "miniqmt_capacity_residual_observability_v1",
+            "succeeded_with_capacity_residual": True,
+            "reason": reason or gate_reason or terminal_reason or "miniqmt_capacity_residual_succeeded",
+            "source": source
+            or (
+                "post_close_terminalization"
+                if terminalization.get("audit_state") == "succeeded_with_capacity_residual"
+                else "submit_result_gate"
+            ),
+            "qmt_batch_id": payload.get("qmt_batch_id"),
+            "qmt_batch_status": payload.get("qmt_batch_status") or batch.get("batch_status"),
+            "failed_intents": failed_intents,
+            "failed_result_count": int(summary.get("failed_result_count") or 0),
+            "capacity_residual_count": capacity_residual_count,
+            "dependent_buy_count": int(summary.get("dependent_buy_count") or 0),
+            "unknown_residual_count": int(summary.get("unknown_residual_count") or 0),
+            "error_codes": list(summary.get("error_codes") or []),
+            "residual_summary": summary,
+            "alert": alert,
+        }
+
+    @staticmethod
+    def _miniqmt_capacity_residual_payload_patch(observability: dict[str, Any] | None) -> dict[str, Any]:
+        if not observability:
+            return {}
+        alert = observability.get("alert") if isinstance(observability.get("alert"), dict) else None
+        patch: dict[str, Any] = {
+            "succeeded_with_capacity_residual": True,
+            "capacity_residual_count": int(observability.get("capacity_residual_count") or 0),
+            "capacity_residual_failed_intents": int(observability.get("failed_intents") or 0),
+            "miniqmt_capacity_residual_observability": observability,
+        }
+        if alert is not None:
+            patch["simulation_alerts"] = [alert]
+        return patch
+
+    @staticmethod
+    def _miniqmt_capacity_residual_result_fields(run: SimulationDailyRun | None) -> dict[str, Any]:
+        if run is None or run.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return {}
+        observability = SimulationLifecycleScheduler._miniqmt_capacity_residual_observability(
+            run.run_payload_json
+        )
+        if not observability:
+            return {}
+        return {
+            "succeeded_with_capacity_residual": True,
+            "capacity_residual_count": int(observability.get("capacity_residual_count") or 0),
+            "capacity_residual_failed_intents": int(observability.get("failed_intents") or 0),
+            "miniqmt_capacity_residual_observability": observability,
+            "alert": observability.get("alert"),
+        }
+
+    @staticmethod
     def _mini_qmt_batch_residual_summary(
         payload: dict[str, Any],
         *,
@@ -5131,6 +5258,11 @@ class SimulationLifecycleScheduler:
             open_order_evidence=open_order_evidence,
             side_effect_evidence=side_effect_evidence,
         )
+        capacity_residual_observability = self._miniqmt_capacity_residual_observability(
+            run.run_payload_json,
+            reason=submit_result_gate.get("reason"),
+            source="submit_result_gate",
+        )
         payload = {
             **payload,
             "strategy_scope": strategy_scope,
@@ -5140,19 +5272,23 @@ class SimulationLifecycleScheduler:
             "open_order_evidence": open_order_evidence,
             "side_effect_evidence": side_effect_evidence,
         }
+        if capacity_residual_observability:
+            payload["miniqmt_capacity_residual_observability"] = capacity_residual_observability
         if submit_result_gate["status"] == "SUCCEEDED":
             next_status = SimulationDailyRunStatus.SUCCEEDED
         elif submit_result_gate["status"] == "PENDING":
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING
         else:
             next_status = SimulationDailyRunStatus.FAILED_RETRYABLE
+        payload_patch = {
+            "last_stage": next_status.value,
+            "reconcile_after_submit": payload,
+        }
+        payload_patch.update(self._miniqmt_capacity_residual_payload_patch(capacity_residual_observability))
         self.repository.update_simulation_daily_run(
             run.run_id,
             status=next_status,
-            payload_patch={
-                "last_stage": next_status.value,
-                "reconcile_after_submit": payload,
-            },
+            payload_patch=payload_patch,
             payload_unset=("submit_failure",) if next_status == SimulationDailyRunStatus.SUCCEEDED else None,
         )
         return payload
@@ -5200,6 +5336,9 @@ class SimulationLifecycleScheduler:
             "broker_called": bool(run.run_payload_json.get("broker_called")),
             "batch_succeeded": batch_succeeded,
             "terminal_capacity_residual": terminal_capacity_residual,
+            "succeeded_with_capacity_residual": status == "SUCCEEDED" and terminal_capacity_residual,
+            "capacity_residual_count": int(batch_residual_summary.get("capacity_residual_count") or 0),
+            "failed_intents": int(run.run_payload_json.get("failed_intents") or 0),
             "open_order_count": open_order_count,
             "pending_open_orders": open_order_count > 0,
             "broker_side_effect_count": broker_side_effect_count,
@@ -5852,6 +5991,7 @@ class SimulationLifecycleBackgroundScheduler:
             "trading_calendar": None,
             "processed": [],
             "errors": [],
+            "alerts": [],
         }
         try:
             calendar_status = self._trading_day_status(trade_date=trade_date)
@@ -5891,20 +6031,33 @@ class SimulationLifecycleBackgroundScheduler:
                         submit=bool(decision["submit"]),
                         as_of_time=now,
                     )
-                result["processed"] = [
-                    {
-                        "binding_id": item.binding_id,
-                        "strategy_id": item.strategy_id,
-                        "broker_backend": item.broker_backend.value,
-                        "status": item.status,
-                        "run_id": item.run.run_id if item.run else None,
-                        "execution_plan_id": item.execution_plan.plan_id if item.execution_plan else None,
-                        "data_source": item.data_source or self._data_source,
-                        "error": item.error,
-                    }
-                    for item in tick.results
-                ]
+                processed = []
+                alerts = []
+                for item in tick.results:
+                    capacity_fields = SimulationLifecycleScheduler._miniqmt_capacity_residual_result_fields(item.run)
+                    alert = capacity_fields.get("alert")
+                    if isinstance(alert, dict):
+                        alerts.append(alert)
+                    processed.append(
+                        {
+                            "binding_id": item.binding_id,
+                            "strategy_id": item.strategy_id,
+                            "broker_backend": item.broker_backend.value,
+                            "status": item.status,
+                            "run_id": item.run.run_id if item.run else None,
+                            "execution_plan_id": item.execution_plan.plan_id if item.execution_plan else None,
+                            "data_source": item.data_source or self._data_source,
+                            "error": item.error,
+                            **capacity_fields,
+                        }
+                    )
+                for terminalized in tick.stale_run_results:
+                    alert = terminalized.get("alert")
+                    if isinstance(alert, dict):
+                        alerts.append(alert)
+                result["processed"] = processed
                 result["terminalized_runs"] = list(tick.stale_run_results)
+                result["alerts"] = alerts
                 result["summary"] = {
                     "total_bindings": tick.total_bindings,
                     "planned_count": tick.planned_count,
@@ -5912,6 +6065,24 @@ class SimulationLifecycleBackgroundScheduler:
                     "submitted_count": tick.submitted_count,
                     "failed_count": tick.failed_count,
                     "stale_terminalized_count": tick.stale_terminalized_count,
+                    "succeeded_with_capacity_residual_count": sum(
+                        1 for item in processed if item.get("succeeded_with_capacity_residual")
+                    )
+                    + sum(
+                        1 for item in tick.stale_run_results if item.get("succeeded_with_capacity_residual")
+                    ),
+                    "capacity_residual_count": sum(
+                        int(item.get("capacity_residual_count") or 0) for item in processed
+                    )
+                    + sum(
+                        int(item.get("capacity_residual_count") or 0) for item in tick.stale_run_results
+                    ),
+                    "capacity_residual_failed_intents": sum(
+                        int(item.get("capacity_residual_failed_intents") or 0) for item in processed
+                    )
+                    + sum(
+                        int(item.get("capacity_residual_failed_intents") or 0) for item in tick.stale_run_results
+                    ),
                 }
             except Exception as exc:  # scheduler must expose failure, not crash silently
                 payload = {
