@@ -473,6 +473,7 @@ function AuditPanel({ events }: { events: AssistantMcpToolEvent[] }) {
                 <div className="ra-chip-row">
                   <span className="ra-chip">profile: {stringifyValue(response.profile)}</span>
                   <span className="ra-chip">approval: {stringifyValue(response.approval_required)}</span>
+                  <span className="ra-chip">task: {stringifyValue(event.task_id)}</span>
                   <span className="ra-chip">event: {event.tool_event_id}</span>
                 </div>
                 <DetailDrawer title="event response / evidence" data={event} />
