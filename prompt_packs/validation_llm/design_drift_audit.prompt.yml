@@ -1,0 +1,33 @@
+﻿schema_version: aistock_validation_llm_prompt_v1
+prompt_id: design_drift_audit
+prompt_version: v1
+model_family: deepseek
+purpose: Compare approved AIstock design excerpts with compact code and CodeGraph/Understand Anything refs to find suspected implementation drift.
+output_schema: aistock_nightly_design_drift_audit_v1
+allowed_output:
+  summary: short string
+  findings:
+    - module: module key
+      severity: P1|P2|P3
+      title: short suspected-drift title
+      suspected_drift: expected design versus observed implementation gap
+      design_refs:
+        - doc path or section
+      code_refs:
+        - file path or file:line
+      confidence: 0.0..1.0
+safety:
+  warning_only: true
+  candidate_only: true
+  no_source_modification: true
+  no_bug_json_write: true
+  no_github_issue_create: true
+  no_shell_commands: true
+  no_production_action: true
+  manual_analysis_required_before_bug_registration: true
+input_policy:
+  design_doc_excerpts_only: true
+  compact_code_samples_only: true
+  codegraph_and_understand_anything_refs_only: true
+  no_full_repo_scan: true
+  no_secrets: true

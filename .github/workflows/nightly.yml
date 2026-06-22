@@ -625,6 +625,31 @@ jobs:
             --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `
             --output "$outDir/llm-guarded-rollout-gate.json"
 
+      - name: Build Nightly LLM design drift audit
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/nightly_design_drift_audit.py --json `
+            --provider deepseek_api `
+            --invoke-llm `
+            --run-id "${{ github.run_id }}" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --output "$outDir/design-drift-audit.json" `
+            --markdown-output "$outDir/design-drift-audit.md"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM design drift audit failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/nightly_design_drift_audit.py --json `
+              --provider deterministic `
+              --run-id "${{ github.run_id }}" `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+              --output "$outDir/design-drift-audit.json" `
+              --markdown-output "$outDir/design-drift-audit.md"
+          }
+          if (Test-Path -LiteralPath "$outDir/design-drift-audit.md") {
+            Get-Content -LiteralPath "$outDir/design-drift-audit.md"
+          }
+
       - name: Validate CI/Nightly issue workflow automation
         run: |
           conda run -n AIstock python -m nox -s validation_workflow_automation
