@@ -296,7 +296,6 @@ class FactorMetricsScheduler:
             raise ValueError(f"invalid official factor cache window: {start_date} > {end_date}")
 
         requested_node_id = str(options.get("node_id") or "").strip() or None
-        node_id = requested_node_id or _DEFAULT_DISPATCH_NODE_ID
         cfg = ConfigComposer()._fetch_workspace_config(requested_node_id)
         factor_data_dir = str(options.get("factor_data_dir") or cfg.get("factor_data_dir") or "").strip()
         if not factor_data_dir:

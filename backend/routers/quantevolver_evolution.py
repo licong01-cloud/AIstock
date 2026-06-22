@@ -38,8 +38,6 @@ from ..services.quantevolver.experiment_config import (
 )
 from ..services.qe_templates.validator import validate_qe_historical_stock_pool_window
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
-OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
-OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.seed_contract import ensure_loop_fixed_seed, raise_http_seed_error
 from ..services.quantevolver.payload_summary import derive_position_summary_from_enhanced_metrics
@@ -52,6 +50,9 @@ from ..services.quantevolver.node_execution import (
 )
 from ..services.strategy_package.promotion_review import PromotionReviewService
 from ..services.trading_core.errors import TradingCoreError
+
+OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
+OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
