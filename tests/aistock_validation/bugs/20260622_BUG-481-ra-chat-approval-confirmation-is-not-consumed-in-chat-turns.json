@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "backend/services/research_assistant/service.py",
     "tests/aistock_validation/bugs/20260622_BUG-481-ra-chat-approval-confirmation-is-not-consumed-in-chat-turns.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-481",
@@ -21,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-5a89fcf2e941",
       "timestamp": "2026-06-22T12:13:55.818708Z"
+    },
+    {
+      "timestamp": "2026-06-22T12:18:00Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Expanded allowed_write_scope to backend/tests/research_assistant/test_service.py because acceptance requires backend unit tests for chat approval consumption, NL confirmation mapping, wrong-token/cross-conversation/multiple-pending rejection, self-approval prevention, and L2 naked-affirmative rejection."
     }
   ],
   "evidence_uris": [],
