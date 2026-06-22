@@ -40,8 +40,8 @@
   "expected": "Chat turns display approval_id and exact confirmation token for proposed side-effect actions; later chat turns with confirm_approval_id plus exact confirmation_text consume the pending approval via the existing approval gate; narrow natural-language affirmative mapping is allowed only for one safe pending approval and never for L2 production-sensitive actions.",
   "first_seen_at": "2026-06-22T12:13:55.818712Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f71b29f60f016d07eb3a8cfa78b8d30e8fc62673",
+  "fixed_at": "2026-06-22T16:39:20.466277Z",
   "github_issue_number": 1483,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1483",
   "last_seen_at": "2026-06-22T12:13:55.818712Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1487",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -72,6 +73,16 @@
     "fingerprint": "5a89fcf2e9411eddbea15283",
     "source_event_id": "FE-20260622-5a89fcf2e941"
   },
+  "validation_evidence": [
+    "GitHub PR checks for #1487 -> passed (17/17 before merge)",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (320 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "rtk proxy python tmp/run_bug481_phase7_skip.py -> passed (ra_phase7_full_accept with isolated test frontend)",
+    "rtk git diff --check -> passed",
+    "rtk proxy ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
