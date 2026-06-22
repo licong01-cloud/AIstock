@@ -1604,6 +1604,7 @@ def test_event_capture_writes_outbox_event_only_when_explicitly_enabled() -> Non
     assert event.source_system == "qe"
     assert event.source_id == "qe_exp"
     assert event.payload["experiment_id"] == "qe_exp"
+    assert event.payload["routing_class"] == "archive"
 
 
 def test_worker_is_disabled_by_default_and_does_not_claim(monkeypatch) -> None:
@@ -1664,8 +1665,9 @@ def test_worker_processes_supported_event_and_completes_job() -> None:
             self.failed_events: list[str] = []
             self.claim_event_types: tuple[str, ...] | None = None
 
-        def claim_outbox_events(self, *, worker_id, limit, event_types):  # type: ignore[no-untyped-def]
+        def claim_outbox_events(self, *, worker_id, limit, event_types, routing_class):  # type: ignore[no-untyped-def]
             self.claim_event_types = tuple(event_types)
+            assert routing_class == "archive"
             return [event]
 
         def create_archive_job(self, job):  # type: ignore[no-untyped-def]
@@ -1771,6 +1773,43 @@ def test_worker_handler_exception_fails_job_and_retries_outbox() -> None:
     assert repository.failed_event[0] == "evt_2"
     assert "RuntimeError: archive failed" in repository.failed_event[1]
     assert repository.failed_event[2:] == (7, 3)
+
+
+def test_repository_claim_outbox_events_filters_archive_routing_class() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.claim_outbox_events(worker_id="worker_1", limit=3, event_types=("qe.loop.completed",))
+
+    sql, params = executed[-1]
+    assert "AND event_type = ANY(%s)" in sql
+    assert "payload->>'routing_class' = %s OR NOT (payload ? 'routing_class')" in sql
+    assert params == [["qe.loop.completed"], "archive", 3, "worker_1"]
 
 
 def test_worker_service_archives_loop_outbox_event_through_backfill_handler() -> None:

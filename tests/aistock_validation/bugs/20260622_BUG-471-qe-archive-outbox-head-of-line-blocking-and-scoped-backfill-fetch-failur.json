@@ -1,0 +1,125 @@
+{
+  "actual": "Unified qe_archive outbox has 21k pending paper_v2 telemetry events and worker is not draining; QE loop archive events are blocked; UI archive request fails at fetch/network layer; selection preview returns unscoped global candidates despite task_ids input.",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/services/qe_archive/event_capture.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/worker.py",
+    "backend/tests/qe_archive/test_manual_ingestion_selection.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "frontend/src/lib/qe-archive/api.ts",
+    "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-471",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T05:09:22.221867Z",
+  "description": "Unified qe_archive outbox has 21k pending paper_v2 telemetry events and worker is not draining; QE loop archive events are blocked; UI archive request fails at fetch/network layer; selection preview returns unscoped global candidates despite task_ids input.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-ff5d9d147d1c",
+      "timestamp": "2026-06-22T05:09:22.221861Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "timestamp": "2026-06-22T05:33:48Z",
+      "old_scope": [
+        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "new_scope": [
+        "backend/services/qe_archive/backfill_service.py",
+        "backend/services/qe_archive/event_capture.py",
+        "backend/services/qe_archive/repository.py",
+        "backend/services/qe_archive/worker.py",
+        "backend/tests/qe_archive/test_manual_ingestion_selection.py",
+        "backend/tests/test_qe_archive_repository_static.py",
+        "frontend/src/lib/qe-archive/api.ts",
+        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "note": "Targeted read-only evidence narrowed BUG-471 fix to qe_archive scoped-selection fallback, outbox archive-routing claim/health observability, and QE Archive frontend API error reporting; no RA/QE training scope."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "QE loop archive events are not starved by paper_v2 telemetry; backfill candidates are strictly scoped to selected experiment/task ids; UI archive action uses bounded/async or paginated endpoint behavior and reports explicit reason_code/error details instead of generic Failed to fetch.",
+  "first_seen_at": "2026-06-22T05:09:22.221867Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1454,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1454",
+  "last_seen_at": "2026-06-22T05:09:22.221867Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open QE Archive UI for an experiment and click archive/backfill while qe_archive_health shows pending_outbox_count > 20000 paper_v2.daemon telemetry events; browser reports Failed to fetch.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE Archive outbox head-of-line blocking and scoped backfill fetch failure",
+  "trigger_condition": {
+    "fingerprint": "ff5d9d147d1cd671fff217ec",
+    "source_event_id": "FE-20260622-ff5d9d147d1c"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe_archive",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/archived_loop_count=0",
+    "ui_routes": [
+      "/archived_loop_count=0"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -130,6 +130,7 @@ class QEArchiveWorker:
             worker_id=self._worker_id,
             limit=limit,
             event_types=tuple(self._handlers.keys()),
+            routing_class="archive",
         )
         completed = 0
         failed = 0

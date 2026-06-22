@@ -41,6 +41,8 @@ from .models import (
 
 ConnectionProvider = Callable[[], Any]
 
+ARCHIVE_ROUTING_CLASS = "archive"
+
 
 RUN_COLUMNS = (
     "run_id",
@@ -828,6 +830,8 @@ class QEArchiveRepository:
         worker_id: str,
         limit: int = 10,
         event_types: Sequence[str] | None = None,
+        routing_class: str | None = ARCHIVE_ROUTING_CLASS,
+        allow_missing_routing_class: bool = True,
     ) -> list[ClaimedOutboxEvent]:
         if limit <= 0:
             return []
@@ -837,6 +841,13 @@ class QEArchiveRepository:
         if event_types:
             event_filter = "AND event_type = ANY(%s)"
             params.append(list(event_types))
+        routing_filter = ""
+        if routing_class is not None:
+            if allow_missing_routing_class:
+                routing_filter = "AND (payload->>'routing_class' = %s OR NOT (payload ? 'routing_class'))"
+            else:
+                routing_filter = "AND payload->>'routing_class' = %s"
+            params.append(routing_class)
         params.extend([limit, worker_id])
 
         sql = f"""
@@ -846,6 +857,7 @@ class QEArchiveRepository:
                 WHERE status = 'pending'
                   AND next_retry_at <= NOW()
                   {event_filter}
+                  {routing_filter}
                 ORDER BY next_retry_at ASC, created_at ASC
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
@@ -1432,6 +1444,24 @@ class QEArchiveRepository:
                 pending_outbox_count = int(cur.fetchone()[0])
                 cur.execute(
                     """
+                    SELECT COUNT(*)
+                    FROM qe_archive.outbox_event
+                    WHERE status = 'pending'
+                      AND payload->>'routing_class' = 'archive'
+                    """
+                )
+                pending_archive_outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM qe_archive.outbox_event
+                    WHERE status = 'pending'
+                      AND NOT (payload ? 'routing_class')
+                    """
+                )
+                pending_unrouted_outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
                     SELECT status, COUNT(*)
                     FROM qe_archive.outbox_event
                     GROUP BY status
@@ -1439,6 +1469,46 @@ class QEArchiveRepository:
                     """
                 )
                 outbox_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT
+                        source_system,
+                        COALESCE(payload->>'routing_class', 'unknown') AS routing_class,
+                        status,
+                        COUNT(*) AS count,
+                        MIN(created_at) AS oldest_created_at
+                    FROM qe_archive.outbox_event
+                    GROUP BY source_system, COALESCE(payload->>'routing_class', 'unknown'), status
+                    ORDER BY count DESC, source_system ASC, routing_class ASC, status ASC
+                    LIMIT 25
+                    """
+                )
+                outbox_source_routing_counts = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT
+                        event_id,
+                        event_type,
+                        source_system,
+                        source_id,
+                        source_sub_id,
+                        COALESCE(payload->>'routing_class', 'unknown') AS routing_class,
+                        status,
+                        next_retry_at,
+                        created_at,
+                        locked_by,
+                        locked_at,
+                        error_message
+                    FROM qe_archive.outbox_event
+                    WHERE status IN ('pending', 'processing')
+                    ORDER BY
+                        CASE WHEN COALESCE(payload->>'routing_class', '') = 'archive' THEN 0 ELSE 1 END,
+                        next_retry_at ASC,
+                        created_at ASC
+                    LIMIT 10
+                    """
+                )
+                outbox_oldest_pending = self._fetch_dicts(cur)
                 cur.execute(
                     """
                     SELECT status, COUNT(*)
@@ -1484,7 +1554,11 @@ class QEArchiveRepository:
             "run_count": run_count,
             "research_valid_counts": research_valid_counts,
             "pending_outbox_count": pending_outbox_count,
+            "pending_archive_outbox_count": pending_archive_outbox_count,
+            "pending_unrouted_outbox_count": pending_unrouted_outbox_count,
             "outbox_status_counts": outbox_status_counts,
+            "outbox_source_routing_counts": outbox_source_routing_counts,
+            "outbox_oldest_pending": outbox_oldest_pending,
             "archive_job_status_counts": archive_job_status_counts,
             "latest_archived_at": latest_archived_at,
             "skip_count": skip_count,
