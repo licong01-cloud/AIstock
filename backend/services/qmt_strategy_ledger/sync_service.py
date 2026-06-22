@@ -38,6 +38,8 @@ from .models import (
     TradeLedgerRecord,
     UnattributedOrderRecord,
     UnattributedTradeRecord,
+    is_open_like_order_status,
+    is_terminal_order_status,
     new_id,
 )
 from .repository import InMemoryQmtStrategyLedgerRepository
@@ -319,7 +321,7 @@ class QmtStrategyLedgerSyncService:
             status_events_appended += 1
             if (
                 order.order_type == BUY_ORDER_TYPE
-                and order.order_status in {STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED}
+                and is_terminal_order_status(order.order_status)
                 and order.order_id not in stale_trade_order_ids
             ):
                 terminal_buy_orders.append((order, strategy_id, intent.intent_id))
@@ -940,7 +942,9 @@ class QmtStrategyLedgerSyncService:
                 continue
             if ledger.qmt_order_id in broker_reported_order_ids:
                 continue
-            if ledger.order_status != STATUS_OPEN_LIKE or int(ledger.order_volume or 0) <= int(ledger.traded_volume or 0):
+            if not is_open_like_order_status(ledger.order_status) or int(ledger.order_volume or 0) <= int(
+                ledger.traded_volume or 0
+            ):
                 continue
             intent = self._repository.get_order_intent_by_remark(self._account_id, ledger.order_remark) if ledger.order_remark else None
             if intent is None or intent.intent_id != ledger.intent_id or intent.trade_date != ledger.trade_date:
@@ -1020,7 +1024,7 @@ class QmtStrategyLedgerSyncService:
         broker_date: date,
     ) -> bool:
         ledger = self._repository.get_order_ledger(account_id, qmt_order_id)
-        if ledger is None or ledger.order_status != STATUS_OPEN_LIKE:
+        if ledger is None or not is_open_like_order_status(ledger.order_status):
             return False
         raw_json = dict(ledger.raw_json)
         raw_json["terminalized"] = {

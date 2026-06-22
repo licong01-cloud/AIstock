@@ -41,7 +41,7 @@ from backend.services.qmt_strategy_ledger.models import (
     OrderBatchRecord,
     OrderBatchStatus,
     OrderIntentRecord,
-    STATUS_OPEN_LIKE,
+    is_open_like_order_status,
     new_id as new_qmt_id,
 )
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
@@ -4700,7 +4700,7 @@ class SimulationLifecycleScheduler:
         open_orders = [
             order
             for order in orders
-            if getattr(order, "order_status", None) == STATUS_OPEN_LIKE
+            if is_open_like_order_status(getattr(order, "order_status", None))
             and int(getattr(order, "order_volume", 0) or 0) > int(getattr(order, "traded_volume", 0) or 0)
         ]
         return {

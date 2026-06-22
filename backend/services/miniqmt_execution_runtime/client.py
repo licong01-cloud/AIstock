@@ -11,6 +11,14 @@ from typing import Any, Callable
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import get_vnpy_style_asset, is_vnpy_style_algo
 from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle, OrderHandleStatus
+from backend.services.qmt_strategy_ledger.models import (
+    OrderLedgerRecord,
+    STATUS_CANCELLED,
+    STATUS_FILLED,
+    STATUS_REJECTED,
+    is_partial_order_status,
+    is_terminal_order_status,
+)
 from backend.services.qmt_strategy_ledger.order_service import (
     ManagedBatchSubmitResult,
     ManagedOrderRequest,
@@ -264,6 +272,7 @@ class MiniQMTExecutionRuntimeClient:
                     runtime_id=runtime.config.runtime_id,
                     child_order_id=child_order_id,
                     managed_result=item,
+                    ledger_order=_ledger_order_for_managed_result(managed_order_service, request, item),
                     source=source,
                 )
         return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
@@ -414,6 +423,7 @@ class MiniQMTExecutionRuntimeClient:
                     runtime_id=build.runtime_evidence.runtime_id,
                     child_order_id=child_order_id,
                     managed_result=item,
+                    ledger_order=_ledger_order_for_managed_result(managed_order_service, request, item),
                     source=source,
                 )
         return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
@@ -652,22 +662,25 @@ class MiniQMTExecutionRuntimeClient:
         runtime_id: str,
         child_order_id: str,
         managed_result: ManagedOrderSubmitResult,
+        ledger_order: OrderLedgerRecord | None = None,
         source: str,
     ) -> MiniQMTChildOrder | None:
         child = _find_child_order(self.repository, runtime_id=runtime_id, child_order_id=child_order_id)
         if child is None:
             return None
-        status = MiniQMTChildOrderStatus.SUBMITTED if managed_result.success else MiniQMTChildOrderStatus.REJECTED
+        status = _runtime_status_from_managed_result(managed_result, ledger_order=ledger_order)
         updated_child = child.model_copy(
             update={
                 "status": status,
                 "broker_order_id": managed_result.qmt_order_id or child.broker_order_id,
-                "submitted_at": datetime.now(UTC) if managed_result.success else child.submitted_at,
+                "submitted_at": datetime.now(UTC) if managed_result.success and child.submitted_at is None else child.submitted_at,
                 "metadata": {
                     **dict(child.metadata),
                     "source": source,
                     "managed_order_result": managed_result.to_dict(),
                     "broker_called": managed_result.broker_called,
+                    "broker_synced_child_status": status.value,
+                    **({"broker_order_ledger": _ledger_order_payload(ledger_order)} if ledger_order is not None else {}),
                 },
             }
         )
@@ -1160,6 +1173,92 @@ def _runtime_status_from_paper_result(result: PaperMiniQMTRuntimeChildResult) ->
     if result.status.state == "partial_filled":
         return MiniQMTChildOrderStatus.PARTIALLY_FILLED
     return MiniQMTChildOrderStatus.SUBMITTED if result.handle is not None else MiniQMTChildOrderStatus.REJECTED
+
+
+def _runtime_status_from_managed_result(
+    result: ManagedOrderSubmitResult,
+    *,
+    ledger_order: OrderLedgerRecord | None,
+) -> MiniQMTChildOrderStatus:
+    if not result.success:
+        return MiniQMTChildOrderStatus.REJECTED
+    if ledger_order is None:
+        return MiniQMTChildOrderStatus.SUBMITTED
+    traded_volume = int(ledger_order.traded_volume or 0)
+    order_volume = max(int(ledger_order.order_volume or 0), 1)
+    if is_terminal_order_status(ledger_order.order_status):
+        return _runtime_terminal_status_from_order_status(ledger_order.order_status)
+    if is_partial_order_status(ledger_order.order_status) or traded_volume > 0:
+        if traded_volume >= order_volume:
+            return MiniQMTChildOrderStatus.FILLED
+        return MiniQMTChildOrderStatus.PARTIALLY_FILLED
+    return MiniQMTChildOrderStatus.SUBMITTED
+
+
+def _runtime_terminal_status_from_order_status(order_status: Any) -> MiniQMTChildOrderStatus:
+    try:
+        status = int(order_status)
+    except (TypeError, ValueError):
+        return MiniQMTChildOrderStatus.SUBMITTED
+    if status == STATUS_CANCELLED:
+        return MiniQMTChildOrderStatus.CANCELLED
+    if status == STATUS_FILLED:
+        return MiniQMTChildOrderStatus.FILLED
+    if status == STATUS_REJECTED:
+        return MiniQMTChildOrderStatus.REJECTED
+    return MiniQMTChildOrderStatus.SUBMITTED
+
+
+def _ledger_order_for_managed_result(
+    managed_order_service: QmtManagedOrderService,
+    request: ManagedOrderRequest,
+    result: ManagedOrderSubmitResult,
+) -> OrderLedgerRecord | None:
+    qmt_order_id = str(result.qmt_order_id or "").strip()
+    if not qmt_order_id:
+        return None
+    repository = getattr(managed_order_service, "_repository", None)
+    if repository is None:
+        raise BrokerSubmitError(
+            "MiniQMT managed child status sync requires strategy ledger repository",
+            context={"reason_code": "MINIQMT_RUNTIME_LEDGER_REPOSITORY_MISSING", "qmt_order_id": qmt_order_id},
+        )
+    getter = getattr(repository, "get_order_ledger", None)
+    if not callable(getter):
+        raise BrokerSubmitError(
+            "MiniQMT managed child status sync requires get_order_ledger(account_id, qmt_order_id)",
+            context={
+                "reason_code": "MINIQMT_RUNTIME_LEDGER_GETTER_MISSING",
+                "qmt_order_id": qmt_order_id,
+                "account_id": request.account_id,
+            },
+        )
+    order = getter(request.account_id, qmt_order_id)
+    if order is not None:
+        return order
+    raise BrokerSubmitError(
+        "MiniQMT managed child status sync could not find broker order in strategy ledger",
+        context={
+            "reason_code": "MINIQMT_RUNTIME_LEDGER_ORDER_MISSING",
+            "qmt_order_id": qmt_order_id,
+            "account_id": request.account_id,
+            "order_remark": request.order_remark,
+            "intent_id": result.intent_id,
+        },
+    )
+
+
+def _ledger_order_payload(order: OrderLedgerRecord) -> dict[str, Any]:
+    return {
+        "qmt_order_id": order.qmt_order_id,
+        "symbol": order.symbol,
+        "order_type": order.order_type,
+        "order_volume": order.order_volume,
+        "traded_volume": order.traded_volume,
+        "order_status": order.order_status,
+        "status_msg": order.status_msg,
+        "order_remark": order.order_remark,
+    }
 
 
 def _submitted_child_count(child_orders: tuple[MiniQMTChildOrder, ...]) -> int:

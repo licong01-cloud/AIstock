@@ -18,6 +18,14 @@ from backend.execution_algos.vnpy_style import (
     is_vnpy_style_algo,
 )
 from backend.execution_algos.vnpy_style.base import VnpyAlgoTemplate
+from backend.services.qmt_strategy_ledger.models import (
+    STATUS_CANCELLED,
+    STATUS_FILLED,
+    STATUS_REJECTED,
+    is_open_like_order_status,
+    is_partial_order_status,
+    is_terminal_order_status,
+)
 from backend.services.trading_core.models import OrderSide
 
 from .gateway import MiniQMTGateway
@@ -152,6 +160,12 @@ class MiniQMTExecutionRuntime:
                 "positions": broker_positions,
                 "sync_before_new_orders": True,
             },
+        )
+        self._reconcile_child_orders_from_broker_snapshot(
+            runtime.runtime_id,
+            broker_orders=broker_orders,
+            broker_trades=broker_trades,
+            source="recovery",
         )
         orphaned_algo_ids = self._terminalize_orphaned_active_algos(
             runtime.runtime_id,
@@ -611,6 +625,60 @@ class MiniQMTExecutionRuntime:
                     reason=f"broker_trade_{child.status.value.lower()}",
                 )
         return event
+
+    def _reconcile_child_orders_from_broker_snapshot(
+        self,
+        runtime_id: str,
+        *,
+        broker_orders: list[dict[str, Any]],
+        broker_trades: list[dict[str, Any]],
+        source: str,
+    ) -> None:
+        """Backfill durable child statuses from broker truth after sync."""
+
+        trades_by_order_id: dict[str, list[dict[str, Any]]] = {}
+        for trade in broker_trades:
+            broker_order_id = _broker_order_id(trade) or _optional_text(trade.get("order_id"))
+            if not broker_order_id:
+                continue
+            trades_by_order_id.setdefault(broker_order_id, []).append(dict(trade))
+
+        for broker_order in broker_orders:
+            broker_order_id = _broker_order_id(broker_order)
+            if not broker_order_id:
+                continue
+            child = self._find_child_order(runtime_id, broker_order_id=broker_order_id)
+            if child is None:
+                continue
+            status = _child_status_from_broker_order_snapshot(
+                broker_order,
+                child_quantity=child.quantity,
+                broker_trades=trades_by_order_id.get(broker_order_id, []),
+            )
+            if status is None:
+                continue
+            metadata = {
+                **dict(child.metadata),
+                "broker_reconciled_status": status.value,
+                "broker_reconcile_source": source,
+                "broker_reconcile_order": dict(broker_order),
+            }
+            if trades_by_order_id.get(broker_order_id):
+                metadata["broker_reconcile_trades"] = [dict(item) for item in trades_by_order_id[broker_order_id]]
+            updated = self.oms.record_child_order(
+                child.model_copy(
+                    update={
+                        "status": status,
+                        "metadata": metadata,
+                    }
+                )
+            )
+            if updated.status in _TERMINAL_CHILD_ORDER_STATUSES:
+                self._terminalize_algo_if_all_children_terminal(
+                    runtime_id,
+                    updated.algo_instance_id,
+                    reason=f"broker_snapshot_{updated.status.value.lower()}",
+                )
 
     def reconcile(self) -> MiniQMTRuntimeRecoverySnapshot:
         runtime = self._require_runtime()
@@ -1481,6 +1549,86 @@ def _child_status_from_broker_status(status: str) -> MiniQMTChildOrderStatus:
     return MiniQMTChildOrderStatus.SUBMITTED
 
 
+def _child_status_from_broker_status_strict(status: str, *, broker_order_id: str | None) -> MiniQMTChildOrderStatus:
+    normalized = str(status or "").strip().upper()
+    if normalized in {"FILLED", "ALL_TRADED"}:
+        return MiniQMTChildOrderStatus.FILLED
+    if normalized in {"PARTIALLY_FILLED", "PARTIAL_FILLED", "PART_TRADED"}:
+        return MiniQMTChildOrderStatus.PARTIALLY_FILLED
+    if normalized in {"OPEN", "SUBMITTED", "PENDING", "CANCEL_REQUESTED", "ACTIVE", "ACCEPTED"}:
+        return MiniQMTChildOrderStatus.SUBMITTED
+    if normalized in {"CANCELLED", "CANCELED"}:
+        return MiniQMTChildOrderStatus.CANCELLED
+    if normalized in {"REJECTED", "BROKER_REJECTED"}:
+        return MiniQMTChildOrderStatus.REJECTED
+    raise RuntimeError(
+        "MiniQMT broker snapshot contains unknown child order text status; "
+        f"reason_code=MINIQMT_RUNTIME_UNKNOWN_BROKER_ORDER_STATUS, broker_order_id={broker_order_id}, "
+        f"raw_status={status!r}"
+    )
+
+
+def _child_status_from_broker_order_snapshot(
+    order: dict[str, Any],
+    *,
+    child_quantity: int,
+    broker_trades: list[dict[str, Any]],
+) -> MiniQMTChildOrderStatus | None:
+    raw_status = order.get("order_status")
+    filled_quantity = _broker_filled_quantity(order, broker_trades=broker_trades)
+    if is_terminal_order_status(raw_status):
+        return _child_status_from_broker_terminal_status(raw_status)
+    if is_partial_order_status(raw_status) or filled_quantity > 0:
+        if filled_quantity >= max(int(child_quantity or 0), 1):
+            return MiniQMTChildOrderStatus.FILLED
+        return MiniQMTChildOrderStatus.PARTIALLY_FILLED
+    if is_open_like_order_status(raw_status):
+        return MiniQMTChildOrderStatus.SUBMITTED
+    text_status = str(order.get("status") or order.get("raw_status") or "").strip().upper()
+    if text_status:
+        return _child_status_from_broker_status_strict(text_status, broker_order_id=_broker_order_id(order))
+    raise RuntimeError(
+        "MiniQMT broker snapshot is missing usable child order status; "
+        f"reason_code=MINIQMT_RUNTIME_MISSING_BROKER_ORDER_STATUS, broker_order_id={_broker_order_id(order)}, "
+        f"raw_order_status={raw_status!r}"
+    )
+
+
+def _child_status_from_broker_terminal_status(raw_status: Any) -> MiniQMTChildOrderStatus:
+    try:
+        status = int(raw_status)
+    except (TypeError, ValueError):
+        return MiniQMTChildOrderStatus.SUBMITTED
+    if status == STATUS_CANCELLED:
+        return MiniQMTChildOrderStatus.CANCELLED
+    if status == STATUS_FILLED:
+        return MiniQMTChildOrderStatus.FILLED
+    if status == STATUS_REJECTED:
+        return MiniQMTChildOrderStatus.REJECTED
+    return MiniQMTChildOrderStatus.SUBMITTED
+
+
+def _broker_filled_quantity(order: dict[str, Any], *, broker_trades: list[dict[str, Any]]) -> int:
+    for key in ("traded_volume", "filled_quantity", "filled_volume", "cumulative_quantity", "traded_quantity"):
+        if order.get(key) is None:
+            continue
+        try:
+            return max(int(order[key]), 0)
+        except (TypeError, ValueError):
+            continue
+    total = 0
+    for trade in broker_trades:
+        for key in ("traded_volume", "quantity", "volume", "filled_quantity"):
+            if trade.get(key) is None:
+                continue
+            try:
+                total += max(int(trade[key]), 0)
+                break
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
 def _optional_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -1580,13 +1728,15 @@ def _is_open_broker_order(order: dict[str, Any]) -> bool:
     diagnostic = order.get("diagnostic")
     if isinstance(diagnostic, dict) and diagnostic.get("cancelable_stale_warning") is True:
         return False
-    raw_status = str(order.get("status") or order.get("raw_status") or "").strip().upper()
-    if raw_status in {"OPEN", "SUBMITTED", "PARTIALLY_FILLED", "PENDING", "CANCEL_REQUESTED"}:
-        return True
-    try:
-        return int(order.get("order_status")) in {48, 49, 50, 51, 55}
-    except (TypeError, ValueError):
+    order_status = order.get("order_status")
+    if is_terminal_order_status(order_status):
         return False
+    if is_open_like_order_status(order_status):
+        return True
+    raw_status = str(order.get("status") or order.get("raw_status") or "").strip().upper()
+    if raw_status in {"OPEN", "SUBMITTED", "PARTIALLY_FILLED", "PENDING", "CANCEL_REQUESTED", "ACTIVE", "ACCEPTED"}:
+        return True
+    return False
 
 
 def _open_order_remaining_quantity(order: dict[str, Any]) -> int:
