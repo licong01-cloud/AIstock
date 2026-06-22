@@ -29,8 +29,8 @@
   "expected": "Research Assistant frontend MCP tool event typing and tests match the backend contract, and frontend tsc passes without touching QE template business code.",
   "first_seen_at": "2026-06-21T20:15:10.580665Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f8d27832c4c69e640a860b316246cedb99c56300",
+  "fixed_at": "2026-06-22T02:10:32.630200Z",
   "github_issue_number": 1437,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1437",
   "last_seen_at": "2026-06-21T20:15:10.580665Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1444",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -90,6 +91,16 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "cd frontend && npm exec tsc -- --noEmit --incremental false -> passed",
+    "cd frontend && npm run lint -> passed (existing react-hooks warnings only)",
+    "cd frontend && npx playwright test tests/research-assistant/phase5-mcp-gateway-ui.spec.ts --project chromium -> passed (1 passed)",
+    "nox -s l0 research_assistant_backend research_assistant_mcp_contract -> passed (l0, 306 backend tests, 38 MCP contract tests)",
+    "nox -s validation_module_registry_l0 -> passed (8 tests and ownership scan)",
+    "nox -s mcp_gateway_phase5_assistant -> passed (192 backend/MCP tests, frontend build, phase5 Playwright 1 passed)",
+    "nox -s ra_phase7_full_accept -> passed (306 backend tests, phase7 frontend 4 passed, RA UI 8 passed, crosscheck/catalog/ownership passed)",
+    "GitHub PR #1444 required checks -> all required green; 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
