@@ -29,8 +29,8 @@
   "expected": "Normalize all scheduler time to Asia/Shanghai (like live_session); add a LocalSim post-close + stale terminalizer mirroring the MiniQMT ones; fail-closed (DataUnavailableError) when context.cash is None instead of 0.0; add trading-day gate to inner run_once/roll-forward. MiniQMT logic untouched.",
   "first_seen_at": "2026-06-21T19:09:58.030388Z",
   "fix_branch": "bug/BUG-463-p0-paper-v2-localsim-scheduler-timezone-localsim-20260622",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "64291ba237c319acc0ee0b6fc9afbcfcfb3c5bdd",
+  "fixed_at": "2026-06-22T08:06:11.511305Z",
   "github_issue_number": 1428,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1428",
   "last_seen_at": "2026-06-21T19:09:58.030388Z",
@@ -38,6 +38,8 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_opened_at": "2026-06-21T21:37:59Z",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1441",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +61,9 @@
     "fingerprint": "385549276b89b2383d6fb771",
     "source_event_id": "FE-20260622-385549276b89"
   },
+  "validation_evidence": [
+    "gh pr checks 1441 -> 17 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -71,18 +76,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 70 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 11 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
-    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py docs/handoff/BUG-463-analysis.md -> passed",
-    "rtk python -m json.tool tests/aistock_validation/bugs/20260622_BUG-463-p0-paper-v2-localsim-scheduler-timezone-localsim-terminalizer-fail-close.json -> json ok",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
-    "rtk cmd /c paper_v2_l3 hosted CI env -> passed (paper_v2_backend 633 passed, 1 skipped, 1 deselected; data quality gates passed)"
-  ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1441",
-  "pr_opened_at": "2026-06-21T21:37:59Z"
+  "workflow_gate": "ready_for_fix"
 }
