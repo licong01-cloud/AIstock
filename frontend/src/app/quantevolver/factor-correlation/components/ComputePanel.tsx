@@ -106,7 +106,7 @@ interface Props {
 }
 
 const SCOPE_OPTIONS: { value: ComputeScope; label: string; desc: string }[] = [
-  { value: "cache", label: "全量计算", desc: "使用 official offline single parquet cache 全量重算相关性矩阵" },
+  { value: "cache", label: "全量重算相关性", desc: "使用 rdagent_assets/factor_values/single 官方因子值缓存重算相关性矩阵" },
 ];
 
 const DATASET_OPTIONS = [
@@ -518,7 +518,7 @@ export default function ComputePanel({
       {factorStats && (
         <div style={{ marginTop: 20 }}>
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
-            因子统计（官方离线缓存口径）
+            因子统计（官方缓存口径）
             <span style={{ marginLeft: 8, opacity: 0.7 }}>
               独立指标 / 相关性 / QE 回测共用 {officialDisplayWindow.start} ~ {officialDisplayWindow.end}
             </span>
@@ -568,7 +568,7 @@ export default function ComputePanel({
       >
         {singleCache && (
           <>
-            <StatItem label="缓存来源" value="官方离线缓存" />
+            <StatItem label="缓存来源" value="官方缓存" />
             <StatItem label="共用时间段" value={`${officialDisplayWindow.start} ~ ${officialDisplayWindow.end}`} />
             <StatItem label="因子缓存文件" value={`${singleCache.cached_count} 个`} />
             {singleCache.disk_factor_count != null && (
@@ -632,7 +632,7 @@ export default function ComputePanel({
         }}
       >
         <strong>计算模式说明：</strong>
-        相关性计算只使用 <strong>rdagent_assets/factor_values/single</strong> official offline parquet cache，
+        相关性计算只使用 <strong>rdagent_assets/factor_values/single</strong> official factor-value parquet cache，
         与官方独立指标和 QE 回测共用同一份因子值缓存；默认展示全量数据集
         <strong>2018-08-01 ~ 2026-04-30</strong>，缺缓存的因子不会回退到非官方缓存或旧快照。
         如需补齐因子值，请在因子库提交官方全量因子计算后再重新计算相关性。

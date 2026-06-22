@@ -618,7 +618,7 @@ export default function FactorList({
     force = false,
   ) => {
     if (!cacheStartDate || !cacheEndDate) {
-      throw new Error("请先选择官方离线缓存开始/结束日期");
+      throw new Error("请先选择官方缓存窗口开始/结束日期");
     }
     if (cacheStartDate > cacheEndDate) {
       throw new Error("开始日期不能晚于结束日期");
@@ -1850,7 +1850,7 @@ export default function FactorList({
                 </span>
                 {remoteStats && (
                   <span style={{ fontSize: 12, color: selectedRemoteNode?.reachable === false ? "#dc2626" : "#64748b", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
-                    WSL缓存 {remoteStats.local.disk_cached ?? remoteStats.local.cached}
+                    官方缓存节点 {remoteStats.local.disk_cached ?? remoteStats.local.cached}
                     {remoteStats.local.meta_cached != null && <>｜Meta {remoteStats.local.meta_cached}</>}
                     {(remoteStats.local.orphan_parquet_count || 0) > 0 && <>｜待补元数据 <span style={{ color: "#d97706" }}>{remoteStats.local.orphan_parquet_count}</span></>}
                     {selectedRemoteNode ? (
@@ -1904,7 +1904,7 @@ export default function FactorList({
               <select
                 value={cacheCoverageFilter}
                 onChange={e => setCacheCoverageFilter(e.target.value)}
-                title="按所选官方离线缓存区间筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
+                title="按所选官方缓存窗口筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
                 style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}
               >
                 <option value="all">全部缓存状态</option>
@@ -1982,7 +1982,7 @@ export default function FactorList({
                     {selectedCacheTask.error ? ` | error: ${selectedCacheTask.error}` : ""}
                   </div>
                   <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
-                    official offline | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
+                    official cache | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
                   </div>
                   {selectedCacheTask.dispatch_sync_error && (
                     <div style={{ fontSize: 12, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
@@ -2530,12 +2530,9 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_annual_return")}>年化(独立){getSortIndicator("ind_annual_return")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} title="official full compute 生成同一份因子值缓存并写入独立指标；优先显示缓存计算时间，兼容显示独立指标时间。" onClick={() => handleSort("cache_computed_at")}>官方更新时间{getSortIndicator("cache_computed_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
-                <th style={{ ...thStyle, width: 90 }}>远端同步</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_start_date")}>缓存开始{getSortIndicator("cache_start_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_end_date")}>缓存结束{getSortIndicator("cache_end_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} onClick={() => handleSort("cache_computed_at")}>缓存计算{getSortIndicator("cache_computed_at")}</th>
+                <th style={{ ...thStyle, width: 90 }}>远程同步</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 80 }} onClick={() => handleSort("generated_at_utc")}>入库时间{getSortIndicator("generated_at_utc")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
@@ -2569,6 +2566,11 @@ export default function FactorList({
                 const cacheTargetStart = cacheStartDate || cacheContext?.trainStart;
                 const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
                 const cacheCoverageOk = factorCacheCoversRequestedWindow(f, cacheTargetStart, cacheTargetEnd);
+                const officialUpdatedAt = f.cache_computed_at || f.ind_calculated_at || null;
+                const officialUpdateTitle = [
+                  f.cache_computed_at ? `官方缓存计算: ${f.cache_computed_at}` : null,
+                  f.ind_calculated_at ? `独立指标计算: ${f.ind_calculated_at}` : null,
+                ].filter(Boolean).join("\n");
                 const remoteSyncStatus = remoteFactorStatusByName[f.factor_name];
                 const remoteNeedsMetaReconcile = Boolean(
                   remoteSyncStatus?.local_meta_status && remoteSyncStatus.local_meta_status !== "ok"
@@ -2735,8 +2737,8 @@ export default function FactorList({
                           <span style={{ color: "#d1d5db", fontSize: 9 }}>-</span>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.ind_calculated_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.ind_calculated_at || undefined}>
-                        {f.ind_calculated_at ? f.ind_calculated_at.slice(0, 16).replace("T", " ") : "-"}
+                      <td style={{ ...tdStyle, fontSize: 10, color: officialUpdatedAt ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={officialUpdateTitle || undefined}>
+                        {officialUpdatedAt ? officialUpdatedAt.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
                         {f.cache_reconcile_required || f.cache_status === "missing_meta_reconcile_required" ? (
@@ -2790,15 +2792,6 @@ export default function FactorList({
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_start_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_end_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_end_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_computed_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.cache_computed_at || undefined}>
-                        {f.cache_computed_at ? f.cache_computed_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.generated_at_utc ? f.generated_at_utc.slice(0, 10) : "-"}</td>
                       <td style={tdStyle}>
@@ -2854,7 +2847,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-        <td colSpan={23} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={22} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",
