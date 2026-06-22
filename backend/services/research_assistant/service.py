@@ -1373,19 +1373,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         runtime_config_path: Path | None = None,
         prompt_pack_path: Path | None = None,
     ) -> dict[str, Any]:
-        if runtime_config_path is not None:
-            self._runtime_config_path = runtime_config_path
-        if prompt_pack_path is not None:
-            self._prompt_pack_path = prompt_pack_path
+        next_runtime_config_path = runtime_config_path if runtime_config_path is not None else self._runtime_config_path
+        next_prompt_pack_path = prompt_pack_path if prompt_pack_path is not None else self._prompt_pack_path
         try:
             snapshot = load_declarative_config(
                 environment=self.environment,
-                runtime_config_path=self._runtime_config_path,
-                prompt_pack_path=self._prompt_pack_path,
+                runtime_config_path=next_runtime_config_path,
+                prompt_pack_path=next_prompt_pack_path,
             )
         except ResearchAssistantDeclarativeConfigError as exc:
             raise ResearchAssistantRuntimeConfigInvalidError(exc.error_payload) from exc
         with self._declarative_config_lock:
+            self._runtime_config_path = next_runtime_config_path
+            self._prompt_pack_path = next_prompt_pack_path
             self._declarative_config = snapshot
         logger.warning(
             "research assistant declarative config reloaded: runtime_source=%s prompt_source=%s",
@@ -1394,6 +1394,117 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         return self.declarative_config_status()
 
+    def reload_declarative_config_with_audit(
+        self,
+        *,
+        actor: str,
+        runtime_config_path: Path | None = None,
+        prompt_pack_path: Path | None = None,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        old_status = self.declarative_config_status()
+        try:
+            new_status = self.reload_declarative_config(
+                runtime_config_path=runtime_config_path,
+                prompt_pack_path=prompt_pack_path,
+            )
+        except ResearchAssistantRuntimeConfigInvalidError as exc:
+            duration_ms = int((perf_counter() - started) * 1000)
+            payload = self._declarative_config_reload_audit_payload(
+                actor=actor,
+                success=False,
+                old_status=old_status,
+                new_status=self.declarative_config_status(),
+                duration_ms=duration_ms,
+                error_payload=exc.error_payload,
+            )
+            trace = self.create_trace_event(
+                TraceEventCreate(
+                    event_type="declarative_config_reloaded",
+                    component="declarative_config",
+                    status="failed",
+                    duration_ms=duration_ms,
+                    payload_json=payload,
+                )
+            )
+            logger.error(
+                "research assistant declarative config reload failed: actor=%s reason_code=%s source_path=%s trace_id=%s",
+                actor,
+                exc.error_payload.get("reason_code"),
+                exc.error_payload.get("source_path"),
+                trace.get("trace_id"),
+            )
+            exc.error_payload.setdefault("audit_trace_id", trace.get("trace_id"))
+            exc.error_payload.setdefault("last_good_source_sha256", old_status.get("source_sha256"))
+            raise
+        duration_ms = int((perf_counter() - started) * 1000)
+        payload = self._declarative_config_reload_audit_payload(
+            actor=actor,
+            success=True,
+            old_status=old_status,
+            new_status=new_status,
+            duration_ms=duration_ms,
+        )
+        trace = self.create_trace_event(
+            TraceEventCreate(
+                event_type="declarative_config_reloaded",
+                component="declarative_config",
+                status="succeeded",
+                duration_ms=duration_ms,
+                payload_json=payload,
+            )
+        )
+        return {
+            "schema_version": "aistock_research_assistant_config_reload_result_v1",
+            "status": "succeeded",
+            "actor": actor,
+            "declarative_config_status": new_status,
+            "old_declarative_config_status": old_status,
+            "audit_trace_id": trace.get("trace_id"),
+            "multi_worker_notice": self._declarative_config_reload_multi_worker_notice(),
+        }
+
+    @staticmethod
+    def _declarative_config_reload_multi_worker_notice() -> str:
+        return (
+            "Reload only updates the Research Assistant declarative config snapshot in the current worker process; "
+            "multi-worker deployments must call this endpoint once per worker or restart workers to activate the same YAML everywhere."
+        )
+
+    def _declarative_config_reload_audit_payload(
+        self,
+        *,
+        actor: str,
+        success: bool,
+        old_status: dict[str, Any],
+        new_status: dict[str, Any],
+        duration_ms: int,
+        error_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "aistock_research_assistant_config_reload_audit_v1",
+            "actor": actor,
+            "success": success,
+            "status": "succeeded" if success else "failed",
+            "duration_ms": duration_ms,
+            "old_source_sha256": old_status.get("source_sha256"),
+            "new_source_sha256": new_status.get("source_sha256"),
+            "old_runtime_source_sha256": (old_status.get("runtime_config") or {}).get("source_sha256"),
+            "new_runtime_source_sha256": (new_status.get("runtime_config") or {}).get("source_sha256"),
+            "old_prompt_source_sha256": (old_status.get("prompt_pack") or {}).get("source_sha256"),
+            "new_prompt_source_sha256": (new_status.get("prompt_pack") or {}).get("source_sha256"),
+            "old_runtime_config_version": (old_status.get("runtime_config") or {}).get("config_version"),
+            "new_runtime_config_version": (new_status.get("runtime_config") or {}).get("config_version"),
+            "old_prompt_pack_version": (old_status.get("prompt_pack") or {}).get("pack_version"),
+            "new_prompt_pack_version": (new_status.get("prompt_pack") or {}).get("pack_version"),
+            "old_counts": old_status.get("counts") or {},
+            "new_counts": new_status.get("counts") or {},
+            "old_status": old_status,
+            "new_status": new_status,
+            "error": dict(error_payload or {}),
+            "multi_worker_notice": self._declarative_config_reload_multi_worker_notice(),
+        }
+
     @property
     def declarative_config(self) -> ResearchAssistantDeclarativeConfigSnapshot:
         with self._declarative_config_lock:
@@ -1401,9 +1512,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def declarative_config_status(self) -> dict[str, Any]:
         snapshot = self.declarative_config
+        source_sha256 = sha256_json(
+            {
+                "runtime_config": snapshot.runtime_config.source_sha256,
+                "prompt_pack": snapshot.prompt_pack.source_sha256,
+            }
+        )
         return {
             "schema_version": "aistock_research_assistant_declarative_config_status_v1",
             "authority": "yaml_memory",
+            "source_path": {
+                "runtime_config": snapshot.runtime_config.source_path,
+                "prompt_pack": snapshot.prompt_pack.source_path,
+            },
+            "source_sha256": source_sha256,
             "runtime_config": {
                 "config_key": snapshot.runtime_config.config_key,
                 "config_version": snapshot.runtime_config.config_version,
@@ -1418,6 +1540,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             },
             "workflow_capability_count": len(snapshot.workflow_capabilities),
             "prompt_node_count": len(snapshot.prompt_nodes),
+            "counts": {
+                "workflow_capabilities": len(snapshot.workflow_capabilities),
+                "prompt_nodes": len(snapshot.prompt_nodes),
+            },
         }
 
     @staticmethod

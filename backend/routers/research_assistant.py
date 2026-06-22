@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hmac
+import os
+import threading
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.services.research_assistant.models import (
@@ -36,9 +39,15 @@ from backend.services.research_assistant.models import (
 )
 from backend.services.research_assistant.repository import ResearchAssistantSchemaMissingError
 from backend.services.research_assistant.mcp_catalog_sync import enrich_mcp_server_record
-from backend.services.research_assistant.service import ResearchAssistantCatalogNotReadyError, ResearchAssistantService
+from backend.services.research_assistant.service import (
+    ResearchAssistantCatalogNotReadyError,
+    ResearchAssistantRuntimeConfigInvalidError,
+    ResearchAssistantService,
+)
 
 router = APIRouter(prefix="/research-assistant", tags=["research-assistant"])
+_research_assistant_service_lock = threading.RLock()
+_research_assistant_service_singleton: ResearchAssistantService | None = None
 
 
 class ResearchAssistantResponse(BaseModel):
@@ -77,12 +86,47 @@ class TempMemoryCreateRequest(BaseModel):
     confirmation_text: str | None = None
 
 
+class ConfigReloadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = Field("operator", min_length=1)
+
+
 def get_research_assistant_service() -> ResearchAssistantService:
-    return ResearchAssistantService()
+    global _research_assistant_service_singleton
+    with _research_assistant_service_lock:
+        if _research_assistant_service_singleton is None:
+            _research_assistant_service_singleton = ResearchAssistantService()
+        return _research_assistant_service_singleton
 
 
 def _success(data: Any) -> ResearchAssistantResponse:
     return ResearchAssistantResponse(data=data)
+
+
+def require_config_reload_operator(
+    x_research_assistant_operator_token: str | None = Header(None),
+) -> bool:
+    expected = os.getenv("AISTOCK_RA_CONFIG_RELOAD_TOKEN")
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "research_assistant_config_reload_token_not_configured",
+                "reason_code": "operator_token_not_configured",
+                "message": "Config reload is an operator action; set AISTOCK_RA_CONFIG_RELOAD_TOKEN before using this endpoint.",
+            },
+        )
+    if not x_research_assistant_operator_token or not hmac.compare_digest(x_research_assistant_operator_token, expected):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "research_assistant_config_reload_unauthorized",
+                "reason_code": "operator_token_required",
+                "message": "Config reload requires X-Research-Assistant-Operator-Token.",
+            },
+        )
+    return True
 
 
 def _map_error(exc: Exception) -> HTTPException:
@@ -90,6 +134,8 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ResearchAssistantSchemaMissingError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, ResearchAssistantRuntimeConfigInvalidError):
+        return HTTPException(status_code=400, detail=exc.error_payload)
     if isinstance(exc, ResearchAssistantCatalogNotReadyError):
         return HTTPException(
             status_code=409,
@@ -133,6 +179,19 @@ def seed_catalogs(service: ResearchAssistantService = Depends(get_research_assis
 def catalog_readiness(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.catalog_readiness())
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/config/reload", response_model=ResearchAssistantResponse)
+def reload_declarative_config(
+    request: ConfigReloadRequest | None = None,
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+    _authorized: bool = Depends(require_config_reload_operator),
+) -> ResearchAssistantResponse:
+    try:
+        data = request or ConfigReloadRequest()
+        return _success(service.reload_declarative_config_with_audit(actor=data.actor))
     except Exception as exc:
         raise _map_error(exc) from exc
 

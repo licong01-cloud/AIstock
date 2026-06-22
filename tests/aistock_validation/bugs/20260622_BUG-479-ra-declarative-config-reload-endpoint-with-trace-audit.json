@@ -26,6 +26,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-b38c08f8bc4f",
       "timestamp": "2026-06-22T07:46:47.053840Z"
+    },
+    {
+      "timestamp": "2026-06-22T09:12:40.530904+00:00",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Implemented authorized POST /api/v1/research-assistant/config/reload backed by reload_declarative_config_with_audit(), append-only assistant_trace_events audit for success/failure, last-good preservation on invalid YAML, constant-time operator token check, singleton in-process service for reload effectiveness, and offline tests. No DDL, no production DB, no production service restart.",
+      "validation": [
+        "rtk proxy python -m pytest backend/tests/research_assistant/test_declarative_config_reload.py -q -> 4 passed",
+        "rtk proxy python -m pytest backend/tests/research_assistant/test_api.py -q -> 9 passed",
+        "rtk proxy python -m nox -s l0 -> passed",
+        "rtk proxy python -m nox -s research_assistant_backend -> 312 passed",
+        "rtk proxy python -m nox -s research_assistant_mcp_contract -> 38 passed",
+        "rtk proxy python -m nox -s validation_module_registry_l0 -> 8 passed + ownership scan passed",
+        "ra_phase7_full_accept evidence: backend 312 passed, frontend lint/build passed, phase7-frontend-acceptance 4 passed with PLAYWRIGHT_SKIP_WEBSERVER=1 and nox-equivalent env, research-assistant.spec 9 passed, phase7 crosscheck/catalog_integrity/ownership passed; monolithic nox command showed 4 phase7 tests ok but hung in Playwright webServer teardown, so recorded split evidence instead",
+        "rtk proxy ruff check backend/services/research_assistant/service.py backend/routers/research_assistant.py backend/tests/research_assistant/test_declarative_config_reload.py -> passed",
+        "rtk proxy git diff --check -> passed"
+      ]
     }
   ],
   "evidence_uris": [],
