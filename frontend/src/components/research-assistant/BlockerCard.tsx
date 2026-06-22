@@ -9,6 +9,12 @@ function blockerTone(status: string): string {
   return "neutral";
 }
 
+function provenanceDisplay(provenance?: JsonObject): string {
+  if (!provenance || !Object.keys(provenance).length) return "-";
+  const source = provenance.source || provenance.source_ref;
+  return source ? display(source) : Object.entries(provenance).map(([key, value]) => `${key}: ${display(value)}`).join(", ");
+}
+
 export function normalizeBlockerCard(value: unknown): AssistantBlockerCard | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as JsonObject;
@@ -37,13 +43,16 @@ export function BlockerCard({ card }: { card: AssistantBlockerCard }) {
       <div className="ra-evidence-ref-grid">
         <span>next_step</span><strong>{card.next_step}</strong>
         <span>as_of</span><strong>{display(card.as_of)}</strong>
-        <span>provenance</span><strong>{card.provenance ? Object.keys(card.provenance).join(", ") : "-"}</strong>
+        <span>provenance</span><strong>{provenanceDisplay(card.provenance)}</strong>
       </div>
-      <DiagnosticLogBlock
-        title="Blocker diagnostic log"
-        data={card}
-        testId="ra-blocker-log"
-      />
+      <details className="ra-diagnostic-details" data-testid="ra-blocker-log">
+        <summary>Developer details / Diagnostic log</summary>
+        <DiagnosticLogBlock
+          title="Blocker diagnostic log"
+          data={card}
+          testId="ra-blocker-log-detail"
+        />
+      </details>
     </article>
   );
 }

@@ -324,7 +324,7 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
 
 
 
-test("Research Assistant blocker errors are visible as direct log blocks", async ({ page: browserPage }) => {
+test("Research Assistant blocker diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
   const response = {
     ...chatTurnResponse,
     assistant_message: {
@@ -333,7 +333,7 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
     },
     cards: {
       ...chatTurnResponse.cards,
-      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: false },
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
       action_proposals: [
         { title: "read-only health overview", approval_required: false, status: "read_only" },
         { title: "repair plan", approval_required: false, status: "plan_only" },
@@ -363,14 +363,80 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
 
   const blockerLog = browserPage.getByTestId("ra-blocker-log");
   await expect(blockerLog).toBeVisible();
-  await expect(blockerLog).toContainText("proposal-blocker-3");
   await expect(blockerLog).toContainText("approval_required");
   await expect(blockerLog).toContainText("local_data_apply_repair_confirmed");
   await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
   await expect(blockerLog).toContainText("action_proposals");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(1);
+  await blockerLog.locator("summary").click();
   await expect(blockerLog.locator("pre")).toBeVisible();
+  await expect(blockerLog.locator("pre")).toContainText("proposal-blocker-3");
   await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
   await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
+});
+
+test("Research Assistant evidence diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "Evidence card keeps provenance readable and raw diagnostic payload collapsed.",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      evidence_cards: [
+        {
+          card_id: "evidence-card-1",
+          title: "stock evidence",
+          summary: "Quote evidence captured from stock MCP.",
+          status: "supported",
+          evidence_refs: [
+            {
+              source: "stock_analysis.latest_quote",
+              source_ref: "stock_analysis:000688",
+              as_of: "",
+              provenance: {
+                source: "stock_analysis",
+                server_key: "aistock-stock-analysis",
+                trace_id: "trace-secret-raw-json",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("show stock evidence");
+  await browserPage.locator(".ra-chat-send").click();
+
+  const evidenceCard = browserPage.getByTestId("ra-evidence-card");
+  await expect(evidenceCard).toBeVisible();
+  const evidenceGrid = evidenceCard.locator(".ra-evidence-ref-grid");
+  await expect(evidenceGrid).toContainText("stock_analysis.latest_quote");
+  await expect(evidenceGrid).toContainText("stock_analysis");
+  await expect(evidenceGrid).toContainText("-");
+  await expect(evidenceGrid).not.toContainText("trace-secret-raw-json");
+  await expect(evidenceGrid).not.toContainText("{");
+
+  const evidenceLog = browserPage.getByTestId("ra-evidence-log");
+  await expect(evidenceLog).toBeVisible();
+  await expect(evidenceLog.locator("summary")).toContainText("Developer details / Diagnostic log");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.locator("summary").click();
+  await expect(evidenceLog.locator("pre")).toBeVisible();
+  await expect(evidenceLog.locator("pre")).toContainText("trace-secret-raw-json");
+  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(0);
 });
 
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {

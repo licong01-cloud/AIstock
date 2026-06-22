@@ -29,6 +29,12 @@ export function evidenceCompleteness(card: AssistantEvidenceCard): { ok: boolean
   return { ok: missing.length === 0, missing };
 }
 
+function provenanceDisplay(provenance?: JsonObject): string {
+  if (!isObject(provenance) || !Object.keys(provenance).length) return "-";
+  const source = provenance.source || provenance.source_ref;
+  return source ? display(source) : Object.entries(provenance).map(([key, value]) => `${key}: ${display(value)}`).join(", ");
+}
+
 export function EvidenceCard({ card }: { card: AssistantEvidenceCard }) {
   const refs = Array.isArray(card.evidence_refs) ? card.evidence_refs.map(normalizeEvidenceRef) : [];
   const completeness = evidenceCompleteness({ ...card, evidence_refs: refs });
@@ -55,14 +61,17 @@ export function EvidenceCard({ card }: { card: AssistantEvidenceCard }) {
               <div className="ra-evidence-ref-grid">
                 <span>source</span><strong>{display(ref.source || ref.source_ref)}</strong>
                 <span>as_of</span><strong>{display(ref.as_of)}</strong>
-                <span>provenance</span><strong>{isObject(ref.provenance) ? Object.keys(ref.provenance).join(", ") : "-"}</strong>
+                <span>provenance</span><strong>{provenanceDisplay(ref.provenance)}</strong>
               </div>
               {missing.length ? <p className="ra-muted">insufficient: {missing.join(", ")}</p> : null}
-              <DiagnosticLogBlock
-                title="Evidence provenance log"
-                data={ref}
-                testId="ra-evidence-log"
-              />
+              <details className="ra-diagnostic-details" data-testid="ra-evidence-log">
+                <summary>Developer details / Diagnostic log</summary>
+                <DiagnosticLogBlock
+                  title="Evidence provenance log"
+                  data={ref}
+                  testId="ra-evidence-log-detail"
+                />
+              </details>
             </div>
           );
         })}
