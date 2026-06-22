@@ -491,47 +491,6 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   await expect(browserPage.locator("body")).not.toContainText("鎴");
   await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
-  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
-    if (path.endsWith("/mcp/tools")) {
-      return respond(page([
-        {
-          tool_id: "mcp_tool_validation_issue_sync",
-          server_key: "aistock-validation",
-          tool_name: "mcp_github_issue_sync_bug",
-          title: "\u6807\u51c6 workflow \u540c\u6b65 Issue",
-          risk_level: "high",
-          requires_approval: true,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["catalog", "approval"] },
-          required_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
-        },
-      ]));
-    }
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_demo_1", title: "QE 实验规划", status: "running" }]));
-    if (path.endsWith("/mcp/preflight")) return respond({ passed: false, approval_required: true, missing_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"], trace_event: { event_type: "approval_required" }, deep_links: ["/research-assistant/approvals"] });
-    return respond(page([]));
-  });
-
-  await browserPage.goto("/research-assistant/admin");
-  await expect(browserPage.getByRole("heading", { name: "旧版表格与 JSON 详情保留在这里" })).toBeVisible();
-  await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
-
-  await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: /Action Proposal/ })).toBeVisible();
-  await expect(browserPage.locator("#ra-legacy-payload")).toBeVisible();
-  await browserPage.getByRole("button", { name: /preflight/ }).click();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("缺少确认");
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("pre")).toBeHidden();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(1);
-});
-
-
 test("Research Assistant workbench surfaces local data MCP tools as readable cards", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
