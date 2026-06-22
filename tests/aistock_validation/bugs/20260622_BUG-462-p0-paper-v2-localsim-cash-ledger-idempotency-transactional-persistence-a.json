@@ -57,8 +57,8 @@
   "expected": "Add unique (run_id, fill_id) on paper_v2.cash_ledger + ON CONFLICT DO NOTHING in save_cash_entry (forward+rollback migration; prod applied by user); add an explicit transactional persistence path (disable autocommit / txn context) so each logical unit (one tick / one day snapshot copy) commits atomically incl. the bar-cursor advance. MiniQMT untouched.",
   "first_seen_at": "2026-06-21T19:09:34.287072Z",
   "fix_branch": "bug/BUG-462-p0-paper-v2-localsim-cash-ledger-idempotency-tra-20260622",
-  "fix_commit": "54cbc336c2c8c542b866c8185521ee30b0cfa2e1",
-  "fixed_at": null,
+  "fix_commit": "557eddad379edaffe259eae64c29f27c1c5e588a",
+  "fixed_at": "2026-06-22T07:32:36.745504Z",
   "github_issue_number": 1427,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1427",
   "last_seen_at": "2026-06-21T19:09:34.287072Z",
@@ -66,9 +66,13 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1439",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "related_prs": [
+    "https://github.com/licong01-cloud/AIstock/pull/1439"
+  ],
   "reproduce_command": "Inspect repository.py:2028 save_cash_entry (no ON CONFLICT); pg_pool.py:252/327 autocommit=True; repository.py save_positions DELETE then INSERT.",
   "required_verification": [
     "l0",
@@ -78,7 +82,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -87,6 +91,9 @@
     "fingerprint": "3b1f4b68b98c4f598146058c",
     "source_event_id": "FE-20260622-3b1f4b68b98c"
   },
+  "validation_evidence": [
+    "gh pr checks 1439 -> 17 passed, 0 failed"
+  ],
   "verification_run_id": "BUG-462-localsim-ddl-transaction-rework-20260622",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -99,17 +106,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "validation_evidence": [
-    "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_day_runner.py -q -> passed (61 passed)",
-    "python -m ruff check backend/db/init_trading_core_v2_schema.py backend/db/pg_pool.py backend/services/paper_trading_v2/repository.py backend/tests/paper_trading_v2/test_day_runner.py -> passed",
-    "git diff --check -> passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> passed",
-    "cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed (UI skipped; paper_v2_backend 640 passed, 1 skipped, 1 deselected; legacy paper_v2_ledger_consistency WARN non-blocking)"
-  ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1439",
-  "related_prs": [
-    "https://github.com/licong01-cloud/AIstock/pull/1439"
-  ]
+  "workflow_gate": "ready_for_fix"
 }
