@@ -268,6 +268,24 @@ class CountingContextProvider(StaticSimulationRunContextProvider):
         )
 
 
+class SelectiveFailingContextProvider(StaticSimulationRunContextProvider):
+    def __init__(self, *, failing_binding_id: str, exc_factory, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.failing_binding_id = failing_binding_id
+        self.exc_factory = exc_factory
+        self.calls: list[str] = []
+
+    def load_context(self, *, runtime_release, binding, trade_date):
+        self.calls.append(binding.binding_id)
+        if binding.binding_id == self.failing_binding_id:
+            raise self.exc_factory(binding, trade_date)
+        return super().load_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+        )
+
+
 def _position_context(*, portfolio_id: str, local_broker=None, cash: float | None = 100_000) -> SimulationRunContext:
     return SimulationRunContext(
         portfolio_id=portfolio_id,
@@ -623,6 +641,139 @@ def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_e
     ]
     assert normalized_intents[0] == normalized_intents[1]
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_intents[0]
+
+
+@pytest.mark.parametrize(
+    ("exc_cls", "reason_code"),
+    (
+        (DataUnavailableError, "UNIT_PRE_RUN_CONTEXT_UNAVAILABLE"),
+        (RuntimeConfigInvalidError, "UNIT_PRE_RUN_CONFIG_INVALID"),
+    ),
+)
+def test_scheduler_persists_pre_run_binding_failure_without_duplicate_rows(exc_cls, reason_code) -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+
+    def exc_factory(binding, trade_date):
+        return exc_cls(
+            "unit pre-run failure",
+            context={
+                "reason_code": reason_code,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "trade_date": trade_date.isoformat(),
+            },
+        )
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=SelectiveFailingContextProvider(
+            failing_binding_id=local_binding.binding_id,
+            exc_factory=exc_factory,
+        ),
+    )
+
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    runs = [
+        run
+        for run in repo.list_simulation_daily_runs(trade_date=TRADE_DATE, limit=10)
+        if run.binding_id == local_binding.binding_id
+    ]
+    latest = repo.get_simulation_daily_run_by_key(
+        strategy_id=local_binding.strategy_id,
+        binding_id=local_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    assert latest is not None
+    pre_run_failure = latest.run_payload_json["pre_run_failure"]
+    detail = SimulationRuntimeOpsService(repository=repo).get_run_detail(latest.run_id)
+
+    assert first.failed_count == 1
+    assert first.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert first.results[0].run is not None
+    assert second.failed_count == 1
+    assert second.results[0].run is not None
+    assert second.results[0].run.run_id == first.results[0].run.run_id
+    assert len(runs) == 1
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest.execution_plan_id is None
+    assert pre_run_failure["stage"] == "PRE_RUN_FAILED"
+    assert pre_run_failure["reason_code"] == reason_code
+    assert pre_run_failure["binding_id"] == local_binding.binding_id
+    assert pre_run_failure["strategy_id"] == local_binding.strategy_id
+    assert pre_run_failure["trade_date"] == TRADE_DATE.isoformat()
+    assert pre_run_failure["broker_called"] is False
+    assert pre_run_failure["observed_count"] == 2
+    assert latest.run_payload_json["broker_called"] is False
+    assert latest.run_payload_json["submitted_intents"] == 0
+    assert latest.run_payload_json["failed_intents"] == 0
+    assert latest.run_payload_json["submit_failure"]["stage"] == "PRE_RUN_FAILED"
+    assert detail["run"]["errors"][0]["code"] == "PRE_RUN_FAILED"
+    assert detail["run"]["errors"][0]["context"]["reason_code"] == reason_code
+
+
+def test_scheduler_pre_run_binding_failure_does_not_block_other_bindings() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+
+    def exc_factory(binding, trade_date):
+        return DataUnavailableError(
+            "unit LocalSim context unavailable",
+            context={
+                "reason_code": "UNIT_PRE_RUN_CONTEXT_UNAVAILABLE",
+                "binding_id": binding.binding_id,
+                "trade_date": trade_date.isoformat(),
+            },
+        )
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=SelectiveFailingContextProvider(
+            failing_binding_id=local_binding.binding_id,
+            exc_factory=exc_factory,
+            by_binding_id={
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_qmt_still_runs"),
+            },
+        ),
+    )
+
+    result = scheduler.run_once(trade_date=TRADE_DATE, data_source="DB_HISTORICAL", submit=False)
+    by_binding_id = {item.binding_id: item for item in result.results}
+    failed_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=local_binding.strategy_id,
+        binding_id=local_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    qmt_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=qmt_binding.strategy_id,
+        binding_id=qmt_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+
+    assert result.total_bindings == 2
+    assert result.failed_count == 1
+    assert result.planned_count == 1
+    assert by_binding_id[local_binding.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert by_binding_id[local_binding.binding_id].error["context"]["reason_code"] == "UNIT_PRE_RUN_CONTEXT_UNAVAILABLE"
+    assert by_binding_id[qmt_binding.binding_id].status == "PLANNED"
+    assert failed_run is not None
+    assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert qmt_run is not None
+    assert qmt_run.execution_plan_id is not None
 
 
 def test_scheduler_sizes_miniqmt_targets_from_dynamic_strategy_slot_equity() -> None:
@@ -5200,7 +5351,7 @@ def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
     )
 
     assert result.failed_count == 1
-    assert result.results[0].status == "FAILED"
+    assert result.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
     assert result.results[0].error["type"] == "DataUnavailableError"
     assert "stale daily selection evidence" in result.results[0].error["message"]
 
@@ -5278,7 +5429,7 @@ def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
 
     context = result.results[0].error["context"]
     assert result.failed_count == 1
-    assert result.results[0].status == "FAILED"
+    assert result.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
     assert result.results[0].error["type"] == "DataUnavailableError"
     assert "cutoff_date" in context["reasons"]
     assert context["cutoff_date"] == "2026-05-19"
