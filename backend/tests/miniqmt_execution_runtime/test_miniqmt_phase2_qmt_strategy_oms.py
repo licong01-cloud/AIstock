@@ -22,7 +22,8 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.trading_core.models import OrderSide
+from backend.services.trading_core.errors import BrokerSubmitError
+from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 
 TRADE_DATE = date(2026, 6, 23)
@@ -206,7 +207,7 @@ def test_event_loop_rejects_compiler_style_managed_vnpy_timer_building() -> None
         runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
     )
 
-    with pytest.raises(Exception, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS"):
+    with pytest.raises(BrokerSubmitError, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS"):
         client.build_managed_vnpy_order_requests(
             parent_intents=[],
             policy_context={},
@@ -217,3 +218,46 @@ def test_event_loop_rejects_compiler_style_managed_vnpy_timer_building() -> None
             strategy_slot_id="slot_phase2",
             managed_request_factory=lambda child, index: None,  # type: ignore[arg-type]
         )
+
+
+def test_event_loop_rejects_all_compiler_style_submit_paths_before_sync_lifecycle() -> None:
+    client = MiniQMTExecutionRuntimeClient(
+        repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+        strategy_ledger_repository=InMemoryQmtStrategyLedgerRepository(),
+        runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+    )
+    intent = OrderIntent(
+        package_id="pkg_phase2",
+        portfolio_id="portfolio_phase2",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        quantity=100,
+        order_type=OrderType.LIMIT,
+        limit_price=10.2,
+        target_trade_date=TRADE_DATE,
+    )
+
+    with pytest.raises(BrokerSubmitError, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS") as managed_exc:
+        client.submit_managed_order_requests(
+            managed_order_service=object(),  # type: ignore[arg-type]
+            requests=[],
+            account_group_id=ACCOUNT_ID,
+            trade_date=TRADE_DATE,
+            runtime_config_hash="event_loop_refuses_managed_submit",
+            runtime_id="mqrt_event_loop_refuses_managed_submit",
+        )
+    assert managed_exc.value.context["operation"] == "submit_managed_order_requests"
+
+    with pytest.raises(BrokerSubmitError, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS") as paper_exc:
+        client.execute_paper_vnpy_intent(
+            portfolio=type("Portfolio", (), {"portfolio_id": "portfolio_phase2"})(),
+            run=type("Run", (), {"run_id": "run_phase2"})(),
+            trade_date=TRADE_DATE,
+            intent=intent,
+            broker=object(),  # type: ignore[arg-type]
+            execution_policy_context={"policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}},
+            runtime_config_hash="event_loop_refuses_paper_submit",
+            account_group_id=ACCOUNT_ID,
+            strategy_slot_id="slot_phase2",
+        )
+    assert paper_exc.value.context["operation"] == "execute_paper_vnpy_intent"

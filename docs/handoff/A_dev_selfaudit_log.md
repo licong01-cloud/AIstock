@@ -89,7 +89,7 @@ flag inert evidence: Phase 0 test still passes get_miniqmt_execution_runtime_kin
 2. 我是否新造了第二套非 durable OMS？
    - 否；事件写入仍经 MiniQMTExecutionRuntime append-only events + child order projection；Phase 2 才推进 qmt_strategy OMS 落库。
 3. 我是否动了 B 或分叉了算法核？
-   - 否；B 兼容 QmtClientMiniQMTGateway 未切换，默认 flag 仍 compiler，ackend/execution_algos/vnpy_style/ 无改动。
+   - 否；B 兼容 QmtClientMiniQMTGateway 未切换，默认 flag 仍 compiler，ackend/execution_algos/vnpy_style/ 无改动。
 
 ### 子交付物与测试
 
@@ -140,7 +140,7 @@ ange(_timer_iterations) 合成生命周期。
 2. 我是否新造了第二套非 durable OMS？
    - 否。event_loop client 绑定 QmtStrategyLedgerRepository/注入的 InMemoryQmtStrategyLedgerRepository；child order/trade facts 写 qmt_strategy_ledger，JSON runtime repo 不作为 OMS authority。
 3. 我是否动了 B 或分叉了算法核？
-   - 否。默认 runtime_kind 仍来自 MINIQMT_EXECUTION_RUNTIME 且默认 compiler；compiler test 锁定不写 qmt_strategy OMS；ackend/execution_algos/vnpy_style/ 无改动。
+   - 否。默认 runtime_kind 仍来自 MINIQMT_EXECUTION_RUNTIME 且默认 compiler；compiler test 锁定不写 qmt_strategy OMS；ackend/execution_algos/vnpy_style/ 无改动。
 
 ### 子交付物与测试
 
@@ -159,3 +159,65 @@ rtk git diff --check
 ### 偏差拦截
 
 - 拦截一次潜在偏差：最初考虑让 event_loop 继续兼容 managed vn.py request build；自审后判定这会保留 compiler-style 合成 timer/一次性 build 生命周期，已改为 event_loop loud reject MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS，compiler 路径不变。
+
+## 2026-06-23 Phase 2 / event_loop 拒绝 compiler-style 生命周期补强
+
+### 设计复读
+
+- 已重读 `docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` §3、§9 Phase 2、§9.x、§10。
+- 已重读 `docs/adr/0002-miniqmt-execution-runtime-event-loop-target-architecture.md` 关于禁止“合成 timer / 提交后查一次 / JSON 文件 OMS”近似 A 的要求。
+- 本次补强只扩大 event_loop 显式拒绝范围：preview/submit managed requests、managed vn.py build、Paper v2 sync lifecycle 都在 event_loop 下 loud reject；默认 compiler 路径不变。
+
+### §10 grep guard 输出
+
+```text
+range_timer_iterations_event_loop_files_count=0
+compiler_lifecycle_reject_guard_count=5
+all_range_timer_iterations_count=2
+event_loop_gateway_sync_return_empty_count=0
+jsonfile_event_loop_authority_count=0
+vnpy_style_changed_files=none
+is_open_like_order_status_usage_count=5
+is_terminal_order_status_usage_count=7
+is_partial_order_status_usage_count=6
+status_predicate_bad_literal_probe_count=0
+no_silent_except_pass_count=0
+miniqmt_runtime_default_compiler=True
+```
+
+### 三问
+
+1. 我这段是否真事件驱动，还是悄悄做成了查一次/合成 timer？
+   - 本次没有新增任何事件生命周期；反而补强 event_loop 对 compiler-style sync lifecycle 的 loud reject，避免 A 误走一次性 build/timer 路径。
+2. 我是否新造了第二套非 durable OMS？
+   - 否；无新增 OMS，只保持 event_loop 绑定 qmt_strategy_ledger facts，JSON runtime repo 不作为 event_loop 权威 OMS。
+3. 我是否动了 B 或分叉了算法核？
+   - 否；默认 `MINIQMT_EXECUTION_RUNTIME` 仍为 `compiler`，`backend/execution_algos/vnpy_style/` 无改动；新增测试只断言 event_loop 拒绝 B-style 生命周期。
+
+### 子交付物与测试
+
+```text
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py -q
+.....                                                                    [100%]
+5 passed in 1.09s
+
+rtk python -m pytest backend/tests/miniqmt_execution_runtime -q
+...........................................                              [100%]
+43 passed in 1.49s
+
+rtk python -m ruff check backend/services/miniqmt_execution_runtime backend/routers/simulation_runtime.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py
+All checks passed!
+
+rtk python -m nox -s l0
+Session l0 was successful.
+
+rtk python -m nox -s validation_module_registry_l0
+Session validation_module_registry_l0 was successful.
+
+rtk cmd /c "set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3"
+Ran 5 sessions: paper_v2_l3 success; l0 success; paper_v2_backend 661 passed, 1 skipped, 1 deselected; paper_v2_data_quality success with legacy ledger consistency WARN; data_quality_deep 10 passed, 21 skipped.
+```
+
+### 偏差拦截
+
+- 拦截一次潜在偏差：接手后发现 event_loop 仅拒绝 `build_managed_vnpy_order_requests`，但 preview/submit managed requests 和 Paper v2 sync lifecycle 仍可能被显式 event_loop client 调用，存在“先走一次性 compiler 生命周期”的偏航风险；已改为全部 loud reject `MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS` 并加测试锁定。
