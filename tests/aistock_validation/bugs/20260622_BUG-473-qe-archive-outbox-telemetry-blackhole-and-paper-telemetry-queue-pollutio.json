@@ -2,7 +2,9 @@
   "actual": "paper_v2 daemon telemetry events are written into qe_archive.outbox_event with routing_class=telemetry, but the production QE archive worker only claims archive QE event types. After BUG-471 isolates archive routing, these telemetry rows remain a silent durable blackhole with 21k pending rows; low-frequency paper archive events are also not registered in the live worker. Need plan-first fix covering scoped cleanup SQL, telemetry routing/reaper decision, explicit skip/audit for unprocessable paper events, and no DB writes until user approval.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260622_BUG-473-qe-archive-outbox-telemetry-blackhole-and-paper-telemetry-queue-pollutio.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/qe_archive_outbox_telemetry_blackhole_plan_20260622.md",
+    "docs/analysis/qe_archive_paper_telemetry_outbox_cleanup_20260622.sql"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-473",
@@ -20,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-1743ae07ad8b",
       "timestamp": "2026-06-22T07:22:37.811343Z"
+    },
+    {
+      "timestamp": "2026-06-22T07:45:00Z",
+      "actor": "codex",
+      "action": "plan_scope_expanded",
+      "note": "Plan-only scope expanded for BUG-473 design document and gated paper telemetry cleanup SQL; no implementation or production DML executed."
     }
   ],
   "evidence_uris": [],
@@ -66,5 +74,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "plan_only_until_tier2_design_review"
 }
