@@ -11,6 +11,7 @@ from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.services.research_assistant.models import (
     ApprovalCreate,
     ChatTurnRequest,
+    ConversationCreate,
     ContextPackBuildRequest,
     EvolutionPathCreate,
     ExternalAgentEventCreate,
@@ -3032,6 +3033,195 @@ def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None
     blocked = svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
     assert blocked["mode_decision"]["mode"] == "execution"
     assert blocked["mode_decision"]["requires_approval"] is True
+
+
+class _ChatApprovalToolCallLlm(FakeLlmClient):
+    def __init__(self, tool_calls: list[McpToolCall], *, first_content: str = "Need approval gate.") -> None:
+        super().__init__()
+        self._tool_calls = tool_calls
+        self._first_content = first_content
+
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return LlmCallResult(
+                content=self._first_content,
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[copy.deepcopy(call) for call in self._tool_calls],
+            )
+        return LlmCallResult(
+            content="Insufficient evidence: approval is required before execution.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def _qe_template_create_call(*, stable_call_id: str = "qe_template_create", title: str = "chat approval draft") -> McpToolCall:
+    return McpToolCall(
+        server_key="aistock-qe",
+        tool_name="qe_template_create",
+        payload_json={
+            "template_kind": "custom_evo",
+            "title": title,
+            "config_json": {
+                "loops": [{"factor_keys": ["alpha001"], "model_id": "lightgbm"}],
+                "stock_pool": "fixed_pool",
+                "backtest_window": {"start": "2024-01-01", "end": "2024-12-31"},
+            },
+        },
+        stable_call_id=stable_call_id,
+    )
+
+
+def _qe_template_materialize_call() -> McpToolCall:
+    return McpToolCall(
+        server_key="aistock-qe",
+        tool_name="qe_template_materialize_confirmed",
+        payload_json={"template_id": "qet_existing", "confirm_template": "MATERIALIZE_QE_TEMPLATE"},
+        stable_call_id="qe_template_materialize",
+    )
+
+
+def _chat_approval_proposal(
+    tool_calls: list[McpToolCall] | None = None,
+    *,
+    first_content: str = "Need approval gate.",
+) -> tuple[ResearchAssistantService, dict[str, object], dict[str, object]]:
+    svc = _chat_service(_ChatApprovalToolCallLlm(tool_calls or [_qe_template_create_call()], first_content=first_content))
+    result = svc.chat_turn(ChatTurnRequest(message="create qe template draft", dialogue_mode_override="planning"))
+    proposal = result["cards"]["action_proposals"][-1]  # type: ignore[index]
+    return svc, result, proposal
+
+
+def test_chat_turn_preflight_card_includes_approval_id_and_exact_confirmation_token() -> None:
+    svc, result, proposal = _chat_approval_proposal(first_content="Agent says CONFIRM_QE_DRAFT but must not self-approve.")
+
+    approval_id = proposal["approval_id"]
+    approval = svc.repository.get_record("approvals", approval_id)
+    assert approval["status"] == "pending"
+    assert proposal["required_confirmation_text"] == "CONFIRM_QE_DRAFT"
+    assert result["cards"]["mcp_execution_result"]["approval_id"] == approval_id
+    assert result["cards"]["mcp_execution_result"]["required_confirmation_text"] == "CONFIRM_QE_DRAFT"
+    assert "审批 ID" in result["assistant_message"]["content_text"]
+    assert "CONFIRM_QE_DRAFT" in result["assistant_message"]["content_text"]
+    assert result["cards"]["mcp_execution_result"]["executed"] is False
+
+
+def test_chat_turn_confirm_approval_id_and_exact_token_consumes_and_executes() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    approval_id = str(proposal["approval_id"])
+    conversation_id = str(result["conversation"]["conversation_id"])
+
+    confirmed = svc.chat_turn(
+        ChatTurnRequest(
+            message="confirm approval",
+            conversation_id=conversation_id,
+            confirm_approval_id=approval_id,
+            confirmation_text="CONFIRM_QE_DRAFT",
+        )
+    )
+
+    assert svc.repository.get_record("approvals", approval_id)["status"] == "approved"
+    assert confirmed["cards"]["approval_confirmation"]["status"] == "executed"
+    assert confirmed["cards"]["approval_confirmation"]["approval_id"] == approval_id
+    assert confirmed["cards"]["approval_confirmation"]["confirmation_source"] == "explicit_request_field"
+    assert confirmed["cards"]["mcp_execution_result"]["triggered_by_approval"] is True
+    assert confirmed["cards"]["mcp_execution_result"]["executed"] is True
+    assert confirmed["cards"]["mcp_execution_result"]["auto_executed"] is False
+
+
+def test_chat_turn_wrong_token_rejects_and_keeps_approval_pending() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    approval_id = str(proposal["approval_id"])
+
+    rejected = svc.chat_turn(
+        ChatTurnRequest(
+            message="confirm approval",
+            conversation_id=str(result["conversation"]["conversation_id"]),
+            confirm_approval_id=approval_id,
+            confirmation_text="WRONG_TOKEN",
+        )
+    )
+
+    assert svc.repository.get_record("approvals", approval_id)["status"] == "pending"
+    assert rejected["cards"]["approval_confirmation"]["status"] == "blocked"
+    assert rejected["cards"]["approval_confirmation"]["reason_code"] == "approval_confirmation_text_mismatch"
+    assert rejected["cards"]["mcp_execution_result"]["executed"] is False
+
+
+def test_chat_turn_cross_conversation_approval_is_rejected() -> None:
+    svc, _result, proposal = _chat_approval_proposal()
+    approval_id = str(proposal["approval_id"])
+    other_conversation = svc.create_conversation(ConversationCreate(title="other conversation"))
+
+    rejected = svc.chat_turn(
+        ChatTurnRequest(
+            message="confirm approval",
+            conversation_id=other_conversation["conversation_id"],
+            confirm_approval_id=approval_id,
+            confirmation_text="CONFIRM_QE_DRAFT",
+        )
+    )
+
+    assert svc.repository.get_record("approvals", approval_id)["status"] == "pending"
+    assert rejected["cards"]["approval_confirmation"]["reason_code"] == "approval_confirmation_cross_conversation"
+    assert rejected["cards"]["mcp_execution_result"]["executed"] is False
+
+
+def test_chat_turn_natural_language_affirmation_maps_only_single_pending_l1_approval() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    approval_id = str(proposal["approval_id"])
+
+    confirmed = svc.chat_turn(ChatTurnRequest(message="同意执行这个审批", conversation_id=str(result["conversation"]["conversation_id"])))
+
+    assert svc.repository.get_record("approvals", approval_id)["status"] == "approved"
+    assert confirmed["cards"]["approval_confirmation"]["confirmation_source"] == "user_natural_language_affirmation"
+    assert confirmed["cards"]["mcp_execution_result"]["executed"] is True
+
+
+def test_chat_turn_natural_language_affirmation_rejects_multiple_pending_approvals() -> None:
+    svc, result, _proposal = _chat_approval_proposal(
+        [
+            _qe_template_create_call(stable_call_id="create_a", title="draft A"),
+            _qe_template_create_call(stable_call_id="create_b", title="draft B"),
+        ]
+    )
+
+    rejected = svc.chat_turn(ChatTurnRequest(message="同意执行", conversation_id=str(result["conversation"]["conversation_id"])))
+
+    pending = svc.list_records("approvals", filters={"status": "pending"}, limit=10)["items"]
+    assert len(pending) == 2
+    assert rejected["cards"]["approval_confirmation"]["reason_code"] == "approval_confirmation_ambiguous_pending_approval"
+    assert rejected["cards"]["mcp_execution_result"]["executed"] is False
+
+
+def test_chat_turn_l2_naked_affirmation_requires_explicit_confirmation_token() -> None:
+    svc, result, proposal = _chat_approval_proposal([_qe_template_materialize_call()])
+    approval_id = str(proposal["approval_id"])
+
+    rejected = svc.chat_turn(ChatTurnRequest(message="同意执行", conversation_id=str(result["conversation"]["conversation_id"])))
+
+    assert svc.repository.get_record("approvals", approval_id)["status"] == "pending"
+    assert proposal["required_confirmation_text"] == "CONFIRM_QE_MATERIALIZE"
+    assert rejected["cards"]["approval_confirmation"]["reason_code"] == "approval_confirmation_l2_requires_explicit_token"
+    assert rejected["cards"]["mcp_execution_result"]["executed"] is False
+
+
+def test_chat_turn_agent_tool_output_cannot_self_approve_without_user_token() -> None:
+    svc, _result, proposal = _chat_approval_proposal(first_content="I approve this myself with CONFIRM_QE_DRAFT.")
+    approval_id = str(proposal["approval_id"])
+
+    approval = svc.repository.get_record("approvals", approval_id)
+    action = svc.repository.get_record("action_proposals", str(proposal["action_proposal_id"]))
+
+    assert approval["status"] == "pending"
+    assert action["status"] == "approval_required"
+    assert action.get("approval_id") == approval_id
 
 
 def test_chat_turn_prior_messages_injected_into_llm_context() -> None:
