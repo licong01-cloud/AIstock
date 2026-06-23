@@ -601,3 +601,67 @@ rtk rg -n "MINIQMT_EXECUTION_RUNTIME|get_miniqmt_execution_runtime_kind\(\{\}\)|
 5. 影子是否真对账? 答: Phase 5 尚未开始, 下一子交付物实现 durable shadow reconciliation。
 
 - 偏差拦截: 无。
+
+
+## 2026-06-23 Phase 5 self-audit checkpoint - shadow reconciliation dry-run replay (2026-06-23T05:30:26.334590+00:00)
+
+- ????: Phase 5 ??/???? + ????????? `MiniQMTShadowReconciler` / `MiniQMTShadowParallelRunner` / `MiniQMTShadowEventLoopAdapter` / `MiniQMTShadowCompilerAdapter` / dry-run no-broker gateway?A/B ??? replay ????? child order ?/?/?/status?trade?cash?positions???? `SHADOW_RECONCILIATION_REPORTED` runtime event + runtime metadata ????fatal drift loud `MINIQMT_SHADOW_RECONCILIATION_FATAL`?
+- ????: ADR 0002?`docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` ?3(???9 TDX ??)??7??8??9 Phase5??9.x??10?Phase0 seam contract????????? Phase5 shadow/dry-run????????????
+
+### ?10 grep guard output
+
+```text
+rtk python -c "... event_loop gateway return [] count ..."
+event_loop_gateway_return_empty_list_count= 0
+
+rtk python -c "... event_loop core range(_timer_iterations) count ..."
+event_loop_core_range_timer_iterations_count= 0
+all_timer_iteration_refs=
+<none>
+
+rtk python -c "... TDX guard count ..."
+tdx_in_miniqmt_runtime_tests_count= 0
+
+rtk git diff --name-only -- backend/execution_algos/vnpy_style
+<empty>
+
+rtk rg -n "JsonFileMiniQMTExecutionRuntimeRepository|uses_qmt_strategy_authority|strategy_ledger_repository" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+JsonFile remains repository/export/restart-test compatibility only; event_loop client injects qmt_strategy ledger and Phase2 tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
+
+rtk rg -n "is_open_like_order_status|is_terminal_order_status|is_partial_order_status|STATUS_OPEN_LIKE|STATUS_PART_SUCC|STATUS_CANCELLED|STATUS_FILLED|STATUS_REJECTED" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates for broker numeric status classification; shadow uses qmt_strategy constants only to build dry-run broker snapshots and does not add hard-coded numeric forks.
+
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.. [100%]
+2 passed in 1.28s
+```
+
+### Validation evidence
+
+```text
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py -q
+................... [100%]
+19 passed in 1.18s
+
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q
+...................................................................... [100%]
+70 passed in 1.65s
+
+rtk python -m ruff check backend/services/miniqmt_execution_runtime/risk.py backend/services/miniqmt_execution_runtime/runtime.py backend/services/miniqmt_execution_runtime/models.py backend/services/miniqmt_execution_runtime/shadow.py backend/services/miniqmt_execution_runtime/__init__.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase4_risk_engine.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py
+All checks passed!
+
+rtk git diff --check
+passed
+```
+
+### Self questions
+
+1. ???????, ???????/?? timer? ?: A adapter ?? `MiniQMTExecutionRuntime` ? `create_vnpy_algo_instance` + `on_tick`/`record_trade_event`/`record_order_event`/`record_disconnect_event`/`recover` ???????timer ??????? explicit `timer`/`algo_timer` ????? range(_timer_iterations) synthetic loop?B adapter ??? shadow ? compiler ?????
+2. ???????? durable OMS? ?: ??shadow ???? runtime repository ????? runtime metadata?A replay ?? runtime OMS??? JSON OMS ?? event_loop ???
+3. ??? B ??????? ?: ???? `MINIQMT_EXECUTION_RUNTIME` compiler ??????`backend/execution_algos/vnpy_style/` diff ???
+4. ???? TDX ??? ?: ??MiniQMT runtime/tests grep `fetch_tdx_realtime_quotes|TDX_REALTIME` ? 0?shadow tick ???????????? TDX?
+5. ???????? ?: ???? Phase5 test ?? ?8 full_fill?partial_55_stream?delay?reject?cancel?disconnect?restart_recovery?A/B adapter ??? replay ??? diff child orders/trades/cash/positions?fatal drift loud ? durable?
+
+### Deviation intercept
+
+- ????: ?? Phase5 ??????? snapshot/echo adapter????????????? A/B?????????? `MiniQMTShadowEventLoopAdapter` + `MiniQMTShadowCompilerAdapter`?? runtime event-loop replay ?? compiler preview replay??? ?8 ?????????

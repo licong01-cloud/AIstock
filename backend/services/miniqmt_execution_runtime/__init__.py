@@ -64,6 +64,22 @@ from .risk import (
     NoopMiniQMTRiskEngine,
 )
 from .runtime import MiniQMTExecutionEventLoop, MiniQMTExecutionRuntime
+from .shadow import (
+    MiniQMTShadowDifference,
+    MiniQMTShadowDryRunGateway,
+    MiniQMTShadowCompilerAdapter,
+    MiniQMTShadowEventLoopAdapter,
+    MiniQMTShadowInputEvent,
+    MiniQMTShadowLedgerSnapshot,
+    MiniQMTShadowParallelRunner,
+    MiniQMTShadowReconciliationReport,
+    MiniQMTShadowReconciler,
+    MiniQMTShadowRuntimeAdapter,
+    MiniQMTShadowRuntimeSnapshot,
+    MiniQMTShadowScenario,
+    MiniQMTShadowSeverity,
+    NoBrokerMutationMiniQMTShadowGateway,
+)
 
 __all__ = [
     "PaperV2MiniQMTRuntimeGateway",
@@ -115,7 +131,21 @@ __all__ = [
     "MiniQMTRiskPriceBand",
     "MiniQMTRiskRuleSet",
     "MiniQMTRuntimeRecoverySnapshot",
+    "MiniQMTShadowDifference",
+    "MiniQMTShadowDryRunGateway",
+    "MiniQMTShadowCompilerAdapter",
+    "MiniQMTShadowEventLoopAdapter",
+    "MiniQMTShadowInputEvent",
+    "MiniQMTShadowLedgerSnapshot",
+    "MiniQMTShadowParallelRunner",
+    "MiniQMTShadowReconciliationReport",
+    "MiniQMTShadowReconciler",
+    "MiniQMTShadowRuntimeAdapter",
+    "MiniQMTShadowRuntimeSnapshot",
+    "MiniQMTShadowScenario",
+    "MiniQMTShadowSeverity",
     "NoopMiniQMTRiskEngine",
+    "NoBrokerMutationMiniQMTShadowGateway",
     "QmtClientMiniQMTEventLoopGateway",
     "QmtClientMiniQMTGateway",
 ]
