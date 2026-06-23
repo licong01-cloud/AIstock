@@ -1,0 +1,109 @@
+{
+  "actual": "scripts/issue_flow.py evaluate_pr_quality_gate classifies a PR as high-risk P0/P1 (is_high_risk) whenever linkage inference finds a bare BUG-NNN token in the PR body (re.findall BUG-\\d{3,}), then with --enforce-p0-p1-evidence (AISTOCK_PR_QUALITY_ENFORCE_P0P1=true) blocks it (exit 2) if it lacks a linked bug issue. This false-positives on FEATURE/EPIC PRs that only REFERENCE a bug, e.g. the MiniQMT durable runtime epic PR #1523 (tracked by epic #1501) was blocked because its body said the runtime reuses 'BUG-470 status predicates' -- it does not fix a bug and has no linked bug issue, yet carries full evidence (tests/nox/gates).",
+  "allowed_write_scope": [
+    "scripts/issue_flow.py",
+    "backend/tests/scripts/test_issue_flow_pr_quality.py",
+    "tests/aistock_validation/bugs/20260623_BUG-497-p2-validation-pr-quality-p0-p1-gate-false-positives-on-prs-that-merely-m.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-497-analysis.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-497",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T07:29:47.520545Z",
+  "description": "scripts/issue_flow.py evaluate_pr_quality_gate marks a PR high-risk (is_high_risk) whenever linkage inference finds a bare BUG-NNN token in the PR body (line ~962 re.findall BUG-\\d{3,}); with --enforce-p0-p1-evidence (AISTOCK_PR_QUALITY_ENFORCE_P0P1=true) it then blocks (exit 2) when the missing checks (typically linked_issue) are absent. FALSE-POSITIVE on feature/epic PRs that only REFERENCE a bug (MiniQMT durable runtime epic PR #1523, tracked by epic #1501, blocked because body said runtime reuses 'BUG-470 status predicates'; it fixes no bug, has no linked bug issue, yet carries full evidence). FIX: drive high-risk P0/P1 classification from ACTUAL bug-fix evidence -- changed files include a new/modified tests/aistock_validation/bugs/*.json OR the PR Closes a bug issue OR a linked bug record has explicit severity -- not a mere textual BUG-NNN mention; a feature/epic PR that only references a BUG-NNN -> not_applicable. MUST NOT weaken enforcement for real bug-fix PRs: regression tests BOTH directions (real bug PR missing evidence still blocked; feature PR referencing BUG-NNN is not_applicable). Pure tooling/CI change (scripts/issue_flow.py + tests); no product code; isolated from A epic and paper_v2 runtime.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-4566c18523a0",
+      "timestamp": "2026-06-23T07:29:47.520540Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include requested BUG-497 analysis handoff document; source/test/tooling scope remains unchanged.",
+      "timestamp": "2026-06-23T07:50:29.755513Z"
+    },
+    {
+      "action": "source_fix_ready_for_pr",
+      "actor": "codex",
+      "note": "Implemented high-risk detection using actual bug-fix evidence; added regression coverage for real bug fixes and reference-only BUG tokens.",
+      "timestamp": "2026-06-23T08:02:15.476083Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "user-approved-codex",
+      "note": "User authorized adding file_ownership.yaml only to map docs/handoff/** ownership for BUG-497 handoff doc.",
+      "timestamp": "2026-06-23T08:11:15.010825Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/BUG-497-analysis.md"
+  ],
+  "expected": "High-risk P0/P1 classification must be driven by ACTUAL bug-fix evidence -- changed files include a new/modified tests/aistock_validation/bugs/*.json, OR the PR Closes a bug issue, OR a linked bug record has explicit severity -- NOT a mere textual BUG-NNN mention. A feature/epic PR that only references a BUG-NNN classifies as not_applicable. MUST keep enforcing the gate for real bug-fix PRs (regression tests both directions: real bug PR still blocked when missing evidence; feature PR referencing BUG-NNN is not_applicable).",
+  "first_seen_at": "2026-06-23T07:29:47.520545Z",
+  "fix_branch": "bug/BUG-497-p2-validation-pr-quality-p0-p1-gate-false-positi-20260623",
+  "fix_commit": null,
+  "fixed_at": "2026-06-23T08:02:15.476065Z",
+  "github_issue_number": 1532,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1532",
+  "last_seen_at": "2026-06-23T07:29:47.520545Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Build a PR-quality summary for a PR whose body mentions BUG-470 but changes no bugs/*.json and Closes no bug issue; python scripts/issue_flow.py pr-check ... --enforce-p0-p1-evidence exits 2 (blocked) though it is a feature PR.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "[P2][Validation] PR-quality P0/P1 gate false-positives on PRs that merely mention a BUG-NNN token",
+  "trigger_condition": {
+    "fingerprint": "4566c18523a060f2e0f733a9",
+    "source_event_id": "FE-20260623-4566c18523a0"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix",
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py -q -> passed (6 passed)",
+    "rtk python -m ruff check scripts/issue_flow.py backend/tests/scripts/test_issue_flow_pr_quality.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py backend/tests/scripts/test_issue_flow.py -q -> passed (41 passed)",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s guardrail_changed_files -> passed (files=5 mapped=5 unmapped=0 ambiguous=0)",
+    "rtk python -m nox -s validation_center_backend -> passed (458 passed)"
+  ]
+}
