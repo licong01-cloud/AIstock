@@ -850,3 +850,95 @@ def test_pre_trade_miniqmt_quote_uses_yuan_basis_for_limit_range() -> None:
     assert payload["limit_down"] == pytest.approx(27.13)
     assert payload["no_tradable_market"] is False
     assert payload["blocked_sides"] == []
+
+
+def test_pre_trade_miniqmt_quote_ignores_degenerate_raw_li_limit_metadata() -> None:
+    payload = quote_tradability_evidence(
+        symbol="000048.SZ",
+        quote={
+            "quote_price_basis": "raw_li",
+            "lastPrice": 20.66,
+            "pre_close": 20.75,
+            "open": 20.7,
+            "high": 20.88,
+            "low": 20.3,
+            "volume": 12345,
+            "amount": 25432100,
+            "bid_price_1": 20.65,
+            "bid_volume_1": 100,
+            "ask_price_1": 20.66,
+            "ask_volume_1": 100,
+            "limit_up": 20.0,
+            "limit_down": 20.0,
+            "time": "2026-06-23 14:05:00",
+        },
+        source="MINIQMT_REALTIME.broker_quote",
+        trade_date=date(2026, 6, 23),
+        as_of_time=datetime(2026, 6, 23, 14, 5, 30),
+        st_status_provider=FakeStStatusProvider(is_st=False),
+    )
+
+    assert payload["quote_price_basis"] == "yuan"
+    assert payload["limit_up"] == pytest.approx(22.83)
+    assert payload["limit_down"] == pytest.approx(18.68)
+    assert payload["limit_down"] < payload["pre_close"] < payload["limit_up"]
+    assert payload["no_tradable_market"] is False
+
+
+def test_pre_trade_miniqmt_quote_fails_with_miniqmt_source_label_when_pre_close_missing() -> None:
+    with pytest.raises(DataUnavailableError) as exc_info:
+        quote_tradability_evidence(
+            symbol="603303.SH",
+            quote={
+                "lastPrice": 30.23,
+                "open": 30.27,
+                "high": 31.8,
+                "low": 29.01,
+                "volume": 66974,
+                "amount": 203373536,
+                "bid_price_1": 30.23,
+                "bid_volume_1": 108,
+                "ask_price_1": 30.26,
+                "ask_volume_1": 17,
+                "time": "2026-06-23 14:05:00",
+            },
+            source="MINIQMT_REALTIME.broker_quote",
+            trade_date=date(2026, 6, 23),
+            as_of_time=datetime(2026, 6, 23, 14, 5, 30),
+            st_status_provider=FakeStStatusProvider(is_st=False),
+        )
+
+    assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_PRE_CLOSE_MISSING"
+    assert exc_info.value.context["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    assert str(exc_info.value).startswith("MiniQMT realtime quote previous close")
+    assert "TDX" not in str(exc_info.value)
+
+
+def test_pre_trade_miniqmt_st_quote_uses_five_percent_limit() -> None:
+    payload = quote_tradability_evidence(
+        symbol="000048.SZ",
+        quote={
+            "quote_price_basis": "raw_li",
+            "lastPrice": 20.66,
+            "pre_close": 20.75,
+            "open": 20.7,
+            "high": 20.88,
+            "low": 20.3,
+            "volume": 12345,
+            "amount": 25432100,
+            "bid_price_1": 20.65,
+            "bid_volume_1": 100,
+            "ask_price_1": 20.66,
+            "ask_volume_1": 100,
+            "time": "2026-06-23 14:05:00",
+        },
+        source="MINIQMT_REALTIME.broker_quote",
+        trade_date=date(2026, 6, 23),
+        as_of_time=datetime(2026, 6, 23, 14, 5, 30),
+        st_status_provider=FakeStStatusProvider(is_st=True),
+    )
+
+    assert payload["quote_price_basis"] == "yuan"
+    assert payload["limit_pct"] == pytest.approx(0.05)
+    assert payload["limit_up"] == pytest.approx(21.79)
+    assert payload["limit_down"] == pytest.approx(19.71)

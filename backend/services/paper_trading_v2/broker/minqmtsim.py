@@ -1123,16 +1123,17 @@ def normalize_miniqmt_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, o
                 return value
         return default
 
-    bid_prices = first(("bidPrice", "bid_price", "bidPrice1", "bid"), [])
-    ask_prices = first(("askPrice", "ask_price", "askPrice1", "ask"), [])
-    bid_volumes = first(("bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
-    ask_volumes = first(("askVol", "ask_volume", "askVol1", "askVolume"), [])
+    bid_prices = first(("bid_price_1", "bidPrice", "bid_price", "bidPrice1", "bid"), [])
+    ask_prices = first(("ask_price_1", "askPrice", "ask_price", "askPrice1", "ask"), [])
+    bid_volumes = first(("bid_volume_1", "bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
+    ask_volumes = first(("ask_volume_1", "askVol", "ask_volume", "askVol1", "askVolume"), [])
 
     def level(value: object) -> object:
         if isinstance(value, (list, tuple)) and value:
             return value[0]
         return value
 
+    raw = row.get("raw")
     normalized = {
         "symbol": symbol,
         "price_basis": "yuan",
@@ -1148,6 +1149,6 @@ def normalize_miniqmt_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, o
         "volume": first(("volume", "vol", "totalVolume", "TotalHand", "total_hand"), None),
         "amount": first(("amount", "turnover", "totalAmount", "Amount"), None),
         "time": first(("time", "timetag", "datetime"), None),
-        "raw": dict(row),
+        "raw": dict(raw) if isinstance(raw, dict) else dict(row),
     }
     return normalized

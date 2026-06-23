@@ -4831,6 +4831,83 @@ def test_production_context_provider_miniqmt_quote_yuan_limits_do_not_fail_pre_r
     assert broker.full_tick_calls == [["603303.SH"]]
 
 
+def test_production_context_provider_miniqmt_degenerate_raw_limit_metadata_passes_pre_run() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_miniqmt_degenerate_limit_metadata",
+            strategy_id="strat1",
+            symbol="000048.SZ",
+            open_trade_id="trade_miniqmt_degenerate_limit_metadata",
+            open_date=date.today() - timedelta(days=1),
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("20.75"),
+            cost_amount=Decimal("2075.00"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    tradability = FakePreTradeTradabilityProvider()
+    broker = FakeManagedOrderBroker(
+        positions=[{"stock_code": "000048.SZ", "quantity": 100, "can_sell": 100}],
+        quotes={
+            "000048.SZ": {
+                "price_basis": "raw_li",
+                "bidPrice": [20.65],
+                "askPrice": [20.66],
+                "bidVol": [100],
+                "askVol": [100],
+                "lastPrice": 20.66,
+                "lastClose": 20.75,
+                "openPrice": 20.7,
+                "highPrice": 20.88,
+                "lowPrice": 20.3,
+                "limit_up": 20.0,
+                "limit_down": 20.0,
+                "volume": 12345,
+                "amount": 25432100,
+                "time": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 20.66 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        pre_trade_tradability_provider=tradability,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+
+    status = ctx.pre_trade_tradability["000048.SZ"]
+    assert status["is_tradable"] is True
+    assert status["quote_evidence"]["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    assert status["quote_evidence"]["quote_price_basis"] == "yuan"
+    assert status["quote_evidence"]["limit_up"] == pytest.approx(22.83)
+    assert status["quote_evidence"]["limit_down"] == pytest.approx(18.68)
+    assert broker.full_tick_calls == [["000048.SZ"]]
+
+
 def test_production_context_provider_miniqmt_quote_missing_is_visible_without_tdx_fallback() -> None:
     """MiniQMT quote outages must surface as MiniQMT evidence, not TDX timestamp failures."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider

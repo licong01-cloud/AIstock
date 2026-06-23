@@ -1003,6 +1003,11 @@ def _round_quote_price_tick(value: float, *, price_basis: str) -> float:
 
 
 def _quote_price_basis(quote: dict[str, Any], *, source: str) -> str:
+    if str(source or "").upper().startswith("MINIQMT_REALTIME"):
+        # MiniQMT/xtdata L1 prices are yuan-denominated. Some broker payloads
+        # have carried stale raw_li metadata; trusting it collapses A-share
+        # limit prices to an integer tick and blocks unattended pre-run.
+        return "yuan"
     raw_basis = str(quote.get("price_basis") or quote.get("quote_price_basis") or "").strip().lower()
     if raw_basis in {"yuan", "raw_li"}:
         return raw_basis
@@ -1015,8 +1020,6 @@ def _quote_price_basis(quote: dict[str, Any], *, source: str) -> str:
                 "price_basis": raw_basis,
             },
         )
-    if str(source or "").upper().startswith("MINIQMT_REALTIME"):
-        return "yuan"
     return "raw_li"
 
 
