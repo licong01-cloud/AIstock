@@ -42,8 +42,8 @@
   "expected": "Research Assistant has no workbench nav entry, /research-assistant/workbench redirects to chat without 404, and only one chat entry remains.",
   "first_seen_at": "2026-06-23T07:08:19.691733Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8f8ccbf5726a3d71dcc0590de854d6bc05953064",
+  "fixed_at": "2026-06-23T11:06:22.475173Z",
   "github_issue_number": 1529,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1529",
   "last_seen_at": "2026-06-23T07:08:19.691733Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1539",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -104,6 +105,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub required checks for PR #1539 after rebase -> passed: 17 passed, 0 failed",
+    "rtk proxy python -m nox -s ra_phase7_full_accept with isolated 3031 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
