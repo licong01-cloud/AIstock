@@ -650,6 +650,31 @@ jobs:
             Get-Content -LiteralPath "$outDir/design-drift-audit.md"
           }
 
+      - name: Build Nightly LLM silent degradation audit
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/nightly_silent_degradation_audit.py --json `
+            --provider deepseek_api `
+            --invoke-llm `
+            --run-id "${{ github.run_id }}" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --output "$outDir/silent-degradation-audit.json" `
+            --markdown-output "$outDir/silent-degradation-audit.md"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "LLM silent degradation audit failed; retrying deterministic fallback."
+            $global:LASTEXITCODE = 0
+            conda run -n AIstock python scripts/nightly_silent_degradation_audit.py --json `
+              --provider deterministic `
+              --run-id "${{ github.run_id }}" `
+              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+              --output "$outDir/silent-degradation-audit.json" `
+              --markdown-output "$outDir/silent-degradation-audit.md"
+          }
+          if (Test-Path -LiteralPath "$outDir/silent-degradation-audit.md") {
+            Get-Content -LiteralPath "$outDir/silent-degradation-audit.md"
+          }
+
       - name: Validate CI/Nightly issue workflow automation
         run: |
           conda run -n AIstock python -m nox -s validation_workflow_automation

@@ -1,0 +1,46 @@
+schema_version: aistock_validation_llm_prompt_v1
+prompt_id: silent_degradation_audit
+prompt_version: v1
+model_family: deepseek
+purpose: Let DeepSeek review compact AIstock reference excerpts, CodeGraph / Understand Anything refs, and marker hits to find suspected silent degradation.
+output_schema: aistock_nightly_silent_degradation_audit_v1
+allowed_output:
+  summary: short string
+  findings:
+    - module: module key
+      severity: P1|P2|P3
+      title: short suspected silent-degradation title
+      suspected_silent_degradation: hidden failure, fake success, swallowed error, or semantic downgrade risk
+      expected_behavior: required behavior from reference docs or runtime contract
+      observed_code_evidence: compact code evidence only
+      reference_refs:
+        - doc path or section
+      code_refs:
+        - file path or file:line
+      why_this_is_not_normal_fallback: why this is not a legitimate explicit fallback
+      manual_validation_suggestion: manual analysis suggestion only; no shell command
+      confidence: 0.0..1.0
+safety:
+  warning_only: true
+  candidate_only: true
+  no_source_modification: true
+  no_bug_json_write: true
+  no_github_issue_create: true
+  no_shell_commands: true
+  no_production_action: true
+  no_closure_decision: true
+  manual_analysis_required_before_bug_registration: true
+review_guidance:
+  distinguish_legitimate_fallback: true
+  require_code_refs_for_each_finding: true
+  prefer_high_signal_findings: true
+  avoid_duplicate_findings: true
+  reject_template_only_matches: true
+  never_claim_confirmed_bug_without_manual_validation: true
+input_policy:
+  reference_doc_excerpts_only: true
+  compact_code_samples_only: true
+  marker_hits_only: true
+  codegraph_and_understand_anything_refs_only: true
+  no_full_repo_scan: true
+  no_secrets: true

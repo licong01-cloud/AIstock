@@ -47,10 +47,12 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_llm_provider_adapter.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
+    "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
     "configs/validation/design_drift_audit.yaml",
+    "configs/validation/silent_degradation_audit.yaml",
     "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
     "docs/standards/aistock_issue_workflow_quickstart.md",
@@ -62,6 +64,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/test_plan_advisor.prompt.yml",
     "prompt_packs/validation_llm/triage_failure.prompt.yml",
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
+    "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
     "scripts/aistock_guardrail_scan.py",
     "scripts/bug_registry_metadata_check.py",
@@ -72,6 +75,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/llm_provider_adapter.py",
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
+    "scripts/nightly_silent_degradation_audit.py",
 }
 PROMPT_EVALUATION_PATH_PREFIXES = ("prompt_packs/validation_llm/",)
 PROMPT_EVALUATION_FILES = {
