@@ -346,3 +346,54 @@ rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q
 
 ### Deviation intercept
 - 拦截并修正一个 Phase 3 偏差：基线 adapter 会在 child terminal 后提前终结 vn.py-style instance，导致 TWAP/BestLimit 不能存活至执行窗口/后续 tick。已改为 vn.py-style instance 仅由 core FINISH 或 operator command 终结。
+
+
+## Phase 3 operator cancel characterization self-audit - 2026-06-23T03:43:16.007248+00:00
+
+### Deliverable
+- Added explicit Phase 3 operator cancel characterization for a runtime-owned vn.py Sniper instance: active child order is cancelled through gateway and the owning algo instance is terminalized as CANCELLED.
+
+### Design reread
+- Re-read durable design §3 rules 1/2/3/5/7/9, §4.4 operator cancel semantics, §9 Phase 3, §9.x, §10.
+- Re-read Phase0 seam contract OMS/gateway boundaries.
+
+### §10 grep guard output
+
+```text
+event_loop runtime/gateway range(_timer_iterations count:
+<no matches>
+
+event_loop class sync methods no return []:
+QmtClientMiniQMTEventLoopGateway.sync_orders/sync_trades/sync_positions all call _required_qmt_list with MINIQMT_EVENT_LOOP_SYNC_*_UNAVAILABLE reason_code; no return [] in class.
+
+JsonFile OMS authority:
+Only seam doc and repository/export compatibility references; no event_loop authority use added.
+
+vnpy_style diff:
+<empty git diff -- backend/execution_algos/vnpy_style>
+
+status predicates scan:
+runtime.py/oms.py use is_open_like_order_status and is_terminal_order_status for broker numeric statuses. No new status literal fork added.
+
+flag inert tests:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.. [100%]
+2 passed in 1.02s
+
+MiniQMT/event_loop TDX guard:
+rg -n 'fetch_tdx_realtime_quotes|TDX_REALTIME' backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+<no matches>
+
+Targeted test:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py backend/tests/miniqmt_execution_runtime/ -q
+46 passed in 1.30s
+```
+
+### Self questions
+- 真事件驱动还是查一次/合成 timer? 真事件驱动；operator command event cancels active child and terminalizes instance, no query-once lifecycle.
+- 是否新造第二套非 durable OMS? 否。
+- 是否动 B 或分叉算法核? 否；只补 runtime test，`vnpy_style` diff 为空。
+- 是否引入 TDX 行情? 否；A runtime/backend tests grep 为 0。
+
+### Deviation intercept
+- 未新增偏差；该用例锁定前一条已拦截的实例生命周期偏差不会影响 operator cancel 的强制终结语义。
