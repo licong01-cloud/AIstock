@@ -44,8 +44,8 @@
   "expected": "MiniQMT broker-quote pre-trade limits must be valid A-share limits: derive from pre_close x board%/ST(5%) with correct per-board tick rounding (reuse existing derivation) OR authoritative stk_limit; reject/ignore degenerate broker limit fields (limit_up==limit_down, or not matching pre_close +/- pct); if limits truly unavailable -> loud fail with ACCURATE source label (no hardcoded TDX). L2/L16 then pass pre-run when limits valid. Fix the misleading TDX message (_quote_source_label / hardcoded text). MiniQMT-scoped.",
   "first_seen_at": "2026-06-23T11:31:28.578266Z",
   "fix_branch": "bug/BUG-499-p0-miniqmt-broker-quote-pre-trade-limit-up-down-20260623",
-  "fix_commit": "5cbce740607be1900239f08bac7f219fd522df2e",
-  "fixed_at": null,
+  "fix_commit": "eb42c7fc7861163b3373eef740f3be38ca71e471",
+  "fixed_at": "2026-06-23T16:01:32.917954Z",
   "github_issue_number": 1549,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1549",
   "last_seen_at": "2026-06-23T11:31:28.578266Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1555",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -73,6 +74,15 @@
     "fingerprint": "d7e5c3a11c0adad5d5ced68f",
     "source_event_id": "FE-20260623-d7e5c3a11c0a"
   },
+  "validation_evidence": [
+    "rtk gh pr checks 1555 -> passed (17 passed, 0 failed)",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (116 passed)",
+    "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -85,14 +95,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_tier2_review",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (116 passed)",
-    "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
-  ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1555"
+  "workflow_gate": "ready_for_tier2_review"
 }
