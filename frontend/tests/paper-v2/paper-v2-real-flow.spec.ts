@@ -920,7 +920,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expectNoRawJsonUi(page);
   });
 
-  test("Overview, settings, and portfolio detail lifecycle are usable without market-time streams", async ({ page, request }) => {
+  test("Overview and portfolio detail lifecycle are usable without market-time streams", async ({ page, request }) => {
     test.skip(Boolean(paperPortfolioRuntimeBlocked), `Paper portfolio runtime asset block: ${paperPortfolioRuntimeBlocked}`);
     expect(replayPortfolioId, "previous replay portfolio must be available for UI detail validation").toMatch(/^paper_/);
 
@@ -962,10 +962,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("miniqmt-position-sort-code").click();
     await page.getByTestId("miniqmt-position-sort-code").click();
 
-    await page.goto("/paper-v2/settings");
-    await expect(page.locator('a[href="/paper-v2/packages"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/paper-v2/selection"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/paper-v2/portfolios"]').first()).toBeVisible();
+    await expect(page.locator('a[href="/paper-v2/settings"]')).toHaveCount(0);
 
     await page.goto(`/paper-v2/portfolios/${replayPortfolioId}`);
     await expect(page.locator(`a[href="/paper-v2/portfolios/${replayPortfolioId}/run-console"]`).first()).toBeVisible();
