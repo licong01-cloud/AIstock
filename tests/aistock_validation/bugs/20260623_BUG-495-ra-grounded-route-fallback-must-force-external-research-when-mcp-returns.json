@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-495",
-  "closed_at": null,
+  "closed_at": "2026-06-23T16:31:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,8 +27,8 @@
     {
       "action": "implementation",
       "actor": "codex",
-      "timestamp": "2026-06-23T09:44:12.460285Z",
       "note": "Implemented deterministic external_research web fallback inside react_grounding only: information query + empty MCP evidence forces one external_research_search_web call; empty external result returns explicit no_data_source_after_mcp_and_external_research with attempted sources. Confirmed default external_research provider is deterministic offline/example.org stub unless a real provider is injected. No service.py/smoke/backend service/production DB/DDL touched.",
+      "timestamp": "2026-06-23T09:44:12.460285Z",
       "validation": [
         "pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_react_grounding.py -q -> 13 passed",
         "ruff check changed py files -> passed",
@@ -45,8 +45,8 @@
     {
       "action": "implementation_update",
       "actor": "codex",
-      "timestamp": "2026-06-23T13:17:00Z",
       "note": "Tier2 safety fix: external_research fallback now treats example.org and deterministic/offline summary adapter markers as non-evidence, so stub results route to no_data_source_after_mcp_and_external_research and are not exposed as sources; non-stub external_research evidence is still accepted. No service.py, smoke scripts, production services, production DB, or DDL touched.",
+      "timestamp": "2026-06-23T13:17:00Z",
       "validation": [
         "pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_react_grounding.py -q -> 14 passed",
         "ruff check backend/services/research_assistant/react_grounding.py backend/tests/research_assistant/test_react_tool_loop.py -> passed",
@@ -55,14 +55,20 @@
         "nox -s research_assistant_mcp_contract -> 38 passed",
         "nox -s ra_phase7_full_accept with PLAYWRIGHT_SKIP_WEBSERVER=1 against local test frontend 3011 -> passed (331 backend + frontend lint/build + Playwright 4+8 + crosscheck/catalog/ownership)"
       ]
+    },
+    {
+      "action": "closed_after_source_pr_merge",
+      "actor": "codex",
+      "note": "Source PR #1542 squash-merged at 6a9a88fb0029b542903c2ab164c56425271d3415; GitHub Issue #1530 is closed with status:fixed; BUG JSON marked closed in the close-sync PR. No services started, no production DB touched, no DDL executed.",
+      "timestamp": "2026-06-23T16:31:45Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Information-query intent + empty selected MCP result triggers one deterministic external_research fallback with inline source/as_of; if still empty, the reply explicitly says no corresponding data source and lists sources attempted. Anti-hallucination/no-silent/approval gates unchanged.",
   "first_seen_at": "2026-06-23T07:10:51.700702Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6a9a88fb0029b542903c2ab164c56425271d3415",
+  "fixed_at": "2026-06-23T16:23:39.174035Z",
   "github_issue_number": 1530,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1530",
   "last_seen_at": "2026-06-23T07:10:51.700702Z",
@@ -70,6 +76,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1542",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -85,7 +92,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -94,6 +101,9 @@
     "fingerprint": "85fffc1b9c1e48d739ccdd75",
     "source_event_id": "FE-20260623-85fffc1b9c1e"
   },
+  "validation_evidence": [
+    "PR #1542 required checks -> all green"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
