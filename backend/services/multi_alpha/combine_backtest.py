@@ -317,7 +317,11 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
 
 
 def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
-    """Apply explicit runtime overrides before qrun reads conf.yaml."""
+    """Apply explicit runtime overrides before qrun reads conf.yaml.
+
+    The production qrun config is a Jinja template, so this must not parse and
+    dump the whole YAML document. Keep the edit scoped to strategy kwargs.
+    """
 
     topk = backtest_config.get("topk")
     strategy_overrides = backtest_config.get("strategy_kwargs")
@@ -332,48 +336,218 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         )
     topk_int = _positive_int(topk, field_name="topk") if topk is not None else None
     conf_path = workspace / "conf.yaml"
-    try:
-        conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
-        raise MultiAlphaCombineBacktestError(
-            f"failed to parse pred-backtest conf.yaml for explicit overrides: {type(exc).__name__}: {exc}",
-            reason_code="pred_backtest_conf_parse_failed",
-            context={"workspace": str(workspace), "conf_path": str(conf_path)},
-        ) from exc
-    if not isinstance(conf, dict):
-        raise MultiAlphaCombineBacktestError(
-            "pred-backtest conf.yaml root must be a mapping before explicit overrides",
-            reason_code="pred_backtest_conf_invalid",
-            context={"workspace": str(workspace), "conf_path": str(conf_path), "root_type": type(conf).__name__},
-        )
-    port_analysis = _require_mapping(conf, "port_analysis_config", conf_path=conf_path)
-    strategy = _require_mapping(port_analysis, "strategy", conf_path=conf_path)
-    kwargs = strategy.get("kwargs")
-    if kwargs is None:
-        kwargs = {}
-        strategy["kwargs"] = kwargs
-    if not isinstance(kwargs, dict):
-        raise MultiAlphaCombineBacktestError(
-            "port_analysis_config.strategy.kwargs must be a mapping before explicit overrides",
-            reason_code="pred_backtest_conf_invalid",
-            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": "port_analysis_config.strategy.kwargs"},
-        )
-    if topk_int is not None:
-        kwargs["topk"] = topk_int
     strategy_keys: list[str] = []
     if isinstance(strategy_overrides, Mapping):
-        for key, value in strategy_overrides.items():
-            strategy_keys.append(str(key))
-            kwargs[str(key)] = value
-    conf_path.write_text(yaml.safe_dump(conf, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        strategy_keys = [str(key) for key in strategy_overrides]
+    updated_conf = _apply_pred_backtest_overrides_text(
+        conf_path.read_text(encoding="utf-8"),
+        workspace=workspace,
+        conf_path=conf_path,
+        topk=topk_int,
+        strategy_overrides=strategy_overrides if isinstance(strategy_overrides, Mapping) else {},
+    )
+    conf_path.write_text(updated_conf, encoding="utf-8")
     logger.info(
         "Applied pred-backtest conf overrides",
         extra={
             "workspace": str(workspace),
-            "effective_topk": kwargs.get("topk"),
+            "effective_topk": topk_int,
             "strategy_kwargs_keys": sorted(strategy_keys),
         },
     )
+
+
+def _apply_pred_backtest_overrides_text(
+    text: str,
+    *,
+    workspace: Path,
+    conf_path: Path,
+    topk: int | None,
+    strategy_overrides: Mapping[str, Any],
+) -> str:
+    lines = text.splitlines(keepends=True)
+    port_idx, port_indent = _find_conf_mapping_key(
+        lines,
+        key="port_analysis_config",
+        start=0,
+        end=len(lines),
+        conf_path=conf_path,
+        workspace=workspace,
+    )
+    port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
+    strategy_idx, strategy_indent = _find_conf_mapping_key(
+        lines,
+        key="strategy",
+        start=port_idx + 1,
+        end=port_end,
+        conf_path=conf_path,
+        workspace=workspace,
+    )
+    strategy_end = _conf_block_end(lines, start=strategy_idx + 1, parent_indent=strategy_indent)
+    kwargs_idx, kwargs_indent = _find_conf_mapping_key(
+        lines,
+        key="kwargs",
+        start=strategy_idx + 1,
+        end=strategy_end,
+        conf_path=conf_path,
+        workspace=workspace,
+        field="port_analysis_config.strategy.kwargs",
+    )
+    kwargs_end = _conf_block_end(lines, start=kwargs_idx + 1, parent_indent=kwargs_indent)
+    child_indent = _infer_conf_child_indent(lines, start=kwargs_idx + 1, end=kwargs_end, parent_indent=kwargs_indent)
+    if topk is not None:
+        delta = _replace_or_insert_conf_kwargs_key(
+            lines,
+            key="topk",
+            value=topk,
+            start=kwargs_idx + 1,
+            end=kwargs_end,
+            parent_indent=kwargs_indent,
+            child_indent=child_indent,
+            conf_path=conf_path,
+            workspace=workspace,
+            required=True,
+        )
+        kwargs_end += delta
+    for key, value in strategy_overrides.items():
+        delta = _replace_or_insert_conf_kwargs_key(
+            lines,
+            key=str(key),
+            value=value,
+            start=kwargs_idx + 1,
+            end=kwargs_end,
+            parent_indent=kwargs_indent,
+            child_indent=child_indent,
+            conf_path=conf_path,
+            workspace=workspace,
+            required=False,
+        )
+        kwargs_end += delta
+    return "".join(lines)
+
+
+def _find_conf_mapping_key(
+    lines: Sequence[str],
+    *,
+    key: str,
+    start: int,
+    end: int,
+    conf_path: Path,
+    workspace: Path,
+    field: str | None = None,
+) -> tuple[int, int]:
+    matches: list[tuple[int, int]] = []
+    pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(key)}\s*:(?P<rest>.*)$")
+    for idx in range(start, end):
+        match = pattern.match(lines[idx].rstrip("\r\n"))
+        if match is None:
+            continue
+        matches.append((idx, len(match.group("indent"))))
+    if not matches:
+        raise MultiAlphaCombineBacktestError(
+            f"conf.yaml missing mapping field: {field or key}",
+            reason_code="pred_backtest_conf_invalid",
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": field or key},
+        )
+    if len(matches) > 1:
+        raise MultiAlphaCombineBacktestError(
+            f"conf.yaml has ambiguous mapping field: {field or key}",
+            reason_code="pred_backtest_conf_invalid",
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": field or key, "match_count": len(matches)},
+        )
+    return matches[0]
+
+
+def _conf_block_end(lines: Sequence[str], *, start: int, parent_indent: int) -> int:
+    for idx in range(start, len(lines)):
+        stripped = lines[idx].strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _conf_line_indent(lines[idx]) <= parent_indent:
+            return idx
+    return len(lines)
+
+
+def _infer_conf_child_indent(lines: Sequence[str], *, start: int, end: int, parent_indent: int) -> int:
+    for idx in range(start, end):
+        stripped = lines[idx].strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = _conf_line_indent(lines[idx])
+        if indent > parent_indent:
+            return indent
+    return parent_indent + 2
+
+
+def _replace_or_insert_conf_kwargs_key(
+    lines: list[str],
+    *,
+    key: str,
+    value: Any,
+    start: int,
+    end: int,
+    parent_indent: int,
+    child_indent: int,
+    conf_path: Path,
+    workspace: Path,
+    required: bool,
+) -> int:
+    pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(key)}\s*:.*$")
+    matches: list[tuple[int, int]] = []
+    for idx in range(start, end):
+        if _conf_line_indent(lines[idx]) <= parent_indent:
+            continue
+        match = pattern.match(lines[idx].rstrip("\r\n"))
+        if match is not None:
+            matches.append((idx, len(match.group("indent"))))
+    if len(matches) > 1:
+        raise MultiAlphaCombineBacktestError(
+            f"conf.yaml has ambiguous strategy kwarg: {key}",
+            reason_code="pred_backtest_conf_invalid",
+            context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"port_analysis_config.strategy.kwargs.{key}", "match_count": len(matches)},
+        )
+    if not matches:
+        if required:
+            raise MultiAlphaCombineBacktestError(
+                f"conf.yaml missing strategy kwarg: {key}",
+                reason_code="pred_backtest_conf_invalid",
+                context={"workspace": str(workspace), "conf_path": str(conf_path), "field": f"port_analysis_config.strategy.kwargs.{key}"},
+            )
+        rendered = _render_conf_kwargs_value(key=key, value=value, indent=child_indent, newline=_conf_newline(lines))
+        lines[end:end] = rendered.splitlines(keepends=True)
+        return len(rendered.splitlines())
+    idx, indent = matches[0]
+    rendered = _render_conf_kwargs_value(key=key, value=value, indent=indent, newline=_conf_line_newline(lines[idx]) or _conf_newline(lines))
+    replacement = rendered.splitlines(keepends=True)
+    lines[idx : idx + 1] = replacement
+    return len(replacement) - 1
+
+
+def _render_conf_kwargs_value(*, key: str, value: Any, indent: int, newline: str) -> str:
+    rendered = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    rendered = "\n".join(line for line in rendered.splitlines() if line != "...")
+    rendered = rendered.replace("\n", newline)
+    return "".join((" " * indent) + line + newline for line in rendered.split(newline) if line)
+
+
+def _conf_line_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _conf_line_newline(line: str) -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    return ""
+
+
+def _conf_newline(lines: Sequence[str]) -> str:
+    for line in lines:
+        newline = _conf_line_newline(line)
+        if newline:
+            return newline
+    return "\n"
 
 
 def _require_mapping(payload: Mapping[str, Any], key: str, *, conf_path: Path) -> dict[str, Any]:
