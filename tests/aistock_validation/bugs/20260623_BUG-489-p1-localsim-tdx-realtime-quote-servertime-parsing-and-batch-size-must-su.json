@@ -1,0 +1,74 @@
+{
+  "actual": "LocalSim runs persisted FAILED_RETRYABLE/PRE_RUN_FAILED with REALTIME_QUOTE_TIMESTAMP_INVALID or REALTIME_QUOTE_FETCH_FAILED; one failure includes TDX response code=-1 message=一次最多查询50只股票.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "tests/aistock_validation/bugs/20260623_BUG-489-p1-localsim-tdx-realtime-quote-servertime-parsing-and-batch-size-must-su.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-489",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T03:09:53.157334Z",
+  "description": "LocalSim runs persisted FAILED_RETRYABLE/PRE_RUN_FAILED with REALTIME_QUOTE_TIMESTAMP_INVALID or REALTIME_QUOTE_FETCH_FAILED; one failure includes TDX response code=-1 message=一次最多查询50只股票.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-7aacb31a5fb3",
+      "timestamp": "2026-06-23T03:09:53.157330Z"
+    }
+  ],
+  "evidence_uris": [
+    "Runtime check 2026-06-23 10:15 Asia/Shanghai: LocalSim simrun_ac556f235ac28537 failed on raw_timestamp=10151103 and simrun_86ee029b31924074 failed because TDX batch quote exceeded 50 symbols."
+  ],
+  "expected": "LocalSim TDX realtime quote fetch chunks requests according to the TDX <=50-symbol limit, parses observed ServerTime intraday formats correctly, and keeps fail-fast/loud behavior for genuinely missing, stale, future, or malformed quote data.",
+  "first_seen_at": "2026-06-23T03:09:53.157334Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1510,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1510",
+  "last_seen_at": "2026-06-23T03:09:53.157334Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/runs?trade_date=2026-06-23&broker_backend=local_sim shows PRE_RUN_FAILED with REALTIME_QUOTE_TIMESTAMP_INVALID or REALTIME_QUOTE_FETCH_FAILED; direct TDX /api/batch-quote returns ServerTime like 10158777.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][LocalSim] TDX realtime quote ServerTime parsing and batch size must support unattended pre-run",
+  "trigger_condition": {
+    "fingerprint": "7aacb31a5fb37e8f80828d7b",
+    "source_event_id": "FE-20260623-7aacb31a5fb3"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

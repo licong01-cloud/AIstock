@@ -13,6 +13,7 @@ from backend.services.paper_trading_v2.market_data import (
     PaperV2MinuteMarketDataProvider,
     PreTradeTradabilityProvider,
     PreviousClose,
+    fetch_tdx_realtime_quotes,
 )
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
@@ -676,6 +677,75 @@ def test_pre_trade_tdx_quote_fails_closed_when_timestamp_is_stale() -> None:
 
     assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_STALE"
     assert exc_info.value.context["quote_age_seconds"] == pytest.approx(360.0)
+
+
+@pytest.mark.parametrize(
+        ("server_time", "as_of_time", "expected_timestamp"),
+        [
+            ("9594403", datetime(2026, 6, 16, 9, 59, 45), "2026-06-16T09:59:44.030000"),
+            ("10151103", datetime(2026, 6, 16, 10, 15, 12), "2026-06-16T10:15:11.030000"),
+            ("10158777", datetime(2026, 6, 16, 10, 15, 30), "2026-06-16T10:15:00"),
+        ],
+)
+def test_pre_trade_tdx_quote_accepts_compact_servertime_with_centiseconds(
+    server_time: str,
+    as_of_time: datetime,
+    expected_timestamp: str,
+) -> None:
+    provider = pre_trade_provider(make_tdx_quote(server_time=server_time))
+
+    statuses = provider.get_statuses(
+        ["000001.SZ"],
+        date(2026, 6, 16),
+        require_realtime_quote=True,
+        as_of_time=as_of_time,
+        side_by_symbol={"000001.SZ": "BUY"},
+    )
+
+    status = statuses["000001.SZ"]
+    assert status["is_tradable"] is True
+    assert status["reason_code"] == "OK"
+    assert status["quote_evidence"]["quote_timestamp"] == expected_timestamp
+
+
+def test_fetch_tdx_realtime_quotes_chunks_batch_quote_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    class FakeResponse:
+        def __init__(self, codes: list[str]) -> None:
+            self.codes = list(codes)
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "code": 0,
+                    "data": [
+                        {
+                            "Code": code[-6:],
+                            "Exchange": code[:2],
+                            "ServerTime": "10151103",
+                        }
+                        for code in self.codes
+                ],
+            }
+
+    def fake_post(_url: str, *, json: dict, timeout: int):
+        assert timeout == 5
+        codes = list(json["codes"])
+        calls.append(codes)
+        assert len(codes) <= 50
+        return FakeResponse(codes)
+
+    monkeypatch.setattr("backend.services.paper_trading_v2.market_data.requests.post", fake_post)
+    symbols = [f"{index:06d}.SZ" for index in range(1, 86)]
+
+    quotes = fetch_tdx_realtime_quotes(symbols)
+
+    assert [len(call) for call in calls] == [50, 35]
+    assert len(quotes) == 85
+    assert quotes["000001.SZ"]["ServerTime"] == "10151103"
 
 
 def test_pre_trade_tdx_quote_fails_closed_when_st_source_is_unavailable() -> None:
