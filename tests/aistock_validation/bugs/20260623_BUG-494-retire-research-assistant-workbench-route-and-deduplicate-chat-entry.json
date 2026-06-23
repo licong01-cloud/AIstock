@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-494",
-  "closed_at": null,
+  "closed_at": "2026-06-23T11:05:59Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -36,6 +36,12 @@
       "actor": "codex",
       "note": "Added validation_module_registry_l0 because the workflow context pack selected it as a required validation gate for BUG-494.",
       "timestamp": "2026-06-23T07:25:42Z"
+    },
+    {
+      "action": "closed_after_merge",
+      "actor": "codex",
+      "note": "PR #1539 merged at 2026-06-23T11:05:58Z; GitHub Issue #1529 is CLOSED with status:fixed. BUG JSON status is closed in the close-sync PR.",
+      "timestamp": "2026-06-23T11:05:59Z"
     }
   ],
   "evidence_uris": [],
@@ -66,7 +72,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
