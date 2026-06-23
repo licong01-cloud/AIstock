@@ -32,13 +32,19 @@
       "actor": "codex",
       "note": "MiniQMT broker quote path forces yuan price basis; degenerate broker limit metadata ignored; validation passed locally.",
       "timestamp": "2026-06-23T12:16:23.166141Z"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex",
+      "note": "Created PR #1555 for Tier2 review; PR is not merged.",
+      "timestamp": "2026-06-23T12:22:44.518352Z"
     }
   ],
   "evidence_uris": [],
   "expected": "MiniQMT broker-quote pre-trade limits must be valid A-share limits: derive from pre_close x board%/ST(5%) with correct per-board tick rounding (reuse existing derivation) OR authoritative stk_limit; reject/ignore degenerate broker limit fields (limit_up==limit_down, or not matching pre_close +/- pct); if limits truly unavailable -> loud fail with ACCURATE source label (no hardcoded TDX). L2/L16 then pass pre-run when limits valid. Fix the misleading TDX message (_quote_source_label / hardcoded text). MiniQMT-scoped.",
   "first_seen_at": "2026-06-23T11:31:28.578266Z",
   "fix_branch": "bug/BUG-499-p0-miniqmt-broker-quote-pre-trade-limit-up-down-20260623",
-  "fix_commit": null,
+  "fix_commit": "5cbce740607be1900239f08bac7f219fd522df2e",
   "fixed_at": null,
   "github_issue_number": 1549,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1549",
@@ -79,7 +85,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_pr",
+  "workflow_gate": "ready_for_tier2_review",
   "validation_evidence": [
     "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (116 passed)",
     "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
@@ -87,5 +93,6 @@
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed",
     "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1555"
 }
