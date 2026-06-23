@@ -49,6 +49,10 @@
 6. **成败由 ledger 事实判定**:成功不得覆盖 submit 失败(0608 §6.2);run/batch status 不作事实替身。
 7. **flag 门控 + 默认 inert**:`MINIQMT_EXECUTION_RUNTIME=compiler|event_loop`,默认 `compiler`(=B);A 未灰度的 portfolio 行为与 B 完全一致。
 8. **SIM/LIVE 同码**:A 不得对 SIM/LIVE 走不同执行逻辑分支(仅账户/模式/风控阈值差异);实盘成交动态由测试覆盖,不靠 sim 证明。
+9. **★MiniQMT 行情源端到端隔离(2026-06-23 新增, 关闭已发现偏移)**:MiniQMT 路线的 **pre-trade tradability 报价、分钟线、执行期 tick 全部走 MiniQMT/xtquant 券商行情;TDX 实时行情仅限 LocalSim**。
+   - 已发现偏移(必须关闭):`backend/services/simulation_runtime/scheduler.py:375-377` 把 `ProductionSimulationRunContextProvider._pre_trade_tradability_provider` 默认写死成 `PreTradeTradabilityProvider(realtime_quote_fetcher=fetch_tdx_realtime_quotes, realtime_quote_source="TDX_REALTIME.batch_quote")`,**对所有 backend(含 MINIQMT_SIM)统一用 TDX**;`assert_broker_market_source_match`(`market_data.py:74`)目前只约束分钟线源,**未覆盖 tradability provider** → 标称 `MINIQMT_REALTIME` 实则 pre-trade 闸用 TDX。
+   - 硬规则:pre-trade tradability provider 必须**按 broker_backend 选源**(minqmt_sim/minqmt_live → xtquant/券商行情;localsim → TDX);`assert_broker_market_source_match` 必须**扩展覆盖 tradability 报价源**;**MiniQMT/event_loop 代码路径禁止出现 `fetch_tdx_realtime_quotes` / `TDX_REALTIME`**;必须有测试断言 minqmt_sim 调 TDX 即失败、localsim 才允许 TDX。
+   - 范围说明:该 pre-trade 闸在执行 runtime 的**上游**(共享 run-context provider),其修复作为独立 P0 bug 推进(MiniQMT 禁 TDX);A 设计在此**显式纳入为不可变规则**,确保 A 接线后不会静默继承/复活该偏移。
 
 ## 4. A 目标分层架构与合同
 
@@ -148,6 +152,7 @@
 - 订单状态判定统一走 `is_open_like_order_status`/`is_terminal_order_status`（BUG-470 权威谓词），A 内无新分叉的状态集字面量。
 - `MINIQMT_EXECUTION_RUNTIME` 默认 `compiler`；未设置时 B 行为零变化（测试锁定）。
 - 无 silent：A 路径无 `except: pass` / 裸 fallback；券商异常/未知状态/断连均 loud + reason_code。
+- **★MiniQMT 行情源隔离(规则 9)**:MiniQMT/`event_loop` 代码路径中 `fetch_tdx_realtime_quotes` / `TDX_REALTIME` 出现次数 = 0；pre-trade tradability provider 按 broker_backend 选源(非写死 TDX);`assert_broker_market_source_match` 覆盖 tradability 报价源;有测试断言 `minqmt_sim` 调 TDX 即失败、`localsim` 允许 TDX。
 
 ## 11. Issue / PR 证据模板
 

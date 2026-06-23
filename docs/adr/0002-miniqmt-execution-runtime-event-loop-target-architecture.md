@@ -62,6 +62,7 @@
 - 禁止在没有影子/并行运行验证的情况下把任何 portfolio 切到 A。
 - 禁止在缺失盘前风控层与未修复 cash-overcommit 失败的情况下接入任何实盘账户（`MINIQMT_MODE=LIVE`）。
 - 禁止用 sim 通过来声称 A/实盘执行时效达标。
+- **★禁止 MiniQMT 路线依赖 TDX 行情(2026-06-23 新增, 关闭已发现偏移)**:MiniQMT 的 pre-trade tradability 报价、分钟线、执行期 tick 必须端到端走 MiniQMT/xtquant 券商行情;**TDX 实时行情仅限 LocalSim**。当前 `scheduler.py:375-377` 把 pre-trade tradability provider 写死成 TDX(对所有 backend 含 MINIQMT_SIM),`assert_broker_market_source_match` 未覆盖该 provider——属"标称 MINIQMT_REALTIME 实则 TDX"的偏移,必须关闭:pre-trade tradability provider 按 broker_backend 选源、`assert_broker_market_source_match` 扩展覆盖 tradability 报价源、MiniQMT 代码路径禁止 `fetch_tdx_realtime_quotes`/`TDX_REALTIME`、并有 minqmt_sim 调 TDX 即失败的回归测试。该 pre-trade 闸修复作为独立 P0 bug 推进;A 设计已纳入为不可变规则(详细设计 §3 规则 9 / §10 grep guard)。
 
 ## 分阶段落地
 
