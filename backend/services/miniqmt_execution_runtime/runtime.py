@@ -903,6 +903,8 @@ class MiniQMTExecutionRuntime:
         instance = self._find_algo_instance(runtime_id, algo_instance_id)
         if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
             return None
+        if self._is_vnpy_instance(instance) and command_id is None:
+            return None
         children = [
             child
             for child in self.repository.list_child_orders(runtime_id, active_only=False)

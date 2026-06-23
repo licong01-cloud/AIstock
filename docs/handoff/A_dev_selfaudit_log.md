@@ -221,3 +221,128 @@ Ran 5 sessions: paper_v2_l3 success; l0 success; paper_v2_backend 661 passed, 1 
 ### 偏差拦截
 
 - 拦截一次潜在偏差：接手后发现 event_loop 仅拒绝 `build_managed_vnpy_order_requests`，但 preview/submit managed requests 和 Paper v2 sync lifecycle 仍可能被显式 event_loop client 调用，存在“先走一次性 compiler 生命周期”的偏航风险；已改为全部 loud reject `MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS` 并加测试锁定。
+
+
+## Phase 3 start self-audit - 2026-06-23T03:26:20.836920+00:00
+
+### Scope
+- Worktree: `F:/Dev/AIstock_worktrees/miniqmt-event-loop-runtime-phase3-20260623`
+- Base: `origin/main` at `7a38aaa2` (contains Phase 0-2 `5197edb0` and rule 9 `439a916e`)
+- Read: ADR 0002; durable design §3/§4.4/§9/§10 including rule 9; Phase0 seam contract; 0608 §4.1/Phase3 table.
+
+### §10 grep guard output (baseline before Phase 3 edits)
+
+```text
+event_loop range(_timer_iterations) in A modules:
+<no matches>
+
+all range(_timer_iterations) references under backend/services/miniqmt_execution_runtime:
+<no matches>
+
+event_loop gateway sync return [] (broad gateway.py scan, needs class-qualified interpretation):
+33:    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
+36:    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
+39:    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
+136:    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
+139:    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
+142:    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
+214:    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
+217:            return []
+220:    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
+223:            return []
+226:    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:  # noqa: ARG002
+229:            return []
+369:    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
+378:    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
+386:    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
+
+Interpretation: line 214/220/226 are legacy QmtClientMiniQMTGateway compatibility, not QmtClientMiniQMTEventLoopGateway; Phase 3 will add an explicit event_loop loud test.
+
+JsonFile OMS event_loop authority references:
+docs/architecture/miniqmt_event_loop_runtime_phase0_seam_contract_20260623.md:88:- JsonFileMiniQMTExecutionRuntimeRepository only for compiler/test/debug, not event_loop authority.
+backend/services/miniqmt_execution_runtime/__init__.py:54,76 export compatibility repository.
+backend/services/miniqmt_execution_runtime/repository.py:152 class JsonFileMiniQMTExecutionRuntimeRepository; repository.py:247 default store factory.
+
+vnpy_style attribution/source map diff:
+<empty git diff>
+
+BUG-470 predicates in A modules:
+runtime.py imports/uses is_open_like_order_status and is_terminal_order_status; oms.py imports/uses the same predicates. STATUS_* constants are used only as qmt_strategy_ledger canonical statuses, not new literal forks.
+
+flag default compiler evidence references:
+config.py defaults MINIQMT_EXECUTION_RUNTIME to compiler; test_miniqmt_phase0_seam_contracts.py asserts default compiler and unsupported value reason_code MINIQMT_EXECUTION_RUNTIME_UNSUPPORTED.
+
+MiniQMT/event_loop TDX guard:
+Only ADR/design docs contain fetch_tdx_realtime_quotes / TDX_REALTIME; backend/services/miniqmt_execution_runtime and backend/tests/miniqmt_execution_runtime have no matches.
+```
+
+### Self questions
+- 真事件驱动还是查一次/合成 timer? 当前工作尚未改代码；基线 runtime 已无 `range(_timer_iterations)`，后续只接受真实 `MarketTick/TradeFill/AlgoTimer` 事件。
+- 是否新造第二套非 durable OMS? 否；仅使用 `MiniQMTOmsLedger` / `qmt_strategy_ledger` seam，不引入 JSON/内存权威 OMS。
+- 是否动 B 或分叉算法核? 否；`backend/execution_algos/vnpy_style/` diff 为空，flag 默认 compiler 不变。
+- 是否引入 TDX 行情? 否；A runtime/backend tests 无 `fetch_tdx_realtime_quotes` / `TDX_REALTIME`。
+
+### Deviation intercept
+- 未拦截偏差。注意：broad grep 命中 legacy `QmtClientMiniQMTGateway` sync return []; 这不是 event_loop class，但本轮需用测试锁定 `QmtClientMiniQMTEventLoopGateway` 缺 qmt_client 方法 loud。
+
+
+## Phase 3 algo lifecycle fix self-audit - 2026-06-23T03:35:21.631962+00:00
+
+### Deliverable
+- Added Phase 3 characterization for BestLimit cancel/requote lifecycle and TWAP window lifecycle.
+- Fixed runtime adapter so vn.py-style instances are not terminalized merely because their current child order is terminal; they remain active until the core emits FINISH or operator command explicitly terminalizes/cancels.
+- Hardened event_loop gateway missing `get_trades` / `get_positions` tests to loud failures.
+
+### Design reread
+- Re-read durable design §3 rules 1/2/3/5/7/9, §4.4, §9 Phase 3, §9.x, §10.
+- Re-read Phase0 seam contract gateway sync and OMS rules.
+- Re-read 0608 §4.1/§4.2 algo semantics and Phase3 acceptance table.
+
+### §10 grep guard output
+
+```text
+event_loop runtime/gateway range(_timer_iterations count:
+<no matches>
+
+all range(_timer_iterations references:
+backend/services/miniqmt_execution_runtime/client.py:369:            for index in range(_timer_iterations(algo_code, dict(policy_json.get("algo_config") or {}))):
+backend/services/miniqmt_execution_runtime/client.py:512:        for index in range(_timer_iterations(algo_code, dict(policy_json.get("algo_config") or {}))):
+Interpretation: compiler/compat client paths only; event_loop runtime/gateway/oms/models count is 0.
+
+event_loop class sync methods and return [] context:
+QmtClientMiniQMTEventLoopGateway.sync_orders/sync_trades/sync_positions call _required_qmt_list with reason_code MINIQMT_EVENT_LOOP_SYNC_*_UNAVAILABLE; no return [] in this class.
+
+broad gateway return []:
+legacy QmtClientMiniQMTGateway lines 214/220/226 still contain return [] compatibility for non-event_loop path; event_loop subclass overrides with loud _required_qmt_list. Test locks orders/trades/positions loud failures.
+
+JsonFile OMS event_loop authority references:
+docs seam contract only says JsonFile not event_loop authority; repository export/factory remains for compatibility/debug. No event_loop authority use added.
+
+vnpy_style attribution/source map diff:
+<empty git diff -- backend/execution_algos/vnpy_style>
+
+BUG-470 predicates / literal status scan in A runtime:
+runtime.py and oms.py use is_open_like_order_status/is_terminal_order_status for broker numeric statuses. Existing raw text fallback remains only for text status snapshots; no new status literal fork added.
+
+flag default compiler tests:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.. [100%]
+2 passed in 0.91s
+
+MiniQMT/event_loop TDX guard:
+rg -n 'fetch_tdx_realtime_quotes|TDX_REALTIME' backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+<no matches>
+
+Targeted test:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q
+45 passed in 2.02s
+```
+
+### Self questions
+- 真事件驱动还是查一次/合成 timer? 真事件驱动；新增测试通过真实 `on_tick`/`on_timer`/`record_trade_event`/`record_order_event` 推动 core，没有同步 for-loop 或查一次生命周期。
+- 是否新造第二套非 durable OMS? 否；仍通过 runtime OMS facade 和 repository seam，未新增 JSON/内存权威 OMS。
+- 是否动 B 或分叉算法核? 否；未改 `backend/execution_algos/vnpy_style/`，compiler 默认测试通过。
+- 是否引入 TDX 行情? 否；A runtime/backend tests grep 为 0。
+
+### Deviation intercept
+- 拦截并修正一个 Phase 3 偏差：基线 adapter 会在 child terminal 后提前终结 vn.py-style instance，导致 TWAP/BestLimit 不能存活至执行窗口/后续 tick。已改为 vn.py-style instance 仅由 core FINISH 或 operator command 终结。
