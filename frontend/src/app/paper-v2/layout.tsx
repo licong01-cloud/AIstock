@@ -15,7 +15,6 @@ const TABS = [
   { href: "/paper-v2/portfolios", label: "模拟盘实例", exact: false },
   { href: "/paper-v2/miniqmt-sim", label: "MiniQMT", exact: false },
   { href: "/paper-v2/model-hmm", label: "模型与 HMM", exact: false },
-  { href: "/paper-v2/settings", label: "设置", exact: false },
 ];
 
 export default function PaperV2Layout({ children }: { children: ReactNode }) {

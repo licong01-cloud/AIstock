@@ -235,6 +235,11 @@ function listPayload(runs: MockRun[]) {
 
 async function mockApi(page: Page) {
   const writeMethods: string[] = [];
+  await page.route("**/api/ingestion/alerts/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const data = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+  });
   await page.route("**/api/v1/simulation-runtime/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -341,6 +346,7 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
 
   await page.goto("/paper-v2/simulation-runtime");
 
+  await expect(page.locator('a[href="/paper-v2/settings"]')).toHaveCount(0);
   await expect(page.getByTestId("sim-runtime-total-runs")).toBeVisible();
   await expect(page.getByTestId("sim-runtime-total-runs")).toContainText("2");
   await expect(page.getByTestId("sim-runtime-local-count")).toContainText("1");

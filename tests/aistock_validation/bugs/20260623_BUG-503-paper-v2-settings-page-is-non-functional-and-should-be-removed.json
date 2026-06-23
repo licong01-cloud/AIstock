@@ -1,0 +1,117 @@
+{
+  "actual": "The page renders only text cards plus links to packages, selection, and portfolios; it exposes no settings operation.",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/layout.tsx",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260623_BUG-503-paper-v2-settings-page-is-non-functional-and-should-be-removed.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-503",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T12:10:17.898884Z",
+  "description": "The page renders only text cards plus links to packages, selection, and portfolios; it exposes no settings operation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-f223e2f02923",
+      "timestamp": "2026-06-23T12:10:17.898881Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Remove the misleading Paper v2 Settings navigation entry and remove/downline the /paper-v2/settings card page unless real configuration controls exist.",
+  "first_seen_at": "2026-06-23T12:10:17.898884Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1554,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1554",
+  "last_seen_at": "2026-06-23T12:10:17.898884Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://localhost:3000/paper-v2/settings and inspect available controls: there are no forms, buttons, inputs, selects, or save actions.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 settings page is non-functional and should be removed",
+  "trigger_condition": {
+    "fingerprint": "f223e2f02923547a3e69c8be",
+    "source_event_id": "FE-20260623-f223e2f02923"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/layout.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/paper-v2/settings",
+    "ui_routes": [
+      "/paper-v2/settings",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
