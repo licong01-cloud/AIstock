@@ -13,10 +13,7 @@ const TABS = [
   { href: "/research-assistant/tasks", label: "任务" },
   { href: "/research-assistant/memory", label: "记忆" },
   { href: "/research-assistant/graph", label: "图谱" },
-  { href: "/research-assistant/mcp-tools", label: "MCP 工具" },
-  { href: "/research-assistant/skills", label: "Skills" },
   { href: "/research-assistant/approvals", label: "审批" },
-  { href: "/research-assistant/models", label: "模型路由" },
   { href: "/research-assistant/trace", label: "Trace" },
   { href: "/research-assistant/settings", label: "设置" },
 ];
