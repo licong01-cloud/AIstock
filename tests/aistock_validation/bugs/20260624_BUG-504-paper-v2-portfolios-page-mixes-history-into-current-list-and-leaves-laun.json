@@ -35,8 +35,8 @@
   "expected": "The strategy-package launch card should span the available width. The current-running section should show only operable LocalSim/MiniQMT simulations. Historical, terminal, READY, and stale RUNNING records should be shown separately as history or abnormal/stale records without inflating the current count.",
   "first_seen_at": "2026-06-23T16:28:17.668700Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0f08f8bbd327c0b5a57ebbf4726196e0bdb82546",
+  "fixed_at": "2026-06-23T17:46:25.603814Z",
   "github_issue_number": 1559,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1559",
   "last_seen_at": "2026-06-23T16:28:17.668700Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1562",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -107,6 +108,12 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1562 GitHub checks -> passed (mergeStateStatus=CLEAN; AIstock CI, PR Quality, Semgrep, CodeQL success)",
+    "rtk npm exec -- tsc --noEmit --incremental false (frontend) -> passed",
+    "rtk npm exec -- playwright test tests/paper-v2/paper-v2-portfolios-current-history.spec.ts --project=chromium (frontend) -> passed, 1 passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_SKIP_REALTIME=1&& set PAPER_V2_E2E_SKIP_REALTIME=1&& python -m nox -s paper_v2_ui -> passed, 27 passed, 1 skipped"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
