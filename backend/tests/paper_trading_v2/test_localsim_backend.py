@@ -50,8 +50,11 @@ from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.models import (
     Fill,
     MinuteBar,
+    OrderEvent,
+    OrderEventType,
     OrderIntent,
     OrderSide,
+    OrderStatus,
     OrderType,
     PositionLot,
 )
@@ -149,6 +152,8 @@ def _build_backend(
     initial_cash: float = 1_000_000.0,
     data_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL,
     provider: FakeMarketDataProvider | None = None,
+    execution_engine=None,
+    initial_positions: dict[str, PositionLot] | None = None,
 ) -> tuple[LocalSimBackend, FakeMarketDataProvider, StrategyPackageManifest]:
     manifest = make_paper_enabled_manifest()
     market_data_provider = provider or FakeMarketDataProvider()
@@ -158,6 +163,8 @@ def _build_backend(
         data_source=data_source,
         manifest=manifest,
         market_data_provider=market_data_provider,
+        execution_engine=execution_engine,
+        initial_positions=initial_positions,
     )
     return backend, market_data_provider, manifest
 
@@ -227,6 +234,37 @@ def _unchecked_ledger_fill(
     )
 
 
+class FullFillExecutionEngine:
+    def execute_order(self, *, order, minute_bars, algo_code, algo_config, market_context, allow_partial_fill):
+        bar = minute_bars[-1]
+        fill = Fill(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=order.quantity,
+            price=bar.close,
+            trade_time=bar.bar_time,
+            bar_time=bar.bar_time,
+            reason="unit full fill",
+            metadata={"algo_code": "UNIT_FULL_FILL"},
+        )
+        final_order = order.model_copy(
+            update={
+                "status": OrderStatus.FILLED,
+                "filled_quantity": order.quantity,
+                "avg_fill_price": fill.price,
+                "updated_at": fill.trade_time,
+            }
+        )
+        event = OrderEvent(
+            order_id=order.order_id,
+            event_type=OrderEventType.FILLED,
+            fill=fill,
+            reason=fill.reason,
+        )
+        return final_order, [fill], [event]
+
+
 # ---------------------------------------------------------------------------
 # 1. Constructor + market-source binding
 # ---------------------------------------------------------------------------
@@ -280,6 +318,41 @@ def test_submit_order_intent_returns_terminal_status_synchronously() -> None:
     assert status.avg_fill_price is not None
     assert status.rejection_reason is None
     backend.unsubscribe_fill_callback(sub)
+
+
+def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
+    initial_lot = PositionLot(
+        portfolio_id="paper_star_exit",
+        symbol="688720.SH",
+        quantity=1547,
+        available_quantity=1547,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    backend, _, _ = _build_backend(
+        portfolio_id="paper_star_exit",
+        initial_cash=100_000.0,
+        execution_engine=FullFillExecutionEngine(),
+        initial_positions={"688720.SH": initial_lot},
+    )
+    intent = OrderIntent(
+        package_id=backend.package_id,
+        portfolio_id=backend.portfolio_id,
+        symbol="688720.SH",
+        side=OrderSide.SELL,
+        quantity=1547,
+        order_type=OrderType.MARKET,
+        target_trade_date=TRADE_DATE,
+    )
+
+    handle = backend.submit_order_intent(intent)
+
+    status = backend.query_status(handle)
+    assert status.state == "filled"
+    assert status.filled_quantity == 1547
+    assert "688720.SH" not in backend.query_positions()
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+    assert [fill.quantity for fill in snapshot["fills"]] == [1547]
 
 
 def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
@@ -681,3 +754,29 @@ def test_inmemoryledger_rejects_non_board_lot_partial_sell_but_allows_full_exit(
 
     assert "000001.SZ" not in ledger.positions
     assert ledger.cash_entries[-1].notional == Decimal("2750.00")
+
+
+def test_inmemoryledger_uses_star_board_lot_increment_for_whole_position_sell() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_star_board_sell", initial_cash=100_000.0)
+    ledger.positions["688720.SH"] = PositionLot(
+        portfolio_id=ledger.portfolio_id,
+        symbol="688720.SH",
+        quantity=1547,
+        available_quantity=1547,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(
+            order_id="ord_star_full_exit",
+            fill_id="fill_star_full_exit",
+            symbol="688720.SH",
+            side=OrderSide.SELL,
+            quantity=1547,
+            price=11.0,
+        )
+    )
+
+    assert "688720.SH" not in ledger.positions
+    assert ledger.cash_entries[-1].notional == Decimal("17017.00")

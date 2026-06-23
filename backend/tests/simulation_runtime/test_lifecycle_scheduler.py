@@ -67,7 +67,7 @@ from backend.services.strategy_package.models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 
 
@@ -375,6 +375,21 @@ class FakeLocalSimBroker:
             backend_id="local_sim",
             submitted_at=datetime.now(UTC),
             intent_id=intent.intent_id,
+        )
+
+
+class BoardLotRejectingLocalSimBroker(FakeLocalSimBroker):
+    def submit_order_intent(self, intent):
+        self.submitted.append(intent)
+        raise BrokerRejectedError(
+            "LocalSim ledger rejected the order",
+            context={
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "quantity": intent.quantity,
+                "cause": "fill quantity violates LocalSim board-lot rules; reason_code=LOCAL_SIM_BOARD_LOT_VIOLATION",
+                "cause_code": "RISK_RULE_ERROR",
+            },
         )
 
 
@@ -4179,6 +4194,61 @@ def test_scheduler_marks_pre_trade_blocked_holding_without_broker_submit() -> No
     assert result.results[0].execution_plan.intents == []
     assert result.results[0].execution_plan.trading_rule_decisions[0].reason_code == "NO_TRADABLE_REALTIME_QUOTE"
     assert context.local_broker.submitted == []
+
+
+def test_scheduler_terminalizes_deterministic_localsim_board_lot_rejection_without_replay() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    broker = BoardLotRejectingLocalSimBroker()
+    position = PositionLot(
+        portfolio_id="portfolio_board_lot_terminal",
+        symbol="688720.SH",
+        quantity=1547,
+        available_quantity=1547,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    context = SimulationRunContext(
+        portfolio_id="portfolio_board_lot_terminal",
+        current_positions={"688720.SH": position},
+        current_prices={"688720.SH": 10.0},
+        local_broker=broker,
+        cash=100_000.0,
+        market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=[], valid_no_candidate=True),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    assert result.results[0].status == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert latest_run.run_payload_json["broker_called"] is False
+    assert latest_run.run_payload_json["submitted_intents"] == 0
+    assert latest_run.run_payload_json["failed_intents"] == 1
+    diagnostics = latest_run.run_payload_json["local_sim_deterministic_submit_failure"]
+    assert diagnostics["reason_code"] == "LOCAL_SIM_BOARD_LOT_VIOLATION"
+    assert diagnostics["stage"] == "LOCAL_SIM_SUBMIT_FAILED"
+    assert len(broker.submitted) == 1
+
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    assert second.results[0].status == "REUSED_EXISTING_PLAN"
+    assert len(broker.submitted) == 1
 
 
 def test_scheduler_marks_existing_zero_intent_plan_success_when_submit_window_reuses_it() -> None:

@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import logging
 from typing import Any
 
+from backend.execution_algos.board_lot import board_lot_rule
+
 from .errors import DataUnavailableError, RiskRuleError
 from .models import AccountSnapshot, Fill, OrderSide, PositionLot
 
@@ -21,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 _MONEY_QUANT = Decimal("0.01")
 _ZERO_MONEY = Decimal("0.00")
-_A_SHARE_BOARD_LOT = 100
-
 
 def _decimal_from_value(value: Any, *, field_name: str) -> Decimal:
     try:
@@ -371,8 +371,23 @@ class InMemoryLedger:
         )
 
     def _validate_board_lot(self, fill: Fill) -> None:
-        min_qty = _A_SHARE_BOARD_LOT
-        increment = _A_SHARE_BOARD_LOT
+        try:
+            min_qty, increment = board_lot_rule(fill.symbol)
+        except ValueError as exc:
+            self._raise_risk(
+                "fill symbol does not have an A-share board-lot rule",
+                context={
+                    "reason_code": "LOCAL_SIM_BOARD_LOT_RULE_UNAVAILABLE",
+                    "operation": "apply_fill",
+                    "portfolio_id": self.portfolio_id,
+                    "order_id": fill.order_id,
+                    "fill_id": fill.fill_id,
+                    "symbol": fill.symbol,
+                    "side": fill.side.value,
+                    "fill_quantity": fill.quantity,
+                    "cause": str(exc),
+                },
+            )
         if fill.quantity >= min_qty and fill.quantity % increment == 0:
             return
         current = self.positions.get(fill.symbol)
