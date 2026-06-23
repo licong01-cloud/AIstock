@@ -439,3 +439,102 @@ def test_submit_batch_allows_account_group_cash_fit_across_strategy_slots() -> N
     assert result.success is True
     assert broker.place_order_calls == 2
     assert all(item.preflight.errors == () for item in result.results)
+
+
+def test_pre_trade_risk_default_is_inert_for_sim_submit() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100000")))
+    broker = CountingBroker()
+
+    result = _service(repo, broker).submit_order(_buy_request(quantity=1000, price=Decimal("50")))
+
+    assert result.success is True
+    assert broker.place_order_calls == 1
+
+
+def test_pre_trade_risk_kill_switch_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "kill_switch_active": True,
+            }
+        }
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_KILL_SWITCH_ACTIVE"
+    assert result.preflight.primary_error.context["risk_layer"] == "miniqmt_pre_trade"
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_price_collar_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        price=Decimal("13.50"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "price_collar": {"reference_price": "10", "max_deviation_pct": "0.10"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_PRICE_COLLAR_REJECT"
+    assert result.preflight.primary_error.context["max_price"] == 11.0
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_fat_finger_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        quantity=2000,
+        price=Decimal("10"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "fat_finger": {"max_quantity": 1000, "max_notional": "15000"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert [error.code for error in result.preflight.errors] == [
+        "PRE_TRADE_FAT_FINGER_QUANTITY",
+        "PRE_TRADE_FAT_FINGER_NOTIONAL",
+    ]
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_buying_power_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        quantity=1000,
+        price=Decimal("10"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "buying_power": {"available_buying_power": "9000"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_BUYING_POWER_REJECT"
+    assert result.preflight.primary_error.context["available_buying_power"] == 9000.0
+    assert broker.place_order_calls == 0
