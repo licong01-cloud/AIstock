@@ -1357,6 +1357,7 @@ def build_llm_value_summary(
     prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
     rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
     design_drift = _read_json_object(artifact_dir / "design-drift-audit.json")
+    silent_degradation = _read_json_object(artifact_dir / "silent-degradation-audit.json")
     ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
     discovery_manifest = _read_json_object(artifact_dir / "discovery-plans" / "manifest.json")
     bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
@@ -1470,6 +1471,8 @@ def build_llm_value_summary(
         warnings.append("LLM guarded rollout artifact is missing.")
     if not design_drift:
         warnings.append("LLM design drift audit artifact is missing.")
+    if not silent_degradation:
+        warnings.append("LLM silent degradation audit artifact is missing.")
     artifact_refs = {
         "codegraph_freshness_json": _artifact_ref(artifact_dir / "codegraph-freshness.json", root),
         "codegraph_freshness_md": _artifact_ref(artifact_dir / "codegraph-freshness.md", root),
@@ -1489,6 +1492,8 @@ def build_llm_value_summary(
         "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
         "design_drift_audit_json": _artifact_ref(artifact_dir / "design-drift-audit.json", root),
         "design_drift_audit_markdown": _artifact_ref(artifact_dir / "design-drift-audit.md", root),
+        "silent_degradation_audit_json": _artifact_ref(artifact_dir / "silent-degradation-audit.json", root),
+        "silent_degradation_audit_markdown": _artifact_ref(artifact_dir / "silent-degradation-audit.md", root),
     }
     codegraph_refs = _unique_refs(
         artifact_refs["codegraph_freshness_json"],
@@ -1632,6 +1637,22 @@ def build_llm_value_summary(
             "artifact_ref": artifact_refs["design_drift_audit_json"],
             "markdown_ref": artifact_refs["design_drift_audit_markdown"],
         },
+        "silent_degradation_audit": {
+            "workflow_gate": silent_degradation.get("workflow_gate"),
+            "candidate_only": silent_degradation.get("candidate_only"),
+            "manual_analysis_required_before_bug_registration": silent_degradation.get(
+                "manual_analysis_required_before_bug_registration"
+            ),
+            "review_target_count": (silent_degradation.get("summary") or {}).get("review_target_count")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
+            "finding_count": (silent_degradation.get("summary") or {}).get("finding_count")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
+            "llm_invoked": bool(silent_degradation.get("llm_invoked")),
+            "artifact_ref": artifact_refs["silent_degradation_audit_json"],
+            "markdown_ref": artifact_refs["silent_degradation_audit_markdown"],
+        },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
             "case_count": prompt_eval.get("case_count") or prompt_metrics.get("case_count"),
@@ -1659,6 +1680,11 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
     prompt = payload.get("prompt_evaluation") if isinstance(payload.get("prompt_evaluation"), dict) else {}
     rollout = payload.get("guarded_rollout") if isinstance(payload.get("guarded_rollout"), dict) else {}
     design_drift = payload.get("design_drift_audit") if isinstance(payload.get("design_drift_audit"), dict) else {}
+    silent_degradation = (
+        payload.get("silent_degradation_audit")
+        if isinstance(payload.get("silent_degradation_audit"), dict)
+        else {}
+    )
     metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
     feedback = metrics.get("candidate_feedback") if isinstance(metrics.get("candidate_feedback"), dict) else {}
     refs = payload.get("artifact_refs") if isinstance(payload.get("artifact_refs"), dict) else {}
@@ -1694,6 +1720,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- design_drift_audit: `targets={design_drift.get('review_target_count') or 0}, findings={design_drift.get('finding_count') or 0}, candidate_only={bool(design_drift.get('candidate_only'))}`",
+        f"- silent_degradation_audit: `targets={silent_degradation.get('review_target_count') or 0}, findings={silent_degradation.get('finding_count') or 0}, candidate_only={bool(silent_degradation.get('candidate_only'))}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
         f"- guarded_rollout: `mode={rollout.get('mode') or 'unknown'}, can_enhance={rollout.get('llm_can_enhance_issue')}`",
         "",
@@ -1709,6 +1736,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
         f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
         f"- design_drift_audit: `{refs.get('design_drift_audit_markdown') or refs.get('design_drift_audit_json') or 'missing'}`",
+        f"- silent_degradation_audit: `{refs.get('silent_degradation_audit_markdown') or refs.get('silent_degradation_audit_json') or 'missing'}`",
         "",
         "This is a compact value summary. Raw JSON artifacts stay in the uploaded artifact bundle and are not inlined in the Nightly summary.",
     ]

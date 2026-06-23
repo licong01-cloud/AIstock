@@ -1456,6 +1456,23 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
         encoding="utf-8",
     )
     (artifact_dir / "design-drift-audit.md").write_text("# Nightly LLM Design Drift Audit\n", encoding="utf-8")
+    (artifact_dir / "silent-degradation-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_silent_degradation_audit_v1",
+                "workflow_gate": "warning",
+                "candidate_only": True,
+                "manual_analysis_required_before_bug_registration": True,
+                "llm_invoked": True,
+                "summary": {"review_target_count": 6, "finding_count": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "silent-degradation-audit.md").write_text(
+        "# Nightly LLM Silent Degradation Audit\n",
+        encoding="utf-8",
+    )
 
     payload = adapter.build_llm_value_summary(root=tmp_path, artifact_dir=artifact_dir)
     markdown = adapter.render_llm_value_summary_markdown(payload)
@@ -1479,6 +1496,8 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert payload["value_metrics"]["candidate_feedback"]["placeholders_present"] is True
     assert payload["design_drift_audit"]["candidate_only"] is True
     assert payload["design_drift_audit"]["finding_count"] == 1
+    assert payload["silent_degradation_audit"]["candidate_only"] is True
+    assert payload["silent_degradation_audit"]["finding_count"] == 2
     assert payload["understand_anything"]["summary_count"] == 2
     assert payload["understand_anything"]["manifest_freshness"] == "base_current"
     assert payload["understand_anything"]["base_current_summary_count"] == 2
@@ -1493,10 +1512,12 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert "bug_candidates: `candidates=2, high_value=1, issue_payload_drafts=1`" in markdown
     assert "candidate_feedback: `available=True, accepted=1, rejected=0, closed=0, pending=1`" in markdown
     assert "design_drift_audit: `targets=5, findings=1, candidate_only=True`" in markdown
+    assert "silent_degradation_audit: `targets=6, findings=2, candidate_only=True`" in markdown
     assert "candidate_no_issue_reason: `no_high_value_actionable_candidates`" in markdown
     assert "bug-candidates/manifest.json" in markdown
     assert "selected-plans.json" in markdown
     assert "design-drift-audit.md" in markdown
+    assert "silent-degradation-audit.md" in markdown
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 
 
