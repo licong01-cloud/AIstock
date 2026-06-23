@@ -33,8 +33,8 @@
   "expected": "LocalSim allows whole-position SELL odd lots, rejects only non-whole-position odd-lot orders before broker submit with durable reason_code, and deterministic LocalSim submit failures do not loop forever in SUBMITTING/retry state.",
   "first_seen_at": "2026-06-23T07:06:41.494267Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2a91ac3b4771144845bc1f4935e2edc492dc996e",
+  "fixed_at": "2026-06-23T09:19:51.983291Z",
   "github_issue_number": 1528,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1528",
   "last_seen_at": "2026-06-23T07:06:41.494267Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1534",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "69eab3e5f2f89aa0f6a40033",
     "source_event_id": "FE-20260623-69eab3e5f2f8"
   },
+  "validation_evidence": [
+    "CI for PR #1534 -> passed (17 passed, 0 failed); local targeted pytest 107 passed; ruff changed files passed; git diff --check passed; nox l0 passed; validation_module_registry_l0 passed; paper_v2_l3 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
