@@ -32,8 +32,8 @@
   "expected": "For minqmt_sim, pre-trade tradability and realtime quote evidence use MiniQMT/xtquant broker quotes only; TDX fetcher is not invoked; L2/L16 can proceed past pre-run when QMT quotes are available; errors are loud with reason_code if broker quotes are unavailable.",
   "first_seen_at": "2026-06-23T03:05:32.503434Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "73da9d8ffbae7fca7f46494813f93ffe4451f821",
+  "fixed_at": "2026-06-23T04:51:29.846233Z",
   "github_issue_number": 1507,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1507",
   "last_seen_at": "2026-06-23T03:05:32.503434Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1513",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "693f27861afdccf53a459a0a",
     "source_event_id": "FE-20260623-693f27861afd"
   },
+  "validation_evidence": [
+    "CI checks PR #1513 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
