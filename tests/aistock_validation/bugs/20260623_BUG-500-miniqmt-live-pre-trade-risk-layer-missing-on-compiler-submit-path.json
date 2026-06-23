@@ -5,7 +5,7 @@
   "module": "qmt_strategy_ledger",
   "severity": "P0",
   "risk_area": "bug",
-  "status": "validation_passed",
+  "status": "pr_open",
   "description": "Compiler submit path lacks unified LIVE pre-trade risk layer for price collar, fat-finger, buying power and submit-time kill-switch.",
   "actual": "Compiler submit path lacks unified LIVE pre-trade risk layer for price collar, fat-finger, buying power and submit-time kill-switch.",
   "expected": "Compiler submit path must provide flag-gated pre-trade risk checks with loud reason_code while keeping SIM defaults inert and LIVE locked.",
@@ -58,6 +58,12 @@
       "actor": "codex",
       "note": "Implemented inert-by-default MiniQMT compiler pre-trade risk layer stacked on BUG-501; PR pending Tier2.",
       "timestamp": "2026-06-23T18:39:45.793592+00:00"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened stacked PR #1566 based on BUG-501 branch; not merged or close-synced.",
+      "timestamp": "2026-06-23T18:43:56.402787+00:00"
     }
   ],
   "fix_branch": "bug/BUG-500-p0-miniqmt-live-pre-trade-risk-layer-missing-on-20260624",
@@ -91,5 +97,7 @@
       "command": "rtk cmd /c set AISTOCK_HOSTED_CI=1 and PAPER_V2_L3_SKIP_UI=1 then python -m nox -s paper_v2_l3",
       "result": "passed"
     }
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1566",
+  "pr_number": 1566
 }
