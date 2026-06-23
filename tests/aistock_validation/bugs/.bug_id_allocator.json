@@ -1,6 +1,12 @@
 {
+<<<<<<< HEAD
   "last_allocated": 492,
   "schema_version": "aistock_bug_id_allocator_v1",
   "updated_at": "2026-06-23T06:51:10.805701Z",
+=======
+  "last_allocated": 493,
+  "schema_version": "aistock_bug_id_allocator_v1",
+  "updated_at": "2026-06-23T07:07:05.407406Z",
+>>>>>>> aedced58 (chore(issue): register BUG-493)
   "updated_by": "aistock_issue_workflow.py"
 }
