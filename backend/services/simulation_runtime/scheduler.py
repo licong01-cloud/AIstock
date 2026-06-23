@@ -49,7 +49,7 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_calendar_status import TradingCalendarStatusService
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
@@ -3596,13 +3596,30 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        execution = self.orchestrator.submit_execution_plan(
-            build_result=build_result,
-            local_broker=context.local_broker,
-            managed_order_service=context.managed_order_service,
-            mode=mode,
-            price_by_symbol=context.price_by_symbol or context.current_prices,
-        )
+        try:
+            execution = self.orchestrator.submit_execution_plan(
+                build_result=build_result,
+                local_broker=context.local_broker,
+                managed_order_service=context.managed_order_service,
+                mode=mode,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
+            )
+        except BrokerRejectedError as exc:
+            terminalized = self._terminalize_deterministic_localsim_submit_failure(
+                binding=binding,
+                run=build_result.run,
+                plan=build_result.execution_plan,
+                trade_date=trade_date,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+                exc=exc,
+            )
+            if terminalized is not None:
+                return terminalized
+            raise
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
             run=execution.run,
@@ -4146,15 +4163,32 @@ class SimulationLifecycleScheduler:
                         default_data_source=data_source,
                     ),
                 )
-            execution = self.orchestrator.submit_persisted_execution_plan(
-                run=run,
-                binding=binding,
-                execution_plan=plan,
-                local_broker=context.local_broker,
-                managed_order_service=context.managed_order_service,
-                mode=mode,
-                price_by_symbol=context.price_by_symbol or context.current_prices,
-            )
+            try:
+                execution = self.orchestrator.submit_persisted_execution_plan(
+                    run=run,
+                    binding=binding,
+                    execution_plan=plan,
+                    local_broker=context.local_broker,
+                    managed_order_service=context.managed_order_service,
+                    mode=mode,
+                    price_by_symbol=context.price_by_symbol or context.current_prices,
+                )
+            except BrokerRejectedError as exc:
+                terminalized = self._terminalize_deterministic_localsim_submit_failure(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    trade_date=trade_date,
+                    data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                        binding=binding,
+                        trade_date=trade_date,
+                        default_data_source=data_source,
+                    ),
+                    exc=exc,
+                )
+                if terminalized is not None:
+                    return terminalized
+                raise
             local_persistence = self._persist_local_sim_execution_result(
                 binding=binding,
                 run=execution.run,
@@ -4272,6 +4306,79 @@ class SimulationLifecycleScheduler:
                     "context": diagnostic,
                 },
             },
+        )
+
+    def _terminalize_deterministic_localsim_submit_failure(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        trade_date: date,
+        data_source: str,
+        exc: BrokerRejectedError,
+    ) -> SimulationSchedulerBindingResult | None:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return None
+        if not self._is_deterministic_localsim_submit_failure(exc):
+            return None
+        plan_counts = self._execution_plan_side_counts(plan)
+        raw_context = getattr(exc, "context", None)
+        context = dict(raw_context) if isinstance(raw_context, dict) else {}
+        reason_code = self._deterministic_localsim_submit_reason_code(context)
+        diagnostic = {
+            "schema_version": "localsim_deterministic_submit_failure_v1",
+            "stage": "LOCAL_SIM_SUBMIT_FAILED",
+            "reason_code": reason_code,
+            "reason": "local_sim_deterministic_submit_failure_terminalized",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "strategy_id": binding.strategy_id,
+            "binding_id": binding.binding_id,
+            "trade_date": trade_date.isoformat(),
+            "plan_intent_count": plan_counts["intent_count"],
+            "buy_intent_count": plan_counts["buy_intent_count"],
+            "sell_intent_count": plan_counts["sell_intent_count"],
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "context": context,
+            "next_action": (
+                "fix the deterministic LocalSim order-shape rejection before retrying; "
+                "the scheduler will not repeatedly resubmit the same failed plan"
+            ),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_TERMINAL,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                "no_rebalance_required": False,
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": plan_counts["intent_count"],
+                "local_sim_retry_diagnostics": diagnostic,
+                "local_sim_deterministic_submit_failure": diagnostic,
+                "submit_failure": {
+                    "stage": "LOCAL_SIM_SUBMIT_FAILED",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": diagnostic,
+                },
+            },
+        )
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status=updated.status.value,
+            run=updated,
+            execution_plan=plan,
+            error={
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "context": diagnostic,
+            },
+            data_source=data_source,
         )
 
     @staticmethod
@@ -4609,6 +4716,27 @@ class SimulationLifecycleScheduler:
             )
         ).lower()
         return "insufficient cash" in text
+
+    @staticmethod
+    def _is_deterministic_localsim_submit_failure(exc: BaseException) -> bool:
+        if not isinstance(exc, BrokerRejectedError):
+            return False
+        context = getattr(exc, "context", None)
+        if not isinstance(context, dict):
+            return False
+        cause = str(context.get("cause") or "").lower()
+        cause_code = str(context.get("cause_code") or "").upper()
+        if "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause_code or "LOCAL_SIM_BOARD_LOT_VIOLATION".lower() in cause:
+            return True
+        return False
+
+    @staticmethod
+    def _deterministic_localsim_submit_reason_code(context: dict[str, Any]) -> str:
+        cause_code = str(context.get("cause_code") or "").upper()
+        cause = str(context.get("cause") or "").upper()
+        if "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause_code or "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause:
+            return "LOCAL_SIM_BOARD_LOT_VIOLATION"
+        return "LOCAL_SIM_DETERMINISTIC_SUBMIT_REJECTED"
 
     @staticmethod
     def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:
