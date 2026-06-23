@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-485",
-  "closed_at": null,
+  "closed_at": "2026-06-23T04:16:53Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,42 +33,48 @@
       "timestamp": "2026-06-22T17:45:00.684407Z"
     },
     {
-      "timestamp": "2026-06-22T17:49:09.416946Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Include RA prompt pack YAML required by BUG-485 B2 design scope."
+      "actor": "codex",
+      "note": "Include RA prompt pack YAML required by BUG-485 B2 design scope.",
+      "timestamp": "2026-06-22T17:49:09.416946Z"
     },
     {
-      "timestamp": "2026-06-22T18:23:52.447047Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Include root assistant prompt node because pack.yaml stores prompt bodies in referenced node files."
+      "actor": "codex",
+      "note": "Include root assistant prompt node because pack.yaml stores prompt bodies in referenced node files.",
+      "timestamp": "2026-06-22T18:23:52.447047Z"
     },
     {
-      "timestamp": "2026-06-22T20:39:00.122990Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Include prompt checksum pins updated by BUG-485 prompt pack version bump for backend parity characterization."
+      "actor": "codex",
+      "note": "Include prompt checksum pins updated by BUG-485 prompt pack version bump for backend parity characterization.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
     },
     {
-      "timestamp": "2026-06-22T20:39:00.122990Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Include retired RA pipeline UI static regression because earlier retired pages may be absent and backend validation still owns the source-boundary check."
+      "actor": "codex",
+      "note": "Include retired RA pipeline UI static regression because earlier retired pages may be absent and backend validation still owns the source-boundary check.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
     },
     {
-      "timestamp": "2026-06-22T20:39:00.122990Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Include stock analysis MCP regression fixtures so stricter future-answer grounding can keep legacy stock tests green without weakening guard logic."
+      "actor": "codex",
+      "note": "Include stock analysis MCP regression fixtures so stricter future-answer grounding can keep legacy stock tests green without weakening guard logic.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
+    },
+    {
+      "action": "closed_after_close_sync_pr_prepared",
+      "actor": "codex",
+      "note": "Source PR #1504 merged at 729a45b7544e155a329aa83a4d669c822979a10a; GitHub Issue #1494 is closed with status:fixed; close-sync PR #1518 marks BUG-485 closed. No services started, no production DB touched, no DDL executed. Runtime backend restart remains user-owned; prompt changes can be reloaded via /config/reload.",
+      "timestamp": "2026-06-23T04:16:53Z"
     }
   ],
   "evidence_uris": [],
   "expected": "RA chat behaves like an analyst: selects multiple read-only tools when needed, checks graph_context first for cross-module relationship questions, synthesizes bottom-line answers in natural Chinese with inline sources/as_of and future-answer boundaries, while write actions still require approval.",
   "first_seen_at": "2026-06-22T17:45:00.684410Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-485-ra-b2-agentic-synthesis-still-behaves-like-singl-20260623",
+  "fix_commit": "729a45b7544e155a329aa83a4d669c822979a10a",
+  "fixed_at": "2026-06-23T04:15:21.343072Z",
   "github_issue_number": 1494,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1494",
   "last_seen_at": "2026-06-22T17:45:00.684410Z",
@@ -76,7 +82,8 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "production_backend_dependency_gate": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1504",
+  "production_backend_dependency_gate": "pending",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Ask RA: QE成果怎么利用; compare with a multi-dimensional stock question and a future-style question.",
@@ -93,7 +100,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -102,6 +109,10 @@
     "fingerprint": "6448bbc4ec9ca741b75976e3",
     "source_event_id": "FE-20260623-6448bbc4ec9c"
   },
+  "validation_evidence": [
+    "PR #1504 required checks -> all passed",
+    "Tier2 review -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
