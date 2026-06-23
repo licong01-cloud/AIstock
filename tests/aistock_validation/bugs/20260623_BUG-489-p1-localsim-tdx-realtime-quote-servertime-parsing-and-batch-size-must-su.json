@@ -30,8 +30,8 @@
   "expected": "LocalSim TDX realtime quote fetch chunks requests according to the TDX <=50-symbol limit, parses observed ServerTime intraday formats correctly, and keeps fail-fast/loud behavior for genuinely missing, stale, future, or malformed quote data.",
   "first_seen_at": "2026-06-23T03:09:53.157334Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "81228ce8a6b197b0c0e0c494212e3b5da1b4fbbb",
+  "fixed_at": "2026-06-23T05:05:06.469054Z",
   "github_issue_number": 1510,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1510",
   "last_seen_at": "2026-06-23T03:09:53.157334Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1515",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -59,6 +60,9 @@
     "fingerprint": "7aacb31a5fb37e8f80828d7b",
     "source_event_id": "FE-20260623-7aacb31a5fb3"
   },
+  "validation_evidence": [
+    "CI checks PR #1515 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
