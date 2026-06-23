@@ -379,6 +379,63 @@ def test_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slot
 
     assert result.preflight_passed is False
     assert broker.place_order_calls == 0
-    assert "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH" in {
-        error.code for item in result.results for error in item.preflight.errors
-    }
+    assert [item.preflight.primary_error.code for item in result.results] == [
+        "ACCOUNT_GROUP_CASH_OVERCOMMIT",
+        "ACCOUNT_GROUP_CASH_OVERCOMMIT",
+    ]
+    assert all(item.broker_called is False for item in result.results)
+    assert {
+        error.context["account_group_id"]
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    } == {"ag_minqmt_62266303_sim"}
+
+
+def test_submit_batch_allows_account_group_cash_fit_across_strategy_slots() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_account_group_slots(
+        MiniQmtAccountGroup(
+            account_group_id="ag_minqmt_62266303_sim",
+            broker_account_id=ACCOUNT_ID,
+            cash_limit=Decimal("25000"),
+            slots=(
+                MiniQmtStrategySlot(
+                    account_group_id="ag_minqmt_62266303_sim",
+                    strategy_slot_id="slot_a",
+                    strategy_id="strat_a",
+                    strategy_name="poc_strategy_a",
+                    display_name="POC Strategy A",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("12500"),
+                    order_remark_prefix="ag622-a",
+                ),
+                MiniQmtStrategySlot(
+                    account_group_id="ag_minqmt_62266303_sim",
+                    strategy_slot_id="slot_b",
+                    strategy_id="strat_b",
+                    strategy_name="poc_strategy_b",
+                    display_name="POC Strategy B",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("12500"),
+                    order_remark_prefix="ag622-b",
+                ),
+            ),
+        )
+    )
+    for strategy_id in ("strat_a", "strat_b"):
+        account = repo.get_virtual_account(strategy_id)
+        repo.update_virtual_account(replace(account, cash=Decimal("12500")))
+    broker = CountingBroker()
+
+    result = _service(repo, broker).submit_batch(
+        [
+            _buy_request(strategy_name="poc_strategy_a", order_remark="ag622-fit-a", quantity=1000, price=Decimal("10")),
+            _buy_request(strategy_name="poc_strategy_b", order_remark="ag622-fit-b", quantity=1000, price=Decimal("10")),
+        ]
+    )
+
+    assert result.preflight_passed is True
+    assert result.success is True
+    assert broker.place_order_calls == 2
+    assert all(item.preflight.errors == () for item in result.results)

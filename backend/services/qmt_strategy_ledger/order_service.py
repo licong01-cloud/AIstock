@@ -51,6 +51,7 @@ _CAPACITY_RESIDUAL_ERROR_CODES = frozenset(
         "SKIPPED_INSUFFICIENT_CAPITAL",
     }
 )
+_ACCOUNT_GROUP_CASH_OVERCOMMIT_CODE = "ACCOUNT_GROUP_CASH_OVERCOMMIT"
 _CASH_SHRINK_REASON_KEY = "miniqmt_cash_preflight_shrink_reason"
 
 
@@ -667,6 +668,8 @@ class QmtManagedOrderService:
         seen_remarks: dict[tuple[str, str], int] = {}
         buy_freeze_by_account_strategy: dict[tuple[str, str], Decimal] = {}
         buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
+        buy_indexes_by_account_group: dict[tuple[str, str], list[int]] = {}
+        account_group_context_by_key: dict[tuple[str, str], tuple[Decimal, dict[str, Any]]] = {}
         sell_proceeds_by_account_strategy: dict[tuple[str, str], Decimal] = {}
         sell_proceeds_by_account_group: dict[tuple[str, str], Decimal] = {}
         sell_requests_by_account_strategy: dict[tuple[str, str], list[ManagedOrderRequest]] = {}
@@ -699,6 +702,8 @@ class QmtManagedOrderService:
                     buy_freeze_by_account_group[group_key] = (
                         buy_freeze_by_account_group.get(group_key, Decimal("0")) + base_results[index].freeze_amount
                     )
+                    buy_indexes_by_account_group.setdefault(group_key, []).append(index)
+                    account_group_context_by_key[group_key] = (cash_limit, context)
             if request.order_type == SELL_ORDER_TYPE:
                 key = (request.account_id, request.strategy_name, request.symbol)
                 sell_quantity_by_account_strategy_symbol[key] = (
@@ -722,6 +727,35 @@ class QmtManagedOrderService:
                 broker_sell_quantity_by_account_symbol[broker_key] = (
                     broker_sell_quantity_by_account_symbol.get(broker_key, 0) + max(int(request.quantity), 0)
                 )
+
+        account_group_overcommit: dict[tuple[str, str], OrderPreflightError] = {}
+        for group_key, group_total_freeze in buy_freeze_by_account_group.items():
+            cash_limit, context = account_group_context_by_key[group_key]
+            group_sell_proceeds = sell_proceeds_by_account_group.get(group_key, Decimal("0"))
+            group_effective_cash_limit = cash_limit + group_sell_proceeds
+            if group_total_freeze <= group_effective_cash_limit:
+                continue
+            account_group_overcommit[group_key] = _account_group_cash_overcommit_error(
+                group_context=context,
+                account_group_cash_limit=cash_limit,
+                same_batch_sell_proceeds=group_sell_proceeds,
+                effective_account_group_cash_limit=group_effective_cash_limit,
+                batch_required_cash=group_total_freeze,
+                affected_orders=[
+                    requests[index]
+                    for index in buy_indexes_by_account_group.get(group_key, [])
+                    if requests[index].order_type == BUY_ORDER_TYPE
+                ],
+            )
+        for group_key, error in account_group_overcommit.items():
+            for index in buy_indexes_by_account_group.get(group_key, []):
+                errors_by_index[index] = [
+                    error,
+                    *_without_preflight_error_codes(
+                        errors_by_index[index],
+                        {_ACCOUNT_GROUP_CASH_OVERCOMMIT_CODE, "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH"},
+                    ),
+                ]
 
         cumulative_buy_freeze_by_account_strategy: dict[tuple[str, str], Decimal] = {}
         cumulative_buy_freeze_by_account_group: dict[tuple[str, str], Decimal] = {}
@@ -778,6 +812,8 @@ class QmtManagedOrderService:
                 group_limit = _account_group_cash_limit(account) if account is not None else None
                 if group_limit is not None:
                     group_key, cash_limit, context = group_limit
+                    if group_key in account_group_overcommit:
+                        continue
                     group_total_freeze = buy_freeze_by_account_group.get(group_key, Decimal("0"))
                     group_sell_proceeds = sell_proceeds_by_account_group.get(group_key, Decimal("0"))
                     group_effective_cash_limit = cash_limit + group_sell_proceeds
@@ -1707,6 +1743,41 @@ def _skipped_insufficient_capital_error(
         "SKIPPED_INSUFFICIENT_CAPITAL",
         "funds-only capacity allocator skipped this buy instead of failing the whole batch",
         context,
+    )
+
+
+def _account_group_cash_overcommit_error(
+    *,
+    group_context: dict[str, Any],
+    account_group_cash_limit: Decimal,
+    same_batch_sell_proceeds: Decimal,
+    effective_account_group_cash_limit: Decimal,
+    batch_required_cash: Decimal,
+    affected_orders: list[ManagedOrderRequest],
+) -> OrderPreflightError:
+    return OrderPreflightError(
+        _ACCOUNT_GROUP_CASH_OVERCOMMIT_CODE,
+        "account-group aggregate buy cash demand exceeds available buying power; batch rejected before broker submit",
+        {
+            **group_context,
+            "account_group_cash_limit": float(account_group_cash_limit),
+            "same_batch_estimated_sell_proceeds": float(same_batch_sell_proceeds),
+            "effective_account_group_cash_limit": float(effective_account_group_cash_limit),
+            "batch_required_cash": float(batch_required_cash),
+            "overcommit_cash": float(batch_required_cash - effective_account_group_cash_limit),
+            "affected_buy_orders": [
+                {
+                    "strategy_name": request.strategy_name,
+                    "symbol": request.symbol,
+                    "quantity": request.quantity,
+                    "price": str(request.price),
+                    "order_remark": request.order_remark,
+                    "required_cash": str(max(request.price * Decimal(request.quantity), Decimal("0"))),
+                }
+                for request in affected_orders
+            ],
+            "next_action": "reduce account-group buy demand or increase account-group buying power before submit",
+        },
     )
 
 
