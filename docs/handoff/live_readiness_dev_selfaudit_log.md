@@ -7,3 +7,11 @@
 - Loud failures / reason_code: yes. Offending account-group BUY intents now receive ACCOUNT_GROUP_CASH_OVERCOMMIT with account_group_id, cash limits, batch_required_cash, overcommit_cash, affected orders, and next_action.
 - Allowed scope: within BUG-501 allowed_write_scope only.
 - Production gates: production_ddl_gate=noop; backend_dependency_gate=noop; frontend_dependency_gate=noop.
+
+## BUG-500 - 2026-06-24
+
+- Reproduction / coverage: added explicit pre-trade risk regression tests for inert default, kill-switch, price collar, fat-finger quantity/notional, and buying-power rejection; all targeted tests passed.
+- LocalSim / B-inert regression: no LocalSim files touched; compiler/B risk layer is inert unless miniqmt_pre_trade_risk.enabled or miniqmt_pre_trade_risk_enabled is set. LIVE remains locked; MiniQMTSim SIM mode guard unchanged.
+- Loud failures / reason_code: yes. Rejections use PRE_TRADE_KILL_SWITCH_ACTIVE, PRE_TRADE_PRICE_COLLAR_REJECT, PRE_TRADE_FAT_FINGER_QUANTITY, PRE_TRADE_FAT_FINGER_NOTIONAL, PRE_TRADE_BUYING_POWER_REJECT, or PRE_TRADE_RISK_CONFIG_INVALID with risk context and next_action.
+- Allowed scope: within BUG-500 allowed_write_scope; minqmtsim.py was inspected but not modified because the compiler-submit guard belongs in order_service.py and existing MiniQMTSim hard locks remain intact.
+- Production gates: production_ddl_gate=noop; backend_dependency_gate=noop; frontend_dependency_gate=noop.
