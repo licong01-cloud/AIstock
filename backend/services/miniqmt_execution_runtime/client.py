@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Callable
@@ -26,6 +27,7 @@ from backend.services.qmt_strategy_ledger.order_service import (
     OrderPreflightResult,
     QmtManagedOrderService,
 )
+from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRepository
 from backend.services.trading_core.errors import BrokerSubmitError, TradingCoreError
 from backend.services.trading_core.miniqmt_vnpy_execution import (
     MiniQMTAlgoChildOrder,
@@ -35,6 +37,7 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
+from .config import MiniQMTExecutionRuntimeKind, get_miniqmt_execution_runtime_kind
 from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
 from .models import (
     MiniQMTChildOrder,
@@ -175,8 +178,22 @@ class PaperMiniQMTRuntimeSubmitResult:
 class MiniQMTExecutionRuntimeClient:
     """Facade used by product paths to enter the canonical runtime owner."""
 
-    def __init__(self, *, repository: MiniQMTExecutionRuntimeRepository | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repository: MiniQMTExecutionRuntimeRepository | None = None,
+        strategy_ledger_repository: Any | None = None,
+        runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
+    ) -> None:
         self.repository = repository or default_miniqmt_execution_runtime_repository()
+        self.runtime_kind = (
+            MiniQMTExecutionRuntimeKind(runtime_kind)
+            if runtime_kind is not None
+            else get_miniqmt_execution_runtime_kind(os.environ)
+        )
+        self.strategy_ledger_repository = strategy_ledger_repository
+        if self.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP and self.strategy_ledger_repository is None:
+            self.strategy_ledger_repository = QmtStrategyLedgerRepository()
 
     def preview_managed_order_requests(
         self,
@@ -189,6 +206,7 @@ class MiniQMTExecutionRuntimeClient:
         runtime_id: str | None = None,
         source: str = "simulation_runtime_preview",
     ) -> MiniQMTPlanPreviewResult:
+        self._reject_event_loop_compiler_lifecycle(source=source, operation="preview_managed_order_requests")
         runtime = self._runtime(
             account_group_id=account_group_id,
             trade_date=trade_date,
@@ -222,6 +240,7 @@ class MiniQMTExecutionRuntimeClient:
         source: str = "simulation_runtime_submit",
         algo_code: str = "MINIQMT_MANAGED_ORDER",
     ) -> MiniQMTRuntimeManagedBatchSubmitResult:
+        self._reject_event_loop_compiler_lifecycle(source=source, operation="submit_managed_order_requests")
         if not requests:
             raise BrokerSubmitError("MiniQMTExecutionRuntime requires at least one managed order request")
         materialized_requests = tuple(requests)
@@ -294,6 +313,11 @@ class MiniQMTExecutionRuntimeClient:
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
         source: str = "simulation_runtime_vnpy_request_build",
     ) -> MiniQMTRuntimeManagedVnpyBuildResult:
+        self._reject_event_loop_compiler_lifecycle(
+            source=source,
+            operation="build_managed_vnpy_order_requests",
+            parent_intent_count=len(parent_intents),
+        )
         if not parent_intents:
             raise BrokerSubmitError("MiniQMTExecutionRuntime requires at least one vn.py parent intent")
         policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
@@ -446,6 +470,7 @@ class MiniQMTExecutionRuntimeClient:
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
         source: str = "paper_v2_vnpy_miniqmt",
     ) -> MiniQMTAlgoExecutionResult:
+        self._reject_event_loop_compiler_lifecycle(source=source, operation="execute_paper_vnpy_intent")
         policy_json = execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
         if not isinstance(policy_json, dict):
             raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py client requires policy_json")
@@ -557,6 +582,26 @@ class MiniQMTExecutionRuntimeClient:
             ),
             repository=self.repository,
             gateway=gateway,
+            strategy_ledger_repository=(
+                self.strategy_ledger_repository
+                if self.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
+                else None
+            ),
+            account_id=account_group_id,
+        )
+
+    def _reject_event_loop_compiler_lifecycle(self, *, source: str, operation: str, **context: Any) -> None:
+        if self.runtime_kind != MiniQMTExecutionRuntimeKind.EVENT_LOOP:
+            return
+        raise BrokerSubmitError(
+            "MiniQMT event_loop runtime requires real gateway callbacks and refuses compiler-style "
+            "managed runtime lifecycle; reason_code=MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS",
+                "source": source,
+                "operation": operation,
+                **context,
+            },
         )
 
     def evidence_for_runtime(self, runtime_id: str, *, source: str) -> MiniQMTRuntimeEvidence:
