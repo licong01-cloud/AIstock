@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger("aistock.research_assistant.react_grounding")
@@ -147,6 +148,59 @@ PROGRAM_ERROR_REASON_CODES = {
     "data_source_unavailable",
     "tool_result_compaction_error",
 }
+SUCCESS_STATUSES = {"succeeded", "success", "ok"}
+EXTERNAL_RESEARCH_SERVER_KEY = "aistock-external-research"
+EXTERNAL_RESEARCH_WEB_TOOL = "external_research_search_web"
+EXTERNAL_RESEARCH_STUB_HOSTS = ("example.org",)
+EXTERNAL_RESEARCH_STUB_MARKERS = (
+    "deterministic_offline",
+    "offline_extract_provider",
+    "offline_external_research",
+    "offline_stub",
+    "example_web_index",
+    "external_research_summary_adapter",
+    "summary_adapter",
+)
+GRAPH_CONTEXT_RESULT_KEY = ("research-assistant", "graph_context")
+EVIDENCE_GUARD_RESULT_KEY = ("evidence_guard", "compose_with_evidence_guard")
+INFORMATION_QUERY_TERMS = (
+    "what",
+    "which",
+    "who",
+    "where",
+    "when",
+    "how",
+    "search",
+    "find",
+    "latest",
+    "recent",
+    "news",
+    "information",
+    "overview",
+    "analysis",
+    "trend",
+    "industry",
+    "\u4ec0\u4e48",
+    "\u54ea\u4e9b",
+    "\u8c01",
+    "\u4f55\u65f6",
+    "\u600e\u4e48",
+    "\u5982\u4f55",
+    "\u662f\u5426",
+    "\u67e5\u8be2",
+    "\u641c\u7d22",
+    "\u6700\u65b0",
+    "\u8fd1\u671f",
+    "\u65b0\u95fb",
+    "\u4fe1\u606f",
+    "\u8d44\u6599",
+    "\u60c5\u51b5",
+    "\u57fa\u672c\u9762",
+    "\u884c\u4e1a",
+    "\u8d70\u52bf",
+    "\u8d8b\u52bf",
+    "\u5206\u6790",
+)
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -286,6 +340,206 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
                 for key, value in payload["status_groups"].items()
             }
     return compact
+
+
+def _normalize_status(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_success_result(result: McpToolResult) -> bool:
+    return _normalize_status(result.status) in SUCCESS_STATUSES and bool(result.executed)
+
+
+def _payload_list_count(payload: dict[str, Any], key: str) -> int:
+    value = payload.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+def _payload_declares_empty_result(payload: dict[str, Any]) -> bool:
+    try:
+        if "total" in payload and int(payload.get("total") or 0) == 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if "items" in payload and isinstance(payload.get("items"), list) and not payload["items"]:
+        if _payload_list_count(payload, "sections") == 0 and not isinstance(payload.get("item"), dict):
+            return True
+    return False
+
+
+def _iter_string_values(value: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            values.extend(_iter_string_values(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_iter_string_values(item))
+    elif value is not None:
+        text = str(value).strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _hostname_is_stub(hostname: str | None) -> bool:
+    host = str(hostname or "").strip().lower()
+    return any(host == stub_host or host.endswith(f".{stub_host}") for stub_host in EXTERNAL_RESEARCH_STUB_HOSTS)
+
+
+def _text_contains_stub_host(text: str) -> bool:
+    parsed = urlparse(text)
+    if _hostname_is_stub(parsed.hostname):
+        return True
+    if "://" not in text:
+        parsed = urlparse(f"//{text}")
+        if _hostname_is_stub(parsed.hostname):
+            return True
+    lowered = text.lower()
+    return any(re.search(rf"(^|[^a-z0-9-]){re.escape(stub_host)}([^a-z0-9-]|$)", lowered) for stub_host in EXTERNAL_RESEARCH_STUB_HOSTS)
+
+
+def _external_research_result_is_stub(result: McpToolResult) -> bool:
+    if not _is_external_research_result(result):
+        return False
+    payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+    values = _iter_string_values(payload)
+    values.extend(str(item) for item in result.source_refs if str(item or "").strip())
+    values.extend(str(item) for item in (result.summary, result.observation) if str(item or "").strip())
+    for value in values:
+        lowered = value.lower()
+        if any(marker in lowered for marker in EXTERNAL_RESEARCH_STUB_MARKERS):
+            return True
+        if _text_contains_stub_host(value):
+            return True
+    return False
+
+
+def _result_has_evidence_items(result: McpToolResult) -> bool:
+    if not _is_success_result(result):
+        return False
+    if _external_research_result_is_stub(result):
+        return False
+    payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+    if _payload_declares_empty_result(payload):
+        return False
+    if _payload_list_count(payload, "items") > 0:
+        return True
+    if _payload_list_count(payload, "sections") > 0:
+        return True
+    if isinstance(payload.get("item"), dict) and payload["item"]:
+        return True
+    if payload.get("graph_context") or payload.get("response_mode") == "graph_context":
+        return True
+    if result.source_refs and result.as_of and (result.summary or result.observation):
+        return True
+    return False
+
+
+def _is_empty_success_result(result: McpToolResult) -> bool:
+    if not _is_success_result(result):
+        return False
+    return not _result_has_evidence_items(result)
+
+
+def _is_business_source_result(result: McpToolResult) -> bool:
+    return (result.server_key, result.tool_name) not in {GRAPH_CONTEXT_RESULT_KEY, EVIDENCE_GUARD_RESULT_KEY}
+
+
+def _is_external_research_result(result: McpToolResult) -> bool:
+    return result.server_key == EXTERNAL_RESEARCH_SERVER_KEY and result.tool_name == EXTERNAL_RESEARCH_WEB_TOOL
+
+
+def _has_business_evidence(collected_results: list[McpToolResult]) -> bool:
+    return any(_is_business_source_result(result) and _result_has_evidence_items(result) for result in collected_results)
+
+
+def _has_empty_mcp_business_result(collected_results: list[McpToolResult]) -> bool:
+    return any(
+        _is_business_source_result(result)
+        and not _is_external_research_result(result)
+        and _is_empty_success_result(result)
+        for result in collected_results
+    )
+
+
+def _has_empty_external_research_result(collected_results: list[McpToolResult]) -> bool:
+    return any(_is_external_research_result(result) and _is_empty_success_result(result) for result in collected_results)
+
+
+def _has_external_research_call_or_result(calls: list[McpToolCall], results: list[McpToolResult]) -> bool:
+    return any(call.server_key == EXTERNAL_RESEARCH_SERVER_KEY and call.tool_name == EXTERNAL_RESEARCH_WEB_TOOL for call in calls) or any(
+        _is_external_research_result(result) for result in results
+    )
+
+
+def _is_information_query(config: ReactGroundingConfig) -> bool:
+    return _contains_any(config.user_message, INFORMATION_QUERY_TERMS)
+
+
+def _external_research_web_fallback_call(config: ReactGroundingConfig) -> McpToolCall:
+    query = config.user_message.strip() or "external research"
+    return McpToolCall(
+        server_key=EXTERNAL_RESEARCH_SERVER_KEY,
+        tool_name=EXTERNAL_RESEARCH_WEB_TOOL,
+        payload_json={"query": query, "locale": "zh-CN", "limit": 3},
+        stable_call_id="fallback:aistock-external-research:external_research_search_web",
+        reason="deterministic_external_research_after_empty_mcp",
+        risk_level="low",
+        side_effect_level="read_only",
+    )
+
+
+def _should_force_external_research(
+    *,
+    config: ReactGroundingConfig,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+) -> bool:
+    if not _is_information_query(config):
+        return False
+    if _has_business_evidence(collected_results):
+        return False
+    if not _has_empty_mcp_business_result(collected_results):
+        return False
+    return not _has_external_research_call_or_result(collected_calls, collected_results)
+
+
+def _attempted_source_names(collected_calls: list[McpToolCall], collected_results: list[McpToolResult]) -> list[str]:
+    attempted = [f"{call.server_key}/{call.tool_name}" for call in collected_calls if call.server_key and call.tool_name]
+    attempted.extend(f"{result.server_key}/{result.tool_name}" for result in collected_results if result.server_key and result.tool_name)
+    return _dedupe_preserve_order(attempted)
+
+
+def _render_no_data_source_reply(
+    *,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+    config: ReactGroundingConfig,
+) -> str:
+    attempted = _attempted_source_names(collected_calls, collected_results)
+    attempted_text = ", ".join(attempted) if attempted else "none"
+    query = config.user_message.strip() or "the requested information"
+    return (
+        "没有对应数据源：已按信息查询兜底流程尝试已路由 MCP 只读工具和 external_research，"
+        f"但没有返回可用于回答 `{query}` 的证据。"
+        f"尝试过的来源：{attempted_text}。reason_code=no_data_source_after_mcp_and_external_research"
+    )
+
+
+def _no_data_source_guard(
+    *,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+    config: ReactGroundingConfig,
+) -> EvidenceGuardDecision:
+    return EvidenceGuardDecision(
+        False,
+        _render_no_data_source_reply(collected_calls=collected_calls, collected_results=collected_results, config=config),
+        "no_data_source_after_mcp_and_external_research",
+        sum(1 for item in collected_results if _result_has_evidence_items(item) and item.source_refs),
+        sum(1 for item in collected_results if _result_has_evidence_items(item) and item.as_of),
+    )
 
 
 def _classify_exception_reason(exc: BaseException, call: McpToolCall) -> str:
@@ -804,12 +1058,17 @@ def _evidence_summary_fallback_text(result: McpToolResult) -> str:
 
 
 def _is_terminal_summary_result(result: McpToolResult) -> bool:
-    if result.status not in {"succeeded", "success", "ok"} or not result.executed:
+    if _normalize_status(result.status) not in SUCCESS_STATUSES or not result.executed:
         return False
     if not result.source_refs or not result.as_of:
         return False
     payload = result.payload_json if isinstance(result.payload_json, dict) else {}
-    return str(payload.get("response_mode") or "") in TERMINAL_SUMMARY_RESPONSE_MODES
+    response_mode = str(payload.get("response_mode") or "")
+    if response_mode in TERMINAL_SUMMARY_RESPONSE_MODES:
+        return True
+    if result.server_key == EXTERNAL_RESEARCH_SERVER_KEY:
+        return bool(_result_has_evidence_items(result))
+    return False
 
 
 def _has_terminal_summary_evidence(collected_results: list[McpToolResult]) -> bool:
@@ -909,6 +1168,29 @@ def run_react_grounding_loop(
         model_turns.append(turn)
         trace_steps.append({"iteration": iteration, "model": turn.model, "tool_call_count": len(calls), "provider": turn.provider})
         if not calls:
+            if _should_force_external_research(config=config, collected_calls=collected_calls, collected_results=collected_results):
+                calls = [_external_research_web_fallback_call(config)]
+                trace_steps.append(
+                    {
+                        "iteration": iteration,
+                        "fallback": "external_research_after_empty_mcp",
+                        "fallback_tool_call_count": 1,
+                        "reason": "empty_mcp_result_for_information_query",
+                    }
+                )
+            else:
+                if (
+                    _has_empty_external_research_result(collected_results)
+                    and _is_information_query(config)
+                    and not _has_business_evidence(collected_results)
+                    and _has_empty_mcp_business_result(collected_results)
+                ):
+                    guard = _no_data_source_guard(collected_calls=collected_calls, collected_results=collected_results, config=config)
+                    trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
+                    return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, "no_data_source", model_turns)
+                calls = []
+
+        if not calls:
             guard = compose_with_evidence_guard(turn.content, collected_results, config)
             last_guard = guard
             trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
@@ -954,6 +1236,16 @@ def run_react_grounding_loop(
             if fallback_calls:
                 calls = fallback_calls
                 trace_steps.append({"iteration": iteration, "fallback_tool_call_count": len(calls), "reason": guard.reason})
+            elif _should_force_external_research(config=config, collected_calls=collected_calls, collected_results=collected_results):
+                calls = [_external_research_web_fallback_call(config)]
+                trace_steps.append(
+                    {
+                        "iteration": iteration,
+                        "fallback": "external_research_after_empty_mcp",
+                        "fallback_tool_call_count": 1,
+                        "reason": "empty_mcp_result_for_information_query",
+                    }
+                )
             else:
                 collected_results.append(
                     McpToolResult(
@@ -1009,6 +1301,29 @@ def run_react_grounding_loop(
         for result in iteration_results:
             collected_results.append(result)
             working_messages.append(tool_result_message(result))
+        if (
+            iteration < config.max_tool_iterations
+            and _should_force_external_research(config=config, collected_calls=collected_calls, collected_results=collected_results)
+        ):
+            pending_seeded = [_external_research_web_fallback_call(config)]
+            trace_steps.append(
+                {
+                    "iteration": iteration,
+                    "fallback": "external_research_after_empty_mcp",
+                    "fallback_tool_call_count": 1,
+                    "reason": "empty_mcp_result_for_information_query",
+                }
+            )
+            continue
+        if (
+            _has_empty_external_research_result(iteration_results)
+            and _is_information_query(config)
+            and not _has_business_evidence(collected_results)
+            and _has_empty_mcp_business_result(collected_results)
+        ):
+            guard = _no_data_source_guard(collected_calls=collected_calls, collected_results=collected_results, config=config)
+            trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
+            return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, "no_data_source", model_turns)
         if any(item.status in {"failed", "rejected"} for item in iteration_results):
             working_messages.append(_retry_directive(iteration_results))
 

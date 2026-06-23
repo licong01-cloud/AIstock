@@ -482,6 +482,205 @@ def test_bug_404_412_recovered_catalog_rejection_does_not_override_grounded_answ
     assert rejected.error_json["recoverable_catalog_rejection"] is True
 
 
+
+class _EmptyMcpThenExternalProvider:
+    def __init__(self, *, external_has_items: bool, external_stub: bool = False) -> None:
+        self.external_has_items = external_has_items
+        self.external_stub = external_stub
+        self.calls: list[tuple[str, str]] = []
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        self.calls.append((call.server_key, call.tool_name))
+        if call.tool_name == "stock_analysis_get_quote":
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={"response_mode": "stock_analysis_evidence_card", "items": [], "total": 0},
+                source_refs=["stock_analysis_empty_fixture"],
+                as_of="2026-06-23",
+                summary="no stock rows",
+                executed=True,
+            )
+        if call.tool_name == "external_research_search_web":
+            url = "https://example.org/research/guocheng" if self.external_stub else "https://research.example.net/guocheng"
+            source = "example_web_index" if self.external_stub else "trusted_research_index"
+            provider = "deterministic_offline_external_research" if self.external_stub else "live_external_research_provider"
+            items = (
+                [
+                    {
+                        "title": "Guocheng Mining external evidence",
+                        "summary": "industry status context",
+                        "url": url,
+                        "source": source,
+                        "as_of": "2026-06-23",
+                        "evidence_ref": "external-evidence:guocheng",
+                        "provider": provider,
+                    }
+                ]
+                if self.external_has_items
+                else []
+            )
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={
+                    "response_mode": "summary",
+                    "domain": "external_research.web",
+                    "items": items,
+                    "total": len(items),
+                    "source": source,
+                    "as_of": "2026-06-23",
+                    "provider": provider,
+                },
+                source_refs=[source] if items else [],
+                as_of="2026-06-23" if items else None,
+                summary="external evidence" if items else "no external evidence",
+                executed=True,
+            )
+        raise AssertionError(f"unexpected tool call: {call.server_key}/{call.tool_name}")
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("BUG-495 fallback tools must be read-only")
+
+
+class _EmptyMcpThenExternalLlm:
+    def __init__(self, *, source: str = "trusted_research_index") -> None:
+        self.calls = 0
+        self.source = source
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls += 1
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        if self.calls == 1:
+            return ModelTurn(content="", provider="fake", model="fake-primary", duration_ms=1, usage={})
+        assert "external_research_search_web" in joined
+        assert self.source in joined
+        return ModelTurn(
+            content=f"External evidence can supplement industry context; source={self.source} as_of=2026-06-23.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+class _EmptyMcpExternalNoDataLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        return ModelTurn(content="", provider="fake", model="fake-primary", duration_ms=1, usage={})
+
+
+_BUG_495_USER_MESSAGE = "Guocheng Mining industry status information query"
+
+
+def _bug_495_catalog_entries() -> list[ToolCatalogEntry]:
+    return [
+        ToolCatalogEntry(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_quote",
+            status="enabled",
+            risk_level="low",
+            side_effect_level="read_only",
+        ),
+        ToolCatalogEntry(
+            server_key="aistock-external-research",
+            tool_name="external_research_search_web",
+            status="enabled",
+            risk_level="low",
+            side_effect_level="read_only",
+        ),
+    ]
+
+
+def _bug_495_seeded_stock_call() -> list[McpToolCall]:
+    return [
+        McpToolCall(server_key="aistock-stock-analysis", tool_name="stock_analysis_get_quote", stable_call_id="route:stock"),
+    ]
+
+
+def test_bug_495_empty_mcp_information_query_forces_external_research_and_cites_source() -> None:
+    fake = _EmptyMcpThenExternalLlm()
+    provider = _EmptyMcpThenExternalProvider(external_has_items=True)
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": _BUG_495_USER_MESSAGE}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=_bug_495_catalog_entries(),
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message=_BUG_495_USER_MESSAGE),
+        seeded_tool_calls=_bug_495_seeded_stock_call(),
+    )
+
+    assert provider.calls == [
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-external-research", "external_research_search_web"),
+    ]
+    assert result.evidence_guard.allowed is True
+    assert result.stopped_reason == "final_answer"
+    assert "trusted_research_index" in result.final_text
+    assert "2026-06-23" in result.final_text
+    assert "example.org" not in result.final_text
+    assert any(step.get("fallback") == "external_research_after_empty_mcp" for step in result.trace_steps)
+
+
+def test_bug_495_stub_external_research_is_not_treated_as_evidence() -> None:
+    fake = _EmptyMcpExternalNoDataLlm()
+    provider = _EmptyMcpThenExternalProvider(external_has_items=True, external_stub=True)
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": _BUG_495_USER_MESSAGE}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=_bug_495_catalog_entries(),
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message=_BUG_495_USER_MESSAGE),
+        seeded_tool_calls=_bug_495_seeded_stock_call(),
+    )
+
+    assert provider.calls == [
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-external-research", "external_research_search_web"),
+    ]
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
+    assert result.stopped_reason == "no_data_source"
+    assert "example.org" not in result.final_text
+    assert "deterministic_offline" not in result.final_text
+    assert "aistock-external-research/external_research_search_web" in result.final_text
+
+
+def test_bug_495_empty_mcp_and_empty_external_research_reports_no_data_source() -> None:
+    fake = _EmptyMcpExternalNoDataLlm()
+    provider = _EmptyMcpThenExternalProvider(external_has_items=False)
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": _BUG_495_USER_MESSAGE}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=_bug_495_catalog_entries(),
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message=_BUG_495_USER_MESSAGE),
+        seeded_tool_calls=_bug_495_seeded_stock_call(),
+    )
+
+    assert provider.calls == [
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-external-research", "external_research_search_web"),
+    ]
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
+    assert result.stopped_reason == "no_data_source"
+    assert "aistock-stock-analysis/stock_analysis_get_quote" in result.final_text
+    assert "aistock-external-research/external_research_search_web" in result.final_text
+    assert "Insufficient evidence" not in result.final_text
+
+
 def test_bug_404_412_unrecovered_catalog_rejection_reports_loud_capability_error() -> None:
     fake = _UnrecoveredCatalogRejectionLlm()
 
