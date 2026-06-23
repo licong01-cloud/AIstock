@@ -24,18 +24,18 @@
       "timestamp": "2026-06-23T02:25:59.924990Z"
     },
     {
-      "timestamp": "2026-06-23T02:31:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "User explicitly constrained implementation to backend/services/multi_alpha and tests; include combine_backtest.py and regression tests."
+      "actor": "codex",
+      "note": "User explicitly constrained implementation to backend/services/multi_alpha and tests; include combine_backtest.py and regression tests.",
+      "timestamp": "2026-06-23T02:31:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-23T02:25:59.924994Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67fde0dd8c38cd68df7e6872a34a953a3485c62e",
+  "fixed_at": "2026-06-23T03:18:42.727085Z",
   "github_issue_number": 1505,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1505",
   "last_seen_at": "2026-06-23T02:25:59.924994Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1506",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -88,6 +89,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_multi_alpha_combine_backtest.py -q -> 35 passed",
+    "python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "git diff --check origin/main...HEAD -> passed",
+    "nox -s l0 validation_module_registry_l0 -> passed",
+    "GitHub PR #1506 checks -> all required checks success"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
