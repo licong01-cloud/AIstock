@@ -50,8 +50,8 @@
   "expected": "High-risk P0/P1 classification must be driven by ACTUAL bug-fix evidence -- changed files include a new/modified tests/aistock_validation/bugs/*.json, OR the PR Closes a bug issue, OR a linked bug record has explicit severity -- NOT a mere textual BUG-NNN mention. A feature/epic PR that only references a BUG-NNN classifies as not_applicable. MUST keep enforcing the gate for real bug-fix PRs (regression tests both directions: real bug PR still blocked when missing evidence; feature PR referencing BUG-NNN is not_applicable).",
   "first_seen_at": "2026-06-23T07:29:47.520545Z",
   "fix_branch": "bug/BUG-497-p2-validation-pr-quality-p0-p1-gate-false-positi-20260623",
-  "fix_commit": null,
-  "fixed_at": "2026-06-23T08:02:15.476065Z",
+  "fix_commit": "da8abdfca65d2bd7a74010a3272bcd37ae9b487c",
+  "fixed_at": "2026-06-23T10:54:01.332017Z",
   "github_issue_number": 1532,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1532",
   "last_seen_at": "2026-06-23T07:29:47.520545Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1536",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,6 +82,16 @@
     "fingerprint": "4566c18523a060f2e0f733a9",
     "source_event_id": "FE-20260623-4566c18523a0"
   },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py -q -> passed (6 passed)",
+    "rtk python -m ruff check scripts/issue_flow.py backend/tests/scripts/test_issue_flow_pr_quality.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py backend/tests/scripts/test_issue_flow.py -q -> passed (41 passed)",
+    "rtk python -m nox -s guardrail_changed_files -> passed (files=5 mapped=5 unmapped=0 ambiguous=0)",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s validation_center_backend -> passed (458 passed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
@@ -95,15 +106,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "validation_evidence": [
-    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py -q -> passed (6 passed)",
-    "rtk python -m ruff check scripts/issue_flow.py backend/tests/scripts/test_issue_flow_pr_quality.py -> passed",
-    "rtk git diff --check -> passed",
-    "rtk python -m pytest backend/tests/scripts/test_issue_flow_pr_quality.py backend/tests/scripts/test_issue_flow.py -q -> passed (41 passed)",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk python -m nox -s guardrail_changed_files -> passed (files=5 mapped=5 unmapped=0 ambiguous=0)",
-    "rtk python -m nox -s validation_center_backend -> passed (458 passed)"
-  ]
+  "workflow_gate": "ready_for_fix"
 }
