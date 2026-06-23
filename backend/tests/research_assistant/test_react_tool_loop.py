@@ -482,6 +482,178 @@ def test_bug_404_412_recovered_catalog_rejection_does_not_override_grounded_answ
     assert rejected.error_json["recoverable_catalog_rejection"] is True
 
 
+class _EmptyMcpThenExternalProvider:
+    def __init__(self, *, external_has_items: bool) -> None:
+        self.external_has_items = external_has_items
+        self.calls: list[tuple[str, str]] = []
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        self.calls.append((call.server_key, call.tool_name))
+        if call.tool_name == "stock_analysis_get_quote":
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={"response_mode": "stock_analysis_evidence_card", "items": [], "total": 0},
+                source_refs=["stock_analysis_empty_fixture"],
+                as_of="2026-06-23",
+                summary="no stock rows",
+                executed=True,
+            )
+        if call.tool_name == "external_research_search_web":
+            items = (
+                [
+                    {
+                        "title": "国城矿业 external evidence",
+                        "summary": "industry status context",
+                        "url": "https://example.org/research/guocheng",
+                        "source": "example_web_index",
+                        "as_of": "2026-06-23",
+                        "evidence_ref": "external-evidence:guocheng",
+                    }
+                ]
+                if self.external_has_items
+                else []
+            )
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={
+                    "response_mode": "summary",
+                    "domain": "external_research.web",
+                    "items": items,
+                    "total": len(items),
+                    "source": "external_research_provider",
+                    "as_of": "2026-06-23",
+                },
+                source_refs=["external_research_provider"] if items else [],
+                as_of="2026-06-23" if items else None,
+                summary="external evidence" if items else "no external evidence",
+                executed=True,
+            )
+        raise AssertionError(f"unexpected tool call: {call.server_key}/{call.tool_name}")
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("BUG-495 fallback tools must be read-only")
+
+
+class _EmptyMcpThenExternalLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls += 1
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        if self.calls == 1:
+            return ModelTurn(content="", provider="fake", model="fake-primary", duration_ms=1, usage={})
+        assert "external_research_search_web" in joined
+        assert "external_research_provider" in joined
+        return ModelTurn(
+            content="外部证据显示可补充行业地位背景；source=external_research_provider as_of=2026-06-23.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+class _EmptyMcpExternalNoDataLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        self.calls += 1
+        return ModelTurn(content="", provider="fake", model="fake-primary", duration_ms=1, usage={})
+
+
+def test_bug_495_empty_mcp_information_query_forces_external_research_and_cites_source() -> None:
+    fake = _EmptyMcpThenExternalLlm()
+    provider = _EmptyMcpThenExternalProvider(external_has_items=True)
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "国城矿业行业地位信息查询"}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            ToolCatalogEntry(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业行业地位信息查询"),
+        seeded_tool_calls=[
+            McpToolCall(server_key="aistock-stock-analysis", tool_name="stock_analysis_get_quote", stable_call_id="route:stock"),
+        ],
+    )
+
+    assert provider.calls == [
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-external-research", "external_research_search_web"),
+    ]
+    assert result.evidence_guard.allowed is True
+    assert result.stopped_reason == "final_answer"
+    assert "external_research_provider" in result.final_text
+    assert "2026-06-23" in result.final_text
+    assert any(step.get("fallback") == "external_research_after_empty_mcp" for step in result.trace_steps)
+
+
+def test_bug_495_empty_mcp_and_empty_external_research_reports_no_data_source() -> None:
+    fake = _EmptyMcpExternalNoDataLlm()
+    provider = _EmptyMcpThenExternalProvider(external_has_items=False)
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "国城矿业行业地位信息查询"}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            ToolCatalogEntry(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业行业地位信息查询"),
+        seeded_tool_calls=[
+            McpToolCall(server_key="aistock-stock-analysis", tool_name="stock_analysis_get_quote", stable_call_id="route:stock"),
+        ],
+    )
+
+    assert provider.calls == [
+        ("aistock-stock-analysis", "stock_analysis_get_quote"),
+        ("aistock-external-research", "external_research_search_web"),
+    ]
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
+    assert result.stopped_reason == "no_data_source"
+    assert "没有对应数据源" in result.final_text
+    assert "aistock-stock-analysis/stock_analysis_get_quote" in result.final_text
+    assert "aistock-external-research/external_research_search_web" in result.final_text
+    assert "Insufficient evidence" not in result.final_text
+
+
 def test_bug_404_412_unrecovered_catalog_rejection_reports_loud_capability_error() -> None:
     fake = _UnrecoveredCatalogRejectionLlm()
 

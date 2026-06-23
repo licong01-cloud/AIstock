@@ -23,6 +23,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260623-85fffc1b9c1e",
       "timestamp": "2026-06-23T07:10:51.700698Z"
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "timestamp": "2026-06-23T09:44:12.460285Z",
+      "note": "Implemented deterministic external_research web fallback inside react_grounding only: information query + empty MCP evidence forces one external_research_search_web call; empty external result returns explicit no_data_source_after_mcp_and_external_research with attempted sources. Confirmed default external_research provider is deterministic offline/example.org stub unless a real provider is injected. No service.py/smoke/backend service/production DB/DDL touched.",
+      "validation": [
+        "pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_react_grounding.py -q -> 13 passed",
+        "ruff check changed py files -> passed",
+        "git diff --check -> passed",
+        "nox -s l0 -> passed",
+        "nox -s research_assistant_backend -> 330 passed",
+        "nox -s research_assistant_mcp_contract -> 38 passed",
+        "nox -s ra_phase7_full_accept -> passed (330 backend + frontend lint/build + Playwright 4+8 + crosscheck/catalog/ownership)",
+        "nox -s ra_phase0_baseline -> passed (330 backend + catalog/ownership)",
+        "nox -s ra_phase5_agent_teams -> passed (13 pytest + catalog/ownership)",
+        "nox -s validation_module_registry_l0 -> passed (8 pytest + ownership)"
+      ]
     }
   ],
   "evidence_uris": [],
