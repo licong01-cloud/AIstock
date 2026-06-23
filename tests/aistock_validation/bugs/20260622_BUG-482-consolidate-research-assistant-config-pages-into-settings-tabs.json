@@ -7,7 +7,12 @@
     "frontend/src/app/research-assistant/skills/page.tsx",
     "frontend/src/app/research-assistant/models/page.tsx",
     "tests/aistock_validation/bugs/20260622_BUG-482-consolidate-research-assistant-config-pages-into-settings-tabs.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/components/research-assistant/McpCatalogSection.tsx",
+    "frontend/src/components/research-assistant/SkillsSection.tsx",
+    "frontend/src/components/research-assistant/ModelRoutingSection.tsx",
+    "frontend/src/components/research-assistant/HealthSection.tsx",
+    "frontend/e2e/research-assistant-settings.spec.ts"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-482",
@@ -25,6 +30,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260622-ce0daee95e38",
       "timestamp": "2026-06-22T12:14:52.748870Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope to include extracted frontend section components and a page-specific Playwright spec required by BUG-482 acceptance. Scope remains frontend-only plus BUG metadata; no backend files.",
+      "timestamp": "2026-06-23T02:50:00Z"
     }
   ],
   "evidence_uris": [],
