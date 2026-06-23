@@ -37,6 +37,7 @@ MINUTE_VOLUME_HAND_SIZE = 100
 PRICE_TICK = Decimal("0.01")
 TDX_REALTIME_QUOTE_MAX_AGE = timedelta(minutes=5)
 TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW = timedelta(seconds=30)
+TDX_REALTIME_BATCH_QUOTE_LIMIT = 50
 PRICE_COMPARE_EPSILON = 1e-6
 
 TdxMinuteFetcher = Callable[[str, date], list[dict[str, Any]]]
@@ -487,21 +488,30 @@ def fetch_tdx_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     if not normalized_symbols:
         return {}
     url = f"http://localhost:{TDX_DEFAULT_PORT}/api/batch-quote"
-    response = requests.post(url, json={"codes": [_to_tdx_code(symbol) for symbol in normalized_symbols]}, timeout=5)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict) or payload.get("code") != 0:
-        raise RuntimeError(f"TDX batch-quote returned invalid response: {payload!r}")
-    items = payload.get("data") or []
-    if not isinstance(items, list):
-        raise RuntimeError("TDX batch-quote data payload must be a list")
     quotes: dict[str, dict[str, Any]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        symbol = _symbol_from_tdx_quote(item)
-        if symbol:
-            quotes[symbol] = dict(item)
+    for chunk_index, chunk in enumerate(_chunks(normalized_symbols, TDX_REALTIME_BATCH_QUOTE_LIMIT), start=1):
+        response = requests.post(url, json={"codes": [_to_tdx_code(symbol) for symbol in chunk]}, timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise RuntimeError(
+                "TDX batch-quote returned invalid response: "
+                f"chunk_index={chunk_index} chunk_size={len(chunk)} total_symbols={len(normalized_symbols)} "
+                f"payload={payload!r}"
+            )
+        items = payload.get("data") or []
+        if not isinstance(items, list):
+            raise RuntimeError(
+                "TDX batch-quote data payload must be a list: "
+                f"chunk_index={chunk_index} chunk_size={len(chunk)} total_symbols={len(normalized_symbols)} "
+                f"payload_type={type(items).__name__}"
+            )
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            symbol = _symbol_from_tdx_quote(item)
+            if symbol:
+                quotes[symbol] = dict(item)
     return quotes
 
 
@@ -796,7 +806,11 @@ def _parse_tdx_quote_timestamp(value: Any, *, trade_date: date) -> datetime:
         if len(text) <= 6:
             return _parse_tdx_intraday_time(text, trade_date=trade_date)
         if len(text) == 8:
-            raise ValueError("date-only timestamp has no intraday time")
+            if _looks_like_yyyymmdd(text):
+                raise ValueError("date-only timestamp has no intraday time")
+            return _parse_tdx_intraday_centisecond_time(text, trade_date=trade_date)
+        if len(text) == 7:
+            return _parse_tdx_intraday_centisecond_time(text, trade_date=trade_date)
         if len(text) == 14:
             return datetime.strptime(text, "%Y%m%d%H%M%S")
         numeric = int(text)
@@ -837,6 +851,53 @@ def _parse_tdx_intraday_time(value: str, *, trade_date: date) -> datetime:
     if hour > 23 or minute > 59 or second > 59:
         raise ValueError(f"invalid intraday timestamp {value!r}")
     return datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute, second)
+
+
+def _parse_tdx_intraday_centisecond_time(value: str, *, trade_date: date) -> datetime:
+    if len(value) == 7:
+        hour = int(value[0])
+        minute = int(value[1:3])
+        second = int(value[3:5])
+        centisecond = int(value[5:7])
+    elif len(value) == 8:
+        hour = int(value[0:2])
+        minute = int(value[2:4])
+        second = int(value[4:6])
+        centisecond = int(value[6:8])
+    else:
+        raise ValueError(f"unsupported TDX centisecond intraday timestamp length {len(value)}")
+    if hour > 23 or minute > 59 or centisecond > 99:
+        raise ValueError(f"invalid TDX centisecond intraday timestamp {value!r}")
+    if second > 59:
+        # Some TDX servers expose HHMM plus a non-clock intra-minute sequence
+        # in the final four digits (for example 10158777 at 10:15). The minute
+        # is still authoritative for freshness; do not turn it into 10:16:27.
+        second = 0
+        centisecond = 0
+    parsed = datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute) + timedelta(
+        seconds=second,
+        milliseconds=centisecond * 10,
+    )
+    if parsed.date() != trade_date:
+        raise ValueError(f"TDX centisecond intraday timestamp overflows trade_date {value!r}")
+    return parsed
+
+
+def _looks_like_yyyymmdd(value: str) -> bool:
+    if len(value) != 8 or not value.startswith(("19", "20")):
+        return False
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _chunks(values: list[str], size: int) -> Iterator[list[str]]:
+    if size <= 0:
+        raise ValueError("chunk size must be positive")
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
 
 
 def _normalize_datetime_for_compare(value: datetime) -> datetime:
