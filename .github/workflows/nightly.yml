@@ -932,6 +932,8 @@ jobs:
 
       - name: Close stale Nightly failure issues after recovery
         if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact
 
