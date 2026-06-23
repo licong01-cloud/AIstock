@@ -569,3 +569,35 @@ Ran 5 sessions successfully: paper_v2_l3, l0, paper_v2_backend (661 passed, 1 sk
 
 ### Deviation intercept
 - Recorded deviations intercepted earlier remain fixed: Phase 3 premature vn.py instance terminalization; Phase 4 kill-switch fail-fast reason-code ordering.
+
+## 2026-06-23 Phase 4 self-audit checkpoint - configurable RiskEngine ruleset
+
+- 子交付物: Phase 4 收尾, 增加 `ConfigurableMiniQMTRiskEngine` / `MiniQMTRiskRuleSet` / `MiniQMTRiskPriceBand`, 覆盖 pre-submit 越限、账户亏损阈值、敞口、tick 价格带、断连 kill-switch；`submit_child_order` 前置实时风控挂载点与 kill-switch 对齐, 全部 loud + reason_code。
+- 重读设计: ADR 0002；`docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` §3(含规则9)、§4.5、§9 Phase4、§10；Phase0 seam contract。
+- 验证:
+  - `rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase4_risk_engine.py -q` -> 5 passed
+  - `rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q` -> 51 passed
+  - `rtk python -m ruff check backend/services/miniqmt_execution_runtime/risk.py backend/services/miniqmt_execution_runtime/runtime.py backend/services/miniqmt_execution_runtime/__init__.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase4_risk_engine.py` -> All checks passed
+  - `rtk git diff --check` -> pass
+
+### §10 grep guard output
+
+```text
+rtk python -c "... event_loop gateway return [] count ..." -> event_loop_gateway_return_empty_list_count=0
+rtk python -c "... event_loop timer range count ..." -> event_loop_timer_range_count=0
+rtk python -c "... TDX guard count ..." -> tdx_in_miniqmt_runtime_count=0
+rtk git diff --name-only -- backend/execution_algos/vnpy_style -> <empty>
+rtk rg -n "JsonFileMiniQMTExecutionRuntimeRepository|uses_qmt_strategy_authority|strategy_ledger_repository" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime -> JsonFile remains only repository/debug/restart-test compatible; event_loop client injects QmtStrategyLedgerRepository and tests assert uses_qmt_strategy_authority=True.
+rtk rg -n "is_open_like_order_status|is_terminal_order_status|is_partial_order_status|STATUS_OPEN_LIKE|STATUS_PART_SUCC|STATUS_CANCELLED|STATUS_FILLED|STATUS_REJECTED" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime -> runtime/oms/client continue through BUG-470 predicates; no new status literal fork in Phase4 changes.
+rtk rg -n "MINIQMT_EXECUTION_RUNTIME|get_miniqmt_execution_runtime_kind\(\{\}\)|MiniQMTExecutionRuntimeKind.COMPILER" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime -> config default remains compiler; Phase0/Phase2 tests lock compiler inert.
+```
+
+### 自问
+
+1. 是否真事件驱动, 还是悄悄查一次/合成 timer? 答: 真事件驱动。RiskEngine 在 Tick/Order/Trade/Account/Disconnect 事件与 pre-submit 挂载点同步评估；未引入 timer loop 或提交后查一次。
+2. 是否新造第二套非 durable OMS? 答: 否。未新增 OMS, 订单/成交仍经 `MiniQMTOmsLedger` 与 qmt_strategy_ledger 权威路径。
+3. 是否动 B 或分叉算法核? 答: 否。默认 compiler 未改；`backend/execution_algos/vnpy_style/` diff 为空。
+4. 是否引入 TDX 行情? 答: 否。MiniQMT runtime/tests TDX guard count=0。
+5. 影子是否真对账? 答: Phase 5 尚未开始, 下一子交付物实现 durable shadow reconciliation。
+
+- 偏差拦截: 无。

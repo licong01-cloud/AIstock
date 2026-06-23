@@ -55,9 +55,12 @@ from .repository import (
     MiniQMTExecutionRuntimeRepository,
 )
 from .risk import (
+    ConfigurableMiniQMTRiskEngine,
     MiniQMTRiskDecision,
     MiniQMTRiskDecisionAction,
     MiniQMTRiskEngine,
+    MiniQMTRiskPriceBand,
+    MiniQMTRiskRuleSet,
     NoopMiniQMTRiskEngine,
 )
 from .runtime import MiniQMTExecutionEventLoop, MiniQMTExecutionRuntime
@@ -71,6 +74,7 @@ __all__ = [
     "MiniQMTPlanPreviewResult",
     "MiniQMTExecutionRuntimeClient",
     "MINIQMT_EXECUTION_RUNTIME_ENV",
+    "ConfigurableMiniQMTRiskEngine",
     "MiniQMTExecutionRuntimeKind",
     "MiniQMTGatewayContract",
     "MiniQMTGatewayEventSourceContract",
@@ -108,6 +112,8 @@ __all__ = [
     "MiniQMTRiskDecision",
     "MiniQMTRiskDecisionAction",
     "MiniQMTRiskEngine",
+    "MiniQMTRiskPriceBand",
+    "MiniQMTRiskRuleSet",
     "MiniQMTRuntimeRecoverySnapshot",
     "NoopMiniQMTRiskEngine",
     "QmtClientMiniQMTEventLoopGateway",
