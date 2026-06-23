@@ -1,7 +1,7 @@
 # MiniQMT LIVE Readiness Gap Investigation (2026-06-23)
 
-> 调查角色：实盘准入调查员。  
-> 范围：按 ADR 0002 禁止事项与 `docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` §12，只调查并登记缺口，不实施修复。  
+> 调查角色：实盘准入调查员。
+> 范围：按 ADR 0002 禁止事项与 `docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` §12，只调查并登记缺口，不实施修复。
 > 结论：MiniQMT 仍禁止接入 `MINIQMT_MODE=LIVE`；三道实盘准入门均存在未关闭缺口。
 
 ## 0. 权威与安全边界
