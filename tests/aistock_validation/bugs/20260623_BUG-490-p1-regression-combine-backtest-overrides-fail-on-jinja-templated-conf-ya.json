@@ -30,8 +30,8 @@
   "expected": "topk and strategy_kwargs overrides should apply to production Jinja conf.yaml without parsing or rewriting the whole template, preserving Jinja placeholders and failing loud before command execution on missing or ambiguous override targets.",
   "first_seen_at": "2026-06-23T03:44:33.231634Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "673b94a0c25abe8cce6f1f4468c28cc48910f27e",
+  "fixed_at": "2026-06-23T05:18:59.112151Z",
   "github_issue_number": 1512,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1512",
   "last_seen_at": "2026-06-23T03:44:33.231634Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1516",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -58,6 +59,14 @@
     "fingerprint": "9806d80968eea3479e633c85",
     "source_event_id": "FE-20260623-9806d80968ee"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_multi_alpha_combine_backtest.py -q -> 36 passed",
+    "python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/test_multi_alpha_combine_backtest.py -> passed",
+    "git diff --check origin/main...HEAD -> passed",
+    "nox -s l0 validation_module_registry_l0 -> passed",
+    "GitHub PR #1516 checks -> all required checks success"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
