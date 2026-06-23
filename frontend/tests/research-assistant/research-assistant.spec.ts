@@ -343,7 +343,7 @@ test("Research Assistant blocker diagnostics are collapsed behind developer deta
           approval_required: true,
           status: "approval_required",
           reason: "local_data_apply_repair_confirmed",
-          next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
+          next_step: "请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。",
           provenance: { source: "action_proposals" },
         },
       ],
@@ -365,7 +365,7 @@ test("Research Assistant blocker diagnostics are collapsed behind developer deta
   await expect(blockerLog).toBeVisible();
   await expect(blockerLog).toContainText("approval_required");
   await expect(blockerLog).toContainText("local_data_apply_repair_confirmed");
-  await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
+  await expect(blockerLog).toContainText("请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。");
   await expect(blockerLog).toContainText("action_proposals");
   await expect(blockerLog.locator("pre")).toBeHidden();
   await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(0);
@@ -491,50 +491,20 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   await expect(browserPage.locator("body")).not.toContainText("鎴");
   await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-test("Research Assistant workbench surfaces local data MCP tools as readable cards", async ({ page: browserPage }) => {
+test("Research Assistant retired workbench redirects to the single chat entry", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
-    if (path.endsWith("/capabilities")) return respond(page([]));
-    if (path.endsWith("/actions")) return respond(page([]));
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_local_data_1", title: "本地数据检查", status: "running" }]));
-    if (path.endsWith("/mcp/tools")) {
-      return respond(page([
-        {
-          tool_id: "mcp_tool_local_data_health",
-          server_key: "aistock-local-data",
-          tool_name: "local_data_health_overview",
-          title: "数据健康总览",
-          risk_level: "read_only",
-          requires_approval: false,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["dataset", "alerts", "jobs"] },
-          required_confirmations: [],
-        },
-        {
-          tool_id: "mcp_tool_local_data_plan_repair",
-          server_key: "aistock-local-data",
-          tool_name: "local_data_plan_repair",
-          title: "生成本地数据修复计划",
-          risk_level: "plan_only",
-          requires_approval: false,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["overview", "gaps", "targets"] },
-          required_confirmations: [],
-        },
-      ]));
-    }
-    return respond(page([]));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: page([]) }) });
   });
 
   await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: "本地数据 MCP 工作台" })).toBeVisible();
-  await expect(browserPage.getByTestId("ra-local-data-workbench-card")).toContainText("local_data_management");
-  await expect(browserPage.getByText("本地数据检查").first()).toBeVisible();
-  await expect(browserPage.getByText("本地数据工具目录")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("数据健康总览");
-  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("生成本地数据修复计划");
+  await expect(browserPage).toHaveURL(/\/research-assistant\/chat$/);
+  await expect(browserPage.locator(".ra-chat-input")).toBeVisible();
+
+  const nav = browserPage.getByRole("navigation", { name: "研究助理功能导航" });
+  await expect(nav.getByRole("link", { name: "对话" })).toHaveAttribute("href", "/research-assistant/chat");
+  await expect(nav.getByRole("link", { name: /对话/ })).toHaveCount(1);
+  await expect(nav.locator('a[href="/research-assistant"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/workbench"]')).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "工作台" })).toHaveCount(0);
+  await expect(browserPage.locator("body")).not.toContainText("本地数据 MCP 工作台");
 });
