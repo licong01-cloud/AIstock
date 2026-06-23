@@ -27,8 +27,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-23T09:45:01.485556Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "89d8a7f2735655f628579f4a5fc5131b17e6dda9",
+  "fixed_at": "2026-06-23T10:00:53.289219Z",
   "github_issue_number": 1541,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1541",
   "last_seen_at": "2026-06-23T09:45:01.485556Z",
@@ -36,6 +36,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1543",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -84,6 +85,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1543 CI -> 14 passed, mergeState CLEAN",
+    "git diff --check -> passed",
+    "workflow-smoke --changed-file .github/workflows/nightly.yml --module validation -> passed",
+    "ci-issue-janitor --superseded-only dry-run -> passed",
+    "nox -s l0 validation_module_registry_l0 guardrail_changed_files -> passed",
+    "nox -s validation_center_backend -> passed (458 passed, coverage line=80.41 branch=63.04)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
