@@ -31,6 +31,12 @@ from .gateway import (
     QmtClientMiniQMTEventLoopGateway,
     QmtClientMiniQMTGateway,
 )
+from .gray import (
+    MiniQMTGrayDecision,
+    MiniQMTGrayDecisionStatus,
+    MiniQMTGrayDecisionType,
+    MiniQMTGraySwitchController,
+)
 from .models import (
     MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrder,
@@ -120,6 +126,10 @@ __all__ = [
     "MiniQMTGatewayEventSourceError",
     "MiniQMTGatewayOrderAck",
     "MiniQMTGatewayState",
+    "MiniQMTGrayDecision",
+    "MiniQMTGrayDecisionStatus",
+    "MiniQMTGrayDecisionType",
+    "MiniQMTGraySwitchController",
     "MiniQMTOmsLedger",
     "MiniQMTOmsProjection",
     "MiniQMTOmsState",
