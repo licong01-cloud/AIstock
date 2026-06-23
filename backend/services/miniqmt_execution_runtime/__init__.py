@@ -54,6 +54,12 @@ from .repository import (
     JsonFileMiniQMTExecutionRuntimeRepository,
     MiniQMTExecutionRuntimeRepository,
 )
+from .risk import (
+    MiniQMTRiskDecision,
+    MiniQMTRiskDecisionAction,
+    MiniQMTRiskEngine,
+    NoopMiniQMTRiskEngine,
+)
 from .runtime import MiniQMTExecutionEventLoop, MiniQMTExecutionRuntime
 
 __all__ = [
@@ -99,7 +105,11 @@ __all__ = [
     "MiniQMTOmsState",
     "MiniQMTOperatorCommandResult",
     "MiniQMTOperatorCommandStatus",
+    "MiniQMTRiskDecision",
+    "MiniQMTRiskDecisionAction",
+    "MiniQMTRiskEngine",
     "MiniQMTRuntimeRecoverySnapshot",
+    "NoopMiniQMTRiskEngine",
     "QmtClientMiniQMTEventLoopGateway",
     "QmtClientMiniQMTGateway",
 ]

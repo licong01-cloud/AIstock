@@ -114,6 +114,12 @@ def test_event_loop_gateway_sync_methods_require_real_broker_snapshot() -> None:
     with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_SYNC_ORDERS_UNAVAILABLE"):
         gateway.sync_orders(runtime_id="mqrt_missing_query")
 
+    with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_SYNC_TRADES_UNAVAILABLE"):
+        gateway.sync_trades(runtime_id="mqrt_missing_query")
+
+    with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_SYNC_POSITIONS_UNAVAILABLE"):
+        gateway.sync_positions(runtime_id="mqrt_missing_query")
+
 
 def test_event_loop_gateway_rejects_malformed_callbacks_loudly() -> None:
     runtime, _repository, gateway = _runtime()

@@ -72,6 +72,41 @@ def test_cancel_all_open_orders_executes_through_gateway_and_terminalizes_oms() 
     ]
 
 
+def test_operator_cancel_terminalizes_runtime_owned_vnpy_instance() -> None:
+    runtime, repo, gateway = _runtime()
+    algo = runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_vnpy_cancel_000001",
+        strategy_slot_id="slot_alpha_001",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=1000,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+    )
+    runtime.on_tick(
+        symbol="000001.SZ",
+        price=9.99,
+        payload={"bid_price_1": 9.98, "bid_volume_1": 1000, "ask_price_1": 9.99, "ask_volume_1": 1000},
+    )
+    child = repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0]
+
+    result = runtime.execute_operator_command(
+        command_id="opcmd_cancel_vnpy_001",
+        command_type="CANCEL_ALL_OPEN_ORDERS",
+        reason="operator stop runtime-owned algo",
+    )
+
+    assert result.status == MiniQMTOperatorCommandStatus.EXECUTED
+    assert result.cancelled_child_order_ids == [child.child_order_id]
+    assert result.affected_algo_instance_ids == [algo.algo_instance_id]
+    assert gateway.cancelled_orders[0].child_order_id == child.child_order_id
+    stored_child = repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0]
+    stored_algo = repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0]
+    assert stored_child.status == MiniQMTChildOrderStatus.CANCELLED
+    assert stored_algo.status == MiniQMTAlgoInstanceStatus.CANCELLED
+    assert stored_algo.metadata["operator_command_id"] == "opcmd_cancel_vnpy_001"
+
+
 def test_cancel_all_open_orders_imports_active_broker_orders_before_cancel() -> None:
     runtime, repo, gateway = _runtime(
         gateway=FakeMiniQMTGateway(

@@ -47,6 +47,7 @@ from .models import (
 )
 from .oms import MiniQMTOmsLedger
 from .repository import MiniQMTExecutionRuntimeRepository
+from .risk import MiniQMTRiskDecisionAction, MiniQMTRiskEngine, NoopMiniQMTRiskEngine
 
 
 class MiniQMTExecutionEventLoop:
@@ -90,6 +91,7 @@ class MiniQMTExecutionRuntime:
         gateway: MiniQMTGateway,
         strategy_ledger_repository: Any | None = None,
         account_id: str | None = None,
+        risk_engine: MiniQMTRiskEngine | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
@@ -101,6 +103,8 @@ class MiniQMTExecutionRuntime:
             account_id=account_id or config.account_group_id,
             trade_date=config.trade_date,
         )
+        self.risk_engine = risk_engine or NoopMiniQMTRiskEngine()
+        self._kill_switch_active = False
         self._vnpy_cores: dict[str, VnpyAlgoTemplate] = {}
         self._vnpy_random_volume_providers: dict[str, Callable[[int, int], float]] = {}
         event_sink_binder = getattr(gateway, "bind_event_sink", None)
@@ -306,6 +310,8 @@ class MiniQMTExecutionRuntime:
             source="runtime",
             payload={"timer_name": timer_name, **dict(payload or {})},
         )
+        if self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload):
+            return event
         self._dispatch_timer_to_vnpy_algos(runtime.runtime_id)
         return event
 
@@ -318,6 +324,8 @@ class MiniQMTExecutionRuntime:
             source="gateway",
             payload=tick_payload,
         )
+        if self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload):
+            return event
         self._dispatch_tick_to_vnpy_algos(runtime.runtime_id, tick_payload=tick_payload)
         return event
 
@@ -331,7 +339,9 @@ class MiniQMTExecutionRuntime:
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTChildOrder:
         runtime = self._require_runtime()
+        self._raise_if_kill_switch_blocks_submit(runtime, algo_instance_id)
         instance = self._require_algo_instance(runtime.runtime_id, algo_instance_id)
+        self._raise_if_kill_switch_active(runtime.runtime_id, instance)
         order = MiniQMTChildOrder(
             runtime_id=runtime.runtime_id,
             algo_instance_id=instance.algo_instance_id,
@@ -542,6 +552,7 @@ class MiniQMTExecutionRuntime:
             source="gateway",
             payload={"broker_order_id": broker_order_id, "status": status, **dict(payload or {})},
         )
+        risk_triggered = False
         child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
         if child is not None:
             broker_status_payload = {**dict(payload or {}), "order_status": status}
@@ -559,8 +570,13 @@ class MiniQMTExecutionRuntime:
             child = self.oms.record_child_order(
                 child.model_copy(update={"status": child_status, "metadata": child_metadata})
             )
+            risk_triggered = self._evaluate_risk_after_event(
+                runtime.runtime_id,
+                event_type=event.event_type,
+                payload=event.payload,
+            )
             instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
-            if instance is not None and self._is_vnpy_instance(instance):
+            if instance is not None and self._is_vnpy_instance(instance) and not risk_triggered:
                 core = self._ensure_vnpy_core(instance)
                 actions = core.update_order(
                     VnpyOrderUpdate(
@@ -581,6 +597,8 @@ class MiniQMTExecutionRuntime:
                     child.algo_instance_id,
                     reason=f"broker_order_{child.status.value.lower()}",
                 )
+        else:
+            self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload)
         return event
 
     def record_trade_event(
@@ -598,6 +616,7 @@ class MiniQMTExecutionRuntime:
             source="gateway",
             payload={"broker_order_id": broker_order_id, "quantity": quantity, "price": price, **dict(payload or {})},
         )
+        risk_triggered = False
         child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
         if child is not None:
             cumulative_quantity = int(
@@ -623,8 +642,13 @@ class MiniQMTExecutionRuntime:
             )
             self.oms.record_trade_fill(updated_child, quantity=quantity, price=price, payload=payload)
             child = self.oms.record_child_order(updated_child)
+            risk_triggered = self._evaluate_risk_after_event(
+                runtime.runtime_id,
+                event_type=event.event_type,
+                payload=event.payload,
+            )
             instance = self._find_algo_instance(runtime.runtime_id, child.algo_instance_id)
-            if instance is not None and self._is_vnpy_instance(instance):
+            if instance is not None and self._is_vnpy_instance(instance) and not risk_triggered:
                 core = self._ensure_vnpy_core(instance)
                 actions = []
                 if cumulative_quantity >= child.quantity:
@@ -658,16 +682,20 @@ class MiniQMTExecutionRuntime:
                     child.algo_instance_id,
                     reason=f"broker_trade_{child.status.value.lower()}",
                 )
+        else:
+            self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload)
         return event
 
     def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
-        return self.events.append(
+        event = self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.ACCOUNT_EVENT,
             source="gateway",
             payload=dict(payload),
         )
+        self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload)
+        return event
 
     def record_disconnect_event(
         self,
@@ -700,6 +728,7 @@ class MiniQMTExecutionRuntime:
                 }
             )
         )
+        self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload)
         return event
 
     def _reconcile_child_orders_from_broker_snapshot(
@@ -892,6 +921,124 @@ class MiniQMTExecutionRuntime:
             metadata={"active_child_count": len(active_children), "strategy_slot_id": strategy_slot_id},
         )
 
+    def _evaluate_risk_after_event(
+        self,
+        runtime_id: str,
+        *,
+        event_type: MiniQMTExecutionEventType,
+        payload: dict[str, Any],
+    ) -> bool:
+        decision = self.risk_engine.evaluate_event(
+            runtime_id=runtime_id,
+            event_type=event_type.value,
+            payload=dict(payload),
+        )
+        if decision.action != MiniQMTRiskDecisionAction.KILL_SWITCH:
+            return False
+        self._trigger_kill_switch(
+            runtime_id,
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            metadata=decision.metadata,
+            source_event_type=event_type.value,
+        )
+        return True
+
+    def _trigger_kill_switch(
+        self,
+        runtime_id: str,
+        *,
+        reason_code: str,
+        reason: str,
+        metadata: dict[str, Any],
+        source_event_type: str,
+    ) -> None:
+        self._kill_switch_active = True
+        runtime = self.repository.get_runtime(runtime_id)
+        if runtime is not None:
+            self.repository.upsert_runtime(
+                runtime.model_copy(
+                    update={
+                        "event_loop_state": MiniQMTExecutionRuntimeState.PAUSED,
+                        "metadata": {
+                            **dict(runtime.metadata),
+                            "kill_switch_active": True,
+                            "kill_switch_reason_code": reason_code,
+                            "kill_switch_reason": reason,
+                            "kill_switch_source_event_type": source_event_type,
+                        },
+                    }
+                )
+            )
+        cancelled_child_order_ids: list[str] = []
+        broker_packets: list[dict[str, Any]] = []
+        for child in self.repository.list_child_orders(runtime_id, active_only=True):
+            ack = self.gateway.cancel_child_order(child, reason=reason)
+            broker_packets.append(
+                {
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "accepted": ack.accepted,
+                    "message": ack.message,
+                    "raw": dict(ack.raw),
+                }
+            )
+            if not ack.accepted:
+                continue
+            cancelled_child_order_ids.append(child.child_order_id)
+            self.oms.record_child_order(
+                child.model_copy(
+                    update={
+                        "status": MiniQMTChildOrderStatus.CANCELLED,
+                        "metadata": {
+                            **dict(child.metadata),
+                            "risk_kill_switch_reason_code": reason_code,
+                            "risk_kill_switch_reason": reason,
+                            "risk_kill_switch_ack": dict(ack.raw),
+                        },
+                    }
+                )
+            )
+            self._terminalize_algo_if_all_children_terminal(
+                runtime_id,
+                child.algo_instance_id,
+                reason="risk_kill_switch",
+                command_id=f"risk:{reason_code}",
+            )
+        self.events.append(
+            runtime_id=runtime_id,
+            event_type=MiniQMTExecutionEventType.RISK_KILL_SWITCH_TRIGGERED,
+            source="runtime",
+            payload={
+                "reason_code": reason_code,
+                "reason": reason,
+                "source_event_type": source_event_type,
+                "cancelled_child_order_ids": cancelled_child_order_ids,
+                "broker_packets": broker_packets,
+                "metadata": dict(metadata),
+            },
+        )
+
+    def _raise_if_kill_switch_active(
+        self,
+        runtime_id: str,
+        instance: MiniQMTExecutionAlgoInstance,
+    ) -> None:
+        self._raise_if_kill_switch_blocks_submit(runtime_id, instance.algo_instance_id)
+
+    def _raise_if_kill_switch_blocks_submit(self, runtime: MiniQMTExecutionRuntimeRecord | str, algo_instance_id: str) -> None:
+        runtime_record = runtime if isinstance(runtime, MiniQMTExecutionRuntimeRecord) else self.repository.get_runtime(runtime)
+        runtime_id = runtime_record.runtime_id if runtime_record is not None else str(runtime)
+        metadata = dict(runtime_record.metadata) if runtime_record is not None else {}
+        active = self._kill_switch_active or bool(metadata.get("kill_switch_active"))
+        if not active:
+            return
+        reason_code = str(metadata.get("kill_switch_reason_code") or "MINIQMT_RISK_KILL_SWITCH_ACTIVE")
+        raise RuntimeError(
+            "MiniQMT risk kill-switch is active; new child orders are blocked; "
+            f"reason_code={reason_code}, runtime_id={runtime_id}, algo_instance_id={algo_instance_id}"
+        )
+
     def _terminalize_algo_if_all_children_terminal(
         self,
         runtime_id: str,
@@ -902,6 +1049,8 @@ class MiniQMTExecutionRuntime:
     ) -> MiniQMTExecutionAlgoInstance | None:
         instance = self._find_algo_instance(runtime_id, algo_instance_id)
         if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
+            return None
+        if self._is_vnpy_instance(instance) and command_id is None:
             return None
         children = [
             child
