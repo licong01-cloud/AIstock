@@ -12,6 +12,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { parseRunningSummaryItem, type RunningPortfolioSummary } from "@/lib/paper-v2/running-summary";
 import type { DataSource, ExecutionPolicy, HmmConfig, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -26,6 +27,8 @@ const SESSION_MODE_OPTIONS: Array<{ value: PaperSessionMode; label: string; desc
   { value: "LIVE_ONLY", label: "完全实时运行", description: "不做历史追赶，直接创建 TDX 实时分钟线会话。" },
 ];
 const LIVE_TICK_SETTLED_STATUSES = ["LIVE_WAITING_FOR_BAR", "LIVE_WAITING_NEXT_TRADING_DAY", "SUCCEEDED", "FAILED", "STOPPED"];
+const CURRENT_RUNNING_BROKERS = new Set(["local_sim", "minqmt_sim"]);
+const RUNNING_SUMMARY_PAGE_SIZE = 50;
 
 function todayStamp(): string {
   const now = new Date();
@@ -40,8 +43,45 @@ function defaultPortfolioName(packageName?: string): string {
   return packageName ? `${packageName}-${stamp}-模拟盘` : `模拟盘-${stamp}`;
 }
 
+function isCurrentRunningSimulation(row: RunningPortfolioSummary): boolean {
+  const broker = String(row.portfolio.broker_backend || "local_sim").toLowerCase();
+  const status = String(row.portfolio.status || "").toUpperCase();
+  return status === "RUNNING" && CURRENT_RUNNING_BROKERS.has(broker) && row.operability?.has_tickable_session === true;
+}
+
+function historyStatusHint(row: PaperPortfolio, activeIds: Set<string>): string {
+  const status = String(row.status || "").toUpperCase();
+  if (status === "RUNNING" && !activeIds.has(row.portfolio_id)) {
+    return "状态残留/无可推进会话";
+  }
+  if (status === "PAUSED") return "已暂停/历史记录";
+  if (status === "READY") return "已创建未运行";
+  if (["COMPLETED", "FAILED", "RETIRED"].includes(status)) return "历史记录";
+  return "历史/待检查";
+}
+
+async function loadRunningSummaryRows(): Promise<{ summaries: RunningPortfolioSummary[]; pagination: JsonObject }> {
+  const params = {
+    pageSize: RUNNING_SUMMARY_PAGE_SIZE,
+    statuses: ["RUNNING"],
+    snapshotLimit: 5,
+    positionLimit: 5,
+  };
+  const first = await paperV2Api.runningSummaryPage({ ...params, page: 1 });
+  const totalPages = Math.max(1, Number(first.pagination.total_pages || 1));
+  const rest = totalPages > 1
+    ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, index) => paperV2Api.runningSummaryPage({ ...params, page: index + 2 })))
+    : [];
+  return {
+    summaries: [first, ...rest].flatMap((page) => page.summaries.map((item) => parseRunningSummaryItem(item))),
+    pagination: first.pagination,
+  };
+}
+
 export default function PaperV2PortfoliosPage() {
   const [portfolios, setPortfolios] = useState<PaperPortfolio[]>([]);
+  const [runningSummaries, setRunningSummaries] = useState<RunningPortfolioSummary[]>([]);
+  const [runningPagination, setRunningPagination] = useState<JsonObject>({ page: 1, page_size: 50, total: 0, total_pages: 1 });
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [hmmConfigs, setHmmConfigs] = useState<HmmConfig[]>([]);
@@ -72,23 +112,25 @@ export default function PaperV2PortfoliosPage() {
   const [busy, setBusy] = useState(false);
 
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
-  const activePortfolios = useMemo(() => portfolios.filter((item) => ["RUNNING", "PAUSED"].includes(item.status)), [portfolios]);
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [portfolioRows, packageRows, configRows] = await Promise.all([
+      const [portfolioRows, runningRows, packageRows, configRows] = await Promise.all([
         paperV2Api.listPortfoliosPage({
           page: portfolioPage,
           pageSize: 20,
           search: portfolioSearch,
-          statuses: showRetired ? undefined : ["READY", "RUNNING", "PAUSED", "COMPLETED"],
+          statuses: showRetired ? undefined : ["READY", "RUNNING", "PAUSED", "COMPLETED", "FAILED"],
         }),
+        loadRunningSummaryRows(),
         strategyPackageApi.list(undefined, 300),
         hmmTrainingApi.configs(),
       ]);
       setPortfolios(portfolioRows.portfolios);
       setPortfolioPagination(portfolioRows.pagination);
+      setRunningSummaries(runningRows.summaries);
+      setRunningPagination(runningRows.pagination);
       setPackages(packageRows);
       setHmmConfigs(configRows);
       const initialPackage = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("package_id") : null;
@@ -268,7 +310,10 @@ export default function PaperV2PortfoliosPage() {
   const pageStart = (portfolioPageSafe - 1) * portfolioPageSize;
   const portfolioTotal = Number(portfolioPagination.total || portfolios.length);
   const pageRangeStart = portfolioTotal ? pageStart + 1 : 0;
-  const visiblePortfolios = portfolios;
+  const currentRunningRows = runningSummaries.filter(isCurrentRunningSimulation);
+  const currentRunningIds = new Set(currentRunningRows.map((row) => row.portfolio.portfolio_id));
+  const visiblePortfolios = portfolios.filter((row) => !currentRunningIds.has(row.portfolio_id));
+  const runningRecordTotal = Number(runningPagination.total || runningSummaries.length);
   const selectedPortfolioCount = Object.values(selectedPortfolioIds).filter(Boolean).length;
 
   const workflowSteps = paperV2WorkflowSteps({
@@ -276,7 +321,7 @@ export default function PaperV2PortfoliosPage() {
     hasSelectionEnabledPackage: packages.length > 0,
     hasPaperEnabledPackage: packages.length > 0,
     hasSelectionRun: false,
-    hasPortfolio: portfolios.length > 0,
+    hasPortfolio: portfolioTotal > 0 || currentRunningRows.length > 0,
     hasReadyRun: false,
   }, "portfolio");
 
@@ -284,8 +329,7 @@ export default function PaperV2PortfoliosPage() {
     <main>
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="组合操作失败" />
-      <div className="pv2-grid pv2-grid-main">
-        <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+      <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" data-testid="portfolio-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
             <div className="pv2-field"><label>模拟盘名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
@@ -329,13 +373,34 @@ export default function PaperV2PortfoliosPage() {
           </div>
           <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
           {created ? <NoticePanel title="模拟盘已创建" tone="success">组合 {created.portfolio_name} 已创建；当前只是组合/会话记录已生成，真实运行是否成功以 session/run 证据为准。{sessionProgress ? ` 当前会话状态：${sessionProgress.session.status}` : ""}</NoticePanel> : null}
-        </SectionCard>
-
-      </div>
+      </SectionCard>
 
       <SectionCard
-        title="当前模拟盘"
-        eyebrow={loading ? "加载中" : `${pageRangeStart}-${Math.min(pageStart + portfolioPageSize, portfolioTotal)} / ${portfolioTotal} 个模拟盘`}
+        title="当前运行中模拟盘"
+        eyebrow={loading ? "加载中" : `${currentRunningRows.length} 个可推进 / ${runningRecordTotal} 个 RUNNING 记录`}
+        action={<button className="pv2-button" onClick={load} type="button">刷新</button>}
+      >
+        <NoticePanel title="当前运行判定" tone="info">
+          这里只展示状态为 RUNNING、Broker 为 LocalSim/MiniQMT 且存在 scheduler 可推进会话的模拟盘；READY、PAUSED、COMPLETED、FAILED、RETIRED，以及没有可推进会话的 RUNNING 状态残留，统一进入下方历史记录。
+        </NoticePanel>
+        <PaperTable
+          rows={currentRunningRows}
+          empty="暂无正在运行的 LocalSim/MiniQMT 模拟盘。"
+          columns={[
+            { key: "name", header: "名称", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
+            { key: "status", header: "模拟盘状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
+            { key: "broker", header: "Broker", render: ({ portfolio }) => portfolio.broker_backend || "local_sim" },
+            { key: "session", header: "最近会话", render: (row) => row.latestSession ? <><StatusBadge status={row.latestSession.mode} /> <StatusBadge status={row.latestSession.status} /></> : <span className="pv2-muted">无会话</span> },
+            { key: "tickable", header: "可推进会话", render: (row) => String(row.operability?.tickable_session_count ?? 0) },
+            { key: "run", header: "最近运行", render: (row) => row.latestRun ? <>{row.latestRun.trade_date} / <StatusBadge status={row.latestRun.status} /></> : <span className="pv2-muted">尚未运行</span> },
+            { key: "actions", header: "操作", render: ({ portfolio }) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(portfolio.portfolio_id, portfolio.status === "PAUSED" ? "resume" : "pause")} type="button">{portfolio.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(portfolio.portfolio_id, "retire")} type="button">退役</button></div> },
+          ]}
+        />
+      </SectionCard>
+
+      <SectionCard
+        title="历史模拟盘记录"
+        eyebrow={loading ? "加载中" : `${pageRangeStart}-${Math.min(pageStart + portfolioPageSize, portfolioTotal)} / ${portfolioTotal} 个历史/状态记录`}
         action={
           <div className="pv2-row-actions">
             <input className="pv2-input" style={{ maxWidth: 180 }} value={portfolioSearch} onChange={(event) => { setPortfolioSearch(event.target.value); setPortfolioPage(1); }} placeholder="搜索名称/ID/策略包" />
@@ -350,7 +415,7 @@ export default function PaperV2PortfoliosPage() {
       >
         <PaperTable
           rows={visiblePortfolios}
-          empty="暂无模拟盘 v2 组合。"
+          empty="暂无历史模拟盘记录。"
           columns={[
             { key: "select", header: "选择", render: (row) => <input type="checkbox" checked={Boolean(selectedPortfolioIds[row.portfolio_id])} onChange={(event) => togglePortfolio(row.portfolio_id, event.target.checked)} /> },
             { key: "name", header: "名称", render: (row) => <Link href={`/paper-v2/portfolios/${row.portfolio_id}`}>{row.portfolio_name}</Link> },
@@ -362,6 +427,7 @@ export default function PaperV2PortfoliosPage() {
             } },
             { key: "cash", header: "初始资金", render: (row) => formatCompact(row.initial_cash) },
             { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },
+            { key: "bucket", header: "归类", render: (row) => historyStatusHint(row, currentRunningIds) },
             { key: "start", header: "开始", render: (row) => row.start_date },
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}
