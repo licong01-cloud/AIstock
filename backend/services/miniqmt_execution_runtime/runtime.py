@@ -47,7 +47,7 @@ from .models import (
 )
 from .oms import MiniQMTOmsLedger
 from .repository import MiniQMTExecutionRuntimeRepository
-from .risk import MiniQMTRiskDecisionAction, MiniQMTRiskEngine, NoopMiniQMTRiskEngine
+from .risk import MiniQMTRiskDecision, MiniQMTRiskDecisionAction, MiniQMTRiskEngine, NoopMiniQMTRiskEngine
 
 
 class MiniQMTExecutionEventLoop:
@@ -354,6 +354,13 @@ class MiniQMTExecutionRuntime:
             price_type=price_type,
             metadata=dict(metadata or {}),
         )
+        pre_submit_decision = self._evaluate_risk_before_submit(runtime, order)
+        if pre_submit_decision.action == MiniQMTRiskDecisionAction.KILL_SWITCH:
+            raise RuntimeError(
+                "MiniQMT risk kill-switch blocked child order before broker submit; "
+                f"reason_code={pre_submit_decision.reason_code}, runtime_id={runtime.runtime_id}, "
+                f"algo_instance_id={algo_instance_id}, child_order_id={order.child_order_id}"
+            )
         self.oms.record_child_order(order)
         ack = self.gateway.submit_child_order(order)
         submitted = order.model_copy(
@@ -944,6 +951,35 @@ class MiniQMTExecutionRuntime:
         )
         return True
 
+    def _evaluate_risk_before_submit(
+        self,
+        runtime: MiniQMTExecutionRuntimeRecord,
+        order: MiniQMTChildOrder,
+    ) -> MiniQMTRiskDecision:
+        evaluator = getattr(self.risk_engine, "evaluate_pre_submit", None)
+        if not callable(evaluator):
+            raise RuntimeError(
+                "MiniQMT event-loop risk engine must expose a pre-submit risk hook; "
+                f"reason_code=MINIQMT_RISK_PRE_SUBMIT_HOOK_MISSING, runtime_id={runtime.runtime_id}, "
+                f"risk_engine={type(self.risk_engine).__name__}"
+            )
+        decision = evaluator(
+            runtime_id=runtime.runtime_id,
+            order=order,
+            active_child_orders=self.repository.list_child_orders(runtime.runtime_id, active_only=True),
+            active_algo_instances=self.repository.list_algo_instances(runtime.runtime_id, active_only=True),
+        )
+        if decision.action != MiniQMTRiskDecisionAction.KILL_SWITCH:
+            return decision
+        self._trigger_kill_switch(
+            runtime.runtime_id,
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            metadata=decision.metadata,
+            source_event_type="PRE_SUBMIT",
+        )
+        return decision
+
     def _trigger_kill_switch(
         self,
         runtime_id: str,
@@ -971,6 +1007,7 @@ class MiniQMTExecutionRuntime:
                 )
             )
         cancelled_child_order_ids: list[str] = []
+        affected_algo_instance_ids: list[str] = []
         broker_packets: list[dict[str, Any]] = []
         for child in self.repository.list_child_orders(runtime_id, active_only=True):
             ack = self.gateway.cancel_child_order(child, reason=reason)
@@ -1005,6 +1042,22 @@ class MiniQMTExecutionRuntime:
                 reason="risk_kill_switch",
                 command_id=f"risk:{reason_code}",
             )
+        for instance in self.repository.list_algo_instances(runtime_id, active_only=True):
+            affected_algo_instance_ids.append(instance.algo_instance_id)
+            self.oms.record_algo_instance(
+                instance.model_copy(
+                    update={
+                        "status": MiniQMTAlgoInstanceStatus.CANCELLED,
+                        "metadata": {
+                            **dict(instance.metadata),
+                            "terminalized_by_runtime": True,
+                            "terminalized_reason": "risk_kill_switch",
+                            "risk_kill_switch_reason_code": reason_code,
+                            "risk_kill_switch_reason": reason,
+                        },
+                    }
+                )
+            )
         self.events.append(
             runtime_id=runtime_id,
             event_type=MiniQMTExecutionEventType.RISK_KILL_SWITCH_TRIGGERED,
@@ -1014,6 +1067,7 @@ class MiniQMTExecutionRuntime:
                 "reason": reason,
                 "source_event_type": source_event_type,
                 "cancelled_child_order_ids": cancelled_child_order_ids,
+                "affected_algo_instance_ids": _unique(affected_algo_instance_ids),
                 "broker_packets": broker_packets,
                 "metadata": dict(metadata),
             },

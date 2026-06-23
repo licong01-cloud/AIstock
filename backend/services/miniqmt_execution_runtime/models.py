@@ -64,6 +64,7 @@ class MiniQMTExecutionEventType(str, Enum):
     TRADE_EVENT = "TRADE_EVENT"
     ACCOUNT_EVENT = "ACCOUNT_EVENT"
     RISK_KILL_SWITCH_TRIGGERED = "RISK_KILL_SWITCH_TRIGGERED"
+    SHADOW_RECONCILIATION_REPORTED = "SHADOW_RECONCILIATION_REPORTED"
     RECONCILE_STARTED = "RECONCILE_STARTED"
     RECONCILE_COMPLETED = "RECONCILE_COMPLETED"
     OPERATOR_COMMAND_RECEIVED = "OPERATOR_COMMAND_RECEIVED"
@@ -156,7 +157,7 @@ class MiniQMTExecutionEvent(BaseModel):
     sequence: int = Field(ge=1)
     event_type: MiniQMTExecutionEventType
     event_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery"]
+    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery", "shadow"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("event_id", "runtime_id", "source")
