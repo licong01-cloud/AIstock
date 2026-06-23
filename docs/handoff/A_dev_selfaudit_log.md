@@ -397,3 +397,99 @@ rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_operat
 
 ### Deviation intercept
 - 未新增偏差；该用例锁定前一条已拦截的实例生命周期偏差不会影响 operator cancel 的强制终结语义。
+
+
+## Pre-Phase 4 self-audit - 2026-06-23T03:44:31.606603+00:00
+
+### Scope decision
+- Phase 3 checkpoints are committed and worktree is clean.
+- Time permits a narrow Phase 4 skeleton only: real RiskEngine hook and kill-switch behavior with tests; no full rule set, no service/runtime activation.
+
+### Design reread
+- Re-read durable design §3 hard rules including rule 9, §4.5 RiskEngine, §9 Phase 4 gate, §9.x, §10.
+
+### §10 grep guard output
+
+```text
+event_loop runtime/gateway range(_timer_iterations count:
+<no matches>
+
+vnpy_style diff:
+<empty git diff -- backend/execution_algos/vnpy_style>
+
+MiniQMT/event_loop TDX guard:
+rg -n 'fetch_tdx_realtime_quotes|TDX_REALTIME' backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+<no matches>
+
+working tree status before Phase 4:
+<clean>
+```
+
+### Self questions
+- 真事件驱动还是查一次/合成 timer? Planned Phase 4 hook will run after real event callbacks (`tick/order/trade/disconnect`), not polling/query-once.
+- 是否新造第二套非 durable OMS? 否；kill-switch will use existing runtime OMS child order records and gateway cancel path.
+- 是否动 B 或分叉算法核? 否。
+- 是否引入 TDX 行情? 否。
+
+### Deviation intercept
+- 未拦截偏差。Phase 4 scope capped to real hook + kill-switch skeleton; no placeholder-only code.
+
+
+## Phase 4 risk hook self-audit - 2026-06-23T03:50:38.779934+00:00
+
+### Deliverable
+- Added `MiniQMTRiskEngine` realtime hook and `MiniQMTRiskDecision` skeleton.
+- Runtime evaluates risk after real event-loop events (`TICK`, `ORDER_EVENT`, `TRADE_EVENT`, `ACCOUNT_EVENT`, `GATEWAY_DISCONNECTED`, `TIMER`).
+- Kill-switch cancels active child orders through gateway, terminalizes owning instances, persists `RISK_KILL_SWITCH_TRIGGERED`, pauses runtime, and blocks new child orders with loud reason_code.
+- Tests cover disconnect kill-switch and tick price-limit kill-switch running before algo submission.
+
+### Design reread
+- Re-read durable design §3 hard rules including rule 9, §4.5 RiskEngine, §9 Phase 4 gate, §9.x, §10.
+- Confirmed this is a real hook + kill-switch skeleton, not a placeholder; no full pre-trade/production rules attempted.
+
+### §10 grep guard output
+
+```text
+event_loop runtime/gateway range(_timer_iterations count:
+<no matches>
+
+all range(_timer_iterations references:
+backend/services/miniqmt_execution_runtime/client.py:369: compiler/compat path
+backend/services/miniqmt_execution_runtime/client.py:512: compiler/compat path
+
+event_loop class sync methods no return []:
+QmtClientMiniQMTEventLoopGateway.sync_orders/sync_trades/sync_positions all call _required_qmt_list with MINIQMT_EVENT_LOOP_SYNC_*_UNAVAILABLE reason_code.
+
+JsonFile OMS event_loop authority references:
+Only seam doc and repository/export compatibility references; no event_loop authority use added.
+
+vnpy_style attribution/source map diff:
+<empty git diff -- backend/execution_algos/vnpy_style>
+
+BUG-470 predicates / status scan:
+runtime.py/oms.py use is_open_like_order_status/is_terminal_order_status for broker numeric statuses. No new broker status literal fork added in risk hook.
+
+flag inert tests:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.. [100%]
+2 passed in 0.98s
+
+MiniQMT/event_loop TDX guard:
+rg -n 'fetch_tdx_realtime_quotes|TDX_REALTIME' backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
+<no matches>
+
+Targeted tests:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q
+48 passed in 1.48s
+rtk python -m ruff check changed runtime/risk/test files -> All checks passed
+rtk git diff --check -> passed
+```
+
+### Self questions
+- 真事件驱动还是查一次/合成 timer? 真事件驱动；risk hook 在真实 event-loop events 之后运行，tick kill-switch 测试证明在 algo submit 前阻断。
+- 是否新造第二套非 durable OMS? 否；kill-switch 使用既有 child order/OMS/gateway 路径。
+- 是否动 B 或分叉算法核? 否；`risk_engine` 默认 `NoopMiniQMTRiskEngine`，flag inert 测试通过，`vnpy_style` diff 为空。
+- 是否引入 TDX 行情? 否；A runtime/backend tests grep 为 0。
+
+### Deviation intercept
+- 拦截并修正一个 Phase 4 fail-fast 顺序偏差：kill-switch 后对已终结实例提交新单原先会先报 `active algo instance not found`，已改为 kill-switch 优先 loud，返回风险 reason_code。
