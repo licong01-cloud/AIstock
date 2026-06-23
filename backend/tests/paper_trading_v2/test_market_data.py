@@ -14,6 +14,7 @@ from backend.services.paper_trading_v2.market_data import (
     PreTradeTradabilityProvider,
     PreviousClose,
     fetch_tdx_realtime_quotes,
+    quote_tradability_evidence,
 )
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
@@ -818,3 +819,34 @@ def test_pre_trade_tdx_quote_blocks_sell_at_limit_down_with_reason_code() -> Non
     assert status["reason_code"] == "LIMIT_DOWN_SELL_BLOCKED"
     assert status["quote_evidence"]["limit_down"] == pytest.approx(9_000)
     assert status["quote_evidence"]["blocked_sides"] == ["SELL"]
+
+
+def test_pre_trade_miniqmt_quote_uses_yuan_basis_for_limit_range() -> None:
+    payload = quote_tradability_evidence(
+        symbol="603303.SH",
+        quote={
+            "price_basis": "yuan",
+            "lastPrice": 30.23,
+            "pre_close": 30.14,
+            "open": 30.27,
+            "high": 31.8,
+            "low": 29.01,
+            "volume": 66974,
+            "amount": 203373536,
+            "bid_price_1": 30.23,
+            "bid_volume_1": 108,
+            "ask_price_1": 30.26,
+            "ask_volume_1": 17,
+            "time": "2026-06-23 14:05:00",
+        },
+        source="MINIQMT_REALTIME.broker_quote",
+        trade_date=date(2026, 6, 23),
+        as_of_time=datetime(2026, 6, 23, 14, 5, 30),
+        st_status_provider=FakeStStatusProvider(is_st=False),
+    )
+
+    assert payload["quote_price_basis"] == "yuan"
+    assert payload["limit_up"] == pytest.approx(33.15)
+    assert payload["limit_down"] == pytest.approx(27.13)
+    assert payload["no_tradable_market"] is False
+    assert payload["blocked_sides"] == []
