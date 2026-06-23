@@ -190,7 +190,16 @@ def _service(
 def _runtime_template(tmp_path: Path) -> Path:
     template = tmp_path / "runtime_template"
     template.mkdir()
-    for runtime_file in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+        },
+    }
+    (template / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+    for runtime_file in ("qrun_limit_minute.py", "read_exp_res.py"):
         (template / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
     return template
 
@@ -339,6 +348,94 @@ def test_topk_override_updates_qrun_conf_yaml(tmp_path: Path) -> None:
     updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
     assert updated["port_analysis_config"]["strategy"]["kwargs"]["topk"] == 100
     assert updated["port_analysis_config"]["strategy"]["kwargs"]["n_drop"] == 2
+
+
+def test_shell_executor_command_path_applies_topk_and_strategy_overrides(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    template = tmp_path / "runtime_template"
+    template.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+        },
+    }
+    (template / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+    for runtime_file in ("qrun_limit_minute.py", "read_exp_res.py"):
+        (template / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+    script = tmp_path / "emit_metrics.py"
+    script.write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "Path('qlib_results_enhanced.json').write_text(json.dumps({'absolute_returns': "
+        "{'cagr': 1.0, 'max_drawdown': -0.1, 'sharpe': 2.0, 'calmar': 10.0}, "
+        "'prediction_diagnostics': {'topk_return_20': 0.07, 'topk_hit_rate_20': 0.66}, "
+        "'trade_diagnostics': {'avg_turnover': 12.0}}))\n",
+        encoding="utf-8",
+    )
+    pred_pkl = tmp_path / "combined_prediction.pkl"
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_pkl)
+    workspace = tmp_path / "workspace"
+    caplog.set_level("INFO", logger="backend.services.multi_alpha.combine_backtest")
+
+    metrics = ShellPredBacktestExecutor().execute_pred_backtest(
+        workspace=workspace,
+        pred_pkl=pred_pkl,
+        node_id="wsl2-5080",
+        backtest_config={
+            "runtime_template_dir": str(template),
+            "command": [sys.executable, str(script)],
+            "topk": 50,
+            "strategy_kwargs": {"n_drop": 5, "hold_thresh": 0.12},
+            "timeout_seconds": 30,
+        },
+    )
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    kwargs = updated["port_analysis_config"]["strategy"]["kwargs"]
+    assert kwargs["topk"] == 50
+    assert kwargs["n_drop"] == 5
+    assert kwargs["hold_thresh"] == 0.12
+    assert metrics["sharpe"] == 2.0
+    override_logs = [record for record in caplog.records if record.message == "Applied pred-backtest conf overrides"]
+    assert override_logs
+    assert override_logs[-1].workspace == str(workspace)
+    assert override_logs[-1].effective_topk == 50
+    assert override_logs[-1].strategy_kwargs_keys == ["hold_thresh", "n_drop"]
+
+
+def test_shell_executor_command_path_override_failure_is_loud(tmp_path: Path) -> None:
+    template = tmp_path / "runtime_template"
+    template.mkdir()
+    (template / "conf.yaml").write_text(yaml.safe_dump({"port_analysis_config": {"strategy": {"kwargs": []}}}), encoding="utf-8")
+    for runtime_file in ("qrun_limit_minute.py", "read_exp_res.py"):
+        (template / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+    script = tmp_path / "should_not_run.py"
+    script.write_text(
+        "from pathlib import Path\nPath('command_was_run').write_text('unexpected', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    pred_pkl = tmp_path / "combined_prediction.pkl"
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_pkl)
+    workspace = tmp_path / "workspace"
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        ShellPredBacktestExecutor().execute_pred_backtest(
+            workspace=workspace,
+            pred_pkl=pred_pkl,
+            node_id="wsl2-5080",
+            backtest_config={
+                "runtime_template_dir": str(template),
+                "command": [sys.executable, str(script)],
+                "topk": 50,
+                "timeout_seconds": 30,
+            },
+        )
+
+    assert excinfo.value.reason_code == "pred_backtest_conf_invalid"
+    assert excinfo.value.context["field"] == "port_analysis_config.strategy.kwargs"
+    assert not (workspace / "command_was_run").exists()
 
 
 def test_async_run_exposes_running_phase_heartbeat(tmp_path: Path) -> None:
