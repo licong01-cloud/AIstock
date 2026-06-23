@@ -32,8 +32,8 @@
   "expected": "Remove the misleading Paper v2 Settings navigation entry and remove/downline the /paper-v2/settings card page unless real configuration controls exist.",
   "first_seen_at": "2026-06-23T12:10:17.898884Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b827ebfb5025409741de570e7ff22bf5066bfdf5",
+  "fixed_at": "2026-06-23T16:04:37.549070Z",
   "github_issue_number": 1554,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1554",
   "last_seen_at": "2026-06-23T12:10:17.898884Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1556",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -101,6 +102,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1556 CI -> checks_passed, 20 passed, 0 failed, 0 pending",
+    "production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
