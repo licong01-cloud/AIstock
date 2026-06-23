@@ -1,0 +1,73 @@
+{
+  "actual": "yaml.safe_load parses the unrendered Jinja template and fails with ConstructorError: found unhashable key; run macb_33623f1a4e994cf7_20240702_20260310_20260623T032401345631Z had 14 child tasks fail with pred_backtest_conf_parse_failed.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "tests/aistock_validation/bugs/20260623_BUG-490-p1-regression-combine-backtest-overrides-fail-on-jinja-templated-conf-ya.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-490",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T03:44:33.231634Z",
+  "description": "yaml.safe_load parses the unrendered Jinja template and fails with ConstructorError: found unhashable key; run macb_33623f1a4e994cf7_20240702_20260310_20260623T032401345631Z had 14 child tasks fail with pred_backtest_conf_parse_failed.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-9806d80968ee",
+      "timestamp": "2026-06-23T03:44:33.231631Z"
+    }
+  ],
+  "evidence_uris": [
+    "follows/regression-from BUG-487 #1506; production run macb_33623f1a4e994cf7_20240702_20260310_20260623T032401345631Z"
+  ],
+  "expected": "topk and strategy_kwargs overrides should apply to production Jinja conf.yaml without parsing or rewriting the whole template, preserving Jinja placeholders and failing loud before command execution on missing or ambiguous override targets.",
+  "first_seen_at": "2026-06-23T03:44:33.231634Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1512,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1512",
+  "last_seen_at": "2026-06-23T03:44:33.231634Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "pytest backend/tests/test_multi_alpha_combine_backtest.py -q",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "P1 regression: combine-backtest overrides fail on Jinja templated conf.yaml",
+  "trigger_condition": {
+    "fingerprint": "9806d80968eea3479e633c85",
+    "source_event_id": "FE-20260623-9806d80968ee"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
