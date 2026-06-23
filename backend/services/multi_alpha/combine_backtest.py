@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -53,6 +54,7 @@ DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
 _NODE_RESERVATIONS: dict[str, int] = {}
 _NODE_RESERVATIONS_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 class MultiAlphaCombineBacktestError(RuntimeError):
@@ -229,9 +231,9 @@ class ShellPredBacktestExecutor:
             return ingest_enhanced_metrics(result_path)
 
         prepare_pred_backtest_workspace(workspace=workspace, backtest_config=backtest_config)
+        apply_pred_backtest_overrides(workspace=workspace, backtest_config=backtest_config)
         command = backtest_config.get("command")
         if command is None:
-            apply_pred_backtest_overrides(workspace=workspace, backtest_config=backtest_config)
             error_context = _pred_backtest_error_context(workspace=workspace, node_id=node_id, backtest_config=backtest_config)
             qrun = run_command(
                 [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_pkl.name],
@@ -318,21 +320,29 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
     """Apply explicit runtime overrides before qrun reads conf.yaml."""
 
     topk = backtest_config.get("topk")
-    if topk is None:
+    strategy_overrides = backtest_config.get("strategy_kwargs")
+    has_strategy_overrides = strategy_overrides is not None
+    if topk is None and not has_strategy_overrides:
         return
-    topk_int = _positive_int(topk, field_name="topk")
+    if has_strategy_overrides and not isinstance(strategy_overrides, Mapping):
+        raise MultiAlphaCombineBacktestError(
+            "strategy_kwargs must be a mapping before pred-backtest conf override",
+            reason_code="pred_backtest_conf_override_invalid",
+            context={"workspace": str(workspace), "strategy_kwargs_type": type(strategy_overrides).__name__},
+        )
+    topk_int = _positive_int(topk, field_name="topk") if topk is not None else None
     conf_path = workspace / "conf.yaml"
     try:
         conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise MultiAlphaCombineBacktestError(
-            f"failed to parse pred-backtest conf.yaml for topk override: {type(exc).__name__}: {exc}",
+            f"failed to parse pred-backtest conf.yaml for explicit overrides: {type(exc).__name__}: {exc}",
             reason_code="pred_backtest_conf_parse_failed",
             context={"workspace": str(workspace), "conf_path": str(conf_path)},
         ) from exc
     if not isinstance(conf, dict):
         raise MultiAlphaCombineBacktestError(
-            "pred-backtest conf.yaml root must be a mapping before topk override",
+            "pred-backtest conf.yaml root must be a mapping before explicit overrides",
             reason_code="pred_backtest_conf_invalid",
             context={"workspace": str(workspace), "conf_path": str(conf_path), "root_type": type(conf).__name__},
         )
@@ -344,16 +354,26 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         strategy["kwargs"] = kwargs
     if not isinstance(kwargs, dict):
         raise MultiAlphaCombineBacktestError(
-            "port_analysis_config.strategy.kwargs must be a mapping before topk override",
+            "port_analysis_config.strategy.kwargs must be a mapping before explicit overrides",
             reason_code="pred_backtest_conf_invalid",
             context={"workspace": str(workspace), "conf_path": str(conf_path), "field": "port_analysis_config.strategy.kwargs"},
         )
-    kwargs["topk"] = topk_int
-    backtest_overrides = backtest_config.get("strategy_kwargs")
-    if isinstance(backtest_overrides, Mapping):
-        for key, value in backtest_overrides.items():
+    if topk_int is not None:
+        kwargs["topk"] = topk_int
+    strategy_keys: list[str] = []
+    if isinstance(strategy_overrides, Mapping):
+        for key, value in strategy_overrides.items():
+            strategy_keys.append(str(key))
             kwargs[str(key)] = value
     conf_path.write_text(yaml.safe_dump(conf, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    logger.info(
+        "Applied pred-backtest conf overrides",
+        extra={
+            "workspace": str(workspace),
+            "effective_topk": kwargs.get("topk"),
+            "strategy_kwargs_keys": sorted(strategy_keys),
+        },
+    )
 
 
 def _require_mapping(payload: Mapping[str, Any], key: str, *, conf_path: Path) -> dict[str, Any]:
