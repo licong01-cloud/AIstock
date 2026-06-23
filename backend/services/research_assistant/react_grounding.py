@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger("aistock.research_assistant.react_grounding")
@@ -150,6 +151,16 @@ PROGRAM_ERROR_REASON_CODES = {
 SUCCESS_STATUSES = {"succeeded", "success", "ok"}
 EXTERNAL_RESEARCH_SERVER_KEY = "aistock-external-research"
 EXTERNAL_RESEARCH_WEB_TOOL = "external_research_search_web"
+EXTERNAL_RESEARCH_STUB_HOSTS = ("example.org",)
+EXTERNAL_RESEARCH_STUB_MARKERS = (
+    "deterministic_offline",
+    "offline_extract_provider",
+    "offline_external_research",
+    "offline_stub",
+    "example_web_index",
+    "external_research_summary_adapter",
+    "summary_adapter",
+)
 GRAPH_CONTEXT_RESULT_KEY = ("research-assistant", "graph_context")
 EVIDENCE_GUARD_RESULT_KEY = ("evidence_guard", "compose_with_evidence_guard")
 INFORMATION_QUERY_TERMS = (
@@ -356,8 +367,58 @@ def _payload_declares_empty_result(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _iter_string_values(value: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            values.extend(_iter_string_values(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_iter_string_values(item))
+    elif value is not None:
+        text = str(value).strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _hostname_is_stub(hostname: str | None) -> bool:
+    host = str(hostname or "").strip().lower()
+    return any(host == stub_host or host.endswith(f".{stub_host}") for stub_host in EXTERNAL_RESEARCH_STUB_HOSTS)
+
+
+def _text_contains_stub_host(text: str) -> bool:
+    parsed = urlparse(text)
+    if _hostname_is_stub(parsed.hostname):
+        return True
+    if "://" not in text:
+        parsed = urlparse(f"//{text}")
+        if _hostname_is_stub(parsed.hostname):
+            return True
+    lowered = text.lower()
+    return any(re.search(rf"(^|[^a-z0-9-]){re.escape(stub_host)}([^a-z0-9-]|$)", lowered) for stub_host in EXTERNAL_RESEARCH_STUB_HOSTS)
+
+
+def _external_research_result_is_stub(result: McpToolResult) -> bool:
+    if not _is_external_research_result(result):
+        return False
+    payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+    values = _iter_string_values(payload)
+    values.extend(str(item) for item in result.source_refs if str(item or "").strip())
+    values.extend(str(item) for item in (result.summary, result.observation) if str(item or "").strip())
+    for value in values:
+        lowered = value.lower()
+        if any(marker in lowered for marker in EXTERNAL_RESEARCH_STUB_MARKERS):
+            return True
+        if _text_contains_stub_host(value):
+            return True
+    return False
+
+
 def _result_has_evidence_items(result: McpToolResult) -> bool:
     if not _is_success_result(result):
+        return False
+    if _external_research_result_is_stub(result):
         return False
     payload = result.payload_json if isinstance(result.payload_json, dict) else {}
     if _payload_declares_empty_result(payload):
@@ -476,8 +537,8 @@ def _no_data_source_guard(
         False,
         _render_no_data_source_reply(collected_calls=collected_calls, collected_results=collected_results, config=config),
         "no_data_source_after_mcp_and_external_research",
-        sum(1 for item in collected_results if item.source_refs),
-        sum(1 for item in collected_results if item.as_of),
+        sum(1 for item in collected_results if _result_has_evidence_items(item) and item.source_refs),
+        sum(1 for item in collected_results if _result_has_evidence_items(item) and item.as_of),
     )
 
 

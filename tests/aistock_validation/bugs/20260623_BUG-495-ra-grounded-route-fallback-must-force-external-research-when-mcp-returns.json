@@ -41,6 +41,20 @@
         "nox -s ra_phase5_agent_teams -> passed (13 pytest + catalog/ownership)",
         "nox -s validation_module_registry_l0 -> passed (8 pytest + ownership)"
       ]
+    },
+    {
+      "action": "implementation_update",
+      "actor": "codex",
+      "timestamp": "2026-06-23T13:17:00Z",
+      "note": "Tier2 safety fix: external_research fallback now treats example.org and deterministic/offline summary adapter markers as non-evidence, so stub results route to no_data_source_after_mcp_and_external_research and are not exposed as sources; non-stub external_research evidence is still accepted. No service.py, smoke scripts, production services, production DB, or DDL touched.",
+      "validation": [
+        "pytest backend/tests/research_assistant/test_react_tool_loop.py backend/tests/research_assistant/test_react_grounding.py -q -> 14 passed",
+        "ruff check backend/services/research_assistant/react_grounding.py backend/tests/research_assistant/test_react_tool_loop.py -> passed",
+        "git diff --check -> passed (LF/CRLF warning only)",
+        "nox -s research_assistant_backend -> 331 passed",
+        "nox -s research_assistant_mcp_contract -> 38 passed",
+        "nox -s ra_phase7_full_accept with PLAYWRIGHT_SKIP_WEBSERVER=1 against local test frontend 3011 -> passed (331 backend + frontend lint/build + Playwright 4+8 + crosscheck/catalog/ownership)"
+      ]
     }
   ],
   "evidence_uris": [],
