@@ -561,7 +561,7 @@ class MiniQMTSimBackend(BrokerBackend):
                     break
         if not isinstance(row, dict):
             return None
-        return _normalize_quote_row(symbol, row)
+        return normalize_miniqmt_quote_row(symbol, row)
 
     def query_position_marks(self) -> tuple[dict[str, PositionLot], dict[str, float]]:
         """Return MiniQMT-authoritative positions plus mark prices.
@@ -1112,10 +1112,10 @@ def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
     return None
 
 
-__all__ = ["MiniQMTSimBackend"]
+__all__ = ["MiniQMTSimBackend", "normalize_miniqmt_quote_row"]
 
 
-def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
+def normalize_miniqmt_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
     def first(keys: tuple[str, ...], default: object = None) -> object:
         for key in keys:
             value = row.get(key)
@@ -1139,6 +1139,13 @@ def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
         "ask_price_1": level(ask_prices),
         "bid_volume_1": level(bid_volumes),
         "ask_volume_1": level(ask_volumes),
+        "lastPrice": first(("lastPrice", "last_price", "price", "close", "last"), None),
+        "pre_close": first(("pre_close", "preClose", "preclose", "lastClose", "last_close"), None),
+        "open": first(("open", "openPrice", "open_price"), None),
+        "high": first(("high", "highPrice", "high_price"), None),
+        "low": first(("low", "lowPrice", "low_price"), None),
+        "volume": first(("volume", "vol", "totalVolume", "TotalHand", "total_hand"), None),
+        "amount": first(("amount", "turnover", "totalAmount", "Amount"), None),
         "time": first(("time", "timetag", "datetime"), None),
         "raw": dict(row),
     }

@@ -379,17 +379,28 @@ class FakeLocalSimBroker:
 
 
 class FakeManagedOrderBroker:
-    def __init__(self, order_ids: list[int] | None = None, positions: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        order_ids: list[int] | None = None,
+        positions: list[dict[str, Any]] | None = None,
+        quotes: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.order_ids = list(order_ids or [])
         self.positions = (
             list(positions)
             if positions is not None
             else [{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
         )
+        self.quotes = dict(quotes or {})
         self.place_order_payloads = []
+        self.full_tick_calls: list[list[str]] = []
 
     def get_positions(self):
         return list(self.positions)
+
+    def get_full_tick(self, symbols):
+        self.full_tick_calls.append(list(symbols))
+        return {symbol: dict(self.quotes[symbol]) for symbol in symbols if symbol in self.quotes}
 
     def place_order(self, **kwargs):
         self.place_order_payloads.append(kwargs)
@@ -521,6 +532,28 @@ class FakePreTradeTradabilityProvider:
     def __init__(self, statuses: dict[str, dict[str, Any]] | None = None) -> None:
         self.statuses = dict(statuses or {})
         self.calls: list[dict[str, Any]] = []
+        self.suspend_status_provider = self
+        self.st_status_provider = self
+
+    def get_suspend_status(self, symbol: str, trade_date: date):
+        return SimpleNamespace(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_suspended=False,
+            suspend_type=None,
+            suspend_timing=None,
+            source="unit_test.suspend_status",
+        )
+
+    def get_st_status(self, symbol: str, trade_date: date):
+        return SimpleNamespace(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_st=False,
+            source="unit_test.stock_st",
+            start_date=None,
+            end_date=None,
+        )
 
     def get_statuses(self, symbols: list[str], trade_date: date, *, require_realtime_quote: bool = False):
         self.calls.append(
@@ -4580,8 +4613,8 @@ def test_production_context_provider_loads_miniqmt_positions_from_virtual_ledger
     assert getattr(ctx.managed_order_service, "_broker") is qmt_client
 
 
-def test_production_context_provider_applies_miniqmt_pre_trade_tradability_gate_today() -> None:
-    """MiniQMT production context loads suspend/no-quote evidence before plan generation."""
+def test_production_context_provider_uses_miniqmt_quote_for_pre_trade_gate_today() -> None:
+    """MiniQMT same-day gate must use broker quotes and must not call the TDX provider."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -4612,28 +4645,26 @@ def test_production_context_provider_applies_miniqmt_pre_trade_tradability_gate_
             account_id="QMT_SIM_ACCOUNT",
         )
     )
-    tradability = FakePreTradeTradabilityProvider(
-        {
+    tradability = FakePreTradeTradabilityProvider()
+    broker = FakeManagedOrderBroker(
+        positions=[{"stock_code": "688689.SH", "quantity": 878, "can_sell": 878}],
+        quotes={
             "688689.SH": {
-                "schema_version": "pre_trade_tradability_status_v1",
-                "symbol": "688689.SH",
-                "trade_date": date.today().isoformat(),
-                "is_tradable": False,
-                "reason_code": "NO_TRADABLE_REALTIME_QUOTE",
-                "source": "TDX_REALTIME.batch_quote",
-                "quote_evidence": {
-                    "open": 0,
-                    "high": 0,
-                    "low": 0,
-                    "total_hand": 0,
-                    "bid_price_1": 0,
-                    "ask_price_1": 0,
-                    "no_tradable_market": True,
-                },
+                "bidPrice": [0.0],
+                "askPrice": [0.0],
+                "bidVol": [0],
+                "askVol": [0],
+                "lastPrice": 46.82,
+                "lastClose": 46.8,
+                "openPrice": 0.0,
+                "highPrice": 0.0,
+                "lowPrice": 0.0,
+                "volume": 0,
+                "amount": 0,
+                "time": datetime.now().strftime("%Y%m%d%H%M%S"),
             }
-        }
+        },
     )
-    broker = FakeManagedOrderBroker(positions=[{"stock_code": "688689.SH", "quantity": 878, "can_sell": 878}])
     release = _make_test_release()
     manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
     provider = ProductionSimulationRunContextProvider(
@@ -4649,10 +4680,75 @@ def test_production_context_provider_applies_miniqmt_pre_trade_tradability_gate_
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
 
     assert ctx.pre_trade_tradability["688689.SH"]["reason_code"] == "NO_TRADABLE_REALTIME_QUOTE"
+    assert ctx.pre_trade_tradability["688689.SH"]["source"] == "MINIQMT_REALTIME.broker_quote"
     assert ctx.context_diagnostics["pre_trade_tradability"]["blocked_symbols"] == [
-        {"symbol": "688689.SH", "reason_code": "NO_TRADABLE_REALTIME_QUOTE", "source": "TDX_REALTIME.batch_quote"}
+        {"symbol": "688689.SH", "reason_code": "NO_TRADABLE_REALTIME_QUOTE", "source": "MINIQMT_REALTIME.broker_quote"}
     ]
-    assert tradability.calls[-1]["require_realtime_quote"] is True
+    assert tradability.calls == []
+    assert broker.full_tick_calls == [["688689.SH"]]
+
+
+def test_production_context_provider_miniqmt_quote_missing_is_visible_without_tdx_fallback() -> None:
+    """MiniQMT quote outages must surface as MiniQMT evidence, not TDX timestamp failures."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_quote_missing",
+            strategy_id="strat1",
+            symbol="000001.SZ",
+            open_trade_id="trade_quote_missing",
+            open_date=date.today() - timedelta(days=1),
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("10.00"),
+            cost_amount=Decimal("1000.00"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    tradability = FakePreTradeTradabilityProvider()
+    broker = FakeManagedOrderBroker(
+        positions=[{"stock_code": "000001.SZ", "quantity": 100, "can_sell": 100}],
+        quotes={},
+    )
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        pre_trade_tradability_provider=tradability,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+
+    status = ctx.pre_trade_tradability["000001.SZ"]
+    assert status["is_tradable"] is False
+    assert status["reason_code"] == "REALTIME_QUOTE_MISSING"
+    assert status["source"] == "MINIQMT_REALTIME.broker_quote"
+    assert status["quote_evidence"] == {
+        "quote_source": "MINIQMT_REALTIME.broker_quote",
+        "quote_present": False,
+    }
+    assert tradability.calls == []
+    assert broker.full_tick_calls == [["000001.SZ"]]
 
 
 def test_production_context_provider_drops_miniqmt_stale_lots_missing_from_broker():

@@ -80,6 +80,7 @@ DEFAULT_SCHEDULER_APPROVAL_STATES = (
     SimulationBindingApprovalState.LIVE_APPROVAL_PENDING,
     SimulationBindingApprovalState.LIVE_APPROVED,
 )
+MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
 
 DEFAULT_SCHEDULER_WINDOWS = (
     {"window_id": "pre_open", "label": "盘前", "start": "08:50", "end": "09:10", "action": "readiness"},
@@ -402,6 +403,7 @@ class ProductionSimulationRunContextProvider:
                 "source": type(self._pre_trade_tradability_provider).__name__,
                 "localsim_same_day_quote_required": True,
                 "miniqmt_quote_required": True,
+                "miniqmt_quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
                 "historical_quote_required": False,
             },
             "localsim_market_data_source_policy": {
@@ -663,9 +665,11 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
-        pre_trade_tradability = self._load_pre_trade_tradability(
+        pre_trade_tradability = self._load_miniqmt_pre_trade_tradability(
             symbols=list(positions),
             trade_date=trade_date,
+            binding=binding,
+            qmt_client=qmt_client,
             require_realtime_quote=self._position_loader is None and trade_date == date.today(),
         )
         manifest = self._load_strategy_package_manifest(
@@ -745,11 +749,178 @@ class ProductionSimulationRunContextProvider:
                 and (market_data_source == MinuteDataSource.TDX_REALTIME.value or trade_date == date.today())
             )
         )
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            qmt_client = self._qmt_client_factory() if require_realtime_quote else None
+            return self._load_miniqmt_pre_trade_tradability(
+                symbols=symbols,
+                trade_date=trade_date,
+                binding=binding,
+                qmt_client=qmt_client,
+                require_realtime_quote=require_realtime_quote,
+            )
         return self._load_pre_trade_tradability(
             symbols=symbols,
             trade_date=trade_date,
             require_realtime_quote=require_realtime_quote,
         )
+
+    def _load_miniqmt_pre_trade_tradability(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        binding: SimulationReleaseBinding,
+        qmt_client: Any | None,
+        require_realtime_quote: bool,
+    ) -> dict[str, dict[str, Any]]:
+        if not require_realtime_quote:
+            return {}
+        quote_fetcher = self._build_miniqmt_quote_fetcher(
+            qmt_client=qmt_client,
+            binding=binding,
+            trade_date=trade_date,
+        )
+        provider_kwargs: dict[str, Any] = {
+            "realtime_quote_fetcher": quote_fetcher,
+            "realtime_quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+        }
+        injected_provider = self._pre_trade_tradability_provider if self._pre_trade_tradability_provider_injected else None
+        suspend_status_provider = getattr(injected_provider, "suspend_status_provider", None)
+        st_status_provider = getattr(injected_provider, "st_status_provider", None)
+        if suspend_status_provider is not None:
+            provider_kwargs["suspend_status_provider"] = suspend_status_provider
+        if st_status_provider is not None:
+            provider_kwargs["st_status_provider"] = st_status_provider
+        provider = PreTradeTradabilityProvider(**provider_kwargs)
+        return self._load_pre_trade_tradability(
+            symbols=symbols,
+            trade_date=trade_date,
+            require_realtime_quote=True,
+            provider=provider,
+        )
+
+    def _build_miniqmt_quote_fetcher(
+        self,
+        *,
+        qmt_client: Any | None,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> Callable[[list[str]], dict[str, dict[str, Any]]]:
+        if qmt_client is None:
+            raise DataUnavailableError(
+                "MiniQMT realtime quote fetch requires a MiniQMT broker client",
+                context={
+                    "reason_code": "MINIQMT_REALTIME_QUOTE_CLIENT_MISSING",
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "broker_account_id": binding.broker_account_id,
+                    "trade_date": trade_date.isoformat(),
+                    "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                },
+            )
+
+        def fetch(symbols: list[str]) -> dict[str, dict[str, Any]]:
+            normalized_symbols = [str(symbol).strip() for symbol in symbols if str(symbol).strip()]
+            if not normalized_symbols:
+                return {}
+            query_quote = getattr(qmt_client, "query_quote", None)
+            try:
+                if callable(query_quote):
+                    quotes: dict[str, dict[str, Any]] = {}
+                    for symbol in normalized_symbols:
+                        row = query_quote(symbol)
+                        if row is None:
+                            continue
+                        if not isinstance(row, dict):
+                            raise DataUnavailableError(
+                                "MiniQMT query_quote returned invalid quote payload",
+                                context={
+                                    "reason_code": "MINIQMT_REALTIME_QUOTE_PAYLOAD_INVALID",
+                                    "strategy_id": binding.strategy_id,
+                                    "binding_id": binding.binding_id,
+                                    "trade_date": trade_date.isoformat(),
+                                    "symbol": symbol,
+                                    "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                                    "payload_type": type(row).__name__,
+                                },
+                            )
+                        quotes[symbol] = dict(row)
+                    return quotes
+
+                get_full_tick = getattr(qmt_client, "get_full_tick", None)
+                if not callable(get_full_tick):
+                    raise DataUnavailableError(
+                        "MiniQMT realtime quote client must expose get_full_tick or query_quote",
+                        context={
+                            "reason_code": "MINIQMT_REALTIME_QUOTE_FETCHER_MISSING",
+                            "strategy_id": binding.strategy_id,
+                            "binding_id": binding.binding_id,
+                            "broker_account_id": binding.broker_account_id,
+                            "trade_date": trade_date.isoformat(),
+                            "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                            "client_type": type(qmt_client).__name__,
+                        },
+                    )
+                raw_payload = get_full_tick(normalized_symbols)
+                if not isinstance(raw_payload, dict):
+                    raise DataUnavailableError(
+                        "MiniQMT get_full_tick returned invalid quote payload",
+                        context={
+                            "reason_code": "MINIQMT_REALTIME_QUOTE_PAYLOAD_INVALID",
+                            "strategy_id": binding.strategy_id,
+                            "binding_id": binding.binding_id,
+                            "trade_date": trade_date.isoformat(),
+                            "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                            "payload_type": type(raw_payload).__name__,
+                        },
+                    )
+                from backend.services.paper_trading_v2.broker.minqmtsim import normalize_miniqmt_quote_row
+
+                quotes: dict[str, dict[str, Any]] = {}
+                for symbol in normalized_symbols:
+                    row = raw_payload.get(symbol)
+                    if row is None:
+                        raw_code = symbol.split(".")[0]
+                        for key, value in raw_payload.items():
+                            if str(key).split(".")[0] == raw_code:
+                                row = value
+                                break
+                    if row is None:
+                        continue
+                    if not isinstance(row, dict):
+                        raise DataUnavailableError(
+                            "MiniQMT get_full_tick returned invalid quote row",
+                            context={
+                                "reason_code": "MINIQMT_REALTIME_QUOTE_ROW_INVALID",
+                                "strategy_id": binding.strategy_id,
+                                "binding_id": binding.binding_id,
+                                "trade_date": trade_date.isoformat(),
+                                "symbol": symbol,
+                                "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                                "payload_type": type(row).__name__,
+                            },
+                        )
+                    quotes[symbol] = dict(normalize_miniqmt_quote_row(symbol, row))
+                return quotes
+            except DataUnavailableError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise DataUnavailableError(
+                    "MiniQMT realtime quote fetch failed",
+                    context={
+                        "reason_code": "MINIQMT_REALTIME_QUOTE_FETCH_FAILED",
+                        "strategy_id": binding.strategy_id,
+                        "binding_id": binding.binding_id,
+                        "broker_account_id": binding.broker_account_id,
+                        "trade_date": trade_date.isoformat(),
+                        "symbols": normalized_symbols,
+                        "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                ) from exc
+
+        return fetch
 
     def _load_pre_trade_tradability(
         self,
@@ -757,18 +928,20 @@ class ProductionSimulationRunContextProvider:
         symbols: list[str],
         trade_date: date,
         require_realtime_quote: bool,
+        provider: Any | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not require_realtime_quote and not self._pre_trade_tradability_provider_injected:
             return {}
         if self._position_loader is not None and not self._pre_trade_tradability_provider_injected:
             return {}
-        loader = getattr(self._pre_trade_tradability_provider, "get_statuses", None)
+        tradability_provider = provider or self._pre_trade_tradability_provider
+        loader = getattr(tradability_provider, "get_statuses", None)
         if not callable(loader):
             raise DataUnavailableError(
                 "pre-trade tradability provider must expose get_statuses",
                 context={
                     "reason_code": "PRE_TRADE_TRADABILITY_PROVIDER_METHOD_MISSING",
-                    "provider": type(self._pre_trade_tradability_provider).__name__,
+                    "provider": type(tradability_provider).__name__,
                 },
             )
         try:
@@ -780,7 +953,7 @@ class ProductionSimulationRunContextProvider:
                 "pre-trade tradability provider returned invalid payload",
                 context={
                     "reason_code": "PRE_TRADE_TRADABILITY_PROVIDER_INVALID_PAYLOAD",
-                    "provider": type(self._pre_trade_tradability_provider).__name__,
+                    "provider": type(tradability_provider).__name__,
                     "payload_type": type(raw).__name__,
                 },
             )
