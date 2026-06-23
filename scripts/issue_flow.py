@@ -970,6 +970,31 @@ def _infer_github_issue_refs_from_text(*values: str) -> list[str]:
     return _unique_strings(f"#{item}" for item in found)
 
 
+def _infer_closing_issue_refs_from_text(*values: str) -> list[str]:
+    found: list[str] = []
+    closing_verbs = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+    for value in values:
+        for match in re.finditer(
+            rf"\b{closing_verbs}\b\s*:?\s*(?:\S+\s+){{0,6}}?#(\d{{1,7}})\b",
+            value or "",
+            flags=re.IGNORECASE,
+        ):
+            prefix = (value or "")[max(0, match.start() - 24) : match.start()]
+            if re.search(r"\b(?:not|does\s+not|do\s+not)\s+$", prefix, flags=re.IGNORECASE):
+                continue
+            found.append(f"#{match.group(1)}")
+        for match in re.finditer(
+            rf"\b{closing_verbs}\b\s*:?\s*(?:\S+\s+){{0,6}}?\b(BUG-\d{{3,}})\b",
+            value or "",
+            flags=re.IGNORECASE,
+        ):
+            prefix = (value or "")[max(0, match.start() - 24) : match.start()]
+            if re.search(r"\b(?:not|does\s+not|do\s+not)\s+$", prefix, flags=re.IGNORECASE):
+                continue
+            found.append(match.group(1).upper())
+    return _unique_strings(found)
+
+
 def _infer_severity_from_text(*values: str) -> list[str]:
     severities: list[str] = []
     for value in values:
@@ -1082,6 +1107,14 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
             if item.get("bug_id")
         ]
     )
+    bug_record_severity_signals = _unique_strings(
+        [
+            str(item.get("severity") or item.get("severity_guess") or "")
+            for item in bug_records
+            if item.get("severity") or item.get("severity_guess")
+        ]
+    )
+    pr_text_severity_signals = _infer_severity_from_text(branch, commit_subjects, pr_title, pr_body)
     inferred_scope: list[str] = []
     for record in bug_records:
         inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
@@ -1100,15 +1133,11 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "pr_metadata_present": bool(pr_title or pr_body),
         "linked_issues": linked,
         "bug_id_signals": bug_id_signals,
+        "closing_issue_refs": _infer_closing_issue_refs_from_text(pr_title, pr_body, commit_subjects),
         "inferred_allowed_scope": _unique_strings(inferred_scope),
-        "severity_signals": _unique_strings(
-            [
-                str(item.get("severity") or item.get("severity_guess") or "")
-                for item in bug_records
-                if item.get("severity") or item.get("severity_guess")
-            ]
-            + _infer_severity_from_text(branch, commit_subjects, pr_title, pr_body)
-        ),
+        "severity_signals": _unique_strings(bug_record_severity_signals + pr_text_severity_signals),
+        "bug_record_severity_signals": bug_record_severity_signals,
+        "pr_text_severity_signals": pr_text_severity_signals,
         "pr_body_validation_evidence": bool(
             re.search(r"(validation evidence|validation_evidence|nox|pytest|passed|success)", pr_body, flags=re.IGNORECASE)
         ),
@@ -1206,18 +1235,18 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     issue_record = summary.get("issue_record") or {}
     inferred = summary.get("linkage_inference") or {}
     scope = summary.get("scope_check") or {}
-    severity = _highest_severity(
-        _as_list(issue_record.get("severity"))
-        + _as_list(issue_record.get("severity_guess"))
-        + _as_list(inferred.get("severity_signals"))
-    )
-    explicit_bug_context = bool(
-        _as_list(issue_record.get("bug_id"))
-        or _as_list(inferred.get("bug_json_paths"))
-        or _as_list(inferred.get("bug_id_signals"))
-    )
-    explicit_severity = bool(_as_list(issue_record.get("severity")) or _as_list(issue_record.get("severity_guess")))
-    is_high_risk = severity in {"P0", "P1"} and (explicit_bug_context or explicit_severity)
+    explicit_record_severity = _as_list(issue_record.get("severity")) + _as_list(issue_record.get("severity_guess"))
+    bug_record_severity = explicit_record_severity + _as_list(inferred.get("bug_record_severity_signals"))
+    changed_bug_json = bool(_as_list(inferred.get("bug_json_paths")))
+    closing_issue_refs = _as_list(inferred.get("closing_issue_refs"))
+    closes_bug_issue = bool(closing_issue_refs)
+    linked_bug_record_explicit_severity = bool(bug_record_severity)
+    actual_bug_fix_evidence = changed_bug_json or closes_bug_issue or linked_bug_record_explicit_severity
+    severity_values = list(bug_record_severity)
+    if changed_bug_json or closes_bug_issue:
+        severity_values.extend(_as_list(inferred.get("pr_text_severity_signals")))
+    severity = _highest_severity(severity_values)
+    is_high_risk = severity in {"P0", "P1"} and actual_bug_fix_evidence
     validation_evidence_present = bool(
         issue_record.get("verification_run_id")
         or _as_list(issue_record.get("validation_evidence"))
@@ -1251,6 +1280,14 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
         "workflow_gate": gate,
         "enforced": enforce_p0_p1,
         "severity": severity,
+        "is_high_risk": is_high_risk,
+        "high_risk_evidence": {
+            "changed_bug_json": changed_bug_json,
+            "closes_bug_issue": closes_bug_issue,
+            "closing_issue_refs": closing_issue_refs,
+            "linked_bug_record_explicit_severity": linked_bug_record_explicit_severity,
+            "reference_only_bug_id_signals": bool(_as_list(inferred.get("bug_id_signals")) and not actual_bug_fix_evidence),
+        },
         "checks": checks,
         "blocking": missing if gate == "blocked" else [],
         "warnings": missing if gate == "warning" else [],
@@ -1387,7 +1424,10 @@ def build_pr_quality(
             "bug_json_paths": inferred["bug_json_paths"],
             "pr_metadata_present": inferred["pr_metadata_present"],
             "severity_signals": inferred["severity_signals"],
+            "bug_record_severity_signals": inferred["bug_record_severity_signals"],
+            "pr_text_severity_signals": inferred["pr_text_severity_signals"],
             "bug_id_signals": inferred["bug_id_signals"],
+            "closing_issue_refs": inferred["closing_issue_refs"],
             "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
             "bug_record_validation_evidence": inferred["bug_record_validation_evidence"],
             "pr_body_production_gates": inferred["pr_body_production_gates"],

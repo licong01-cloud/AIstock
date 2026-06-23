@@ -671,6 +671,14 @@ rules:
     layer: docs
     risk_level: low
     ownership_reason: Analysis documents record quant research and experiment findings.
+  - rule_id: docs_handoff
+    priority: 50
+    include:
+      - docs/handoff/**
+    primary_module: docs.analysis
+    layer: docs
+    risk_level: low
+    ownership_reason: Handoff documents record task analysis and reviewer handoff notes.
   - rule_id: docs_operations
     priority: 50
     include:
