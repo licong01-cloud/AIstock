@@ -588,7 +588,7 @@ def quote_tradability_evidence(
     )
     if last_price is None or last_price <= 0:
         raise DataUnavailableError(
-            "TDX realtime quote last price is missing or invalid",
+            f"{_quote_source_label(source)} realtime quote last price is missing or invalid",
             context={
                 "reason_code": "REALTIME_QUOTE_LAST_PRICE_MISSING",
                 "symbol": symbol,
@@ -599,7 +599,7 @@ def quote_tradability_evidence(
         )
     if pre_close_price is None or pre_close_price <= 0:
         raise DataUnavailableError(
-            "TDX realtime quote previous close is missing or invalid",
+            f"{_quote_source_label(source)} realtime quote previous close is missing or invalid",
             context={
                 "reason_code": "REALTIME_QUOTE_PRE_CLOSE_MISSING",
                 "symbol": symbol,
@@ -608,18 +608,20 @@ def quote_tradability_evidence(
                 "pre_close": pre_close_price,
             },
         )
+    price_basis = _quote_price_basis(quote, source=source)
     limit_pct = _a_share_daily_limit_pct(symbol, st_status=st_status)
-    limit_up = _round_price_tick_raw(pre_close_price * (1.0 + limit_pct))
-    limit_down = _round_price_tick_raw(pre_close_price * (1.0 - limit_pct))
+    limit_up = _round_quote_price_tick(pre_close_price * (1.0 + limit_pct), price_basis=price_basis)
+    limit_down = _round_quote_price_tick(pre_close_price * (1.0 - limit_pct), price_basis=price_basis)
     if limit_down >= limit_up:
         raise DataUnavailableError(
-            "TDX realtime quote derived limit price range is invalid",
+            f"{_quote_source_label(source)} realtime quote derived limit price range is invalid",
             context={
                 "reason_code": "REALTIME_QUOTE_LIMIT_RANGE_INVALID",
                 "symbol": symbol,
                 "trade_date": trade_date.isoformat(),
                 "quote_source": source,
                 "pre_close": pre_close_price,
+                "price_basis": price_basis,
                 "limit_pct": limit_pct,
                 "limit_up": limit_up,
                 "limit_down": limit_down,
@@ -644,6 +646,7 @@ def quote_tradability_evidence(
         "limit_pct": limit_pct,
         "limit_up": limit_up,
         "limit_down": limit_down,
+        "quote_price_basis": price_basis,
         "is_st": st_status.is_st,
         "st_status_source": st_status.source,
         "at_limit_up": at_limit_up,
@@ -695,7 +698,7 @@ def _require_tdx_quote_timestamp(
     raw_timestamp = _extract_tdx_quote_timestamp_raw(quote)
     if raw_timestamp is None:
         raise DataUnavailableError(
-            "TDX realtime quote timestamp is missing",
+            f"{_quote_source_label(source)} realtime quote timestamp is missing",
             context={
                 "reason_code": "REALTIME_QUOTE_TIMESTAMP_MISSING",
                 "symbol": symbol,
@@ -709,7 +712,7 @@ def _require_tdx_quote_timestamp(
         quote_timestamp = _parse_tdx_quote_timestamp(raw_timestamp, trade_date=trade_date)
     except ValueError as exc:
         raise DataUnavailableError(
-            "TDX realtime quote timestamp is invalid",
+            f"{_quote_source_label(source)} realtime quote timestamp is invalid",
             context={
                 "reason_code": "REALTIME_QUOTE_TIMESTAMP_INVALID",
                 "symbol": symbol,
@@ -722,7 +725,7 @@ def _require_tdx_quote_timestamp(
         ) from exc
     if quote_timestamp.date() != trade_date:
         raise DataUnavailableError(
-            "TDX realtime quote timestamp date does not match trade_date",
+            f"{_quote_source_label(source)} realtime quote timestamp date does not match trade_date",
             context={
                 "reason_code": "REALTIME_QUOTE_DATE_MISMATCH",
                 "symbol": symbol,
@@ -737,7 +740,7 @@ def _require_tdx_quote_timestamp(
     age = as_of_cmp - quote_timestamp
     if age > max_quote_age:
         raise DataUnavailableError(
-            "TDX realtime quote is stale",
+            f"{_quote_source_label(source)} realtime quote is stale",
             context={
                 "reason_code": "REALTIME_QUOTE_STALE",
                 "symbol": symbol,
@@ -752,7 +755,7 @@ def _require_tdx_quote_timestamp(
         )
     if quote_timestamp - as_of_cmp > TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW:
         raise DataUnavailableError(
-            "TDX realtime quote timestamp is in the future",
+            f"{_quote_source_label(source)} realtime quote timestamp is in the future",
             context={
                 "reason_code": "REALTIME_QUOTE_FUTURE_TIMESTAMP",
                 "symbol": symbol,
@@ -976,9 +979,51 @@ def _a_share_daily_limit_pct(symbol: str, *, st_status: DailyStStatus) -> float:
 
 
 def _round_price_tick_raw(value: float) -> float:
-    raw_tick = PRICE_TICK * Decimal(str(PRICE_UNIT_DIVISOR))
-    rounded_units = (Decimal(str(value)) / raw_tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    return float(rounded_units * raw_tick)
+    return _round_quote_price_tick(value, price_basis="raw_li")
+
+
+def _round_price_tick_yuan(value: float) -> float:
+    return float(Decimal(str(value)).quantize(PRICE_TICK, rounding=ROUND_HALF_UP))
+
+
+def _round_quote_price_tick(value: float, *, price_basis: str) -> float:
+    if price_basis == "yuan":
+        return _round_price_tick_yuan(value)
+    if price_basis == "raw_li":
+        raw_tick = PRICE_TICK * Decimal(str(PRICE_UNIT_DIVISOR))
+        rounded_units = (Decimal(str(value)) / raw_tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return float(rounded_units * raw_tick)
+    raise DataUnavailableError(
+        "realtime quote price basis is invalid",
+        context={
+            "reason_code": "REALTIME_QUOTE_PRICE_BASIS_INVALID",
+            "price_basis": price_basis,
+        },
+    )
+
+
+def _quote_price_basis(quote: dict[str, Any], *, source: str) -> str:
+    raw_basis = str(quote.get("price_basis") or quote.get("quote_price_basis") or "").strip().lower()
+    if raw_basis in {"yuan", "raw_li"}:
+        return raw_basis
+    if raw_basis:
+        raise DataUnavailableError(
+            "realtime quote price basis is invalid",
+            context={
+                "reason_code": "REALTIME_QUOTE_PRICE_BASIS_INVALID",
+                "quote_source": source,
+                "price_basis": raw_basis,
+            },
+        )
+    if str(source or "").upper().startswith("MINIQMT_REALTIME"):
+        return "yuan"
+    return "raw_li"
+
+
+def _quote_source_label(source: str) -> str:
+    if str(source or "").upper().startswith("MINIQMT_REALTIME"):
+        return "MiniQMT"
+    return "TDX"
 
 
 def _normalize_symbol_list(symbols: list[str]) -> list[str]:

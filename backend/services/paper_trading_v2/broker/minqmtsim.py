@@ -1135,6 +1135,7 @@ def normalize_miniqmt_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, o
 
     normalized = {
         "symbol": symbol,
+        "price_basis": "yuan",
         "bid_price_1": level(bid_prices),
         "ask_price_1": level(ask_prices),
         "bid_volume_1": level(bid_volumes),

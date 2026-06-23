@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
+from backend.services.paper_trading_v2.market_data import DailyStStatus, MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.broker.base import OrderHandle
@@ -546,13 +546,11 @@ class FakePreTradeTradabilityProvider:
         )
 
     def get_st_status(self, symbol: str, trade_date: date):
-        return SimpleNamespace(
+        return DailyStStatus(
             symbol=symbol,
             trade_date=trade_date,
             is_st=False,
             source="unit_test.stock_st",
-            start_date=None,
-            end_date=None,
         )
 
     def get_statuses(self, symbols: list[str], trade_date: date, *, require_realtime_quote: bool = False):
@@ -4686,6 +4684,81 @@ def test_production_context_provider_uses_miniqmt_quote_for_pre_trade_gate_today
     ]
     assert tradability.calls == []
     assert broker.full_tick_calls == [["688689.SH"]]
+
+
+def test_production_context_provider_miniqmt_quote_yuan_limits_do_not_fail_pre_run() -> None:
+    """MiniQMT broker quotes are yuan-denominated and must not use TDX raw-li rounding."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="StrategyOne",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_miniqmt_quote",
+            strategy_id="strat1",
+            symbol="603303.SH",
+            open_trade_id="trade_miniqmt_quote",
+            open_date=date.today() - timedelta(days=1),
+            quantity=100,
+            available_quantity=100,
+            remaining_quantity=100,
+            avg_cost=Decimal("30.14"),
+            cost_amount=Decimal("3014.00"),
+            account_id="QMT_SIM_ACCOUNT",
+        )
+    )
+    tradability = FakePreTradeTradabilityProvider()
+    broker = FakeManagedOrderBroker(
+        positions=[{"stock_code": "603303.SH", "quantity": 100, "can_sell": 100}],
+        quotes={
+            "603303.SH": {
+                "bidPrice": [30.23],
+                "askPrice": [30.26],
+                "bidVol": [108],
+                "askVol": [17],
+                "lastPrice": 30.23,
+                "lastClose": 30.14,
+                "openPrice": 30.27,
+                "highPrice": 31.8,
+                "lowPrice": 29.01,
+                "volume": 66974,
+                "amount": 203373536,
+                "time": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: 30.23 for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        package_manifest_loader=lambda package_id: manifest,
+        pre_trade_tradability_provider=tradability,
+        enable_miniqmt_submit=False,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+
+    status = ctx.pre_trade_tradability["603303.SH"]
+    assert status["is_tradable"] is True
+    assert status["quote_evidence"]["quote_price_basis"] == "yuan"
+    assert status["quote_evidence"]["limit_up"] == pytest.approx(33.15)
+    assert status["quote_evidence"]["limit_down"] == pytest.approx(27.13)
+    assert tradability.calls == []
+    assert broker.full_tick_calls == [["603303.SH"]]
 
 
 def test_production_context_provider_miniqmt_quote_missing_is_visible_without_tdx_fallback() -> None:
