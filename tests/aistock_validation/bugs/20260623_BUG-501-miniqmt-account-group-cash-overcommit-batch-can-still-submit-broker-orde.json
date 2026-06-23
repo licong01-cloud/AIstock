@@ -5,7 +5,7 @@
   "module": "qmt_strategy_ledger",
   "severity": "P0",
   "risk_area": "bug",
-  "status": "validation_passed",
+  "status": "pr_open",
   "description": "Batch preflight can submit a broker order even when same account-group aggregate cash demand exceeds buying power.",
   "actual": "Batch preflight can submit a broker order even when same account-group aggregate cash demand exceeds buying power.",
   "expected": "Same account-group overcommit batch must deterministically reject before any broker call, with ACCOUNT_GROUP_CASH_OVERCOMMIT reason_code.",
@@ -57,6 +57,12 @@
       "actor": "codex",
       "note": "Implemented account-group pre-broker overcommit rejection with ACCOUNT_GROUP_CASH_OVERCOMMIT; PR pending Tier2.",
       "timestamp": "2026-06-23T18:12:38.331406+00:00"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #1565 for Tier2; not merged or close-synced.",
+      "timestamp": "2026-06-23T18:21:44.852356+00:00"
     }
   ],
   "fix_branch": "bug/BUG-501-p0-miniqmt-account-group-cash-overcommit-batch-c-20260624",
@@ -89,5 +95,7 @@
       "command": "rtk cmd /c set AISTOCK_HOSTED_CI=1 and PAPER_V2_L3_SKIP_UI=1 then python -m nox -s paper_v2_l3",
       "result": "passed"
     }
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1565",
+  "pr_number": 1565
 }
