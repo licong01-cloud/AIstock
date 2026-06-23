@@ -25,6 +25,9 @@ class ReactGroundingConfig:
     token_budget: int | None = None
     placeholder_patterns: tuple[str, ...] = (r"\bXX\b", r"\bX%\b", r"approxX", r"about X")
     forbidden_answer_markers: tuple[str, ...] = ()
+    future_answer_terms: tuple[str, ...] = ("未来", "预测", "预判", "趋势", "会涨", "会跌", "上涨", "下跌", "forecast", "predict", "outlook")
+    future_required_terms: tuple[str, ...] = ("驱动", "情景", "风险", "driver", "scenario", "risk")
+    future_directional_markers: tuple[str, ...] = ("一定会上涨", "将上涨", "会持续上涨", "必然上涨", "一定会下跌", "将下跌", "会持续下跌", "必然下跌", "sure to rise", "will rise", "will fall")
 
     def __post_init__(self) -> None:
         if self.max_tool_iterations <= 0:
@@ -464,6 +467,8 @@ def _payload_source_values(payload: dict[str, Any]) -> list[str]:
     for key in ("source_refs", "evidence_sources", "evidence_refs"):
         items = payload.get(key) if isinstance(payload.get(key), list) else []
         values.extend(str(item) for item in items if str(item or "").strip())
+    if payload.get("graph_context") or payload.get("response_mode") == "graph_context":
+        values.append("graph_context")
     return _dedupe_preserve_order(values)
 
 
@@ -472,6 +477,8 @@ def _payload_as_of_values(payload: dict[str, Any]) -> list[str]:
     for key in ("as_of", "trade_date", "analysis_date", "report_period", "date", "indicator_date"):
         if payload.get(key):
             values.append(str(payload[key]))
+    if payload.get("graph_context") or payload.get("response_mode") == "graph_context":
+        values.append(str(payload.get("as_of") or "LIVE"))
     return _dedupe_preserve_order(values)
 
 
@@ -513,6 +520,9 @@ def _citation_pairs_for_result(result: McpToolResult) -> list[dict[str, str]]:
     payload_dates = _payload_as_of_values(payload)
     result_dates = _dedupe_preserve_order([str(result.as_of or ""), *payload_dates])
     pairs: list[dict[str, str]] = []
+    if payload.get("graph_context") or payload.get("response_mode") == "graph_context":
+        graph_date = str(payload.get("as_of") or result.as_of or "LIVE")
+        pairs.append({"server_key": result.server_key, "tool_name": result.tool_name, "source": "graph_context", "as_of": graph_date})
     for source in _dedupe_preserve_order([*result.source_refs, *_payload_source_values(payload)]):
         for as_of in result_dates[:1]:
             pairs.append({"server_key": result.server_key, "tool_name": result.tool_name, "source": source, "as_of": as_of})
@@ -566,6 +576,64 @@ def _append_missing_evidence_citation(text: str, collected_results: list[McpTool
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(term.lower() in lowered for term in terms)
+
+
+def _is_future_question(config: ReactGroundingConfig) -> bool:
+    return _contains_any(config.user_message, config.future_answer_terms)
+
+
+def _passes_future_answer_discipline(text: str, config: ReactGroundingConfig) -> bool:
+    if not _is_future_question(config):
+        return True
+    lowered = text.lower()
+    answer_mentions_future = _contains_any(
+        text,
+        ("未来", "预测", "预判", "会涨", "会跌", "上涨", "下跌", "forecast", "predict", "outlook", *config.future_directional_markers),
+    )
+    if not answer_mentions_future:
+        return True
+    if any(marker.lower() in lowered for marker in config.future_directional_markers):
+        return False
+    matched = sum(1 for term in config.future_required_terms if term.lower() in lowered)
+    no_prediction_boundary = any(term in lowered for term in ("不预测", "不做方向预测", "不构成投资建议", "not predict", "not investment advice"))
+    return matched >= 3 and no_prediction_boundary
+
+
+def _requires_synthesis_answer(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    executed_tool_keys = {
+        (item.server_key, item.tool_name)
+        for item in collected_results
+        if item.executed and (item.server_key, item.tool_name) != ("research-assistant", "graph_context")
+    }
+    if len(executed_tool_keys) >= 2 and not any(item.status in {"failed", "rejected"} for item in collected_results):
+        return True
+    return _contains_any(config.user_message, ("综合", "关系", "怎么用", "如何用", "怎么利用", "路径", "链路", "synthesize", "multi-source"))
+
+
+def _looks_like_source_listing(text: str, collected_results: list[McpToolResult]) -> bool:
+    executed_tool_keys = {
+        (item.server_key, item.tool_name)
+        for item in collected_results
+        if item.executed and (item.server_key, item.tool_name) != ("research-assistant", "graph_context")
+    }
+    if len(executed_tool_keys) < 2:
+        return False
+    lowered = text.lower()
+    tool_mentions = sum(1 for item in collected_results if item.tool_name and item.tool_name.lower() in lowered)
+    section_markers = sum(1 for marker in ("来源1", "来源2", "来源 1", "来源 2", "source 1", "source 2", "工具1", "工具2", "tool 1", "tool 2", "第一项", "第二项") if marker in lowered)
+    synthesis_terms = ("bottom-line", "结论", "综合", "意味着", "优先", "路径", "下一步", "判断")
+    return (tool_mentions >= 2 or section_markers >= 2) and not any(term in lowered for term in synthesis_terms)
+
+
+def _passes_multi_source_synthesis(text: str, config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    if not _requires_synthesis_answer(config, collected_results):
+        return True
+    if _looks_like_source_listing(text, collected_results):
+        return False
+    lowered = text.lower()
+    if any(term in lowered for term in ("bottom-line", "结论", "综合", "意味着", "路径", "下一步", "判断", "可以先", "优先")):
+        return True
+    return bool(_evidence_citation_inventory(collected_results))
 
 
 def _status_counts_from_results(collected_results: list[McpToolResult]) -> dict[str, int]:
@@ -649,6 +717,20 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
         return decision
     if config.evidence_required and collected_results and not _matches_completed_focus(text, config, collected_results):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested completed-status focus.", "question_focus_mismatch", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
+    if config.evidence_required and collected_results and not _passes_future_answer_discipline(text, config):
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: future-looking answers require drivers, scenarios, risks, and no directional prediction.", "future_answer_boundary_missing", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
+    if config.evidence_required and collected_results and not _passes_multi_source_synthesis(text, config, collected_results):
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: multi-source answers must synthesize a judgement instead of listing tool outputs.", "multi_source_synthesis_missing", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
@@ -771,6 +853,8 @@ def _evidence_guard_retry_directive(guard: EvidenceGuardDecision, failed_answer:
                     "Regenerate the final answer using only the existing TOOL_RESULT evidence. "
                     "Cite exact citation_options.source and citation_options.as_of strings; "
                     "for multi-section evidence cite the relevant section source/as_of token. "
+                    "If reason_code is future_answer_boundary_missing, use drivers, scenarios, risks, and say you do not predict direction. "
+                    "If reason_code is multi_source_synthesis_missing, give a bottom-line synthesis before details instead of listing tools. "
                     "Do not invent placeholders, dates, sources, or new facts. "
                     "If the evidence is genuinely insufficient, say so with the reason."
                 ),
@@ -790,6 +874,7 @@ def run_react_grounding_loop(
     catalog_entries: list[ToolCatalogEntry],
     config: ReactGroundingConfig,
     seeded_tool_calls: list[McpToolCall] | None = None,
+    initial_tool_results: list[McpToolResult] | None = None,
     fallback_tool_calls: Callable[[], list[McpToolCall]] | None = None,
     tool_result_compactor: ToolResultCompactor | None = None,
 ) -> ReactGroundingResult:
@@ -798,7 +883,12 @@ def run_react_grounding_loop(
     collected_calls: list[McpToolCall] = []
     collected_results: list[McpToolResult] = []
     model_turns: list[ModelTurn] = []
-    pending_seeded = sorted(seeded_tool_calls or [], key=lambda call: call.sorted_key())
+    for result in list(initial_tool_results or []):
+        collected_results.append(result)
+        working_messages.append(tool_result_message(result))
+    if collected_results:
+        trace_steps.append({"iteration": 0, "preloaded_tool_result_count": len(collected_results)})
+    pending_seeded = list(seeded_tool_calls or [])
     final_text = ""
     stopped_reason = "max_iterations_exhausted"
     last_guard: EvidenceGuardDecision | None = None
@@ -815,14 +905,14 @@ def run_react_grounding_loop(
             turn = ModelTurn(content=json.dumps({"tool_calls": [call.__dict__ for call in calls]}, ensure_ascii=False), provider="route_seed", model="route_seed", duration_ms=0, usage={})
         else:
             turn = model_complete(working_messages)
-            calls = sorted((turn.tool_calls or extract_structured_tool_calls(turn.content)), key=lambda call: call.sorted_key())
+            calls = list(turn.tool_calls or extract_structured_tool_calls(turn.content))
         model_turns.append(turn)
         trace_steps.append({"iteration": iteration, "model": turn.model, "tool_call_count": len(calls), "provider": turn.provider})
         if not calls:
             guard = compose_with_evidence_guard(turn.content, collected_results, config)
             last_guard = guard
             trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
-            citation_failure = guard.reason in {"missing_inline_tool_evidence", "unsourced_numeric_fact"}
+            citation_failure = guard.reason in {"missing_inline_tool_evidence", "unsourced_numeric_fact", "future_answer_boundary_missing", "multi_source_synthesis_missing"}
             if not guard.allowed and citation_failure and iteration < config.max_tool_iterations and _evidence_citation_inventory(collected_results):
                 collected_results.append(
                     McpToolResult(
@@ -858,7 +948,7 @@ def run_react_grounding_loop(
                 error_guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
                 stopped_reason = "tool_error"
                 return ReactGroundingResult(explicit, working_messages, collected_calls, collected_results, trace_steps, error_guard, iteration, stopped_reason, model_turns)
-            fallback_calls = sorted((fallback_tool_calls() if fallback_tool_calls else []), key=lambda call: call.sorted_key())
+            fallback_calls = list(fallback_tool_calls() if fallback_tool_calls else [])
             already_called = {(call.server_key, call.tool_name) for call in collected_calls}
             fallback_calls = [call for call in fallback_calls if (call.server_key, call.tool_name) not in already_called]
             if fallback_calls:
@@ -880,7 +970,7 @@ def run_react_grounding_loop(
                 continue
 
         iteration_results: list[McpToolResult] = []
-        for call in sorted(calls, key=lambda item: item.sorted_key()):
+        for call in calls:
             collected_calls.append(call)
             try:
                 decision = assert_tool_in_catalog(call, catalog_entries)

@@ -133,7 +133,8 @@ class _StockEvidenceCardLlm:
                 return LlmCallResult(
                     content=(
                         f"{symbol} 全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
-                        f"未来趋势只能基于已返回证据谨慎判断；已覆盖 {datasets}。"
+                        "未来趋势只给驱动、情景和风险，不预测方向，也不构成投资建议；"
+                        f"驱动看行情和资金流，情景看放量/缩量验证，风险是样本窗口短；已覆盖 {datasets}。"
                         f"来源 {source}，截至 {as_of}。"
                     ),
                     provider="fake",
@@ -270,7 +271,8 @@ class _Bug413RealStyleStockEvidenceCardLlm(_NativeStockEvidenceCardLlm):
             return LlmCallResult(
                 content=(
                     "国城矿业（000688）全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
-                    "未来趋势只能基于已返回证据谨慎判断。"
+                    "未来趋势只给驱动、情景和风险，不预测方向，也不构成投资建议；"
+                    "驱动看行情和资金流，情景看放量/缩量验证，风险是样本窗口短。"
                     "来源 stock-ref:quote:000688，截至 2026-06-16；"
                     "来源 stock-ref:financials:000688，截至 2026-06-16；"
                     "来源 stock-ref:fund_flow:000688，截至 2026-06-16；"
@@ -286,7 +288,8 @@ class _Bug413RealStyleStockEvidenceCardLlm(_NativeStockEvidenceCardLlm):
             return LlmCallResult(
                 content=(
                     "国城矿业（000688）全方位分析：基本情况看联网基本面与财务证据，近期走势看行情、资金流和技术面，"
-                    "未来趋势只能基于已返回证据谨慎判断。"
+                    "未来趋势只给驱动、情景和风险，不预测方向，也不构成投资建议；"
+                    "驱动看行情和资金流，情景看放量/缩量验证，风险是样本窗口短。"
                 ),
                 provider="fake",
                 model="fake-primary",

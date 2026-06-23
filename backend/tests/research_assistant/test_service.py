@@ -196,6 +196,43 @@ class AgenticBusinessSynthesisFakeLlmClient(FakeLlmClient):
         )
 
 
+class B2AgenticSynthesisFakeLlmClient(FakeLlmClient):
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        payloads = _tool_payloads_from_messages(kwargs.get("messages"))
+        modes = {str(payload.get("response_mode") or "") for payload in payloads}
+        if {"graph_context", "qe_warehouse_business_summary", "summary"} <= modes:
+            content = (
+                "Bottom-line：QE 成果的利用路径是先把通过门禁的候选沉淀成策略包，再进入 Paper v2 做模拟盘验证；"
+                "当前已有 QE promotes_to 策略包、策略包 enabled_for Paper v2 的链路。"
+                "图谱来源 graph_context，截至 LIVE；QE 候选来源 qe_archive_read_adapter，截至 "
+                f"{_payload_as_of(payloads, 'qe_warehouse_business_summary')}；策略治理只读结果用于核对清单和 readiness。"
+                "下一步可以先看 promotion candidates 是否 passes_gate，再核对策略包清单与 Paper v2 readiness，避免把候选直接当成已上线。"
+            )
+        elif "stock_analysis_evidence_card" in modes:
+            content = (
+                "Bottom-line：这次更适合做证据约束的多维观察，而不是给方向预测；"
+                "驱动看行情和资金流，情景看成交量/价格组合变化，风险是单日资金扰动和样本窗口不足，不预测涨跌方向，不构成投资建议。"
+                f"来源 stock_analysis_summary_adapter，截至 {_payload_as_of(payloads, 'stock_analysis_evidence_card')}。"
+            )
+        else:
+            content = _agentic_business_answer(kwargs.get("messages")) or "需要先读取审计工具结果后再回答。"
+        return LlmCallResult(
+            content=content,
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def _payload_as_of(payloads: list[dict[str, object]], response_mode: str) -> str:
+    for payload in payloads:
+        if str(payload.get("response_mode") or "") == response_mode:
+            return str(payload.get("as_of") or payload.get("trade_date") or "2026-06-17")
+    return "2026-06-17"
+
+
 class SemanticPlanningFakeLlmClient(DialogueAwareFakeLlmClient):
     def __init__(self, plan: dict[str, object]) -> None:
         super().__init__()
@@ -505,7 +542,20 @@ class FakeQeArchiveRepository:
 
     def query_promotion_candidates(self, **kwargs: object) -> list[dict[str, object]]:
         del kwargs
-        return []
+        return [
+            {
+                "factor_set_hash": "fs_qe_promoted",
+                "model_type": "CatBoost",
+                "label_horizon": "20d",
+                "topk": 20,
+                "run_count": 6,
+                "distinct_seed_count": 5,
+                "cagr_mean": 0.18,
+                "sharpe_mean": 1.2,
+                "passes_gate": True,
+                "latest_completed_at": "2026-06-13T09:00:00+08:00",
+            }
+        ]
 
     def query_evolution_lineage(self, **kwargs: object) -> list[dict[str, object]]:
         del kwargs
@@ -857,12 +907,31 @@ def _seed_qe_module_graph(svc: ResearchAssistantService) -> None:
             approval_status="approved",
         )
     )
+    paper_v2 = svc.create_graph_entity(
+        GraphEntityCreate(
+            entity_type="module",
+            entity_key="module.paper_v2",
+            title="Paper v2",
+            summary="Paper v2 simulation trading module enabled by Strategy Package.",
+            source_refs=["test://module/paper-v2"],
+            approval_status="approved",
+        )
+    )
     svc.create_graph_relation(
         GraphRelationCreate(
             source_entity_id=qe["entity_id"],
             target_entity_id=strategy_package["entity_id"],
             relation_type="promotes_to",
             evidence_refs=["test://graph/qe-promotes-strategy-package"],
+            approval_status="approved",
+        )
+    )
+    svc.create_graph_relation(
+        GraphRelationCreate(
+            source_entity_id=strategy_package["entity_id"],
+            target_entity_id=paper_v2["entity_id"],
+            relation_type="enabled_for",
+            evidence_refs=["test://graph/strategy-package-enabled-for-paper-v2"],
             approval_status="approved",
         )
     )
@@ -918,6 +987,27 @@ def test_user_message_module_key_seed_expands_matching_module_subgraph() -> None
     assert graph_context["relation_refs"][0]["relation_type"] == "promotes_to"
     assert graph_context["relation_refs"][0]["source_entity_key"] == "module.qe"
     assert graph_context["relation_refs"][0]["neighbor_entity_key"] == "module.strategy_package"
+
+
+def test_qe_usage_question_expands_qe_strategy_package_paper_v2_graph_chain() -> None:
+    svc = _service()
+    _seed_qe_module_graph(svc)
+
+    pack = svc.build_context_pack(
+        ContextPackBuildRequest(
+            user_message="QE成果怎么利用",
+            dialogue_intent="analysis",
+            token_budget=4000,
+        )
+    )
+
+    graph_context = pack["pack_json"]["graph_context"]
+    relation_refs = graph_context["relation_refs"]
+    assert graph_context["seed_entity_keys"] == ["module.qe"]
+    assert {item["relation_type"] for item in relation_refs} >= {"promotes_to", "enabled_for"}
+    assert any(item["source_entity_key"] == "module.strategy_package" and item["target_entity_key"] == "module.paper_v2" for item in relation_refs)
+    assert graph_context["source"] == "graph_context"
+    assert graph_context["as_of"] == "LIVE"
 
 
 def test_user_message_cjk_module_title_substring_seeds_module_and_expands_neighbor() -> None:
@@ -1011,7 +1101,44 @@ def test_chat_turn_injects_user_seeded_module_graph_into_llm_context() -> None:
     assert "module.qe" in llm_context
     assert "module.strategy_package" in llm_context
     assert "promotes_to" in llm_context
-    assert "1 graph relations" in result["context_pack"]["pack_summary"]
+    assert "2 graph relations" in result["context_pack"]["pack_summary"]
+
+
+def test_b2_route_candidates_seed_multi_tool_qe_strategy_paper_path() -> None:
+    svc = _chat_service_with_qe_fakes(B2AgenticSynthesisFakeLlmClient())
+    _seed_qe_module_graph(svc)
+
+    result = svc.chat_turn(ChatTurnRequest(message="QE成果怎么利用", dialogue_mode_override="analysis"))
+
+    route = result["cards"]["mcp_route_decision"]
+    candidate_tools = [candidate["tool_name"] for candidate in route["route_candidates"]]
+    assert candidate_tools[:3] == [
+        "qe_archive_query_promotion_candidates",
+        "strategy_governance_list_packages",
+        "strategy_governance_get_paper_readiness",
+    ]
+    assert route["graph_first"] is True
+    react = result["cards"]["react_grounding"]
+    assert react["tool_call_count"] >= 3
+    assert react["tool_result_count"] >= 4
+    text = result["assistant_message"]["content_text"]
+    assert "Bottom-line" in text
+    assert "graph_context" in text
+    assert "LIVE" in text
+    assert "qe_archive_read_adapter" in text
+    assert "Paper v2" in text
+    assert "已完成查询" not in text
+
+
+def test_b2_non_module_question_does_not_seed_graph_or_graph_result() -> None:
+    svc = _chat_service_with_qe_fakes(B2AgenticSynthesisFakeLlmClient())
+    _seed_qe_module_graph(svc)
+
+    result = svc.chat_turn(ChatTurnRequest(message="请简要说明今天应该怎么阅读市场新闻", dialogue_mode_override="analysis"))
+
+    assert "0 graph relations" in result["context_pack"]["pack_summary"]
+    react = result["cards"]["react_grounding"]
+    assert react["tool_result_count"] == 0
 
 
 def test_candidate_issue_no_storage_response_is_stable_without_repository_row() -> None:

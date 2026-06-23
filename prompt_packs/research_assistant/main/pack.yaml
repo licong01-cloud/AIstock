@@ -1,7 +1,7 @@
 schema_version: aistock_prompt_pack_v1
 assistant_key: research_assistant
 pack_key: research_assistant.main
-pack_version: 1.2.0
+pack_version: 1.2.1
 owner: research_assistant
 environment_scope:
   - dev

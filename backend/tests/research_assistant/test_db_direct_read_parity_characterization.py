@@ -58,10 +58,10 @@ EXPECTED_TOOL_PROFILE_BY_SELECTED_TOOL = {
 }
 
 PROMPT_CHECKSUMS = {
-    "root.assistant": "b1c474feb9fcc53fd76ed0c66f373b2a9fca075992609caeda52797bda6b99d2",
-    "mode.analysis": "d0300f522706bd579d8ce5fa58b914384c0c6cd2bc7c5825e6d2406755bc7e28",
-    "mode.planning": "23300cdbe98cf07a6a26c5c01996882a769c58f045ced60df3d510fb2af8fdc1",
-    "domain.stock_analysis": "ad269849f7a2cd131cf7b92ccff9a8ab238ed36572fea44931760963d5658480",
+    "root.assistant": "bce85a0f793c68393bd7c6bbbd8a9f8dd18d0715ceae3330946df7b1c2fa63f4",
+    "mode.analysis": "8486276e9efa1b29f1ae232c14fa3eb3cda574ad9d38e51511870e9bbb3862be",
+    "mode.planning": "f495971cd677edd51f1e1abb89b6115f1aff4be1441e858960d248314319203f",
+    "domain.stock_analysis": "64709862585ca17ef151e5c9ab5a0937e1bf8f3cabd5a91a6f70abedff7a3dab",
 }
 
 SELECTED_TOOL_ROUTES = {
