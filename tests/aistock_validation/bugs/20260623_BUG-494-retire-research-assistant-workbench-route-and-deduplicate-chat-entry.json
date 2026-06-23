@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "frontend/src/app/research-assistant/layout.tsx",
     "frontend/src/app/research-assistant/workbench/page.tsx",
+    "frontend/src/app/research-assistant/chat/page.tsx",
     "frontend/tests/research-assistant/research-assistant.spec.ts",
     "tests/aistock_validation/bugs/20260623_BUG-494-retire-research-assistant-workbench-route-and-deduplicate-chat-entry.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -23,6 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260623-63d017e41341",
       "timestamp": "2026-06-23T07:08:19.691729Z"
+    },
+    {
+      "action": "scope_expanded_for_workbench_link_cleanup",
+      "actor": "codex",
+      "note": "Scoped search found the chat page still linked to the retired workbench route, so frontend chat page cleanup was added to retire visible Workbench entry points without touching backend logic.",
+      "timestamp": "2026-06-23T07:21:33Z"
+    },
+    {
+      "action": "required_verification_aligned_with_context_pack",
+      "actor": "codex",
+      "note": "Added validation_module_registry_l0 because the workflow context pack selected it as a required validation gate for BUG-494.",
+      "timestamp": "2026-06-23T07:25:42Z"
     }
   ],
   "evidence_uris": [],
@@ -46,7 +59,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

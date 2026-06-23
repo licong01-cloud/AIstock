@@ -12,7 +12,6 @@ import {
   type ChatModelRunOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import { BlockerCard } from "@/components/research-assistant/BlockerCard";
@@ -310,7 +309,7 @@ function extractBlockerCards(cards: JsonObject): AssistantBlockerCard[] {
       blocker_id: blockerId,
       status: "approval_required",
       reason: String(proposal.reason || proposal.title || "High risk action requires approval"),
-      next_step: String(proposal.next_step || "Review the Workbench preflight and provide explicit confirmation before execution."),
+      next_step: String(proposal.next_step || "请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。"),
       provenance: { source: "action_proposals", action_proposal_id: proposal.action_proposal_id || blockerId },
       as_of: typeof proposal.as_of === "string" ? proposal.as_of : undefined,
     } as AssistantBlockerCard];
@@ -323,7 +322,7 @@ function assistantSummaryText(result: AssistantChatTurnResult): string {
   const contentJson = asRecord(result.assistant_message?.content_json) || {};
   const summary = String(cards.orchestrator_summary || cards.summary || contentJson.summary || result.assistant_message?.content_text || "").trim();
   if (!summary || summary.startsWith("{") || summary.includes("worker_results") || summary.includes("payload_json")) {
-    return "The orchestrator summary is unavailable or unsafe for the main bubble. Open Workbench or Trace for worker process details.";
+    return "执行摘要暂不可安全展示。请在对话内审批卡片或 Trace 中查看过程细节。";
   }
   return summary;
 }
@@ -649,7 +648,6 @@ function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | nul
         {evidenceCards.map((card) => <EvidenceCard card={card} key={card.card_id} />)}
         {blockerCards.map((card) => <BlockerCard card={card} key={card.blocker_id} />)}
       </div>
-      {latest.task?.task_id ? <Link className="ra-chat-admin-link" href={`/research-assistant/workbench?task_id=${encodeURIComponent(latest.task.task_id)}`}>Open Workbench process</Link> : null}
     </section>
   );
 }
